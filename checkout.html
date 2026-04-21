@@ -1,0 +1,1348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Checkout – The Site Office</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@300;400;500;600&display=swap" rel="stylesheet">
+<script src="https://js.stripe.com/v3/"></script>
+<style>
+  :root {
+    --ink: #0f1117; --ink-mid: #2a2d35; --ink-soft: #4a4d58;
+    --rule: #e2e4e9; --off: #f7f8fa; --white: #ffffff;
+    --amber: #e8a020; --green: #1e6b3c; --green-light: #dff0e8;
+    --red: #c0392b; --red-light: #fce8e6;
+    --font-display: 'Barlow Condensed', sans-serif;
+    --font-body: 'Barlow', sans-serif;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: var(--font-body); color: var(--ink); background: var(--off); font-size: 16px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
+
+  /* NAV */
+  nav { background: var(--ink); border-bottom: 3px solid var(--amber); padding: 0 5%; display: flex; align-items: center; justify-content: space-between; height: 64px; }
+  .nav-logo { font-family: var(--font-display); font-size: 1.5rem; font-weight: 800; color: var(--white); text-decoration: none; letter-spacing: 0.03em; }
+  .nav-logo span { color: var(--amber); }
+  .nav-back { color: #8892a4; font-size: 0.9rem; text-decoration: none; display: flex; align-items: center; gap: 0.4rem; transition: color 0.2s; }
+  .nav-back:hover { color: var(--white); }
+
+  /* LAYOUT */
+  .checkout-wrap { max-width: 1000px; margin: 0 auto; padding: 40px 5% 80px; display: grid; grid-template-columns: 1fr 400px; gap: 2rem; align-items: start; }
+  @media (max-width: 800px) { .checkout-wrap { grid-template-columns: 1fr; } }
+
+  /* BASKET */
+  .panel { background: var(--white); border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; }
+  .panel-header { background: var(--ink); padding: 1.2rem 1.5rem; }
+  .panel-header h2 { font-family: var(--font-display); font-size: 1.2rem; font-weight: 700; color: var(--white); letter-spacing: 0.05em; text-transform: uppercase; }
+  .panel-header p { color: #6b7485; font-size: 0.82rem; margin-top: 0.2rem; }
+  .panel-body { padding: 1.5rem; }
+
+  /* BASKET ITEMS */
+  .basket-empty { text-align: center; padding: 3rem 1rem; }
+  .basket-empty p { color: var(--ink-soft); margin-bottom: 1.5rem; }
+  .btn-browse { display: inline-block; background: var(--amber); color: var(--ink); padding: 0.8rem 1.8rem; border-radius: 3px; font-family: var(--font-display); font-size: 1rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; text-decoration: none; transition: background 0.2s; }
+  .btn-browse:hover { background: #f5b840; }
+
+  .basket-item { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; padding: 1rem 0; border-bottom: 1px solid var(--rule); }
+  .basket-item:last-child { border-bottom: none; }
+  .basket-item-info { flex: 1; }
+  .basket-item-name { font-weight: 600; font-size: 0.95rem; margin-bottom: 0.2rem; }
+  .basket-item-tag { font-size: 0.75rem; color: var(--ink-soft); }
+  .basket-item-right { display: flex; align-items: center; gap: 1rem; flex-shrink: 0; }
+  .basket-item-price { font-family: var(--font-display); font-size: 1.2rem; font-weight: 700; }
+  .basket-remove { background: none; border: none; cursor: pointer; color: #ccc; font-size: 1.1rem; transition: color 0.2s; padding: 0.2rem; }
+  .basket-remove:hover { color: var(--red); }
+
+  .basket-total { display: flex; justify-content: space-between; align-items: center; padding-top: 1.2rem; border-top: 2px solid var(--ink); margin-top: 0.5rem; }
+  .basket-total-label { font-family: var(--font-display); font-size: 1rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+  .basket-total-amount { font-family: var(--font-display); font-size: 1.8rem; font-weight: 800; }
+  .vat-note { font-size: 0.78rem; color: var(--ink-soft); margin-top: 0.4rem; text-align: right; }
+
+  /* PAYMENT FORM */
+  .order-summary { margin-bottom: 1.5rem; }
+  .order-line { display: flex; justify-content: space-between; font-size: 0.88rem; padding: 0.3rem 0; color: var(--ink-soft); }
+  .order-line.total { color: var(--ink); font-weight: 600; font-size: 1rem; padding-top: 0.6rem; border-top: 1px solid var(--rule); margin-top: 0.3rem; }
+
+  .form-group { margin-bottom: 1.2rem; }
+  .form-label { display: block; font-size: 0.85rem; font-weight: 600; margin-bottom: 0.4rem; color: var(--ink-mid); }
+  .form-input { width: 100%; padding: 0.75rem 1rem; border: 1px solid var(--rule); border-radius: 4px; font-family: var(--font-body); font-size: 0.95rem; color: var(--ink); background: var(--white); transition: border-color 0.2s; outline: none; }
+  .form-input:focus { border-color: var(--amber); }
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+
+  /* STRIPE CARD ELEMENT */
+  #card-element { padding: 0.75rem 1rem; border: 1px solid var(--rule); border-radius: 4px; background: var(--white); transition: border-color 0.2s; }
+  #card-element.focused { border-color: var(--amber); }
+  #card-errors { color: var(--red); font-size: 0.83rem; margin-top: 0.5rem; min-height: 1.2rem; }
+
+  .btn-pay { width: 100%; background: var(--amber); color: var(--ink); border: none; padding: 1rem; border-radius: 4px; font-family: var(--font-display); font-size: 1.1rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer; transition: background 0.2s, transform 0.15s; margin-top: 1rem; display: flex; align-items: center; justify-content: center; gap: 0.6rem; }
+  .btn-pay:hover:not(:disabled) { background: #f5b840; transform: translateY(-1px); }
+  .btn-pay:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+
+  .secure-note { display: flex; align-items: center; justify-content: center; gap: 0.4rem; margin-top: 0.8rem; color: var(--ink-soft); font-size: 0.78rem; }
+  .secure-note::before { content: '🔒'; }
+
+  /* SUCCESS STATE */
+  .success-panel { display: none; text-align: center; padding: 3rem 2rem; }
+  .success-icon { font-size: 3rem; margin-bottom: 1rem; }
+  .success-title { font-family: var(--font-display); font-size: 1.8rem; font-weight: 800; margin-bottom: 0.5rem; }
+  .success-sub { color: var(--ink-soft); margin-bottom: 2rem; }
+  .download-list { text-align: left; margin-bottom: 2rem; }
+  .download-item { display: flex; align-items: center; justify-content: space-between; padding: 0.8rem 1rem; border: 1px solid var(--rule); border-radius: 4px; margin-bottom: 0.6rem; gap: 1rem; }
+  .download-item-name { font-weight: 600; font-size: 0.9rem; flex: 1; }
+  .btn-download { background: var(--ink); color: var(--white); padding: 0.5rem 1rem; border-radius: 3px; font-family: var(--font-display); font-size: 0.85rem; font-weight: 700; letter-spacing: 0.05em; text-decoration: none; text-transform: uppercase; flex-shrink: 0; transition: background 0.2s; }
+  .btn-download:hover { background: var(--amber); color: var(--ink); }
+  .email-note { background: var(--green-light); border: 1px solid #a8d5b8; border-radius: 4px; padding: 1rem; font-size: 0.88rem; color: var(--green); }
+
+  /* SPINNER */
+  .spinner { width: 18px; height: 18px; border: 2px solid rgba(0,0,0,0.2); border-top-color: var(--ink); border-radius: 50%; animation: spin 0.6s linear infinite; display: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* SHOP SECTION - for adding items */
+  .add-section { margin-top: 3rem; }
+  .add-section h3 { font-family: var(--font-display); font-size: 1rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-soft); margin-bottom: 1rem; }
+  .add-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0.8rem; }
+  .add-item { border: 1px solid var(--rule); border-radius: 4px; padding: 1rem; background: var(--white); display: flex; flex-direction: column; gap: 0.5rem; transition: border-color 0.2s; }
+  .add-item:hover { border-color: var(--amber); }
+  .add-item-name { font-weight: 600; font-size: 0.88rem; line-height: 1.3; flex: 1; }
+  .add-item-bottom { display: flex; align-items: center; justify-content: space-between; }
+  .add-item-price { font-family: var(--font-display); font-weight: 700; font-size: 1.1rem; }
+  .btn-add { background: var(--ink); color: var(--white); border: none; padding: 0.4rem 0.8rem; border-radius: 3px; font-family: var(--font-display); font-size: 0.78rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; cursor: pointer; transition: background 0.2s; }
+  .btn-add:hover { background: var(--amber); color: var(--ink); }
+  .btn-add.in-basket { background: var(--green); }
+  .add-item-tag { font-size: 0.72rem; color: var(--ink-soft); }
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="index.html" class="nav-logo">THE SITE <span>OFFICE</span></a>
+  <a href="index.html" class="nav-back">← Back to shop</a>
+</nav>
+
+<div class="checkout-wrap">
+
+  <!-- LEFT: BASKET -->
+  <div>
+    <div class="panel">
+      <div class="panel-header">
+        <h2>Your Basket</h2>
+        <p>Instant download after payment</p>
+      </div>
+      <div class="panel-body">
+        <div id="basket-items">
+          <!-- populated by JS -->
+        </div>
+        <div id="basket-total-row" style="display:none;">
+          <div class="basket-total">
+            <span class="basket-total-label">Total</span>
+            <span class="basket-total-amount" id="basket-total-display">£0</span>
+          </div>
+          <p class="vat-note">Prices include VAT where applicable</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ADD MORE ITEMS -->
+    <div class="add-section">
+      <h3>Add documents to your order</h3>
+      <div class="add-grid" id="add-grid">
+        <!-- populated by JS -->
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: PAYMENT -->
+  <div>
+    <div class="panel">
+      <div class="panel-header">
+        <h2>Payment</h2>
+        <p>Secure checkout via Stripe</p>
+      </div>
+      <div class="panel-body">
+
+        <!-- ORDER SUMMARY -->
+        <div class="order-summary" id="order-summary">
+          <!-- populated by JS -->
+        </div>
+
+        <!-- PAYMENT FORM -->
+        <div id="payment-form-wrap">
+          <form id="payment-form">
+            <div class="form-group">
+              <label class="form-label" for="email">Email address</label>
+              <input class="form-input" type="email" id="email" placeholder="your@email.com" required>
+              <div style="font-size:0.75rem; color:var(--ink-soft); margin-top:0.3rem;">Download links sent here after purchase</div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label class="form-label" for="first-name">First name</label>
+                <input class="form-input" type="text" id="first-name" placeholder="Dave" required>
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="last-name">Last name</label>
+                <input class="form-input" type="text" id="last-name" placeholder="Smith" required>
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Card details</label>
+              <div id="card-element"></div>
+              <div id="card-errors"></div>
+            </div>
+            <button class="btn-pay" type="submit" id="pay-btn" disabled>
+              <span id="pay-btn-text">Pay £0</span>
+              <div class="spinner" id="pay-spinner"></div>
+            </button>
+            <div class="secure-note">Secured by Stripe. We never store card details.</div>
+          </form>
+        </div>
+
+        <!-- SUCCESS STATE (hidden until payment) -->
+        <div class="success-panel" id="success-panel">
+          <div class="success-icon">✅</div>
+          <div class="success-title">Payment successful!</div>
+          <div class="success-sub">Your documents are ready to download.</div>
+          <div class="download-list" id="download-list"></div>
+          <div class="email-note">📧 Download links have also been sent to your email address.</div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════
+// PRODUCT CATALOGUE
+// When you have your Google Drive links, replace the
+// driveUrl values below with your actual shareable links.
+// Format: https://drive.google.com/uc?export=download&id=YOUR_FILE_ID
+// ═══════════════════════════════════════════════════════
+
+const PRODUCTS = [
+  {
+    id: 'gw-rams',
+    name: 'Groundworks RAMS Pack',
+    tag: 'Health & Safety',
+    price: 900, // in pence
+    ref: 'TSO-GW-001',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1JbWeAEzGMmVsjWSkM7-pm-M99Kch9MEO'
+  },
+  {
+    id: 'rf-rams',
+    name: 'Roofing RAMS Pack',
+    tag: 'Health & Safety',
+    price: 900,
+    ref: 'TSO-RF-001',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1kUdbWMbloPJL0vBOKAWFGQ1YtflXVp6I'
+  },
+  {
+    id: 'cp-rams',
+    name: 'Carpentry & Joinery RAMS',
+    tag: 'Health & Safety',
+    price: 900,
+    ref: 'TSO-CP-001',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1KaoFq_9KMrPgnlRXXKhiSqN6YGc3IDgD'
+  },
+  {
+    id: 'bw-rams',
+    name: 'Brickwork & Blockwork RAMS',
+    tag: 'Health & Safety',
+    price: 900,
+    ref: 'TSO-BW-001',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=11cMhT7cYKCSrdb9Y7BumJ71xCBS_uIAI'
+  },
+  {
+    id: 'wh-rams',
+    name: 'Working at Height RAMS',
+    tag: 'Health & Safety',
+    price: 900,
+    ref: 'TSO-WH-001',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1TV7z7GYS9-tW0GRg6frNCwbPtY8fTxjc'
+  },
+  {
+    id: 'dm-rams',
+    name: 'Demolition RAMS',
+    tag: 'Health & Safety',
+    price: 1200,
+    ref: 'TSO-DM-001',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1hWkHxce1OwNK4GYCa5sVS5A0IaxSj1UB'
+  },
+  {
+    id: 'ps-rams',
+    name: 'Plastering & Drylining RAMS',
+    tag: 'Health & Safety',
+    price: 900,
+    ref: 'TSO-PS-001',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1NljlpjjYCziaBslYs7-TGahK55ioack3'
+  },
+  {
+    id: 'pd-rams',
+    name: 'Painting & Decorating RAMS',
+    tag: 'Health & Safety',
+    price: 900,
+    ref: 'TSO-PD-001',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1hyC2WodijCnPiJ8GercFqkYgN95yUpBy'
+  },
+  {
+    id: 'pm-rams',
+    name: 'Plumbing & Mechanical RAMS',
+    tag: 'Health & Safety',
+    price: 900,
+    ref: 'TSO-PM-001',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=11XcwZ31UJA_W5HAubdV0WBWrATkjsdMx'
+  },
+  {
+    id: 'se-rams',
+    name: 'Steel Erection RAMS',
+    tag: 'Health & Safety',
+    price: 1200,
+    ref: 'TSO-SE-001',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1qe3ZQV2GqGt3Ht5LXOvL_TiqBAj2j7DF'
+  },
+  {
+    id: 'el-rams',
+    name: 'Electrical First Fix RAMS',
+    tag: 'Health & Safety',
+    price: 900,
+    ref: 'TSO-EL-001',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1u_2dVgopezgCfvG1rxRBXh6L-Z3XRTE1'
+  },
+  {
+    id: 'dr-rams',
+    name: 'Drainage & Utilities RAMS',
+    tag: 'Health & Safety',
+    price: 900,
+    ref: 'TSO-DR-001',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1zc0e1RBirzDSOTl_yxXSe2PeB9IsTerf'
+  },
+  {
+    id: 'rams-pack',
+    name: 'Full RAMS Pack (All 12 Trades)',
+    tag: 'Health & Safety',
+    price: 5900,
+    ref: 'TSO-RAMS-PACK',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1Egwwd2V7ugljV1tDg1VaiEBhh5pAKvwO'
+  },
+  {
+    id: 'toolbox',
+    name: 'Toolbox Talk Library (30 Topics)',
+    tag: 'Health & Safety',
+    price: 2500,
+    ref: 'TSO-TTL-001',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1fuAhNd3W1j0sS136J8ZmEfct_BZRu6c3'
+  },
+  {
+    id: 'tbt-01', name: 'TBT: Working at Height', tag: 'Toolbox Talk', price: 0,
+    ref: 'TBT-01', driveUrl: 'https://drive.google.com/uc?export=download&id=12V0Z5vif_pHvU8Zg60FdtwcVc9aSKt9w'
+  },
+  {
+    id: 'tbt-02', name: 'TBT: Manual Handling', tag: 'Toolbox Talk', price: 0,
+    ref: 'TBT-02', driveUrl: 'https://drive.google.com/uc?export=download&id=14WCOMZiVl7-EGWEGxsNW_BwoKc6tnrMV'
+  },
+  {
+    id: 'tbt-03', name: 'TBT: PPE', tag: 'Toolbox Talk', price: 0,
+    ref: 'TBT-03', driveUrl: 'https://drive.google.com/uc?export=download&id=16BKG6tOmKXkLxzaW3xa_Et_FVqjTPnSi'
+  },
+  {
+    id: 'tbt-04', name: 'TBT: Slips, Trips & Falls', tag: 'Toolbox Talk', price: 0,
+    ref: 'TBT-04', driveUrl: 'https://drive.google.com/uc?export=download&id=18z5WkDFw45RzDd-V580kr_dbAeyQh7Ei'
+  },
+  {
+    id: 'tbt-05', name: 'TBT: COSHH', tag: 'Toolbox Talk', price: 0,
+    ref: 'TBT-05', driveUrl: 'https://drive.google.com/uc?export=download&id=19kbPcjc1TqmpUFm_DLXWeklZKilmu_08'
+  },
+  {
+    id: 'tbt-06', name: 'TBT: Excavations', tag: 'Toolbox Talk', price: 0,
+    ref: 'TBT-06', driveUrl: 'https://drive.google.com/uc?export=download&id=1CJzTlwaWH5vHVvbl5oVeZwSCLSF96K4X'
+  },
+  {
+    id: 'tbt-07', name: 'TBT: Fire Safety', tag: 'Toolbox Talk', price: 0,
+    ref: 'TBT-07', driveUrl: 'https://drive.google.com/uc?export=download&id=1FeTLs6ueiE43gMo_ySCi_-lL_hH9QdA0'
+  },
+  {
+    id: 'tbt-08', name: 'TBT: Electrical Safety', tag: 'Toolbox Talk', price: 0,
+    ref: 'TBT-08', driveUrl: 'https://drive.google.com/uc?export=download&id=1Hxra-OPXLLt0J7TwOUvxLaH6JAMppQJL'
+  },
+  {
+    id: 'tbt-09', name: 'TBT: Hot Works', tag: 'Toolbox Talk', price: 0,
+    ref: 'TBT-09', driveUrl: 'https://drive.google.com/uc?export=download&id=1JDo_l_DohfvWWfv3MPnhGmrURw744hdK'
+  },
+  {
+    id: 'tbt-10', name: 'TBT: Plant & Vehicles', tag: 'Toolbox Talk', price: 0,
+    ref: 'TBT-10', driveUrl: 'https://drive.google.com/uc?export=download&id=1KY9UtCjKyoq1zRP5bbxXWPEPpyVTDWL_'
+  },
+  {
+    id: 'tbt-11', name: 'TBT: Noise & Dust', tag: 'Toolbox Talk', price: 0,
+    ref: 'TBT-11', driveUrl: 'https://drive.google.com/uc?export=download&id=1L1UyhSP4YZBBlpBmv3dPKaZbpj3Ti-96'
+  },
+  {
+    id: 'tbt-12', name: 'TBT: Asbestos Awareness', tag: 'Toolbox Talk', price: 0,
+    ref: 'TBT-12', driveUrl: 'https://drive.google.com/uc?export=download&id=1LW5zdmmnufHpQ61VVjyfSIrUcS4qGE1S'
+  },
+  {
+    id: 'tbt-13', name: 'TBT: Near Miss Reporting', tag: 'Toolbox Talk', price: 0,
+    ref: 'TBT-13', driveUrl: 'https://drive.google.com/uc?export=download&id=1PBIaJGJHWhG6Umzpd0X2mX5DvpFklCeo'
+  },
+  {
+    id: 'tbt-14', name: 'TBT: Confined Spaces', tag: 'Toolbox Talk', price: 0,
+    ref: 'TBT-14', driveUrl: 'https://drive.google.com/uc?export=download&id=1W-K9jlbKYyciQl8mQocdco_1MFabUqus'
+  },
+  {
+    id: 'tbt-15', name: 'TBT: Welfare & Hygiene', tag: 'Toolbox Talk', price: 0,
+    ref: 'TBT-15', driveUrl: 'https://drive.google.com/uc?export=download&id=1WiGD_Vep93wIYyMD6HqIOzSYk6E73pMM'
+  },
+  {
+    id: 'tbt-16', name: 'TBT: Hand-Arm Vibration', tag: 'Toolbox Talk', price: 0,
+    ref: 'TBT-16', driveUrl: 'https://drive.google.com/uc?export=download&id=1Y34v_mCT0ODmFl1XMYtry6qH13wph1Zl'
+  },
+  {
+    id: 'tbt-17', name: 'TBT: Lifting Operations', tag: 'Toolbox Talk', price: 0,
+    ref: 'TBT-17', driveUrl: 'https://drive.google.com/uc?export=download&id=1Yvp3mafPfrNJQgxZtzh6xnz6S9ypxX7J'
+  },
+  {
+    id: 'tbt-18', name: 'TBT: Scaffolding Inspection', tag: 'Toolbox Talk', price: 0,
+    ref: 'TBT-18', driveUrl: 'https://drive.google.com/uc?export=download&id=1cz8NcuuDv6YXKcvIn19HrbuOVMhrwskj'
+  },
+  {
+    id: 'tbt-19', name: 'TBT: Drugs & Alcohol', tag: 'Toolbox Talk', price: 0,
+    ref: 'TBT-19', driveUrl: 'https://drive.google.com/uc?export=download&id=1f_ELF3igYwk--f4P8MlWhdFSkFwEmPFZ'
+  },
+  {
+    id: 'tbt-20', name: 'TBT: Mental Health', tag: 'Toolbox Talk', price: 0,
+    ref: 'TBT-20', driveUrl: 'https://drive.google.com/uc?export=download&id=1hH7qu535jiORjGwlzzysTYT9X54zMYK8'
+  },
+  {
+    id: 'tbt-21', name: 'TBT: Permits to Work', tag: 'Toolbox Talk', price: 0,
+    ref: 'TBT-21', driveUrl: 'https://drive.google.com/uc?export=download&id=1iiFgYh926MwMsg7P56ls0IgvKdy2Rr02'
+  },
+  {
+    id: 'tbt-22', name: 'TBT: Housekeeping', tag: 'Toolbox Talk', price: 0,
+    ref: 'TBT-22', driveUrl: 'https://drive.google.com/uc?export=download&id=1j-TSl-K2he26bKHebcgIb5wUiIUp5j7c'
+  },
+  {
+    id: 'tbt-23', name: 'TBT: Young Workers', tag: 'Toolbox Talk', price: 0,
+    ref: 'TBT-23', driveUrl: 'https://drive.google.com/uc?export=download&id=1mt0ZpDe0rv0LQYFWoOYIi1BVqcqDZN38'
+  },
+  {
+    id: 'tbt-24', name: 'TBT: Lone Working', tag: 'Toolbox Talk', price: 0,
+    ref: 'TBT-24', driveUrl: 'https://drive.google.com/uc?export=download&id=1nOLbpj0CkujJ-Tv8kxU010d_-JTlDfBX'
+  },
+  {
+    id: 'tbt-25', name: 'TBT: Struck by Objects', tag: 'Toolbox Talk', price: 0,
+    ref: 'TBT-25', driveUrl: 'https://drive.google.com/uc?export=download&id=1p6Jq3r44-BQNfMs2EHtkGRWLYYjvVC6f'
+  },
+  {
+    id: 'tbt-26', name: 'TBT: Cold Weather Working', tag: 'Toolbox Talk', price: 0,
+    ref: 'TBT-26', driveUrl: 'https://drive.google.com/uc?export=download&id=1q4PZCZUiLQnB1yh9XDzh0avX0yV7ATy4'
+  },
+  {
+    id: 'tbt-27', name: 'TBT: CDM Awareness', tag: 'Toolbox Talk', price: 0,
+    ref: 'TBT-27', driveUrl: 'https://drive.google.com/uc?export=download&id=1rIMVZXukcwy_iNNzLFvY3ZC1yu0M9em5'
+  },
+  {
+    id: 'tbt-28', name: 'TBT: Emergency Procedures', tag: 'Toolbox Talk', price: 0,
+    ref: 'TBT-28', driveUrl: 'https://drive.google.com/uc?export=download&id=1wZz5Tps52mXilm2GLCMdWB9dlRzOhcrY'
+  },
+  {
+    id: 'tbt-29', name: 'TBT: Security on Site', tag: 'Toolbox Talk', price: 0,
+    ref: 'TBT-29', driveUrl: 'https://drive.google.com/uc?export=download&id=1whigaTeWcIOx7jUXZRMbiFI6C6k5wc0T'
+  },
+  {
+    id: 'tbt-30', name: 'TBT: Environmental Awareness', tag: 'Toolbox Talk', price: 0,
+    ref: 'TBT-30', driveUrl: 'https://drive.google.com/uc?export=download&id=1ym46sKK35Lk03gYcc9BD4ZCewObHPOrQ'
+  },
+  {
+    id: 'cdm-cpp',
+    name: 'CDM Construction Phase Plan',
+    tag: 'CDM',
+    price: 1500,
+    ref: 'TSO-CPP-001',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1DwcuDda7hVdCVcpmSBuKQmcRAIhq6WhM'
+  },
+  {
+    id: 'cdm-pack',
+    name: 'CDM Full Pack',
+    tag: 'CDM',
+    price: 4900,
+    ref: 'TSO-CDM-PACK',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1yoPJbzAfVHNY5u9wiZF12E0emowWK-4M'
+  },
+  {
+    id: 'cdm-02',
+    name: 'Pre-Construction Information',
+    tag: 'CDM',
+    price: 900,
+    ref: 'TSO-CDM-02',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1HQLhlwk4xSfqKWxgL00wUtdvQrqq_hSw'
+  },
+  {
+    id: 'cdm-02b',
+    name: 'Pre-Construction Information v2',
+    tag: 'CDM',
+    price: 900,
+    ref: 'TSO-CDM-02b',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1I6cDfEhT7UwydHAAg_FMyJk9Lis0KA50'
+  },
+  {
+    id: 'cdm-03',
+    name: 'Competency Checklist',
+    tag: 'CDM',
+    price: 800,
+    ref: 'TSO-CDM-03',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1K9VrvjLSpUHszAlXA5FroMGy0Tjxdlw_'
+  },
+  {
+    id: 'cdm-04',
+    name: 'F10 Notification Guide',
+    tag: 'CDM',
+    price: 800,
+    ref: 'TSO-CDM-04',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1M1Er2YbRjqzyLN-LYktGfWMjnCEtKEh6'
+  },
+  {
+    id: 'cdm-05',
+    name: 'Designer Risk Register',
+    tag: 'CDM',
+    price: 800,
+    ref: 'TSO-CDM-05',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1MUUCew3b2xWWOzABYeyEat7rjGUTZfpj'
+  },
+  {
+    id: 'cdm-06',
+    name: 'Principal Designer Appointment',
+    tag: 'CDM',
+    price: 900,
+    ref: 'TSO-CDM-06',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1XvfV3P4BkGY3pAtGs5GQIvDUmY0QE3hf'
+  },
+  {
+    id: 'cdm-07',
+    name: 'Site Induction Record',
+    tag: 'CDM',
+    price: 500,
+    ref: 'TSO-CDM-07',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1a1Z35iDAFCXzjH-GY5XauRUGcZogkDiV'
+  },
+  {
+    id: 'cdm-08',
+    name: 'Welfare Inspection Checklist',
+    tag: 'CDM',
+    price: 500,
+    ref: 'TSO-CDM-08',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1je37P1e9Z-Pg0gGm2HybEPeY445YjNqC'
+  },
+  {
+    id: 'cdm-09',
+    name: 'CPP Review Record',
+    tag: 'CDM',
+    price: 500,
+    ref: 'TSO-CDM-09',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1mrAOuc1otOt7Q-FWToUtCGB1KcMKNL3l'
+  },
+  {
+    id: 'cdm-10',
+    name: 'H&S File Handover Checklist',
+    tag: 'CDM',
+    price: 800,
+    ref: 'TSO-CDM-10',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1vYpGadVpaz8CSBEDpv2Bvy6maP2nLDH3'
+  },
+  {
+    id: 'qmp',
+    name: 'Quality Management Plan',
+    tag: 'Quality',
+    price: 1200,
+    ref: 'TSO-QMP-001',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1pEmLwPL2n-mGxCGJIgdPpYsP5UCe2HQD'
+  },
+  {
+    id: 'emp',
+    name: 'Environmental Management Plan',
+    tag: 'Quality & Environmental',
+    price: 1200,
+    ref: 'TSO-EMP-001',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=12_zR5q2YDmSPpzpKVxEE__zB2o21ouAD'
+  },
+  {
+    id: 'wmp',
+    name: 'Waste Management Plan',
+    tag: 'Quality & Environmental',
+    price: 1000,
+    ref: 'TSO-WMP-001',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1w2JnhzmnU2QZOhoUh3ZxEhxPCWZcy7EH'
+  },
+  {
+    id: 'ncr',
+    name: 'Non-Conformance Report',
+    tag: 'Quality',
+    price: 800,
+    ref: 'TSO-NCR-001',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1JQE_e3Z7RhA0W3qHrErW5eAMoa_8sKBh'
+  },
+  {
+    id: 'subcontract',
+    name: 'Subcontractor Agreement',
+    tag: 'Contracts',
+    price: 1500,
+    ref: 'TSO-SCA-001',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1SrpHpv2PahpkIddx3mZ6Uvn2voka2AUx'
+  },
+  {
+    id: 'afp',
+    name: 'Application for Payment Template',
+    tag: 'Commercial',
+    price: 800,
+    ref: 'TSO-AFP-001',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1b39JJzXLy3T3jTHVQ0GgMw0odCxUJo7z'
+  },
+  {
+    id: 'sm-01',
+    name: 'Site Diary',
+    tag: 'Site Management',
+    price: 600,
+    ref: 'TSO-SM-01',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=12nVI5742RnX3ATHkAiQhGnCnlM2w4CmO'
+  },
+  {
+    id: 'sm-02',
+    name: 'Sign In Sheet',
+    tag: 'Site Management',
+    price: 600,
+    ref: 'TSO-SM-02',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=15e_t4_36RD25wSCP5iPMh9ffkbXGjH-K'
+  },
+  {
+    id: 'sm-03',
+    name: 'Visitors Log',
+    tag: 'Site Management',
+    price: 600,
+    ref: 'TSO-SM-03',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=17xydcC66SZnAfkpSrSQvtuxAW2iCSBfO'
+  },
+  {
+    id: 'sm-04',
+    name: 'Weekly Workforce Record',
+    tag: 'Site Management',
+    price: 600,
+    ref: 'TSO-SM-04',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1864ATPJ7YMhlb3ifOJM5PFLYfLHoH6rv'
+  },
+  {
+    id: 'sm-05',
+    name: 'Material Delivery Record',
+    tag: 'Site Management',
+    price: 600,
+    ref: 'TSO-SM-05',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=18sV5-DwoPDsGxY6uhIS7KdQlVQlnx7rV'
+  },
+  {
+    id: 'sm-06',
+    name: 'Concrete Pour Record',
+    tag: 'Site Management',
+    price: 600,
+    ref: 'TSO-SM-06',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=19IgBaE2IMrU1YkjtYWLH2l0y5HO_5NJj'
+  },
+  {
+    id: 'sm-07',
+    name: 'Material Rejection Record',
+    tag: 'Site Management',
+    price: 600,
+    ref: 'TSO-SM-07',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1AEWyElBRO_ifrERCcux86QC4XWJfFE3O'
+  },
+  {
+    id: 'sm-08',
+    name: 'Material Rejection Record v2',
+    tag: 'Site Management',
+    price: 600,
+    ref: 'TSO-SM-07b',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1FxCjAortZ3RccBBWnAOtoPO9wEw1XGcd'
+  },
+  {
+    id: 'sm-09',
+    name: 'Inspection Test Plan',
+    tag: 'Site Management',
+    price: 600,
+    ref: 'TSO-SM-08',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1S0-eAY-1fh3W3F1g-liulWi2F0IqYaBm'
+  },
+  {
+    id: 'sm-10',
+    name: 'Non-Conformance Report',
+    tag: 'Site Management',
+    price: 600,
+    ref: 'TSO-SM-09',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1W-oNrCP14ZVOzpFU0uzO-uPXUd6FwMIL'
+  },
+  {
+    id: 'sm-11',
+    name: 'Snagging List',
+    tag: 'Site Management',
+    price: 600,
+    ref: 'TSO-SM-10',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1XctpP2phjxU7saEDNFZHfIZAq9rWwuY2'
+  },
+  {
+    id: 'sm-12',
+    name: 'Site Handover Checklist',
+    tag: 'Site Management',
+    price: 600,
+    ref: 'TSO-SM-11',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1ZfXZDaImKEwphYEzTNxTowZE3dsQQBqO'
+  },
+  {
+    id: 'sm-13',
+    name: 'As-Built Drawing Tracker',
+    tag: 'Site Management',
+    price: 600,
+    ref: 'TSO-SM-12',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1fJkoMJIr_G_O3Y6dymkrtU3g1tZADNeO'
+  },
+  {
+    id: 'sm-14',
+    name: 'Plant Pre-Use Inspection',
+    tag: 'Site Management',
+    price: 600,
+    ref: 'TSO-SM-13',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1faxSlFfPyCvMCfgMFV-3M4qFS-EU4Huw'
+  },
+  {
+    id: 'sm-15',
+    name: 'Plant Equipment Register',
+    tag: 'Site Management',
+    price: 600,
+    ref: 'TSO-SM-14',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1iEd-kBVUSunsC6COcl8vcNttgGXL5Atw'
+  },
+  {
+    id: 'sm-16',
+    name: 'Accident Incident Report',
+    tag: 'Site Management',
+    price: 600,
+    ref: 'TSO-SM-15',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1iuAWzMxhPCxjV8_PSY5yQyjdDazhWMJe'
+  },
+  {
+    id: 'sm-17',
+    name: 'Near Miss Report',
+    tag: 'Site Management',
+    price: 600,
+    ref: 'TSO-SM-16',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1oYkezSYpkPpaWZhvI6gF4ZYxBgPrcIBU'
+  },
+  {
+    id: 'sm-18',
+    name: 'First Aid Record',
+    tag: 'Site Management',
+    price: 600,
+    ref: 'TSO-SM-17',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1qr3ltTbtgzeFiUd-ZIKbuNxVe3_JWa4B'
+  },
+  {
+    id: 'sm-19',
+    name: 'RIDDOR Checklist',
+    tag: 'Site Management',
+    price: 600,
+    ref: 'TSO-SM-18',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1t9ADIO7X3Izp9K4LKfdwEbv2acZcsmIa'
+  },
+  {
+    id: 'sm-20',
+    name: 'Weekly Progress Report',
+    tag: 'Site Management',
+    price: 600,
+    ref: 'TSO-SM-19',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1ts3W0YXQCEUSJzV3_N6w5wjFHpgHc52-'
+  },
+  {
+    id: 'sm-21',
+    name: 'Subcontractor Performance',
+    tag: 'Site Management',
+    price: 600,
+    ref: 'TSO-SM-20',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1uhhCmC1-tbvZ_qWsU3yghDqQ-5EzRlbs'
+  },
+  {
+    id: 'sm-bundle',
+    name: 'Site Management Bundle (All 20 Forms)',
+    tag: 'Site Management',
+    price: 2900,
+    ref: 'TSO-SM-PACK',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1MAT0vKTh7disKFmIgvskPsxg4RkI3U14'
+  },
+    {
+    id: 'com-01',
+    name: 'Quotation Letter',
+    tag: 'Commercial',
+    price: 600,
+    ref: 'TSO-COM-01',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=14tsdjCXhyIbwBgM72moUJ3AVr-Ls9tqZ'
+  },
+  {
+    id: 'com-02',
+    name: 'Tender Cover Sheet',
+    tag: 'Commercial',
+    price: 600,
+    ref: 'TSO-COM-02',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=178YSWwDLI6NqVwu1zw3bfX_-UEMHGRzX'
+  },
+  {
+    id: 'com-03',
+    name: 'Bid No-Bid Record',
+    tag: 'Commercial',
+    price: 600,
+    ref: 'TSO-COM-03',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=19CEDlI_R6QoQxrb-7lby1M3CF9gVC28b'
+  },
+  {
+    id: 'com-04',
+    name: 'Tender Clarification Request',
+    tag: 'Commercial',
+    price: 600,
+    ref: 'TSO-COM-04',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1A7XK70PYnMJ8kXwq6otOREFFFKyd1Myy'
+  },
+  {
+    id: 'com-04b',
+    name: 'Tender Clarification Request v2',
+    tag: 'Commercial',
+    price: 600,
+    ref: 'TSO-COM-04b',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1NbKSHKpcPX2lefWe6ab-d8a63R5b0Eed'
+  },
+  {
+    id: 'com-05',
+    name: 'Letter of Intent',
+    tag: 'Commercial',
+    price: 1000,
+    ref: 'TSO-COM-05',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1QWOXmWZZ1vD2knoHlZ_uH-FlGbkySq3v'
+  },
+  {
+    id: 'com-06',
+    name: 'Works Order',
+    tag: 'Commercial',
+    price: 800,
+    ref: 'TSO-COM-06',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1R5piMnA3OW63awDIX3e-8bPxBojUypCQ'
+  },
+  {
+    id: 'com-08',
+    name: 'Purchase Order',
+    tag: 'Commercial',
+    price: 600,
+    ref: 'TSO-COM-08',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1StJMYPPJ2ws6R63tWP_8CZi2k5d7G_WZ'
+  },
+  {
+    id: 'com-09',
+    name: 'Bill of Quantities',
+    tag: 'Commercial',
+    price: 1200,
+    ref: 'TSO-COM-09',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1TG17R1LXQ79ilwiQw3_Z8TGUZQM_Po6P'
+  },
+  {
+    id: 'com-10',
+    name: 'Variation Order',
+    tag: 'Commercial',
+    price: 800,
+    ref: 'TSO-COM-10',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1Xa-oY91Vg_kD5sVx268hB3pcTTY5A8HL'
+  },
+  {
+    id: 'com-11',
+    name: 'Daywork Sheet',
+    tag: 'Commercial',
+    price: 600,
+    ref: 'TSO-COM-11',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1XeAjMkiUCCbhIwTrAec50r-4boHxbFie'
+  },
+  {
+    id: 'com-13',
+    name: 'Payment Notice',
+    tag: 'Commercial',
+    price: 600,
+    ref: 'TSO-COM-13',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1gWIbn8sPzjzN6QwSeUfUOb-YHhjYpwje'
+  },
+  {
+    id: 'com-14',
+    name: 'Pay Less Notice',
+    tag: 'Commercial',
+    price: 600,
+    ref: 'TSO-COM-14',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1hGG9eeNM4OJfUX1xAaDfMdmykFi8nv1u'
+  },
+  {
+    id: 'com-15',
+    name: 'Letter Before Action',
+    tag: 'Commercial',
+    price: 1000,
+    ref: 'TSO-COM-15',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1jvocKql1GEvCOvvNWejUB1Qt2aTlONdc'
+  },
+  {
+    id: 'com-16',
+    name: 'Small Contractor Quote',
+    tag: 'Commercial',
+    price: 800,
+    ref: 'TSO-COM-16',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1qGdxTWgO9GmiAhJVKKYPmWMvdvV9QjAE'
+  },
+  {
+    id: 'hr_01',
+    name: 'Employment Offer Letter',
+    tag: 'HR & Workforce',
+    price: 500,
+    ref: 'TSO-HR-01',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=17TjVRSRwMC_av0DbbwPnwbf_LtGV_tF6'
+  },
+  {
+    id: 'hr_02',
+    name: 'Labour Only Agreement',
+    tag: 'HR & Workforce',
+    price: 1000,
+    ref: 'TSO-HR-02',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1A-mptd-o6tiZl5yy5TyEmil_psGbL09T'
+  },
+  {
+    id: 'hr_03',
+    name: 'Self-Employed Confirmation',
+    tag: 'HR & Workforce',
+    price: 800,
+    ref: 'TSO-HR-03',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1A_iUZMzDtxgCxIoWDltoxweYglyzXOi8'
+  },
+  {
+    id: 'hr_04',
+    name: 'Zero Hours Contract',
+    tag: 'HR & Workforce',
+    price: 1000,
+    ref: 'TSO-HR-04',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1B4h4pCHJKKnWizQDL6Awc0prPjJmhfv1'
+  },
+  {
+    id: 'hr_05',
+    name: 'Employment Contract',
+    tag: 'HR & Workforce',
+    price: 1200,
+    ref: 'TSO-HR-05',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1G-0EakC2-_c4MQuFSvaWA0QGpmlwvgtO'
+  },
+  {
+    id: 'hr_06',
+    name: 'New Starter Checklist',
+    tag: 'HR & Workforce',
+    price: 500,
+    ref: 'TSO-HR-06',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1KeSOiL2BlLMuSH4KvfXYOSLlqW2L0K9t'
+  },
+  {
+    id: 'hr_07',
+    name: 'CSCS Card Record',
+    tag: 'HR & Workforce',
+    price: 500,
+    ref: 'TSO-HR-07',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1O25ni_OOdfAXd7fNRO36Qru4n5mt6F4m'
+  },
+  {
+    id: 'hr_08',
+    name: 'Training Matrix',
+    tag: 'HR & Workforce',
+    price: 800,
+    ref: 'TSO-HR-08',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1O766LvlLIdYt-r2j6n5o-c-Zf9RMSbNT'
+  },
+  {
+    id: 'hr_09',
+    name: 'Competency Assessment',
+    tag: 'HR & Workforce',
+    price: 800,
+    ref: 'TSO-HR-09',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1OUAvnhWwqaVcMgRMZeWsDJIEFUs1_b-n'
+  },
+  {
+    id: 'hr_10',
+    name: 'Skills Register',
+    tag: 'HR & Workforce',
+    price: 600,
+    ref: 'TSO-HR-10',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1OWzKqpvW0MadGd_3PHFfEjjHZxlZlnu5'
+  },
+  {
+    id: 'hr_11',
+    name: 'Disciplinary Procedure',
+    tag: 'HR & Workforce',
+    price: 1000,
+    ref: 'TSO-HR-11',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1WQ4BoXntZHdENUtkLUoXsWS6j7WZ4NYo'
+  },
+  {
+    id: 'hr_12',
+    name: 'Verbal Warning Letter',
+    tag: 'HR & Workforce',
+    price: 600,
+    ref: 'TSO-HR-12',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1_rYQu6I8nW_yJMI3elkO4N-jVucHA_ug'
+  },
+  {
+    id: 'hr_13',
+    name: 'Written Warning Letter',
+    tag: 'HR & Workforce',
+    price: 600,
+    ref: 'TSO-HR-13',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1j3xr59XlF1mYMMPq_jlBsLCmjjFvbXUf'
+  },
+  {
+    id: 'hr_14',
+    name: 'Final Written Warning',
+    tag: 'HR & Workforce',
+    price: 600,
+    ref: 'TSO-HR-14',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1j77kLIcXRmXpQdOGyF1uOCYxT8NvpqTZ'
+  },
+  {
+    id: 'hr_15',
+    name: 'Dismissal Letter',
+    tag: 'HR & Workforce',
+    price: 800,
+    ref: 'TSO-HR-15',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1mimfF9yBwX0J0Y5ReSv5J4NYVVuTbKJr'
+  },
+  {
+    id: 'hr_16',
+    name: 'Holiday Request Form',
+    tag: 'HR & Workforce',
+    price: 500,
+    ref: 'TSO-HR-16',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1oi9xDaz1lxdFQDi5YCOY-V_IjK-nQvXI'
+  },
+  {
+    id: 'hr_17',
+    name: 'Return to Work Interview',
+    tag: 'HR & Workforce',
+    price: 600,
+    ref: 'TSO-HR-17',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1qYuLGIe6OtY3kpTiGCTgKrJHTNybxBbh'
+  },
+  {
+    id: 'hr_18',
+    name: 'Sickness Absence Record',
+    tag: 'HR & Workforce',
+    price: 500,
+    ref: 'TSO-HR-18',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1t0vMK4CbRFSxy8Mu3NeaQPGyJNdu7g-f'
+  },
+  {
+    id: 'hr_19',
+    name: 'Fit Note Medical Record',
+    tag: 'HR & Workforce',
+    price: 500,
+    ref: 'TSO-HR-19',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1vEZC8O740Yw4nJU1ysiJ_eVOYN61UDa7'
+  },
+  {
+    id: 'hr_20',
+    name: 'Performance Review',
+    tag: 'HR & Workforce',
+    price: 600,
+    ref: 'TSO-HR-20',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1vhlEwNINPayCO4Oy4P36B3uXpqtQLCOv'
+  },
+  {
+    id: 'sole-trader-pack',
+    name: 'Sole Trader Pack',
+    tag: 'Bundle',
+    price: 4900,
+    ref: 'TSO-SOLE-PACK',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1P_bnO4DqHaoz00ispDh3QodNRtACEzJB'
+  },
+  {
+    id: 'contractor-pack',
+    name: 'Contractor Pack',
+    tag: 'Bundle',
+    price: 14900,
+    ref: 'TSO-CONT-PACK',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1Wkan0-LaoSGY4OCfnMOsgXyB6Dcqcuwj'
+  },
+  {
+    id: 'company-pack',
+    name: 'Company Pack',
+    tag: 'Bundle',
+    price: 29900,
+    ref: 'TSO-COMP-PACK',
+    driveUrl: 'https://drive.google.com/uc?export=download&id=1Ll0H0OhLlyiE7BEXgcybI7hNY13VWCC0'
+  },
+];
+
+// ═══════════════════════════════════════════════════════
+// STRIPE SETUP
+// ═══════════════════════════════════════════════════════
+const stripe = Stripe('pk_live_51TON4vAF39zLoqy1hyWvT9FxKPM4U0xUqZI0tL0ZqThOtmKVILPeFZscgteFomODoNVAGs5wczQEAunV7CE8SS4D00XY0NhC0X');
+const elements = stripe.elements();
+const cardElement = elements.create('card', {
+  style: {
+    base: {
+      fontFamily: "'Barlow', sans-serif",
+      fontSize: '16px',
+      color: '#0f1117',
+      '::placeholder': { color: '#aab0bc' }
+    },
+    invalid: { color: '#c0392b' }
+  }
+});
+cardElement.mount('#card-element');
+cardElement.on('focus', () => document.getElementById('card-element').classList.add('focused'));
+cardElement.on('blur', () => document.getElementById('card-element').classList.remove('focused'));
+cardElement.on('change', (e) => {
+  document.getElementById('card-errors').textContent = e.error ? e.error.message : '';
+});
+
+// ═══════════════════════════════════════════════════════
+// BASKET STATE
+// ═══════════════════════════════════════════════════════
+let basket = [];
+
+// Check if arriving from main site with a product pre-selected
+const urlParams = new URLSearchParams(window.location.search);
+const preload = urlParams.get('add');
+if (preload) {
+  const product = PRODUCTS.find(p => p.id === preload);
+  if (product) basket.push(product);
+}
+
+function formatPrice(pence) {
+  return '£' + (pence / 100).toFixed(2).replace('.00', '');
+}
+
+function basketTotal() {
+  return basket.reduce((sum, item) => sum + item.price, 0);
+}
+
+function renderBasket() {
+  const container = document.getElementById('basket-items');
+  const totalRow = document.getElementById('basket-total-row');
+  const payBtn = document.getElementById('pay-btn');
+  const payBtnText = document.getElementById('pay-btn-text');
+  const total = basketTotal();
+
+  if (basket.length === 0) {
+    container.innerHTML = `
+      <div class="basket-empty">
+        <p>Your basket is empty.<br>Add documents from the list below.</p>
+        <a href="index.html#shop" class="btn-browse">Browse Documents</a>
+      </div>`;
+    totalRow.style.display = 'none';
+    payBtn.disabled = true;
+    payBtnText.textContent = 'Pay £0';
+  } else {
+    container.innerHTML = basket.map(item => `
+      <div class="basket-item">
+        <div class="basket-item-info">
+          <div class="basket-item-name">${item.name}</div>
+          <div class="basket-item-tag">${item.ref} · Word .docx</div>
+        </div>
+        <div class="basket-item-right">
+          <div class="basket-item-price">${formatPrice(item.price)}</div>
+          <button class="basket-remove" onclick="removeFromBasket('${item.id}')" title="Remove">✕</button>
+        </div>
+      </div>
+    `).join('');
+    totalRow.style.display = 'block';
+    document.getElementById('basket-total-display').textContent = formatPrice(total);
+    payBtn.disabled = false;
+    payBtnText.textContent = `Pay ${formatPrice(total)}`;
+  }
+
+  renderOrderSummary();
+  renderAddGrid();
+}
+
+function renderOrderSummary() {
+  const container = document.getElementById('order-summary');
+  const total = basketTotal();
+  if (basket.length === 0) { container.innerHTML = ''; return; }
+  container.innerHTML = `
+    <div style="margin-bottom:1rem;">
+      ${basket.map(item => `
+        <div class="order-line">
+          <span>${item.name}</span>
+          <span>${formatPrice(item.price)}</span>
+        </div>
+      `).join('')}
+      <div class="order-line total">
+        <span>Total</span>
+        <span>${formatPrice(total)}</span>
+      </div>
+    </div>
+    <hr style="border:none; border-top:1px solid var(--rule); margin-bottom:1.2rem;">
+  `;
+}
+
+function renderAddGrid() {
+  const container = document.getElementById('add-grid');
+  const basketIds = basket.map(i => i.id);
+  container.innerHTML = PRODUCTS.map(p => `
+    <div class="add-item">
+      <div class="add-item-tag">${p.tag}</div>
+      <div class="add-item-name">${p.name}</div>
+      <div class="add-item-bottom">
+        <div class="add-item-price">${formatPrice(p.price)}</div>
+        <button class="btn-add ${basketIds.includes(p.id) ? 'in-basket' : ''}"
+          onclick="addToBasket('${p.id}')"
+          ${basketIds.includes(p.id) ? 'disabled' : ''}>
+          ${basketIds.includes(p.id) ? '✓ Added' : '+ Add'}
+        </button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function addToBasket(id) {
+  const product = PRODUCTS.find(p => p.id === id);
+  if (product && !basket.find(i => i.id === id)) {
+    basket.push(product);
+    renderBasket();
+  }
+}
+
+function removeFromBasket(id) {
+  basket = basket.filter(i => i.id !== id);
+  renderBasket();
+}
+
+// ═══════════════════════════════════════════════════════
+// PAYMENT HANDLING
+// Note: For production, the createPaymentIntent call must
+// go via your Netlify serverless function (see netlify/
+// functions/create-payment-intent.js) which holds your
+// Stripe Secret Key securely. Never expose the secret key
+// in frontend code.
+// ═══════════════════════════════════════════════════════
+document.getElementById('payment-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+
+  const email = document.getElementById('email').value;
+  const firstName = document.getElementById('first-name').value;
+  const lastName = document.getElementById('last-name').value;
+
+  if (!email || !firstName || !lastName) {
+    document.getElementById('card-errors').textContent = 'Please fill in all fields.';
+    return;
+  }
+  if (basket.length === 0) return;
+
+  // Show spinner
+  const payBtn = document.getElementById('pay-btn');
+  const paySpinner = document.getElementById('pay-spinner');
+  const payBtnText = document.getElementById('pay-btn-text');
+  payBtn.disabled = true;
+  paySpinner.style.display = 'block';
+  payBtnText.textContent = 'Processing...';
+  document.getElementById('card-errors').textContent = '';
+
+  try {
+    // Call Pipedream to create a PaymentIntent
+    // IMPORTANT: Replace PASTE_YOUR_PIPEDREAM_URL_HERE with your actual Pipedream endpoint URL
+    const PIPEDREAM_URL = 'https://eo9zyhxe2ltfyx7.m.pipedream.net';
+
+    const response = await fetch(PIPEDREAM_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        amount: basketTotal(),
+        currency: 'gbp',
+        email: email,
+        items: basket.map(i => ({ id: i.id, name: i.name, price: i.price }))
+      })
+    });
+
+    // Pipedream returns HTML wrapping the JSON — extract it
+    const rawText = await response.text();
+    
+    // Try to extract JSON from Pipedream's response
+    let clientSecret;
+    try {
+      // First try direct JSON parse
+      const data = JSON.parse(rawText);
+      clientSecret = data.clientSecret || (data[0] && data[0].clientSecret);
+    } catch(e) {
+      // Pipedream wraps in HTML — extract the JSON part
+      const jsonMatch = rawText.match(/\{[^{}]*"clientSecret"[^{}]*\}/);
+      if (jsonMatch) {
+        const data = JSON.parse(jsonMatch[0]);
+        clientSecret = data.clientSecret;
+      }
+      // Also try extracting from $return_value format
+      if (!clientSecret) {
+        const returnMatch = rawText.match(/pi_[A-Za-z0-9_]+_secret_[A-Za-z0-9]+/);
+        if (returnMatch) clientSecret = returnMatch[0];
+      }
+    }
+    
+    if (!clientSecret) throw new Error('Payment setup failed. Please try again.');
+
+    // Confirm payment with Stripe
+    const { error, paymentIntent } = await stripe.confirmCardPayment(clientSecret, {
+      payment_method: {
+        card: cardElement,
+        billing_details: {
+          name: `${firstName} ${lastName}`,
+          email: email
+        }
+      }
+    });
+
+    if (error) {
+      document.getElementById('card-errors').textContent = error.message;
+      payBtn.disabled = false;
+      paySpinner.style.display = 'none';
+      payBtnText.textContent = `Pay ${formatPrice(basketTotal())}`;
+    } else if (paymentIntent.status === 'succeeded') {
+      showSuccess(email);
+    }
+
+  } catch (err) {
+    document.getElementById('card-errors').textContent = err.message || 'Something went wrong. Please try again.';
+    payBtn.disabled = false;
+    paySpinner.style.display = 'none';
+    payBtnText.textContent = `Pay ${formatPrice(basketTotal())}`;
+  }
+});
+
+function showSuccess(email) {
+  // Hide form, show success
+  document.getElementById('payment-form-wrap').style.display = 'none';
+  const successPanel = document.getElementById('success-panel');
+  successPanel.style.display = 'block';
+
+  // Build download list
+  const downloadList = document.getElementById('download-list');
+  downloadList.innerHTML = basket.map(item => `
+    <div class="download-item">
+      <div class="download-item-name">${item.name}</div>
+      <a href="${item.driveUrl}" class="btn-download" target="_blank" download>Download</a>
+    </div>
+  `).join('');
+
+  // Update order summary to show email note
+  document.getElementById('order-summary').innerHTML = `
+    <div class="email-note" style="margin-bottom:1rem;">
+      Receipt and download links sent to <strong>${email}</strong>
+    </div>
+  `;
+
+  // Clear basket
+  basket = [];
+}
+
+// ═══════════════════════════════════════════════════════
+// INITIAL RENDER
+// ═══════════════════════════════════════════════════════
+renderBasket();
+</script>
+</body>
+</html>

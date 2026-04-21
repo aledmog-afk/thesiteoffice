@@ -1,0 +1,1060 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Site Office – Professional Construction Documents for UK Contractors</title>
+<meta name="description" content="Ready-to-use construction documents for UK contractors. Method statements, RAMS, CDM plans, contracts, toolbox talks and more. Written by site professionals.">
+<meta name="keywords" content="construction documents UK, method statement template, RAMS template, CDM construction phase plan, toolbox talks, subcontractor agreement, site management forms">
+<meta property="og:title" content="The Site Office – Construction Documents">
+<meta property="og:description" content="Professional construction documents written by people who've actually worked on site. RAMS, CDM, contracts, HR and more.">
+<meta property="og:url" content="https://thesiteoffice.uk">
+<link rel="canonical" href="https://thesiteoffice.uk">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;800&family=Barlow:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #0f1117;
+    --ink-mid: #2a2d35;
+    --ink-soft: #4a4d58;
+    --rule: #e2e4e9;
+    --off: #f7f8fa;
+    --white: #ffffff;
+    --amber: #e8a020;
+    --amber-light: #fef3dc;
+    --blue: #1a4fa0;
+    --blue-light: #dce8ff;
+    --green: #1e6b3c;
+    --green-light: #dff0e8;
+    --red: #c0392b;
+    --red-light: #fce8e6;
+    --font-display: 'Barlow Condensed', sans-serif;
+    --font-body: 'Barlow', sans-serif;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    font-family: var(--font-body);
+    color: var(--ink);
+    background: var(--white);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ─── NAV ─────────────────────────────────────── */
+  nav {
+    position: sticky; top: 0; z-index: 100;
+    background: var(--ink);
+    border-bottom: 3px solid var(--amber);
+    padding: 0 5%;
+    display: flex; align-items: center; justify-content: space-between;
+    height: 64px;
+  }
+  .nav-logo {
+    font-family: var(--font-display);
+    font-size: 1.5rem; font-weight: 800;
+    color: var(--white); letter-spacing: 0.03em;
+    text-decoration: none;
+  }
+  .nav-logo span { color: var(--amber); }
+  .nav-links { display: flex; gap: 2rem; list-style: none; }
+  .nav-links a {
+    color: #aab0bc; font-size: 0.9rem; font-weight: 500;
+    text-decoration: none; letter-spacing: 0.05em; text-transform: uppercase;
+    transition: color 0.2s;
+  }
+  .nav-links a:hover { color: var(--white); }
+  .nav-cta {
+    background: var(--amber); color: var(--ink) !important;
+    padding: 0.5rem 1.2rem; border-radius: 3px; font-weight: 600 !important;
+    transition: background 0.2s !important;
+  }
+  .nav-cta:hover { background: #f5b840 !important; color: var(--ink) !important; }
+
+  /* ─── HERO ────────────────────────────────────── */
+  .hero {
+    background: var(--ink);
+    padding: 80px 5% 70px;
+    position: relative; overflow: hidden;
+  }
+  .hero::before {
+    content: '';
+    position: absolute; top: 0; right: 0;
+    width: 50%; height: 100%;
+    background: repeating-linear-gradient(
+      -45deg,
+      transparent, transparent 20px,
+      rgba(255,255,255,0.015) 20px, rgba(255,255,255,0.015) 21px
+    );
+  }
+  .hero-inner {
+    max-width: 1100px; margin: 0 auto;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 60px; align-items: center;
+  }
+  .hero-eyebrow {
+    font-family: var(--font-display);
+    font-size: 0.85rem; font-weight: 600; letter-spacing: 0.15em;
+    text-transform: uppercase; color: var(--amber);
+    margin-bottom: 1rem;
+  }
+  .hero h1 {
+    font-family: var(--font-display);
+    font-size: clamp(2.8rem, 5vw, 4.2rem);
+    font-weight: 800; line-height: 1.0;
+    color: var(--white); letter-spacing: 0.01em;
+    margin-bottom: 1.4rem;
+  }
+  .hero h1 em { color: var(--amber); font-style: normal; }
+  .hero-sub {
+    color: #8892a4; font-size: 1.1rem; font-weight: 300;
+    line-height: 1.7; margin-bottom: 2rem; max-width: 480px;
+  }
+  .hero-actions { display: flex; gap: 1rem; flex-wrap: wrap; }
+  .btn-primary {
+    background: var(--amber); color: var(--ink);
+    padding: 0.9rem 2rem; border-radius: 3px;
+    font-family: var(--font-display); font-size: 1rem; font-weight: 700;
+    letter-spacing: 0.05em; text-transform: uppercase;
+    text-decoration: none; border: none; cursor: pointer;
+    transition: background 0.2s, transform 0.15s;
+    display: inline-block;
+  }
+  .btn-primary:hover { background: #f5b840; transform: translateY(-1px); }
+  .btn-outline {
+    background: transparent; color: var(--white);
+    padding: 0.9rem 2rem; border-radius: 3px;
+    font-family: var(--font-display); font-size: 1rem; font-weight: 700;
+    letter-spacing: 0.05em; text-transform: uppercase;
+    text-decoration: none; border: 2px solid rgba(255,255,255,0.2);
+    transition: border-color 0.2s, transform 0.15s;
+    display: inline-block;
+  }
+  .btn-outline:hover { border-color: rgba(255,255,255,0.5); transform: translateY(-1px); }
+
+  .hero-stats {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px;
+    background: rgba(255,255,255,0.08); border-radius: 6px; overflow: hidden;
+  }
+  .stat-box {
+    background: rgba(255,255,255,0.04);
+    padding: 1.8rem 1.4rem; text-align: center;
+  }
+  .stat-num {
+    font-family: var(--font-display);
+    font-size: 2.6rem; font-weight: 800; color: var(--amber);
+    line-height: 1; display: block; margin-bottom: 0.3rem;
+  }
+  .stat-label {
+    color: #6b7485; font-size: 0.8rem; font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.08em;
+  }
+  .hero-trust {
+    margin-top: 1.5rem; padding-top: 1.5rem;
+    border-top: 1px solid rgba(255,255,255,0.08);
+    color: #6b7485; font-size: 0.85rem; font-weight: 500;
+    letter-spacing: 0.05em; text-transform: uppercase;
+  }
+  .trust-badges { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 0.8rem; }
+  .badge {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.1);
+    padding: 0.4rem 0.9rem; border-radius: 3px;
+    color: #8892a4; font-size: 0.8rem; font-weight: 500;
+  }
+
+  /* ─── TRUST BAR ───────────────────────────────── */
+  .trust-bar {
+    background: var(--amber);
+    padding: 14px 5%;
+    display: flex; align-items: center; justify-content: center;
+    gap: 3rem; flex-wrap: wrap;
+  }
+  .trust-bar-item {
+    font-family: var(--font-display);
+    font-size: 0.9rem; font-weight: 700;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--ink); display: flex; align-items: center; gap: 0.5rem;
+  }
+  .trust-bar-item::before { content: '✓'; font-size: 1rem; }
+
+  /* ─── SECTIONS ────────────────────────────────── */
+  section { padding: 80px 5%; }
+  .section-inner { max-width: 1100px; margin: 0 auto; }
+  .section-label {
+    font-family: var(--font-display);
+    font-size: 0.8rem; font-weight: 700; letter-spacing: 0.18em;
+    text-transform: uppercase; color: var(--amber);
+    margin-bottom: 0.8rem;
+  }
+  .section-title {
+    font-family: var(--font-display);
+    font-size: clamp(2rem, 3.5vw, 2.8rem);
+    font-weight: 800; line-height: 1.1;
+    color: var(--ink); margin-bottom: 1rem;
+  }
+  .section-sub {
+    color: var(--ink-soft); font-size: 1.05rem;
+    max-width: 600px; line-height: 1.7;
+  }
+  .section-header { margin-bottom: 3rem; }
+
+  /* ─── CATEGORIES ─────────────────────────────── */
+  #documents { background: var(--off); }
+  .cat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 1px; background: var(--rule);
+    border: 1px solid var(--rule);
+  }
+  .cat-card {
+    background: var(--white); padding: 2rem;
+    text-decoration: none; color: inherit;
+    transition: background 0.2s;
+    display: block;
+  }
+  .cat-card:hover { background: var(--ink); }
+  .cat-card:hover .cat-name { color: var(--white); }
+  .cat-card:hover .cat-count { color: var(--amber); }
+  .cat-card:hover .cat-desc { color: #8892a4; }
+  .cat-card:hover .cat-icon { border-color: rgba(255,255,255,0.1); color: var(--amber); }
+  .cat-icon {
+    width: 44px; height: 44px;
+    border: 2px solid var(--rule); border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.2rem; margin-bottom: 1.2rem;
+    transition: all 0.2s;
+  }
+  .cat-name {
+    font-family: var(--font-display);
+    font-size: 1.2rem; font-weight: 700;
+    letter-spacing: 0.02em; margin-bottom: 0.3rem;
+    transition: color 0.2s;
+  }
+  .cat-count {
+    font-family: var(--font-display);
+    font-size: 0.8rem; font-weight: 600; letter-spacing: 0.1em;
+    text-transform: uppercase; color: var(--amber);
+    margin-bottom: 0.8rem;
+    transition: color 0.2s;
+  }
+  .cat-desc {
+    color: var(--ink-soft); font-size: 0.88rem; line-height: 1.6;
+    transition: color 0.2s;
+  }
+
+  /* ─── FEATURED DOCS ──────────────────────────── */
+  .docs-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 1.5rem;
+  }
+  .doc-card {
+    border: 1px solid var(--rule); border-radius: 4px;
+    padding: 1.5rem; background: var(--white);
+    transition: box-shadow 0.2s, border-color 0.2s;
+    position: relative;
+  }
+  .doc-card:hover {
+    box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+    border-color: var(--amber);
+  }
+  .doc-tag {
+    display: inline-block;
+    font-size: 0.72rem; font-weight: 600; letter-spacing: 0.1em;
+    text-transform: uppercase; padding: 0.25rem 0.7rem;
+    border-radius: 2px; margin-bottom: 1rem;
+  }
+  .tag-hs { background: var(--red-light); color: var(--red); }
+  .tag-commercial { background: var(--blue-light); color: var(--blue); }
+  .tag-legal { background: var(--amber-light); color: #8a5500; }
+  .tag-quality { background: var(--green-light); color: var(--green); }
+  .tag-site { background: #f0eafa; color: #5b3fa0; }
+  .tag-hr { background: #fce8f4; color: #8a1060; }
+  .doc-name {
+    font-family: var(--font-display);
+    font-size: 1.15rem; font-weight: 700; margin-bottom: 0.5rem;
+  }
+  .doc-desc {
+    color: var(--ink-soft); font-size: 0.88rem; line-height: 1.6;
+    margin-bottom: 1.2rem;
+  }
+  .doc-footer { display: flex; align-items: center; justify-content: space-between; }
+  .doc-price {
+    font-family: var(--font-display);
+    font-size: 1.4rem; font-weight: 800; color: var(--ink);
+  }
+  .doc-format {
+    font-size: 0.78rem; font-weight: 500; color: #9099aa;
+    letter-spacing: 0.05em;
+  }
+  .doc-buy {
+    background: var(--ink); color: var(--white);
+    padding: 0.5rem 1.1rem; border-radius: 3px;
+    font-family: var(--font-display); font-size: 0.85rem; font-weight: 700;
+    letter-spacing: 0.05em; text-transform: uppercase;
+    text-decoration: none; border: none; cursor: pointer;
+    transition: background 0.2s;
+  }
+  .doc-buy:hover { background: var(--amber); color: var(--ink); }
+
+  /* ─── PRICING ────────────────────────────────── */
+  #pricing { background: var(--ink); }
+  #pricing .section-title { color: var(--white); }
+  #pricing .section-sub { color: #6b7485; }
+  #pricing .section-label { color: var(--amber); }
+  .pricing-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 4px; overflow: hidden;
+  }
+  .price-card { background: #15181f; padding: 2.5rem 2rem; position: relative; }
+  .price-card.featured { background: #1c2030; }
+  .price-badge {
+    position: absolute; top: -1px; left: 50%; transform: translateX(-50%);
+    background: var(--amber); color: var(--ink);
+    font-family: var(--font-display); font-size: 0.75rem; font-weight: 700;
+    letter-spacing: 0.1em; text-transform: uppercase;
+    padding: 0.3rem 1rem; border-radius: 0 0 4px 4px;
+  }
+  .price-tier {
+    font-family: var(--font-display);
+    font-size: 0.85rem; font-weight: 700; letter-spacing: 0.15em;
+    text-transform: uppercase; color: var(--amber); margin-bottom: 0.5rem;
+  }
+  .price-for {
+    color: #8892a4; font-size: 0.85rem; margin-bottom: 1.5rem;
+  }
+  .price-amount {
+    font-family: var(--font-display);
+    font-size: 3.2rem; font-weight: 800; color: var(--white);
+    line-height: 1; margin-bottom: 0.3rem;
+  }
+  .price-amount span { font-size: 1.4rem; vertical-align: top; margin-top: 0.5rem; display: inline-block; }
+  .price-note { color: #5a6070; font-size: 0.82rem; margin-bottom: 1.8rem; }
+  .price-features { list-style: none; margin-bottom: 2rem; }
+  .price-features li {
+    color: #8892a4; font-size: 0.9rem; padding: 0.5rem 0;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    display: flex; align-items: flex-start; gap: 0.6rem;
+  }
+  .price-features li::before { content: '—'; color: var(--amber); flex-shrink: 0; }
+  .price-features li strong { color: var(--white); }
+  .btn-price {
+    display: block; width: 100%; text-align: center;
+    padding: 0.9rem; border-radius: 3px;
+    font-family: var(--font-display); font-size: 1rem; font-weight: 700;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    text-decoration: none; cursor: pointer; border: none;
+    transition: all 0.2s;
+  }
+  .btn-price-outline {
+    background: transparent; color: #8892a4;
+    border: 1px solid rgba(255,255,255,0.1);
+  }
+  .btn-price-outline:hover { border-color: var(--amber); color: var(--amber); }
+  .btn-price-amber { background: var(--amber); color: var(--ink); }
+  .btn-price-amber:hover { background: #f5b840; }
+  .btn-price-white { background: rgba(255,255,255,0.08); color: var(--white); border: 1px solid rgba(255,255,255,0.15); }
+  .btn-price-white:hover { background: rgba(255,255,255,0.12); }
+
+  /* ─── WHY US ──────────────────────────────────── */
+  .why-grid {
+    display: grid; grid-template-columns: repeat(2, 1fr); gap: 3rem;
+    align-items: center;
+  }
+  .why-list { display: flex; flex-direction: column; gap: 1.5rem; }
+  .why-item { display: flex; gap: 1.2rem; align-items: flex-start; }
+  .why-num {
+    font-family: var(--font-display);
+    font-size: 2rem; font-weight: 800; color: var(--rule);
+    line-height: 1; flex-shrink: 0; width: 2.5rem;
+    transition: color 0.3s;
+  }
+  .why-item:hover .why-num { color: var(--amber); }
+  .why-title {
+    font-family: var(--font-display);
+    font-size: 1.1rem; font-weight: 700; margin-bottom: 0.3rem;
+  }
+  .why-text { color: var(--ink-soft); font-size: 0.9rem; line-height: 1.7; }
+  .testimonial-block {
+    background: var(--off); border-left: 4px solid var(--amber);
+    padding: 2.5rem; border-radius: 0 6px 6px 0;
+  }
+  .testimonial-quote {
+    font-size: 1.1rem; line-height: 1.8; color: var(--ink);
+    font-style: italic; margin-bottom: 1.5rem;
+  }
+  .testimonial-author {
+    font-family: var(--font-display);
+    font-weight: 700; font-size: 0.95rem;
+  }
+  .testimonial-role { color: var(--ink-soft); font-size: 0.85rem; }
+  .stars { color: var(--amber); font-size: 1rem; margin-bottom: 1rem; }
+
+  /* ─── HOW IT WORKS ────────────────────────────── */
+  #how-it-works { background: var(--off); }
+  .steps-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 0;
+    position: relative;
+  }
+  .steps-grid::before {
+    content: '';
+    position: absolute; top: 28px; left: 12.5%; right: 12.5%;
+    height: 2px; background: var(--rule); z-index: 0;
+  }
+  .step { padding: 0 1.5rem; text-align: center; position: relative; z-index: 1; }
+  .step-num {
+    width: 56px; height: 56px;
+    background: var(--white); border: 2px solid var(--rule);
+    border-radius: 50%; margin: 0 auto 1.5rem;
+    font-family: var(--font-display); font-size: 1.4rem; font-weight: 800;
+    color: var(--amber); display: flex; align-items: center; justify-content: center;
+    transition: all 0.2s;
+  }
+  .step:hover .step-num { background: var(--ink); border-color: var(--ink); color: var(--amber); }
+  .step-title {
+    font-family: var(--font-display);
+    font-size: 1rem; font-weight: 700; margin-bottom: 0.5rem;
+  }
+  .step-desc { color: var(--ink-soft); font-size: 0.88rem; line-height: 1.6; }
+
+  /* ─── PERSONALISATION ─────────────────────────── */
+  .personalise-block {
+    background: var(--ink); border-radius: 6px;
+    padding: 3rem; display: grid;
+    grid-template-columns: 1fr 1fr; gap: 3rem; align-items: center;
+  }
+  .personalise-block .section-title { color: var(--white); font-size: 1.8rem; }
+  .personalise-block .section-sub { color: #6b7485; }
+  .personalise-block .section-label { color: var(--amber); }
+  .personalise-list { list-style: none; display: flex; flex-direction: column; gap: 0.8rem; }
+  .personalise-list li {
+    color: #8892a4; font-size: 0.9rem;
+    display: flex; align-items: center; gap: 0.8rem;
+  }
+  .personalise-list li::before { content: '→'; color: var(--amber); }
+  .personalise-list li strong { color: var(--white); }
+  .personalise-price {
+    margin-top: 1.5rem; padding-top: 1.5rem;
+    border-top: 1px solid rgba(255,255,255,0.08);
+    font-family: var(--font-display); font-size: 1.6rem; font-weight: 800;
+    color: var(--white);
+  }
+  .personalise-price span { color: var(--amber); }
+
+  /* ─── FAQ ─────────────────────────────────────── */
+  .faq-list { display: flex; flex-direction: column; gap: 0; }
+  .faq-item { border-bottom: 1px solid var(--rule); }
+  .faq-q {
+    width: 100%; text-align: left; background: none; border: none;
+    padding: 1.4rem 0; cursor: pointer;
+    font-family: var(--font-body); font-size: 1rem; font-weight: 600;
+    color: var(--ink); display: flex; justify-content: space-between; align-items: center;
+  }
+  .faq-q::after {
+    content: '+'; font-size: 1.4rem; color: var(--amber);
+    font-weight: 300; flex-shrink: 0; margin-left: 1rem;
+    transition: transform 0.2s;
+  }
+  .faq-item.open .faq-q::after { transform: rotate(45deg); }
+  .faq-a {
+    display: none; padding-bottom: 1.4rem;
+    color: var(--ink-soft); font-size: 0.95rem; line-height: 1.8;
+    max-width: 680px;
+  }
+  .faq-item.open .faq-a { display: block; }
+
+  /* ─── CTA BANNER ──────────────────────────────── */
+  .cta-banner {
+    background: var(--amber); padding: 60px 5%;
+    text-align: center;
+  }
+  .cta-banner h2 {
+    font-family: var(--font-display);
+    font-size: clamp(2rem, 4vw, 3rem); font-weight: 800;
+    color: var(--ink); margin-bottom: 0.5rem;
+  }
+  .cta-banner p { color: rgba(0,0,0,0.6); font-size: 1.05rem; margin-bottom: 2rem; }
+  .cta-banner .btn-primary { background: var(--ink); color: var(--white); }
+  .cta-banner .btn-primary:hover { background: var(--ink-mid); }
+
+  /* ─── FOOTER ──────────────────────────────────── */
+  footer {
+    background: #0a0c11;
+    border-top: 1px solid rgba(255,255,255,0.06);
+    padding: 60px 5% 30px;
+  }
+  .footer-grid {
+    max-width: 1100px; margin: 0 auto;
+    display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; gap: 3rem;
+    margin-bottom: 3rem;
+  }
+  .footer-brand .nav-logo { display: block; margin-bottom: 1rem; font-size: 1.3rem; }
+  .footer-tagline { color: #4a5060; font-size: 0.88rem; line-height: 1.7; }
+  .footer-heading {
+    font-family: var(--font-display);
+    font-size: 0.8rem; font-weight: 700; letter-spacing: 0.15em;
+    text-transform: uppercase; color: #4a5060; margin-bottom: 1rem;
+  }
+  .footer-links { list-style: none; display: flex; flex-direction: column; gap: 0.6rem; }
+  .footer-links a { color: #6b7485; font-size: 0.88rem; text-decoration: none; transition: color 0.2s; }
+  .footer-links a:hover { color: var(--amber); }
+  .footer-bottom {
+    max-width: 1100px; margin: 0 auto;
+    padding-top: 2rem; border-top: 1px solid rgba(255,255,255,0.05);
+    display: flex; justify-content: space-between; align-items: center;
+    flex-wrap: wrap; gap: 1rem;
+  }
+  .footer-legal { color: #3a3f4a; font-size: 0.8rem; }
+  .footer-legal a { color: #4a5060; text-decoration: none; }
+  .footer-legal a:hover { color: var(--amber); }
+
+  /* ─── SCROLL ANIMATIONS ──────────────────────── */
+  .reveal { opacity: 0; transform: translateY(24px); transition: opacity 0.5s ease, transform 0.5s ease; }
+  .reveal.visible { opacity: 1; transform: translateY(0); }
+
+  /* ─── RESPONSIVE ─────────────────────────────── */
+  @media (max-width: 900px) {
+    .hero-inner { grid-template-columns: 1fr; gap: 40px; }
+    .hero-stats { grid-template-columns: repeat(3, 1fr); }
+    .pricing-grid { grid-template-columns: 1fr; }
+    .why-grid { grid-template-columns: 1fr; }
+    .steps-grid { grid-template-columns: repeat(2, 1fr); gap: 2rem; }
+    .steps-grid::before { display: none; }
+    .personalise-block { grid-template-columns: 1fr; }
+    .footer-grid { grid-template-columns: 1fr 1fr; }
+    nav .nav-links { display: none; }
+  }
+  @media (max-width: 600px) {
+    .hero-stats { grid-template-columns: 1fr; }
+    .steps-grid { grid-template-columns: 1fr; }
+    .footer-grid { grid-template-columns: 1fr; }
+    .footer-bottom { flex-direction: column; text-align: center; }
+  }
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <a href="/" class="nav-logo">THE SITE <span>OFFICE</span></a>
+  <ul class="nav-links">
+    <li><a href="#documents">Documents</a></li>
+    <li><a href="#pricing">Pricing</a></li>
+    <li><a href="#why-us">About</a></li>
+    <li><a href="#faq">FAQ</a></li>
+    <li><a href="#shop" class="nav-cta">Shop Now</a></li>
+  </ul>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="hero-inner">
+    <div>
+      <p class="hero-eyebrow">UK Construction Documents</p>
+      <h1>Every document your site <em>actually needs.</em></h1>
+      <p class="hero-sub">Professional, ready-to-use construction documents written by people who've worn the boots. Not a solicitor. Not a template farm. Someone who's actually run a site.</p>
+      <div class="hero-actions">
+        <a href="#shop" class="btn-primary">Browse Documents</a>
+        <a href="#pricing" class="btn-outline">View Packs</a>
+      </div>
+    </div>
+    <div>
+      <div class="hero-stats">
+        <div class="stat-box">
+          <span class="stat-num">150+</span>
+          <span class="stat-label">Documents</span>
+        </div>
+        <div class="stat-box">
+          <span class="stat-num">CDM</span>
+          <span class="stat-label">2015 Compliant</span>
+        </div>
+        <div class="stat-box">
+          <span class="stat-num">UK</span>
+          <span class="stat-label">Law Ready</span>
+        </div>
+        <div class="stat-box">
+          <span class="stat-num">.docx</span>
+          <span class="stat-label">Word Format</span>
+        </div>
+        <div class="stat-box">
+          <span class="stat-num">✓</span>
+          <span class="stat-label">Instant Download</span>
+        </div>
+        <div class="stat-box">
+          <span class="stat-num">★★★★★</span>
+          <span class="stat-label">Rated</span>
+        </div>
+      </div>
+      <div class="hero-trust">
+        <div>Used by</div>
+        <div class="trust-badges">
+          <span class="badge">Sole Traders</span>
+          <span class="badge">SME Builders</span>
+          <span class="badge">Main Contractors</span>
+          <span class="badge">Subcontractors</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- TRUST BAR -->
+<div class="trust-bar">
+  <div class="trust-bar-item">Written on-site, not in an office</div>
+  <div class="trust-bar-item">Instant Word download</div>
+  <div class="trust-bar-item">CDM 2015 compliant</div>
+  <div class="trust-bar-item">No subscription</div>
+</div>
+
+<!-- DOCUMENT CATEGORIES -->
+<section id="documents">
+  <div class="section-inner">
+    <div class="section-header reveal">
+      <p class="section-label">The Library</p>
+      <h2 class="section-title">Everything your business needs, in one place</h2>
+      <p class="section-sub">From the first RAMS pack to a full company quality system. Solo trader to Tier 1 supply chain.</p>
+    </div>
+    <div class="cat-grid reveal">
+      <a href="#shop" class="cat-card">
+        <div class="cat-icon">🦺</div>
+        <div class="cat-name">Health & Safety</div>
+        <div class="cat-count">40+ Documents</div>
+        <div class="cat-desc">RAMS, method statements, toolbox talks, permits, site inductions, accident reports and more.</div>
+      </a>
+      <a href="#shop" class="cat-card">
+        <div class="cat-icon">📋</div>
+        <div class="cat-name">CDM & Construction Phase</div>
+        <div class="cat-count">12+ Documents</div>
+        <div class="cat-desc">Construction Phase Plans, pre-construction information, F10 guidance, designer duties checklist.</div>
+      </a>
+      <a href="#shop" class="cat-card">
+        <div class="cat-icon">💷</div>
+        <div class="cat-name">Commercial & Estimating</div>
+        <div class="cat-count">20+ Documents</div>
+        <div class="cat-desc">Bill of quantities, variation orders, applications for payment, daywork sheets, tender letters.</div>
+      </a>
+      <a href="#shop" class="cat-card">
+        <div class="cat-icon">📄</div>
+        <div class="cat-name">Contracts & Legal</div>
+        <div class="cat-count">10+ Documents</div>
+        <div class="cat-desc">Subcontractor agreements, letters of intent, self-employed contracts, defects liability notices.</div>
+      </a>
+      <a href="#shop" class="cat-card">
+        <div class="cat-icon">🏗️</div>
+        <div class="cat-name">Site Management</div>
+        <div class="cat-count">25+ Documents</div>
+        <div class="cat-desc">Site diaries, delivery records, snagging lists, inspection & test plans, handover checklists.</div>
+      </a>
+      <a href="#shop" class="cat-card">
+        <div class="cat-icon">✅</div>
+        <div class="cat-name">Quality & Environmental</div>
+        <div class="cat-count">15+ Documents</div>
+        <div class="cat-desc">Quality management plans, environmental plans, waste management, non-conformance reports.</div>
+      </a>
+      <a href="#shop" class="cat-card">
+        <div class="cat-icon">👷</div>
+        <div class="cat-name">HR & Workforce</div>
+        <div class="cat-count">15+ Documents</div>
+        <div class="cat-desc">Labour agreements, competency records, CSCS trackers, training matrices, disciplinary templates.</div>
+      </a>
+      <a href="#shop" class="cat-card">
+        <div class="cat-icon">🤝</div>
+        <div class="cat-name">Client-Facing</div>
+        <div class="cat-count">10+ Documents</div>
+        <div class="cat-desc">Proposals, stage payment schedules, practical completion notices, payment chasing letters.</div>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- FEATURED DOCUMENTS -->
+<section id="shop">
+  <div class="section-inner">
+    <div class="section-header reveal">
+      <p class="section-label">Popular Documents</p>
+      <h2 class="section-title">Buy what you need, when you need it</h2>
+      <p class="section-sub">Individual documents from £5. Instant download. Edit in Word and it's yours.</p>
+    </div>
+    <div class="docs-grid reveal">
+
+      <div class="doc-card">
+        <span class="doc-tag tag-hs">Health &amp; Safety</span>
+        <div class="doc-name">Groundworks RAMS Pack</div>
+        <div class="doc-desc">Full method statement and risk assessment for groundworks. 12 hazards assessed, colour-coded risk ratings, PPE schedule, operative sign-off.</div>
+        <div class="doc-footer">
+          <div>
+            <div class="doc-price">£9</div>
+            <div class="doc-format">Word .docx</div>
+          </div>
+          <a href="checkout.html?add=gw-rams" class="doc-buy">Add to basket</a>
+        </div>
+      </div>
+
+      <div class="doc-card">
+        <span class="doc-tag tag-hs">Health &amp; Safety</span>
+        <div class="doc-name">Roofing RAMS Pack</div>
+        <div class="doc-desc">Method statement and risk assessment for roofing works. Working at height controls, edge protection requirements, weather conditions guidance.</div>
+        <div class="doc-footer">
+          <div>
+            <div class="doc-price">£9</div>
+            <div class="doc-format">Word .docx</div>
+          </div>
+          <a href="checkout.html?add=rf-rams" class="doc-buy">Add to basket</a>
+        </div>
+      </div>
+
+      <div class="doc-card">
+        <span class="doc-tag tag-hs">Health &amp; Safety</span>
+        <div class="doc-name">CDM Construction Phase Plan</div>
+        <div class="doc-desc">CDM 2015 compliant construction phase plan template. Fully structured with all required sections. Used by site managers on projects of all sizes.</div>
+        <div class="doc-footer">
+          <div>
+            <div class="doc-price">£15</div>
+            <div class="doc-format">Word .docx</div>
+          </div>
+          <a href="checkout.html?add=cdm-cpp" class="doc-buy">Add to basket</a>
+        </div>
+      </div>
+
+      <div class="doc-card">
+        <span class="doc-tag tag-quality">Quality</span>
+        <div class="doc-name">Quality Management Plan</div>
+        <div class="doc-desc">Full QMP with ITP hold/witness point table, document control, subcontractor quality requirements and handover pack checklist.</div>
+        <div class="doc-footer">
+          <div>
+            <div class="doc-price">£12</div>
+            <div class="doc-format">Word .docx</div>
+          </div>
+          <a href="checkout.html?add=qmp" class="doc-buy">Add to basket</a>
+        </div>
+      </div>
+
+      <div class="doc-card">
+        <span class="doc-tag tag-legal">Contracts</span>
+        <div class="doc-name">Subcontractor Agreement</div>
+        <div class="doc-desc">Simple, plain-English subcontractor agreement. Covers scope, payment, retentions, defects liability, termination and dispute resolution.</div>
+        <div class="doc-footer">
+          <div>
+            <div class="doc-price">£15</div>
+            <div class="doc-format">Word .docx</div>
+          </div>
+          <a href="checkout.html?add=subcontract" class="doc-buy">Add to basket</a>
+        </div>
+      </div>
+
+      <div class="doc-card">
+        <span class="doc-tag tag-commercial">Commercial</span>
+        <div class="doc-name">Application for Payment Template</div>
+        <div class="doc-desc">Professional interim application for payment. Gross value, retention, previous certified, amount due — all calculated. Looks the part on any job.</div>
+        <div class="doc-footer">
+          <div>
+            <div class="doc-price">£8</div>
+            <div class="doc-format">Word .docx</div>
+          </div>
+          <a href="checkout.html?add=afp" class="doc-buy">Add to basket</a>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- PRICING PACKS -->
+<section id="pricing">
+  <div class="section-inner">
+    <div class="section-header reveal">
+      <p class="section-label">Packs</p>
+      <h2 class="section-title">Everything you need, one price</h2>
+      <p class="section-sub">Three packs built around the size of your business. All documents instant download, all in Word.</p>
+    </div>
+    <div class="pricing-grid reveal">
+
+      <div class="price-card">
+        <div class="price-tier">Sole Trader</div>
+        <div class="price-for">1-man bands & small builders</div>
+        <div class="price-amount"><span>£</span>49</div>
+        <div class="price-note">One-off payment. Yours to keep.</div>
+        <ul class="price-features">
+          <li><strong>15 RAMS templates</strong> — trade specific</li>
+          <li><strong>20 Toolbox Talks</strong> — ready to use</li>
+          <li>Site diary & delivery records</li>
+          <li>Basic subcontractor agreement</li>
+          <li>Client quote & proposal template</li>
+          <li>COSHH assessments</li>
+          <li>Site induction form</li>
+        </ul>
+        <a href="checkout.html?add=sole-trader-pack" class="btn-price btn-price-outline">Get Sole Trader Pack</a>
+      </div>
+
+      <div class="price-card featured">
+        <div class="price-badge">Most Popular</div>
+        <div class="price-tier">Contractor</div>
+        <div class="price-for">Small to mid-size contractors</div>
+        <div class="price-amount"><span>£</span>149</div>
+        <div class="price-note">One-off payment. Yours to keep.</div>
+        <ul class="price-features">
+          <li><strong>Everything in Sole Trader</strong></li>
+          <li><strong>Full CDM document suite</strong></li>
+          <li>Quality Management Plan + ITP</li>
+          <li>Environmental & Waste Management Plans</li>
+          <li>Full commercial pack (BOQ, variations, applications)</li>
+          <li>HR & workforce documents</li>
+          <li>Letter of intent & appointment letters</li>
+          <li>Stage payment schedules</li>
+        </ul>
+        <a href="checkout.html?add=contractor-pack" class="btn-price btn-price-amber">Get Contractor Pack</a>
+      </div>
+
+      <div class="price-card">
+        <div class="price-tier">Company</div>
+        <div class="price-for">Established contractors & Tier 1 supply</div>
+        <div class="price-amount"><span>£</span>299</div>
+        <div class="price-note">One-off payment. Yours to keep.</div>
+        <ul class="price-features">
+          <li><strong>Everything in Contractor</strong></li>
+          <li><strong>Full QMS document suite</strong></li>
+          <li>Non-conformance report system</li>
+          <li>Collateral warranty templates</li>
+          <li>Sustainability statements</li>
+          <li>Full ITP library by trade</li>
+          <li>Priority email support</li>
+          <li>Free updates for 12 months</li>
+        </ul>
+        <a href="checkout.html?add=company-pack" class="btn-price btn-price-white">Get Company Pack</a>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- WHY US -->
+<section id="why-us">
+  <div class="section-inner">
+    <div class="why-grid">
+      <div>
+        <div class="section-header reveal">
+          <p class="section-label">Why The Site Office</p>
+          <h2 class="section-title">Built by someone who's actually been on site</h2>
+        </div>
+        <div class="why-list reveal">
+          <div class="why-item">
+            <div class="why-num">01</div>
+            <div>
+              <div class="why-title">Written from the ground up</div>
+              <div class="why-text">These documents were written by an experienced site manager — not a solicitor, not a generic template service. Every section reflects how construction actually works in the UK.</div>
+            </div>
+          </div>
+          <div class="why-item">
+            <div class="why-num">02</div>
+            <div>
+              <div class="why-title">Ready to use on Monday</div>
+              <div class="why-text">Download, add your company name and logo, fill in the project details. You can have a professional RAMS pack ready before you even get to site.</div>
+            </div>
+          </div>
+          <div class="why-item">
+            <div class="why-num">03</div>
+            <div>
+              <div class="why-title">Legally current, not cobbled together</div>
+              <div class="why-text">CDM 2015, Environmental Protection Act, Waste Regulations 2011 — every document references current UK legislation. Not something copied from a forum in 2014.</div>
+            </div>
+          </div>
+          <div class="why-item">
+            <div class="why-num">04</div>
+            <div>
+              <div class="why-title">No subscription, no catch</div>
+              <div class="why-text">Buy once, use forever. The documents are yours. No monthly fee, no login, no cloud storage required. A Word file on your desktop, ready to go.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="reveal">
+        <div class="testimonial-block">
+          <div class="stars">★★★★★</div>
+          <div class="testimonial-quote">"Saved me hours. I used to spend half a Sunday cobbling together a method statement from bits off Google. Downloaded the groundworks RAMS, had it done in 20 minutes. Exactly what I needed."</div>
+          <div class="testimonial-author">Dave T.</div>
+          <div class="testimonial-role">Groundworks contractor, West Midlands</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<section id="how-it-works">
+  <div class="section-inner">
+    <div class="section-header reveal" style="text-align:center; max-width:600px; margin:0 auto 3rem;">
+      <p class="section-label">How It Works</p>
+      <h2 class="section-title">From purchase to site-ready in minutes</h2>
+    </div>
+    <div class="steps-grid reveal">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-title">Browse & select</div>
+        <div class="step-desc">Pick individual documents or choose a pack that fits your business size.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-title">Pay securely</div>
+        <div class="step-desc">Checkout with card, Apple Pay or Google Pay via Stripe. Takes 30 seconds.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-title">Instant download</div>
+        <div class="step-desc">Your documents arrive immediately. Word format, ready to edit on any device.</div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-title">Add your details</div>
+        <div class="step-desc">Drop in your logo and company name. Professional documents in minutes, not hours.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- PERSONALISATION -->
+<section>
+  <div class="section-inner">
+    <div class="personalise-block reveal">
+      <div>
+        <p class="section-label">White Label Service</p>
+        <h2 class="section-title" style="font-size:1.9rem;">Want your logo on every document?</h2>
+        <p class="section-sub" style="margin-bottom:1.5rem;">Send us your logo and company details and we'll return a fully branded version of any document — or your entire pack — with your name on the cover.</p>
+        <ul class="personalise-list">
+          <li>Your <strong>company logo</strong> on every header</li>
+          <li>Your <strong>company name, address & contact details</strong> pre-filled</li>
+          <li>Your <strong>document reference numbers</strong> applied</li>
+          <li>Returned within <strong>24 hours</strong></li>
+        </ul>
+        <div class="personalise-price">From <span>£10</span> per document <br><span style="font-size:1rem; color:#6b7485; font-weight:400;">or £40 for a full pack</span></div>
+      </div>
+      <div>
+        <a href="mailto:hello@thesiteoffice.uk" class="btn-primary" style="display:block; text-align:center; margin-bottom:1rem;">Get Your Documents Branded</a>
+        <p style="color:#4a5060; font-size:0.85rem; text-align:center;">Email your logo to hello@thesiteoffice.uk after purchase</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- FAQ -->
+<section id="faq" style="background:var(--off);">
+  <div class="section-inner" style="max-width:760px;">
+    <div class="section-header reveal" style="text-align:center; margin:0 auto 3rem;">
+      <p class="section-label">FAQ</p>
+      <h2 class="section-title">Common questions</h2>
+    </div>
+    <div class="faq-list reveal">
+      <div class="faq-item">
+        <button class="faq-q">What format do the documents come in?</button>
+        <div class="faq-a">All documents are provided as Microsoft Word (.docx) files. They work with Word 2016 and later, Google Docs, and LibreOffice. You can edit, brand and save them as many times as you need.</div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q">Are these documents legally compliant?</button>
+        <div class="faq-a">All documents reference current UK legislation including CDM 2015, the Environmental Protection Act 1990, Waste Regulations 2011 and relevant British Standards. They are written to be used as templates — you should always review and adapt them for your specific project. For high-value contracts or complex legal matters, we recommend a solicitor review.</div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q">Can I use these documents on multiple projects?</button>
+        <div class="faq-a">Yes. When you purchase a document you own the template and can use it on as many projects as you like within your own business. You cannot resell the templates or share them with other companies.</div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q">How quickly will I receive my documents?</button>
+        <div class="faq-a">Instantly. As soon as your payment is confirmed you'll receive a download link by email. No waiting, no approval process.</div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q">What if the document doesn't suit my trade or situation?</button>
+        <div class="faq-a">All documents are designed to be adapted. If a specific document really doesn't work for you, contact us at hello@thesiteoffice.uk and we'll help. We also offer a bespoke document service if you need something built from scratch.</div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q">Do you offer refunds?</button>
+        <div class="faq-a">Because these are digital downloads delivered instantly, we don't offer refunds once a document has been downloaded. If you have a problem with a document, get in touch and we'll sort it.</div>
+      </div>
+      <div class="faq-item">
+        <button class="faq-q">Can you create a custom document for my business?</button>
+        <div class="faq-a">Yes. Contact us at hello@thesiteoffice.uk with your requirements and we'll provide a quote. Custom documents are typically turned around within 3–5 working days.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- CTA BANNER -->
+<div class="cta-banner">
+  <h2>Stop cobbling documents together at the weekend.</h2>
+  <p>Get professional, site-ready documents today.</p>
+  <a href="#shop" class="btn-primary">Browse the library →</a>
+</div>
+
+<!-- FOOTER -->
+<footer>
+  <div class="footer-grid">
+    <div class="footer-brand">
+      <a href="/" class="nav-logo">THE SITE <span>OFFICE</span></a>
+      <p class="footer-tagline">Professional construction documents for UK contractors. Written by site professionals, not solicitors.</p>
+    </div>
+    <div>
+      <div class="footer-heading">Documents</div>
+      <ul class="footer-links">
+        <li><a href="#shop">Health & Safety</a></li>
+        <li><a href="#shop">CDM & Construction</a></li>
+        <li><a href="#shop">Commercial</a></li>
+        <li><a href="#shop">Contracts</a></li>
+        <li><a href="#shop">Quality & Environmental</a></li>
+        <li><a href="#shop">HR & Workforce</a></li>
+      </ul>
+    </div>
+    <div>
+      <div class="footer-heading">Packs</div>
+      <ul class="footer-links">
+        <li><a href="#pricing">Sole Trader — £49</a></li>
+        <li><a href="#pricing">Contractor — £149</a></li>
+        <li><a href="#pricing">Company — £299</a></li>
+        <li><a href="#">Branded Documents</a></li>
+      </ul>
+    </div>
+    <div>
+      <div class="footer-heading">Info</div>
+      <ul class="footer-links">
+        <li><a href="#why-us">About</a></li>
+        <li><a href="#faq">FAQ</a></li>
+        <li><a href="mailto:hello@thesiteoffice.uk">Contact</a></li>
+        <li><a href="#">Privacy Policy</a></li>
+        <li><a href="#">Terms & Conditions</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="footer-bottom">
+    <div class="footer-legal">© 2025 The Site Office. All rights reserved. | <a href="#">Privacy</a> | <a href="#">Terms</a></div>
+    <div class="footer-legal">thesiteoffice.uk | hello@thesiteoffice.uk</div>
+  </div>
+</footer>
+
+<script>
+  // Scroll reveal
+  const reveals = document.querySelectorAll('.reveal');
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach((entry, i) => {
+      if (entry.isIntersecting) {
+        setTimeout(() => entry.target.classList.add('visible'), i * 80);
+        observer.unobserve(entry.target);
+      }
+    });
+  }, { threshold: 0.1 });
+  reveals.forEach(el => observer.observe(el));
+
+  // FAQ accordion
+  document.querySelectorAll('.faq-q').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const item = btn.parentElement;
+      const isOpen = item.classList.contains('open');
+      document.querySelectorAll('.faq-item').forEach(i => i.classList.remove('open'));
+      if (!isOpen) item.classList.add('open');
+    });
+  });
+</script>
+</body>
+</html>
