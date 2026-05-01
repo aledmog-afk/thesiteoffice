@@ -537,6 +537,17 @@
     .footer-grid { grid-template-columns: 1fr; }
     .footer-bottom { flex-direction: column; text-align: center; }
   }
+
+  /* DROPDOWN NAV */
+  .nav-links > li { position: relative; }
+  .nav-links > li > a { padding: 0 0.8rem; height: 64px; display: flex; align-items: center; }
+  .nav-links > li > a.has-dropdown::after { content: '▾'; margin-left: 0.3rem; font-size: 0.7rem; }
+  .dropdown { display: none; position: absolute; top: 64px; left: 0; background: #1a1d26; border: 1px solid #2a2d35; border-top: 3px solid var(--amber); min-width: 240px; z-index: 200; }
+  .nav-links > li:hover .dropdown { display: block; }
+  .dropdown a { display: block; padding: 0.7rem 1.2rem; color: #8892a4; font-size: 0.85rem; text-decoration: none; border-bottom: 1px solid #2a2d35; transition: all 0.15s; }
+  .dropdown a:hover { background: #222530; color: var(--white); padding-left: 1.6rem; }
+  .dropdown a:last-child { border-bottom: none; }
+  .drop-label { padding: 0.5rem 1.2rem 0.2rem; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.15em; text-transform: uppercase; color: var(--amber); }
 </style>
 </head>
 <body>
@@ -545,7 +556,19 @@
 <nav>
   <a href="/" class="nav-logo">THE SITE <span>OFFICE</span></a>
   <ul class="nav-links">
-    <li><a href="#documents">Documents</a></li>
+    <li>
+      <a href="#documents" class="has-dropdown">Documents</a>
+      <div class="dropdown">
+        <div class="drop-label">Categories</div>
+        <a href="health-safety.html">🦺 Health &amp; Safety</a>
+        <a href="cdm.html">📋 CDM &amp; Construction Phase</a>
+        <a href="commercial.html">💷 Commercial &amp; Estimating</a>
+        <a href="contracts.html">📄 Contracts &amp; Legal</a>
+        <a href="quality.html">✅ Quality &amp; Environmental</a>
+        <a href="hr.html">👷 HR &amp; Workforce</a>
+        <a href="site-management.html">🏗️ Site Management</a>
+      </div>
+    </li>
     <li><a href="#pricing">Pricing</a></li>
     <li><a href="#why-us">About</a></li>
     <li><a href="#faq">FAQ</a></li>
@@ -622,49 +645,49 @@
       <p class="section-sub">From the first RAMS pack to a full company quality system. Solo trader to Tier 1 supply chain.</p>
     </div>
     <div class="cat-grid reveal">
-      <a href="rams.html" class="cat-card">
+      <a href="health-safety.html" class="cat-card">
         <div class="cat-icon">🦺</div>
         <div class="cat-name">Health & Safety</div>
         <div class="cat-count">40+ Documents</div>
         <div class="cat-desc">RAMS, method statements, toolbox talks, permits, site inductions, accident reports and more.</div>
       </a>
-      <a href="#shop" class="cat-card">
+      <a href="cdm.html" class="cat-card">
         <div class="cat-icon">📋</div>
         <div class="cat-name">CDM & Construction Phase</div>
         <div class="cat-count">12+ Documents</div>
         <div class="cat-desc">Construction Phase Plans, pre-construction information, F10 guidance, designer duties checklist.</div>
       </a>
-      <a href="#shop" class="cat-card">
+      <a href="commercial.html" class="cat-card">
         <div class="cat-icon">💷</div>
         <div class="cat-name">Commercial & Estimating</div>
         <div class="cat-count">20+ Documents</div>
         <div class="cat-desc">Bill of quantities, variation orders, applications for payment, daywork sheets, tender letters.</div>
       </a>
-      <a href="#shop" class="cat-card">
+      <a href="contracts.html" class="cat-card">
         <div class="cat-icon">📄</div>
         <div class="cat-name">Contracts & Legal</div>
         <div class="cat-count">10+ Documents</div>
         <div class="cat-desc">Subcontractor agreements, letters of intent, self-employed contracts, defects liability notices.</div>
       </a>
-      <a href="#shop" class="cat-card">
-        <div class="cat-icon">🏗️</div>
+      <a href="site-management.html" class="cat-card">
+        <div class="cat-icon">X</div>
         <div class="cat-name">Site Management</div>
         <div class="cat-count">25+ Documents</div>
         <div class="cat-desc">Site diaries, delivery records, snagging lists, inspection & test plans, handover checklists.</div>
       </a>
-      <a href="#shop" class="cat-card">
+      <a href="quality.html" class="cat-card">
         <div class="cat-icon">✅</div>
         <div class="cat-name">Quality & Environmental</div>
         <div class="cat-count">15+ Documents</div>
         <div class="cat-desc">Quality management plans, environmental plans, waste management, non-conformance reports.</div>
       </a>
-      <a href="#shop" class="cat-card">
+      <a href="hr.html" class="cat-card">
         <div class="cat-icon">👷</div>
         <div class="cat-name">HR & Workforce</div>
         <div class="cat-count">15+ Documents</div>
         <div class="cat-desc">Labour agreements, competency records, CSCS trackers, training matrices, disciplinary templates.</div>
       </a>
-      <a href="#shop" class="cat-card">
+      <a href="commercial.html" class="cat-card">
         <div class="cat-icon">🤝</div>
         <div class="cat-name">Client-Facing</div>
         <div class="cat-count">10+ Documents</div>

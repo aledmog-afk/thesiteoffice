@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Health & Safety Documents | The Site Office</title>
+<meta name="description" content="Every health and safety document your site needs. Method statements, risk assessments, toolbox talks, permits and more. Written by site professionals, not consultants.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #0f1117; --ink-soft: #4a4d58; --rule: #e2e4e9;
+    --off: #f7f8fa; --white: #ffffff; --amber: #e8a020;
+    --cat: #C0392B; --cat-light: #FFE8E6; --cat-mid: #E74C3C;
+    --font-display: 'Barlow Condensed', sans-serif;
+    --font-body: 'Barlow', sans-serif;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body { font-family: var(--font-body); color: var(--ink); background: var(--white); font-size: 16px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
+
+  /* NAV */
+  nav { position: sticky; top: 0; z-index: 100; background: var(--ink); border-bottom: 3px solid var(--amber); padding: 0 5%; display: flex; align-items: center; justify-content: space-between; height: 64px; }
+  .nav-logo { font-family: var(--font-display); font-size: 1.5rem; font-weight: 800; color: var(--white); letter-spacing: 0.03em; text-decoration: none; }
+  .nav-logo span { color: var(--amber); }
+  .nav-links { display: flex; gap: 0; list-style: none; }
+  .nav-links > li { position: relative; }
+  .nav-links > li > a { color: #aab0bc; font-size: 0.85rem; font-weight: 500; text-decoration: none; letter-spacing: 0.05em; text-transform: uppercase; padding: 0 1rem; height: 64px; display: flex; align-items: center; transition: color 0.2s; }
+  .nav-links > li > a:hover { color: var(--white); }
+  .nav-links > li > a.has-dropdown::after { content: '▾'; margin-left: 0.3rem; font-size: 0.7rem; }
+  .dropdown { display: none; position: absolute; top: 64px; left: 0; background: #1a1d26; border: 1px solid #2a2d35; border-top: 3px solid var(--amber); min-width: 220px; z-index: 200; }
+  .nav-links > li:hover .dropdown { display: block; }
+  .dropdown a { display: block; padding: 0.7rem 1.2rem; color: #8892a4; font-size: 0.85rem; text-decoration: none; border-bottom: 1px solid #2a2d35; transition: all 0.15s; }
+  .dropdown a:hover { background: #222530; color: var(--white); padding-left: 1.5rem; }
+  .dropdown a:last-child { border-bottom: none; }
+  .dropdown .drop-label { padding: 0.5rem 1.2rem 0.2rem; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.15em; text-transform: uppercase; color: var(--amber); }
+  .nav-cta { background: var(--amber); color: var(--ink) !important; padding: 0.5rem 1.2rem !important; border-radius: 3px; font-weight: 600 !important; margin-left: 1rem; height: auto !important; }
+  @media (max-width: 800px) { .nav-links { display: none; } }
+
+  /* HERO */
+  .page-hero { background: var(--ink); padding: 60px 5%; position: relative; overflow: hidden; border-bottom: 4px solid var(--cat); }
+  .page-hero::before { content: ''; position: absolute; top: 0; right: 0; width: 60%; height: 100%; background: repeating-linear-gradient(-45deg, transparent, transparent 20px, rgba(255,255,255,0.015) 20px, rgba(255,255,255,0.015) 21px); }
+  .hero-inner { max-width: 1100px; margin: 0 auto; position: relative; }
+  .breadcrumb { font-size: 0.82rem; color: #6b7485; margin-bottom: 1rem; }
+  .breadcrumb a { color: var(--cat-mid); text-decoration: none; }
+  .page-eyebrow { font-family: var(--font-display); font-size: 0.85rem; font-weight: 700; letter-spacing: 0.15em; text-transform: uppercase; margin-bottom: 0.8rem; color: var(--cat-mid); }
+  .page-title { font-family: var(--font-display); font-size: clamp(2.2rem, 4vw, 3.4rem); font-weight: 800; color: var(--white); line-height: 1.05; margin-bottom: 1rem; }
+  .page-sub { color: #8892a4; font-size: 1rem; max-width: 620px; line-height: 1.7; margin-bottom: 2rem; }
+  .hero-stats { display: flex; gap: 2rem; flex-wrap: wrap; }
+  .hero-stat { display: flex; align-items: center; gap: 0.5rem; }
+  .hero-stat-num { font-family: var(--font-display); font-size: 1.4rem; font-weight: 800; }
+  .hero-stat-label { color: #6b7485; font-size: 0.85rem; }
+
+  /* CONTENT */
+  .page-content { max-width: 1100px; margin: 0 auto; padding: 60px 5%; }
+  .sec-label { font-family: var(--font-display); font-size: 0.78rem; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase; color: var(--cat); margin-bottom: 0.4rem; }
+  .sec-title { font-family: var(--font-display); font-size: 1.8rem; font-weight: 800; color: var(--ink); margin-bottom: 1.5rem; }
+
+  /* PRODUCT GRID */
+  .product-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1.5rem; margin-bottom: 4rem; }
+  .product-card { border: 1px solid var(--rule); border-radius: 4px; padding: 1.5rem; background: var(--white); transition: box-shadow 0.2s, border-color 0.2s; position: relative; display: flex; flex-direction: column; }
+  .product-card:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
+  .featured-badge { position: absolute; top: -1px; right: 20px; color: var(--white); font-family: var(--font-display); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; padding: 0.2rem 0.8rem; border-radius: 0 0 4px 4px; }
+  .product-ref { font-size: 0.75rem; font-weight: 600; letter-spacing: 0.1em; margin-bottom: 0.4rem; }
+  .product-name { font-family: var(--font-display); font-size: 1.15rem; font-weight: 700; margin-bottom: 0.5rem; color: var(--ink); }
+  .product-desc { color: var(--ink-soft); font-size: 0.88rem; line-height: 1.6; margin-bottom: 1rem; flex: 1; }
+  .product-footer { display: flex; align-items: center; justify-content: space-between; padding-top: 1rem; border-top: 1px solid var(--rule); margin-top: auto; }
+  .product-price { font-family: var(--font-display); font-size: 1.6rem; font-weight: 800; color: var(--ink); }
+  .btn-buy { color: var(--white); padding: 0.6rem 1.4rem; border-radius: 3px; font-family: var(--font-display); font-size: 0.9rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; text-decoration: none; transition: opacity 0.2s; white-space: nowrap; }
+
+  /* CTA */
+  .cta-block { border-radius: 6px; padding: 2.5rem; text-align: center; margin-bottom: 2rem; }
+  .cta-block h2 { font-family: var(--font-display); font-size: 2rem; font-weight: 800; margin-bottom: 0.4rem; }
+  .cta-block p { margin-bottom: 1.5rem; opacity: 0.7; }
+
+  /* FOOTER */
+  footer { background: #0a0c11; border-top: 1px solid rgba(255,255,255,0.06); padding: 30px 5%; }
+  .footer-bottom { max-width: 1100px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; }
+  .footer-legal { color: #3a3f4a; font-size: 0.8rem; }
+  .footer-legal a { color: #4a5060; text-decoration: none; }
+  .footer-logo { font-family: var(--font-display); font-size: 1.2rem; font-weight: 800; color: var(--white); text-decoration: none; }
+  .footer-logo span { color: var(--amber); }
+
+  .reveal { opacity: 0; transform: translateY(20px); transition: opacity 0.5s ease, transform 0.5s ease; }
+  .reveal.visible { opacity: 1; transform: translateY(0); }
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="index.html" class="nav-logo">THE SITE <span>OFFICE</span></a>
+  <ul class="nav-links">
+    <li>
+      <a href="#" class="has-dropdown">Documents</a>
+      <div class="dropdown">
+        <div class="drop-label">Categories</div>
+        <a href="health-safety.html">🦺 Health &amp; Safety</a>
+        <a href="cdm.html">📋 CDM &amp; Construction Phase</a>
+        <a href="commercial.html">💷 Commercial &amp; Estimating</a>
+        <a href="contracts.html">📄 Contracts &amp; Legal</a>
+        <a href="quality.html">✅ Quality &amp; Environmental</a>
+        <a href="hr.html">👷 HR &amp; Workforce</a>
+        <a href="site-management.html">🏗️ Site Management</a>
+      </div>
+    </li>
+    <li><a href="index.html#pricing">Pricing</a></li>
+    <li><a href="index.html#why-us">About</a></li>
+    <li><a href="index.html#faq">FAQ</a></li>
+    <li><a href="index.html#shop" class="nav-cta">Shop Now</a></li>
+  </ul>
+</nav>
+
+<div class="page-hero">
+  <div class="hero-inner">
+    <div class="breadcrumb"><a href="index.html">Home</a> → Health & Safety</div>
+    <p class="page-eyebrow">Health & Safety</p>
+    <h1 class="page-title">RAMS, Toolbox Talks & Site Safety</h1>
+    <p class="page-sub">Every health and safety document your site needs. Method statements, risk assessments, toolbox talks, permits and more. Written by site professionals, not consultants.</p>
+    <div class="hero-stats"><div class="hero-stat"><span class="hero-stat-num" style="color:#E74C3C;">40+</span><span class="hero-stat-label">Documents</span></div><div class="hero-stat"><span class="hero-stat-num" style="color:#E74C3C;">CDM</span><span class="hero-stat-label">2015 Compliant</span></div><div class="hero-stat"><span class="hero-stat-num" style="color:#E74C3C;">.docx</span><span class="hero-stat-label">Word Format</span></div><div class="hero-stat"><span class="hero-stat-num" style="color:#E74C3C;">✓</span><span class="hero-stat-label">Instant Download</span></div></div>
+  </div>
+</div>
+
+<div class="page-content">
+  <p class="sec-label">All Documents</p>
+  <h2 class="sec-title">Health & Safety</h2>
+  <div class="product-grid reveal">
+
+    <div class="product-card" style="">
+      
+      <div class="product-ref" style="color:#E74C3C;">TSO-GW-001</div>
+      <div class="product-name">Groundworks RAMS</div>
+      <div class="product-desc">Full method statement and risk assessment for groundworks. 12 hazards assessed, colour-coded risk ratings, PPE schedule, operative sign-off.</div>
+      <div class="product-footer">
+        <div class="product-price">£9</div>
+        <a href="https://thesiteoffice.gumroad.com/l/pljjmh" class="btn-buy" style="background:#C0392B;" onmouseover="this.style.opacity=0.85" onmouseout="this.style.opacity=1" target="_blank">Buy Now</a>
+      </div>
+    </div>
+    <div class="product-card" style="">
+      
+      <div class="product-ref" style="color:#E74C3C;">TSO-RF-001</div>
+      <div class="product-name">Roofing RAMS</div>
+      <div class="product-desc">Method statement and risk assessment for roofing works. Working at height controls, edge protection, fragile roof management and weatherproofing.</div>
+      <div class="product-footer">
+        <div class="product-price">£9</div>
+        <a href="https://thesiteoffice.gumroad.com/l/lrgmds" class="btn-buy" style="background:#C0392B;" onmouseover="this.style.opacity=0.85" onmouseout="this.style.opacity=1" target="_blank">Buy Now</a>
+      </div>
+    </div>
+    <div class="product-card" style="">
+      
+      <div class="product-ref" style="color:#E74C3C;">TSO-WH-001</div>
+      <div class="product-name">Working at Height RAMS</div>
+      <div class="product-desc">Generic working at height RAMS covering scaffold, MEWP, ladder and roof access. Compliant with Work at Height Regulations 2005.</div>
+      <div class="product-footer">
+        <div class="product-price">£9</div>
+        <a href="https://thesiteoffice.gumroad.com/l/hhfygj" class="btn-buy" style="background:#C0392B;" onmouseover="this.style.opacity=0.85" onmouseout="this.style.opacity=1" target="_blank">Buy Now</a>
+      </div>
+    </div>
+    <div class="product-card" style="">
+      
+      <div class="product-ref" style="color:#E74C3C;">TSO-DM-001</div>
+      <div class="product-name">Demolition RAMS</div>
+      <div class="product-desc">Comprehensive method statement and risk assessment for demolition works. References BS 6187 Code of Practice.</div>
+      <div class="product-footer">
+        <div class="product-price">£12</div>
+        <a href="https://thesiteoffice.gumroad.com/l/glznlg" class="btn-buy" style="background:#C0392B;" onmouseover="this.style.opacity=0.85" onmouseout="this.style.opacity=1" target="_blank">Buy Now</a>
+      </div>
+    </div>
+    <div class="product-card" style="">
+      
+      <div class="product-ref" style="color:#E74C3C;">TSO-CP-001</div>
+      <div class="product-name">Carpentry & Joinery RAMS</div>
+      <div class="product-desc">Method statement and risk assessment for carpentry operations. Covers first and second fix, power tools and manual handling.</div>
+      <div class="product-footer">
+        <div class="product-price">£9</div>
+        <a href="https://thesiteoffice.gumroad.com/l/fodcqd" class="btn-buy" style="background:#C0392B;" onmouseover="this.style.opacity=0.85" onmouseout="this.style.opacity=1" target="_blank">Buy Now</a>
+      </div>
+    </div>
+    <div class="product-card" style="">
+      
+      <div class="product-ref" style="color:#E74C3C;">TSO-BW-001</div>
+      <div class="product-name">Brickwork & Blockwork RAMS</div>
+      <div class="product-desc">Method statement and risk assessment for brickwork. Covers setting out, mortar mixing, scaffold use and manual handling.</div>
+      <div class="product-footer">
+        <div class="product-price">£9</div>
+        <a href="https://thesiteoffice.gumroad.com/l/fodcqd" class="btn-buy" style="background:#C0392B;" onmouseover="this.style.opacity=0.85" onmouseout="this.style.opacity=1" target="_blank">Buy Now</a>
+      </div>
+    </div>
+    <div class="product-card" style="">
+      
+      <div class="product-ref" style="color:#E74C3C;">TSO-PS-001</div>
+      <div class="product-name">Plastering & Drylining RAMS</div>
+      <div class="product-desc">Method statement and risk assessment for plastering. Covers COSHH for plaster products, working at height and manual handling.</div>
+      <div class="product-footer">
+        <div class="product-price">£9</div>
+        <a href="https://thesiteoffice.gumroad.com/l/fodcqd" class="btn-buy" style="background:#C0392B;" onmouseover="this.style.opacity=0.85" onmouseout="this.style.opacity=1" target="_blank">Buy Now</a>
+      </div>
+    </div>
+    <div class="product-card" style="">
+      
+      <div class="product-ref" style="color:#E74C3C;">TSO-PD-001</div>
+      <div class="product-name">Painting & Decorating RAMS</div>
+      <div class="product-desc">Method statement and risk assessment for painting. Covers COSHH for paints and solvents, working at height and ventilation.</div>
+      <div class="product-footer">
+        <div class="product-price">£9</div>
+        <a href="https://thesiteoffice.gumroad.com/l/fodcqd" class="btn-buy" style="background:#C0392B;" onmouseover="this.style.opacity=0.85" onmouseout="this.style.opacity=1" target="_blank">Buy Now</a>
+      </div>
+    </div>
+    <div class="product-card" style="">
+      
+      <div class="product-ref" style="color:#E74C3C;">TSO-PM-001</div>
+      <div class="product-name">Plumbing & Mechanical RAMS</div>
+      <div class="product-desc">Method statement and risk assessment for plumbing. Covers hot works, pressure testing and confined spaces.</div>
+      <div class="product-footer">
+        <div class="product-price">£9</div>
+        <a href="https://thesiteoffice.gumroad.com/l/fodcqd" class="btn-buy" style="background:#C0392B;" onmouseover="this.style.opacity=0.85" onmouseout="this.style.opacity=1" target="_blank">Buy Now</a>
+      </div>
+    </div>
+    <div class="product-card" style="">
+      
+      <div class="product-ref" style="color:#E74C3C;">TSO-SE-001</div>
+      <div class="product-name">Steel Erection RAMS</div>
+      <div class="product-desc">Comprehensive RAMS for structural steel erection. Covers lifting operations, crane management and connection procedures.</div>
+      <div class="product-footer">
+        <div class="product-price">£12</div>
+        <a href="https://thesiteoffice.gumroad.com/l/fodcqd" class="btn-buy" style="background:#C0392B;" onmouseover="this.style.opacity=0.85" onmouseout="this.style.opacity=1" target="_blank">Buy Now</a>
+      </div>
+    </div>
+    <div class="product-card" style="">
+      
+      <div class="product-ref" style="color:#E74C3C;">TSO-EL-001</div>
+      <div class="product-name">Electrical First Fix RAMS</div>
+      <div class="product-desc">Method statement and risk assessment for electrical first fix. Covers safe isolation, cable installation and working in voids.</div>
+      <div class="product-footer">
+        <div class="product-price">£9</div>
+        <a href="https://thesiteoffice.gumroad.com/l/fodcqd" class="btn-buy" style="background:#C0392B;" onmouseover="this.style.opacity=0.85" onmouseout="this.style.opacity=1" target="_blank">Buy Now</a>
+      </div>
+    </div>
+    <div class="product-card" style="">
+      
+      <div class="product-ref" style="color:#E74C3C;">TSO-DR-001</div>
+      <div class="product-name">Drainage & Utilities RAMS</div>
+      <div class="product-desc">Method statement and risk assessment for drainage. Covers CAT scan requirements, services avoidance and pipe laying.</div>
+      <div class="product-footer">
+        <div class="product-price">£9</div>
+        <a href="https://thesiteoffice.gumroad.com/l/fodcqd" class="btn-buy" style="background:#C0392B;" onmouseover="this.style.opacity=0.85" onmouseout="this.style.opacity=1" target="_blank">Buy Now</a>
+      </div>
+    </div>
+    <div class="product-card" style="">
+      
+      <div class="product-ref" style="color:#E74C3C;">TSO-TTL-001</div>
+      <div class="product-name">Toolbox Talk Library — 30 Topics</div>
+      <div class="product-desc">30 ready-to-use toolbox talk templates. Working at height, COSHH, fire, manual handling, mental health and more. Print, brief, sign.</div>
+      <div class="product-footer">
+        <div class="product-price">£25</div>
+        <a href="https://thesiteoffice.gumroad.com/l/qyjat" class="btn-buy" style="background:#C0392B;" onmouseover="this.style.opacity=0.85" onmouseout="this.style.opacity=1" target="_blank">Buy Now</a>
+      </div>
+    </div>
+    <div class="product-card" style="border-color:#C0392B; border-width:2px;">
+      <div class="featured-badge" style="background:#C0392B;">Best Value</div>
+      <div class="product-ref" style="color:#E74C3C;">TSO-RAMS-PACK</div>
+      <div class="product-name">Full RAMS Pack — All 12 Trades</div>
+      <div class="product-desc">All 12 trade-specific RAMS packs in one download. Save over £40 vs buying individually. The complete H&S document pack.</div>
+      <div class="product-footer">
+        <div class="product-price">£59</div>
+        <a href="https://thesiteoffice.gumroad.com/l/fodcqd" class="btn-buy" style="background:#C0392B;" onmouseover="this.style.opacity=0.85" onmouseout="this.style.opacity=1" target="_blank">Buy Now</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="cta-block reveal" style="background:#C0392B;">
+    <h2 style="color:white;">Need everything?</h2>
+    <p style="color:rgba(255,255,255,0.75);">Get the full library with the Contractor or Company Pack.</p>
+    <a href="https://thesiteoffice.gumroad.com/l/ifohk" style="background:var(--ink); color:var(--white); padding:0.9rem 2.5rem; border-radius:3px; font-family:var(--font-display); font-size:1.1rem; font-weight:700; letter-spacing:0.05em; text-transform:uppercase; text-decoration:none; display:inline-block;">Get Contractor Pack — £149 →</a>
+  </div>
+</div>
+
+<footer>
+  <div class="footer-bottom">
+    <a href="index.html" class="footer-logo">THE SITE <span>OFFICE</span></a>
+    <div class="footer-legal">© 2025 The Site Office · <a href="index.html">Home</a> · <a href="mailto:hello@thesiteoffice.uk">Contact</a></div>
+  </div>
+</footer>
+
+<script>
+  const reveals = document.querySelectorAll('.reveal');
+  const obs = new IntersectionObserver((entries) => {
+    entries.forEach((e, i) => {
+      if (e.isIntersecting) { setTimeout(() => e.target.classList.add('visible'), i * 50); obs.unobserve(e.target); }
+    });
+  }, { threshold: 0.05 });
+  reveals.forEach(el => obs.observe(el));
+</script>
+</body>
+</html>
