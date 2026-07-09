@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Weekly Report – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="doc-toolbar no-print">
+    <a class="btn btn-outline btn-sm" id="editLink" href="#">Edit</a>
+    <button class="btn btn-outline btn-sm" id="printBtn">Print / Save as PDF</button>
+    <a class="btn btn-amber btn-sm" id="emailLink" href="#">Email to Contractor</a>
+  </div>
+
+  <div class="doc" id="doc">Loading…</div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate } from "./js/app.js";
+
+  await requireAuth();
+  const reportId = getParam("id");
+  if (!reportId) window.location.href = "dashboard.html";
+
+  document.getElementById("printBtn").addEventListener("click", () => window.print());
+
+  const programmeLabel = { "ahead": "Ahead of programme", "on-track": "On track", "behind": "Behind programme" };
+
+  function section(title, value) {
+    if (!value) return "";
+    return `<div class="doc-section"><h3>${escapeHtml(title)}</h3><div class="body-text">${escapeHtml(value)}</div></div>`;
+  }
+
+  async function load() {
+    const { data: r, error } = await supabase.from("weekly_reports").select("*, projects(*)").eq("id", reportId).single();
+    if (error) { document.getElementById("doc").textContent = "Report not found."; return; }
+    const project = r.projects;
+
+    renderHeader([
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project.name, href: `project.html?id=${project.id}` },
+      { label: "Weekly Reports", href: `weekly-reports.html?project=${project.id}` },
+      { label: `${formatDate(r.week_starting)} – ${formatDate(r.week_ending)}` },
+    ]);
+
+    document.getElementById("editLink").href = `weekly-report-form.html?project=${project.id}&id=${r.id}`;
+
+    const subject = encodeURIComponent(`Weekly Site Report – ${project.name} – w/c ${formatDate(r.week_starting)}`);
+    const body = encodeURIComponent(
+      `Hi,\n\nPlease find this week's site report for ${project.name} below.\n\n` +
+      `Week: ${formatDate(r.week_starting)} – ${formatDate(r.week_ending)}\nProgramme status: ${programmeLabel[r.programme_status]}\n\n` +
+      `Progress summary:\n${r.progress_summary || "—"}\n\n` +
+      (r.issues_risks ? `Issues / risks:\n${r.issues_risks}\n\n` : "") +
+      `(Full report with photos: use "Print / Save as PDF" on this page and attach it here.)\n\nRegards,`
+    );
+    document.getElementById("emailLink").href = `mailto:${project.main_contractor_email || ""}?subject=${subject}&body=${body}`;
+
+    const photos = Array.isArray(r.photos) ? r.photos : [];
+
+    document.getElementById("doc").innerHTML = `
+      <div class="doc-head">
+        <div>
+          <h1>Weekly Site Report</h1>
+          <div style="color:var(--ink-soft); font-size:0.9rem; margin-top:0.2rem;">${escapeHtml(project.name)}</div>
+        </div>
+        <div class="doc-meta">
+          ${project.address ? escapeHtml(project.address) + "<br>" : ""}
+          ${project.contract_ref ? "Ref: " + escapeHtml(project.contract_ref) + "<br>" : ""}
+          To: ${escapeHtml(project.main_contractor_name) || "Main Contractor"}
+        </div>
+      </div>
+
+      <dl class="doc-facts">
+        <div><dt>Week Starting</dt><dd>${formatDate(r.week_starting)}</dd></div>
+        <div><dt>Week Ending</dt><dd>${formatDate(r.week_ending)}</dd></div>
+        <div><dt>Programme Status</dt><dd>${programmeLabel[r.programme_status]}</dd></div>
+        <div><dt>Prepared By</dt><dd>${escapeHtml(r.prepared_by) || "—"}</dd></div>
+      </dl>
+
+      ${section("Weather / Lost Time", r.weather)}
+      ${section("Labour on Site", r.labour_on_site)}
+      ${section("Progress This Week", r.progress_summary)}
+      ${section("Health & Safety Notes", r.health_safety_notes)}
+      ${section("Deliveries / Materials", r.deliveries_materials)}
+      ${section("Issues / Risks / Delays", r.issues_risks)}
+      ${section("Plan for Next Week", r.next_week_plan)}
+
+      ${photos.length ? `
+        <div class="doc-section">
+          <h3>Site Photos</h3>
+          <div class="photo-grid">
+            ${photos.map(p => `<div class="photo-thumb"><img src="${p.url}" alt=""></div>`).join("")}
+          </div>
+        </div>` : ""}
+    `;
+  }
+
+  load();
+</script>
+</body>
+</html>

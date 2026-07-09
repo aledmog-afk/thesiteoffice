@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title">Sites</div>
+      <div class="page-sub">Your live projects. Open one to add a weekly report or snagging item.</div>
+    </div>
+    <button class="btn btn-amber" id="newProjectBtn">+ New Site</button>
+  </div>
+
+  <div class="card" id="newProjectCard" style="display:none;">
+    <div id="errorBox" class="error-box"></div>
+    <form id="projectForm">
+      <div class="form-grid">
+        <div class="field">
+          <label for="name">Site name *</label>
+          <input type="text" id="name" required placeholder="e.g. Elm Grove, Phase 2">
+        </div>
+        <div class="field">
+          <label for="contractRef">Contract reference</label>
+          <input type="text" id="contractRef" placeholder="e.g. CON-2026-014">
+        </div>
+      </div>
+      <div class="field">
+        <label for="address">Site address</label>
+        <input type="text" id="address">
+      </div>
+      <div class="form-grid">
+        <div class="field">
+          <label for="contractorName">Main contractor name</label>
+          <input type="text" id="contractorName" placeholder="e.g. Balfour Build Ltd">
+        </div>
+        <div class="field">
+          <label for="contractorEmail">Main contractor email</label>
+          <input type="email" id="contractorEmail" placeholder="reports@contractor.co.uk">
+        </div>
+      </div>
+      <div class="field">
+        <label for="startDate">Start date</label>
+        <input type="date" id="startDate">
+      </div>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-amber">Create Site</button>
+        <button type="button" class="btn btn-outline" id="cancelBtn">Cancel</button>
+      </div>
+    </form>
+  </div>
+
+  <div id="grid" class="grid" style="margin-top:1.5rem;"></div>
+  <div id="emptyState" class="empty" style="display:none;">
+    <p>No sites yet. Add your first one to start logging weekly reports and snags.</p>
+    <button class="btn btn-amber" id="emptyNewBtn">+ New Site</button>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, escapeHtml, formatDate, showError, clearError } from "./js/app.js";
+
+  await requireAuth();
+  renderHeader([{ label: "Dashboard" }]);
+
+  const grid = document.getElementById("grid");
+  const emptyState = document.getElementById("emptyState");
+  const errorBox = document.getElementById("errorBox");
+  const newProjectCard = document.getElementById("newProjectCard");
+
+  function toggleForm(show) {
+    newProjectCard.style.display = show ? "block" : "none";
+  }
+  document.getElementById("newProjectBtn").addEventListener("click", () => toggleForm(true));
+  document.getElementById("emptyNewBtn")?.addEventListener("click", () => toggleForm(true));
+  document.getElementById("cancelBtn").addEventListener("click", () => toggleForm(false));
+
+  document.getElementById("projectForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearError(errorBox);
+    const { data: { user } } = await supabase.auth.getUser();
+    const payload = {
+      name: document.getElementById("name").value.trim(),
+      contract_ref: document.getElementById("contractRef").value.trim() || null,
+      address: document.getElementById("address").value.trim() || null,
+      main_contractor_name: document.getElementById("contractorName").value.trim() || null,
+      main_contractor_email: document.getElementById("contractorEmail").value.trim() || null,
+      start_date: document.getElementById("startDate").value || null,
+      created_by: user.id,
+    };
+    try {
+      const { data, error } = await supabase.from("projects").insert(payload).select().single();
+      if (error) throw error;
+      window.location.href = `project.html?id=${data.id}`;
+    } catch (err) {
+      showError(errorBox, err);
+    }
+  });
+
+  async function load() {
+    const { data: projects, error } = await supabase
+      .from("projects")
+      .select("*")
+      .order("created_at", { ascending: false });
+    if (error) { grid.innerHTML = `<div class="error-box" style="display:block;">${escapeHtml(error.message)}</div>`; return; }
+
+    if (!projects.length) {
+      emptyState.style.display = "block";
+      return;
+    }
+
+    const [{ data: snags }, { data: reports }] = await Promise.all([
+      supabase.from("snag_items").select("project_id, status"),
+      supabase.from("weekly_reports").select("project_id, week_ending"),
+    ]);
+
+    const openSnagCount = {};
+    (snags || []).forEach((s) => {
+      if (s.status === "open") openSnagCount[s.project_id] = (openSnagCount[s.project_id] || 0) + 1;
+    });
+    const lastReport = {};
+    (reports || []).forEach((r) => {
+      if (!lastReport[r.project_id] || r.week_ending > lastReport[r.project_id]) {
+        lastReport[r.project_id] = r.week_ending;
+      }
+    });
+
+    grid.innerHTML = projects.map((p) => `
+      <a class="tile" href="project.html?id=${p.id}">
+        <div class="tile-name">${escapeHtml(p.name)}</div>
+        <div class="tile-meta">${escapeHtml(p.main_contractor_name || "No contractor set")}${p.status !== "active" ? ` · <span class="badge badge-grey">${escapeHtml(p.status)}</span>` : ""}</div>
+        <div class="tile-stats">
+          <div><strong>${openSnagCount[p.id] || 0}</strong>open snags</div>
+          <div><strong>${lastReport[p.id] ? formatDate(lastReport[p.id]) : "—"}</strong>last report</div>
+        </div>
+      </a>
+    `).join("");
+  }
+
+  load();
+</script>
+</body>
+</html>

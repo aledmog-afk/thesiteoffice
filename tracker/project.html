@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Site – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title" id="projectName">Loading…</div>
+      <div class="page-sub" id="projectMeta"></div>
+    </div>
+    <div class="btn-row">
+      <select id="statusSelect" style="width:auto;">
+        <option value="active">Active</option>
+        <option value="on hold">On hold</option>
+        <option value="complete">Complete</option>
+      </select>
+      <button class="btn btn-outline btn-sm" id="editBtn">Edit details</button>
+    </div>
+  </div>
+
+  <div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(240px,1fr)); margin-bottom:2rem;">
+    <a class="tile" href="weekly-reports.html?project=" id="reportsTile">
+      <div class="tile-name">📋 Weekly Reports</div>
+      <div class="tile-stats"><div><strong id="reportCount">–</strong>reports logged</div></div>
+    </a>
+    <a class="tile" href="snagging.html?project=" id="snaggingTile">
+      <div class="tile-name">🔧 Snagging</div>
+      <div class="tile-stats">
+        <div><strong id="openSnagCount">–</strong>open</div>
+        <div><strong id="closedSnagCount">–</strong>closed</div>
+      </div>
+    </a>
+  </div>
+
+  <div class="card" id="detailsCard">
+    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Site Details</h3>
+    <dl class="doc-facts" id="factsView"></dl>
+
+    <form id="editForm" style="display:none;">
+      <div id="errorBox" class="error-box"></div>
+      <div class="form-grid">
+        <div class="field"><label for="name">Site name *</label><input type="text" id="name" required></div>
+        <div class="field"><label for="contractRef">Contract reference</label><input type="text" id="contractRef"></div>
+      </div>
+      <div class="field"><label for="address">Site address</label><input type="text" id="address"></div>
+      <div class="form-grid">
+        <div class="field"><label for="contractorName">Main contractor name</label><input type="text" id="contractorName"></div>
+        <div class="field"><label for="contractorEmail">Main contractor email</label><input type="email" id="contractorEmail"></div>
+      </div>
+      <div class="field"><label for="startDate">Start date</label><input type="date" id="startDate"></div>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-amber">Save Changes</button>
+        <button type="button" class="btn btn-outline" id="cancelEditBtn">Cancel</button>
+        <button type="button" class="btn btn-danger" id="deleteBtn" style="margin-left:auto;">Delete Site</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError } from "./js/app.js";
+
+  await requireAuth();
+  const projectId = getParam("id");
+  if (!projectId) window.location.href = "dashboard.html";
+
+  document.getElementById("reportsTile").href = `weekly-reports.html?project=${projectId}`;
+  document.getElementById("snaggingTile").href = `snagging.html?project=${projectId}`;
+
+  let project = null;
+  const factsView = document.getElementById("factsView");
+  const detailsCard = document.getElementById("detailsCard");
+  const editForm = document.getElementById("editForm");
+  const errorBox = document.getElementById("errorBox");
+
+  function renderFacts() {
+    factsView.innerHTML = `
+      <div><dt>Address</dt><dd>${escapeHtml(project.address) || "—"}</dd></div>
+      <div><dt>Contract Ref</dt><dd>${escapeHtml(project.contract_ref) || "—"}</dd></div>
+      <div><dt>Main Contractor</dt><dd>${escapeHtml(project.main_contractor_name) || "—"}</dd></div>
+      <div><dt>Contractor Email</dt><dd>${escapeHtml(project.main_contractor_email) || "—"}</dd></div>
+      <div><dt>Start Date</dt><dd>${project.start_date ? formatDate(project.start_date) : "—"}</dd></div>
+    `;
+  }
+
+  function fillForm() {
+    document.getElementById("name").value = project.name || "";
+    document.getElementById("contractRef").value = project.contract_ref || "";
+    document.getElementById("address").value = project.address || "";
+    document.getElementById("contractorName").value = project.main_contractor_name || "";
+    document.getElementById("contractorEmail").value = project.main_contractor_email || "";
+    document.getElementById("startDate").value = project.start_date || "";
+  }
+
+  document.getElementById("editBtn").addEventListener("click", () => {
+    fillForm();
+    factsView.style.display = "none";
+    document.getElementById("editBtn").style.display = "none";
+    editForm.style.display = "block";
+  });
+  document.getElementById("cancelEditBtn").addEventListener("click", () => {
+    factsView.style.display = "grid";
+    document.getElementById("editBtn").style.display = "inline-flex";
+    editForm.style.display = "none";
+  });
+
+  editForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearError(errorBox);
+    const payload = {
+      name: document.getElementById("name").value.trim(),
+      contract_ref: document.getElementById("contractRef").value.trim() || null,
+      address: document.getElementById("address").value.trim() || null,
+      main_contractor_name: document.getElementById("contractorName").value.trim() || null,
+      main_contractor_email: document.getElementById("contractorEmail").value.trim() || null,
+      start_date: document.getElementById("startDate").value || null,
+    };
+    const { data, error } = await supabase.from("projects").update(payload).eq("id", projectId).select().single();
+    if (error) { showError(errorBox, error); return; }
+    project = data;
+    renderHeaderAndFacts();
+    document.getElementById("cancelEditBtn").click();
+  });
+
+  document.getElementById("deleteBtn").addEventListener("click", async () => {
+    if (!confirm(`Delete "${project.name}" and all its reports and snags? This cannot be undone.`)) return;
+    const { error } = await supabase.from("projects").delete().eq("id", projectId);
+    if (error) { showError(errorBox, error); return; }
+    window.location.href = "dashboard.html";
+  });
+
+  document.getElementById("statusSelect").addEventListener("change", async (e) => {
+    const { data, error } = await supabase.from("projects").update({ status: e.target.value }).eq("id", projectId).select().single();
+    if (!error) project = data;
+  });
+
+  function renderHeaderAndFacts() {
+    document.getElementById("projectName").textContent = project.name;
+    document.getElementById("projectMeta").textContent = project.contract_ref ? `Ref: ${project.contract_ref}` : "";
+    document.getElementById("statusSelect").value = project.status;
+    renderHeader([{ label: "Dashboard", href: "dashboard.html" }, { label: project.name }]);
+    renderFacts();
+  }
+
+  async function load() {
+    const { data, error } = await supabase.from("projects").select("*").eq("id", projectId).single();
+    if (error) { document.getElementById("projectName").textContent = "Site not found"; return; }
+    project = data;
+    renderHeaderAndFacts();
+
+    const [{ count: reportCount }, { data: snags }] = await Promise.all([
+      supabase.from("weekly_reports").select("id", { count: "exact", head: true }).eq("project_id", projectId),
+      supabase.from("snag_items").select("status").eq("project_id", projectId),
+    ]);
+    document.getElementById("reportCount").textContent = reportCount ?? 0;
+    document.getElementById("openSnagCount").textContent = (snags || []).filter(s => s.status === "open").length;
+    document.getElementById("closedSnagCount").textContent = (snags || []).filter(s => s.status === "closed").length;
+  }
+
+  load();
+</script>
+</body>
+</html>

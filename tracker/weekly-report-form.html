@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Weekly Report – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page" style="max-width:800px;">
+  <div class="page-head">
+    <div>
+      <div class="page-title" id="formTitle">New Weekly Report</div>
+      <div class="page-sub" id="projectSub"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div id="errorBox" class="error-box"></div>
+    <form id="reportForm">
+      <div class="form-grid">
+        <div class="field"><label for="weekStarting">Week starting *</label><input type="date" id="weekStarting" required></div>
+        <div class="field"><label for="weekEnding">Week ending *</label><input type="date" id="weekEnding" required></div>
+      </div>
+      <div class="form-grid">
+        <div class="field"><label for="preparedBy">Prepared by</label><input type="text" id="preparedBy" placeholder="Your name"></div>
+        <div class="field">
+          <label for="programmeStatus">Programme status *</label>
+          <select id="programmeStatus" required>
+            <option value="on-track">On track</option>
+            <option value="ahead">Ahead of programme</option>
+            <option value="behind">Behind programme</option>
+          </select>
+        </div>
+      </div>
+      <div class="field"><label for="weather">Weather / lost time</label><input type="text" id="weather" placeholder="e.g. Dry all week, no lost time"></div>
+      <div class="field"><label for="labourOnSite">Labour on site</label><textarea id="labourOnSite" rows="2" placeholder="e.g. Groundworks: 4, Bricklaying: 6, M&E: 2"></textarea></div>
+      <div class="field"><label for="progressSummary">Progress this week *</label><textarea id="progressSummary" rows="4" required placeholder="Summary of works completed by area/plot/trade"></textarea></div>
+      <div class="field"><label for="healthSafety">Health &amp; safety notes</label><textarea id="healthSafety" rows="3" placeholder="Inspections, incidents, near misses, toolbox talks held"></textarea></div>
+      <div class="field"><label for="deliveries">Deliveries / materials</label><textarea id="deliveries" rows="2"></textarea></div>
+      <div class="field"><label for="issuesRisks">Issues / risks / delays</label><textarea id="issuesRisks" rows="3"></textarea></div>
+      <div class="field"><label for="nextWeekPlan">Plan for next week</label><textarea id="nextWeekPlan" rows="3"></textarea></div>
+
+      <div class="field">
+        <label>Site photos</label>
+        <input type="file" id="photoInput" accept="image/*" multiple>
+        <div class="photo-grid" id="photoGrid"></div>
+      </div>
+
+      <div class="btn-row">
+        <button type="submit" class="btn btn-amber" id="saveBtn">Save Report</button>
+        <button type="button" class="btn btn-outline" id="cancelBtn">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, showError, clearError, mondayOf, uploadPhoto, todayISO } from "./js/app.js";
+
+  await requireAuth();
+  const projectId = getParam("project");
+  const reportId = getParam("id");
+  if (!projectId) window.location.href = "dashboard.html";
+
+  document.getElementById("cancelBtn").addEventListener("click", () => {
+    window.location.href = reportId ? `weekly-report-view.html?id=${reportId}` : `weekly-reports.html?project=${projectId}`;
+  });
+
+  let photos = [];
+  const photoGrid = document.getElementById("photoGrid");
+  const photoInput = document.getElementById("photoInput");
+  const errorBox = document.getElementById("errorBox");
+
+  function renderPhotos() {
+    photoGrid.innerHTML = photos.map((p, i) => `
+      <div class="photo-thumb">
+        <img src="${p.url}" alt="${p.caption || ""}">
+        <button type="button" class="remove" data-i="${i}">✕</button>
+      </div>
+    `).join("");
+    photoGrid.querySelectorAll(".remove").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        photos.splice(Number(btn.dataset.i), 1);
+        renderPhotos();
+      });
+    });
+  }
+
+  photoInput.addEventListener("change", async () => {
+    const files = Array.from(photoInput.files);
+    photoInput.disabled = true;
+    try {
+      for (const file of files) {
+        const url = await uploadPhoto(file, `${projectId}/reports`);
+        photos.push({ url, caption: "" });
+      }
+      renderPhotos();
+    } catch (err) {
+      showError(errorBox, err);
+    } finally {
+      photoInput.value = "";
+      photoInput.disabled = false;
+    }
+  });
+
+  async function initHeader() {
+    const { data: project } = await supabase.from("projects").select("name").eq("id", projectId).single();
+    renderHeader([
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project?.name || "Site", href: `project.html?id=${projectId}` },
+      { label: "Weekly Reports", href: `weekly-reports.html?project=${projectId}` },
+      { label: reportId ? "Edit Report" : "New Report" },
+    ]);
+    document.getElementById("projectSub").textContent = project?.name || "";
+  }
+
+  async function loadExisting() {
+    if (!reportId) {
+      const start = mondayOf(new Date());
+      const end = new Date(start);
+      end.setDate(end.getDate() + 6);
+      document.getElementById("weekStarting").value = start;
+      document.getElementById("weekEnding").value = end.toISOString().slice(0, 10);
+      return;
+    }
+    document.getElementById("formTitle").textContent = "Edit Weekly Report";
+    const { data: r, error } = await supabase.from("weekly_reports").select("*").eq("id", reportId).single();
+    if (error) { showError(errorBox, error); return; }
+    document.getElementById("weekStarting").value = r.week_starting;
+    document.getElementById("weekEnding").value = r.week_ending;
+    document.getElementById("preparedBy").value = r.prepared_by || "";
+    document.getElementById("programmeStatus").value = r.programme_status;
+    document.getElementById("weather").value = r.weather || "";
+    document.getElementById("labourOnSite").value = r.labour_on_site || "";
+    document.getElementById("progressSummary").value = r.progress_summary || "";
+    document.getElementById("healthSafety").value = r.health_safety_notes || "";
+    document.getElementById("deliveries").value = r.deliveries_materials || "";
+    document.getElementById("issuesRisks").value = r.issues_risks || "";
+    document.getElementById("nextWeekPlan").value = r.next_week_plan || "";
+    photos = Array.isArray(r.photos) ? r.photos : [];
+    renderPhotos();
+  }
+
+  document.getElementById("reportForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearError(errorBox);
+    const { data: { user } } = await supabase.auth.getUser();
+    const payload = {
+      project_id: projectId,
+      week_starting: document.getElementById("weekStarting").value,
+      week_ending: document.getElementById("weekEnding").value,
+      prepared_by: document.getElementById("preparedBy").value.trim() || null,
+      programme_status: document.getElementById("programmeStatus").value,
+      weather: document.getElementById("weather").value.trim() || null,
+      labour_on_site: document.getElementById("labourOnSite").value.trim() || null,
+      progress_summary: document.getElementById("progressSummary").value.trim(),
+      health_safety_notes: document.getElementById("healthSafety").value.trim() || null,
+      deliveries_materials: document.getElementById("deliveries").value.trim() || null,
+      issues_risks: document.getElementById("issuesRisks").value.trim() || null,
+      next_week_plan: document.getElementById("nextWeekPlan").value.trim() || null,
+      photos,
+    };
+    document.getElementById("saveBtn").disabled = true;
+    try {
+      if (reportId) {
+        const { error } = await supabase.from("weekly_reports").update(payload).eq("id", reportId);
+        if (error) throw error;
+        window.location.href = `weekly-report-view.html?id=${reportId}`;
+      } else {
+        payload.created_by = user.id;
+        const { data, error } = await supabase.from("weekly_reports").insert(payload).select().single();
+        if (error) throw error;
+        window.location.href = `weekly-report-view.html?id=${data.id}`;
+      }
+    } catch (err) {
+      showError(errorBox, err);
+      document.getElementById("saveBtn").disabled = false;
+    }
+  });
+
+  initHeader();
+  loadExisting();
+</script>
+</body>
+</html>

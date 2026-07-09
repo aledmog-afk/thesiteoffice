@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Snagging Sheet – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+<style>
+  .snag-table img { width: 60px; height: 60px; object-fit: cover; border-radius: 4px; border: 1px solid var(--rule); }
+  .snag-table td, .snag-table th { font-size: 0.82rem; }
+</style>
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="doc-toolbar no-print">
+    <button class="btn btn-outline btn-sm" id="printBtn">Print / Save as PDF</button>
+    <a class="btn btn-amber btn-sm" id="emailLink" href="#">Email to Contractor</a>
+  </div>
+
+  <div class="doc" id="doc" style="max-width:1000px;">Loading…</div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, todayISO } from "./js/app.js";
+
+  await requireAuth();
+  const projectId = getParam("project");
+  const statusFilter = getParam("status") || "open";
+  if (!projectId) window.location.href = "dashboard.html";
+
+  document.getElementById("printBtn").addEventListener("click", () => window.print());
+
+  const priorityBadge = { high: "badge-red", medium: "badge-amber", low: "badge-grey" };
+
+  async function load() {
+    const { data: project } = await supabase.from("projects").select("*").eq("id", projectId).single();
+    if (!project) { document.getElementById("doc").textContent = "Site not found."; return; }
+
+    renderHeader([
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project.name, href: `project.html?id=${projectId}` },
+      { label: "Snagging", href: `snagging.html?project=${projectId}` },
+      { label: "Export Sheet" },
+    ]);
+
+    let query = supabase.from("snag_items").select("*").eq("project_id", projectId).order("item_no", { ascending: true });
+    if (statusFilter !== "all") query = query.eq("status", statusFilter);
+    const { data: snags } = await query;
+
+    const subject = encodeURIComponent(`Snagging Sheet – ${project.name} – ${formatDate(todayISO())}`);
+    const body = encodeURIComponent(
+      `Hi,\n\nPlease find attached the ${statusFilter === "all" ? "" : statusFilter + " "}snagging sheet for ${project.name}, generated ${formatDate(todayISO())}.\n\n` +
+      `${(snags || []).length} item(s) listed.\n\n(Use "Print / Save as PDF" on this page and attach it here.)\n\nRegards,`
+    );
+    document.getElementById("emailLink").href = `mailto:${project.main_contractor_email || ""}?subject=${subject}&body=${body}`;
+
+    const statusLabel = { open: "Open Items", closed: "Closed Items", all: "All Items" }[statusFilter];
+
+    document.getElementById("doc").innerHTML = `
+      <div class="doc-head">
+        <div>
+          <h1>Snagging Sheet</h1>
+          <div style="color:var(--ink-soft); font-size:0.9rem; margin-top:0.2rem;">${escapeHtml(project.name)} — ${statusLabel}</div>
+        </div>
+        <div class="doc-meta">
+          ${project.address ? escapeHtml(project.address) + "<br>" : ""}
+          ${project.contract_ref ? "Ref: " + escapeHtml(project.contract_ref) + "<br>" : ""}
+          To: ${escapeHtml(project.main_contractor_name) || "Main Contractor"}<br>
+          Generated: ${formatDate(todayISO())}
+        </div>
+      </div>
+
+      <div class="table-wrap">
+        <table class="snag-table">
+          <thead>
+            <tr><th>#</th><th>Photo</th><th>Location</th><th>Description</th><th>Trade</th><th>Priority</th><th>Status</th><th>Raised</th></tr>
+          </thead>
+          <tbody>
+            ${(snags || []).map(s => `
+              <tr>
+                <td>${s.item_no}</td>
+                <td>${s.photo_url ? `<img src="${s.photo_url}">` : "—"}</td>
+                <td>${escapeHtml(s.location)}</td>
+                <td>${escapeHtml(s.description)}</td>
+                <td>${escapeHtml(s.trade) || "—"}</td>
+                <td><span class="badge ${priorityBadge[s.priority]}">${escapeHtml(s.priority)}</span></td>
+                <td><span class="badge ${s.status === "open" ? "badge-red" : "badge-green"}">${escapeHtml(s.status)}</span></td>
+                <td>${formatDate(s.raised_date)}</td>
+              </tr>
+            `).join("") || `<tr><td colspan="8" style="text-align:center; color:var(--ink-soft);">No items.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  load();
+</script>
+</body>
+</html>

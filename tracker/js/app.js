@@ -1,0 +1,103 @@
+import { supabase } from "./supabase-client.js";
+
+// ─── Auth guard ─────────────────────────────────────────────────
+// Call at the top of every protected page. Redirects to login if no
+// session, and returns the signed-in user.
+export async function requireAuth() {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) {
+    window.location.href = "login.html";
+    return null;
+  }
+  return session.user;
+}
+
+export async function signOut() {
+  await supabase.auth.signOut();
+  window.location.href = "login.html";
+}
+
+// ─── Small helpers ──────────────────────────────────────────────
+export function getParam(name) {
+  return new URLSearchParams(window.location.search).get(name);
+}
+
+export function escapeHtml(str) {
+  if (str === null || str === undefined) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+export function formatDate(d) {
+  if (!d) return "";
+  const date = new Date(d + "T00:00:00");
+  if (isNaN(date)) return d;
+  return date.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+}
+
+export function todayISO() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+// Given a Date, return the Monday of that week as an ISO date string.
+export function mondayOf(date) {
+  const d = new Date(date);
+  const day = d.getDay();
+  const diff = (day === 0 ? -6 : 1) - day;
+  d.setDate(d.getDate() + diff);
+  return d.toISOString().slice(0, 10);
+}
+
+export function showError(el, err) {
+  const msg = (err && err.message) ? err.message : String(err);
+  el.textContent = msg;
+  el.style.display = "block";
+}
+
+export function clearError(el) {
+  el.textContent = "";
+  el.style.display = "none";
+}
+
+// ─── Photo upload helper ────────────────────────────────────────
+// Uploads a File to the public "site-photos" bucket under the given path
+// and returns its public URL.
+export async function uploadPhoto(file, path) {
+  const ext = file.name.split(".").pop();
+  const key = `${path}/${crypto.randomUUID()}.${ext}`;
+  const { error } = await supabase.storage.from("site-photos").upload(key, file, {
+    cacheControl: "3600",
+    upsert: false,
+  });
+  if (error) throw error;
+  const { data } = supabase.storage.from("site-photos").getPublicUrl(key);
+  return data.publicUrl;
+}
+
+// ─── Shared header ──────────────────────────────────────────────
+// Renders the top nav bar into #site-header. `crumbs` is an array of
+// {label, href} — href omitted on the last (current page) crumb.
+export function renderHeader(crumbs = []) {
+  const el = document.getElementById("site-header");
+  if (!el) return;
+  const crumbHtml = crumbs
+    .map((c, i) =>
+      c.href && i < crumbs.length - 1
+        ? `<a href="${c.href}">${escapeHtml(c.label)}</a>`
+        : `<span>${escapeHtml(c.label)}</span>`
+    )
+    .join('<span class="crumb-sep">/</span>');
+
+  el.innerHTML = `
+    <div class="header-inner">
+      <a href="dashboard.html" class="brand">SITE <span>TRACKER</span></a>
+      <nav class="crumbs">${crumbHtml}</nav>
+      <button id="signOutBtn" class="btn btn-ghost btn-sm">Sign out</button>
+    </div>
+  `;
+  document.getElementById("signOutBtn").addEventListener("click", signOut);
+}
