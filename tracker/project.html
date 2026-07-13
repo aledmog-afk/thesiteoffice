@@ -27,47 +27,17 @@
     </div>
   </div>
 
-  <div class="card" style="margin-bottom:2rem;">
-    <div style="display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap; margin-bottom:0.5rem;">
-      <span class="badge rag-badge" id="ragBadge"></span>
-      <span class="hint" style="color:var(--ink-soft); font-size:0.8rem;">Overall status &amp; programme progress — edit below</span>
-    </div>
-    <div id="progressDisplay"></div>
-  </div>
-
-  <div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(220px,1fr)); margin-bottom:2rem;">
+  <div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(240px,1fr)); margin-bottom:2rem;">
     <a class="tile" href="weekly-reports.html?project=" id="reportsTile">
-      <div class="tile-icon">📋</div>
-      <div class="tile-name">Weekly Reports</div>
+      <div class="tile-name">📋 Weekly Reports</div>
       <div class="tile-stats"><div><strong id="reportCount">–</strong>reports logged</div></div>
     </a>
     <a class="tile" href="snagging.html?project=" id="snaggingTile">
-      <div class="tile-icon">🔧</div>
-      <div class="tile-name">Snagging</div>
+      <div class="tile-name">🔧 Snagging</div>
       <div class="tile-stats">
         <div><strong id="openSnagCount">–</strong>open</div>
         <div><strong id="closedSnagCount">–</strong>closed</div>
       </div>
-    </a>
-    <a class="tile" href="quality-gates.html?project=" id="gatesTile">
-      <div class="tile-icon">✅</div>
-      <div class="tile-name">Quality Gates</div>
-      <div class="tile-stats"><div><strong id="gatesApprovedCount">–</strong>/ 4 approved</div></div>
-    </a>
-    <a class="tile" href="commercials.html?project=" id="commercialsTile">
-      <div class="tile-icon">💷</div>
-      <div class="tile-name">Commercials</div>
-      <div class="tile-stats"><div><strong id="commercialsPendingCount">–</strong>pending review</div></div>
-    </a>
-    <a class="tile" href="handover-checklist.html?project=" id="handoverTile">
-      <div class="tile-icon">📁</div>
-      <div class="tile-name">Handover Checklist</div>
-      <div class="tile-stats"><div><strong id="handoverReadyCount">–</strong>/ 5 ready</div></div>
-    </a>
-    <a class="tile" href="drawings.html?project=" id="drawingsTile">
-      <div class="tile-icon">📐</div>
-      <div class="tile-name">Drawings &amp; Layouts</div>
-      <div class="tile-stats"><div><strong id="drawingsCount">–</strong>drawings uploaded</div></div>
     </a>
   </div>
 
@@ -87,20 +57,6 @@
         <div class="field"><label for="contractorEmail">Main contractor email</label><input type="email" id="contractorEmail"></div>
       </div>
       <div class="field"><label for="startDate">Start date</label><input type="date" id="startDate"></div>
-      <div class="form-grid">
-        <div class="field">
-          <label for="ragStatusInput">Overall status (RAG)</label>
-          <select id="ragStatusInput">
-            <option value="green">Green</option>
-            <option value="amber">Amber</option>
-            <option value="red">Red</option>
-          </select>
-        </div>
-      </div>
-      <div class="form-grid">
-        <div class="field"><label for="baselinePct">Planned / baseline progress (%)</label><input type="number" id="baselinePct" min="0" max="100" step="1"></div>
-        <div class="field"><label for="actualPct">Actual progress (%)</label><input type="number" id="actualPct" min="0" max="100" step="1"></div>
-      </div>
       <div class="btn-row">
         <button type="submit" class="btn btn-amber">Save Changes</button>
         <button type="button" class="btn btn-outline" id="cancelEditBtn">Cancel</button>
@@ -112,7 +68,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("id");
@@ -120,10 +76,6 @@
 
   document.getElementById("reportsTile").href = `weekly-reports.html?project=${projectId}`;
   document.getElementById("snaggingTile").href = `snagging.html?project=${projectId}`;
-  document.getElementById("gatesTile").href = `quality-gates.html?project=${projectId}`;
-  document.getElementById("commercialsTile").href = `commercials.html?project=${projectId}`;
-  document.getElementById("handoverTile").href = `handover-checklist.html?project=${projectId}`;
-  document.getElementById("drawingsTile").href = `drawings.html?project=${projectId}`;
 
   let project = null;
   const factsView = document.getElementById("factsView");
@@ -148,9 +100,6 @@
     document.getElementById("contractorName").value = project.main_contractor_name || "";
     document.getElementById("contractorEmail").value = project.main_contractor_email || "";
     document.getElementById("startDate").value = project.start_date || "";
-    document.getElementById("ragStatusInput").value = project.rag_status;
-    document.getElementById("baselinePct").value = project.baseline_progress_pct;
-    document.getElementById("actualPct").value = project.actual_progress_pct;
   }
 
   document.getElementById("editBtn").addEventListener("click", () => {
@@ -175,9 +124,6 @@
       main_contractor_name: document.getElementById("contractorName").value.trim() || null,
       main_contractor_email: document.getElementById("contractorEmail").value.trim() || null,
       start_date: document.getElementById("startDate").value || null,
-      rag_status: document.getElementById("ragStatusInput").value,
-      baseline_progress_pct: Number(document.getElementById("baselinePct").value) || 0,
-      actual_progress_pct: Number(document.getElementById("actualPct").value) || 0,
     };
     const { data, error } = await supabase.from("projects").update(payload).eq("id", projectId).select().single();
     if (error) { showError(errorBox, error); return; }
@@ -204,11 +150,6 @@
     document.getElementById("statusSelect").value = project.status;
     renderHeader([{ label: "Dashboard", href: "dashboard.html" }, { label: project.name }]);
     renderFacts();
-
-    const ragBadge = document.getElementById("ragBadge");
-    ragBadge.className = `badge badge-${project.rag_status} rag-badge`;
-    ragBadge.innerHTML = `<span class="rag-dot rag-${project.rag_status}"></span>${RAG_LABEL[project.rag_status]}`;
-    document.getElementById("progressDisplay").innerHTML = renderProgressBlock(project.baseline_progress_pct, project.actual_progress_pct, project.rag_status);
   }
 
   async function load() {
@@ -217,21 +158,13 @@
     project = data;
     renderHeaderAndFacts();
 
-    const [{ count: reportCount }, { data: snags }, { data: gates }, { data: commercials }, { data: handoverDocs }, { count: drawingsCount }] = await Promise.all([
+    const [{ count: reportCount }, { data: snags }] = await Promise.all([
       supabase.from("weekly_reports").select("id", { count: "exact", head: true }).eq("project_id", projectId),
       supabase.from("snag_items").select("status").eq("project_id", projectId),
-      supabase.from("quality_gates").select("status").eq("project_id", projectId),
-      supabase.from("commercial_items").select("status").eq("project_id", projectId),
-      supabase.from("handover_documents").select("status").eq("project_id", projectId),
-      supabase.from("drawings").select("id", { count: "exact", head: true }).eq("project_id", projectId),
     ]);
     document.getElementById("reportCount").textContent = reportCount ?? 0;
     document.getElementById("openSnagCount").textContent = (snags || []).filter(s => s.status === "open").length;
     document.getElementById("closedSnagCount").textContent = (snags || []).filter(s => s.status === "closed").length;
-    document.getElementById("gatesApprovedCount").textContent = (gates || []).filter(g => g.status === "approved").length;
-    document.getElementById("commercialsPendingCount").textContent = (commercials || []).filter(c => c.status === "pending_client_review").length;
-    document.getElementById("handoverReadyCount").textContent = (handoverDocs || []).filter(d => d.status === "approved_final").length;
-    document.getElementById("drawingsCount").textContent = drawingsCount ?? 0;
   }
 
   load();

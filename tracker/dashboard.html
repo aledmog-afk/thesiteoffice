@@ -67,7 +67,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock } from "./js/app.js";
+  import { requireAuth, renderHeader, escapeHtml, formatDate, showError, clearError } from "./js/app.js";
 
   await requireAuth();
   renderHeader([{ label: "Dashboard" }]);
@@ -136,12 +136,8 @@
 
     grid.innerHTML = projects.map((p) => `
       <a class="tile" href="project.html?id=${p.id}">
-        <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:0.6rem;">
-          <div class="tile-name">${escapeHtml(p.name)}</div>
-          <span class="badge badge-${p.rag_status} rag-badge"><span class="rag-dot rag-${p.rag_status}"></span>${RAG_LABEL[p.rag_status]}</span>
-        </div>
+        <div class="tile-name">${escapeHtml(p.name)}</div>
         <div class="tile-meta">${escapeHtml(p.main_contractor_name || "No contractor set")}${p.status !== "active" ? ` · <span class="badge badge-grey">${escapeHtml(p.status)}</span>` : ""}</div>
-        ${renderProgressBlock(p.baseline_progress_pct, p.actual_progress_pct, p.rag_status)}
         <div class="tile-stats">
           <div><strong>${openSnagCount[p.id] || 0}</strong>open snags</div>
           <div><strong>${lastReport[p.id] ? formatDate(lastReport[p.id]) : "—"}</strong>last report</div>
