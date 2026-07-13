@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Commercials – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title">Commercials</div>
+      <div class="page-sub" id="projectSub">Early warnings &amp; proposed variations — flagged before they become a surprise on the final account.</div>
+    </div>
+    <button class="btn btn-amber" id="newItemBtn">+ Log Item</button>
+  </div>
+
+  <div class="totals-bar">
+    <div class="totals-box">
+      <div class="totals-label">Approved Variations Total</div>
+      <div class="totals-value approved" id="approvedTotal">£0</div>
+    </div>
+    <div class="totals-box">
+      <div class="totals-label">Potential / Pending Exposure</div>
+      <div class="totals-value pending" id="pendingTotal">£0</div>
+    </div>
+  </div>
+
+  <div class="card" id="itemCard" style="display:none;">
+    <div id="errorBox" class="error-box"></div>
+    <form id="itemForm">
+      <input type="hidden" id="editingId">
+      <div class="field"><label for="title">Title / description *</label><input type="text" id="title" required placeholder="e.g. Ground conditions encountered on plot 4"></div>
+      <div class="form-grid">
+        <div class="field">
+          <label for="type">Type</label>
+          <select id="type">
+            <option value="early_warning">Early Warning</option>
+            <option value="proposed_variation">Proposed Variation</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="status">Status</label>
+          <select id="status">
+            <option value="pending_client_review">Pending Client Review</option>
+            <option value="approved">Approved</option>
+            <option value="rejected">Rejected</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-grid">
+        <div class="field">
+          <label for="costImpact">Cost impact (£)</label>
+          <input type="number" id="costImpact" min="0" step="1" placeholder="Leave blank for TBC">
+        </div>
+        <div class="field">
+          <label for="timeImpact">Time impact (days)</label>
+          <input type="number" id="timeImpact" step="1" placeholder="Leave blank for Nil">
+        </div>
+      </div>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-amber" id="saveBtn">Log Item</button>
+        <button type="button" class="btn btn-outline" id="cancelBtn">Cancel</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Title</th><th>Type</th><th>Cost Impact</th><th>Time Impact</th><th>Status</th><th></th></tr>
+        </thead>
+        <tbody id="itemRows"></tbody>
+      </table>
+    </div>
+    <div id="emptyState" class="empty" style="display:none;"><p>Nothing logged yet.</p></div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, formatGBP } from "./js/app.js";
+
+  await requireAuth();
+  const projectId = getParam("project");
+  if (!projectId) window.location.href = "dashboard.html";
+
+  const typeLabel = { early_warning: "Early Warning", proposed_variation: "Proposed Variation" };
+  const statusBadge = { pending_client_review: "badge-amber", approved: "badge-green", rejected: "badge-red" };
+  const statusLabel = { pending_client_review: "Pending Client Review", approved: "Approved", rejected: "Rejected" };
+
+  let allItems = [];
+  const errorBox = document.getElementById("errorBox");
+  const itemCard = document.getElementById("itemCard");
+  const itemForm = document.getElementById("itemForm");
+
+  function openForAdd() {
+    itemForm.reset();
+    document.getElementById("editingId").value = "";
+    document.getElementById("saveBtn").textContent = "Log Item";
+    itemCard.style.display = "block";
+  }
+  function openForEdit(item) {
+    document.getElementById("editingId").value = item.id;
+    document.getElementById("title").value = item.title;
+    document.getElementById("type").value = item.type;
+    document.getElementById("status").value = item.status;
+    document.getElementById("costImpact").value = item.cost_impact ?? "";
+    document.getElementById("timeImpact").value = item.time_impact_days ?? "";
+    document.getElementById("saveBtn").textContent = "Save Changes";
+    itemCard.style.display = "block";
+  }
+  window.editItem = (id) => { const it = allItems.find(x => x.id === id); if (it) openForEdit(it); };
+
+  document.getElementById("newItemBtn").addEventListener("click", openForAdd);
+  document.getElementById("cancelBtn").addEventListener("click", () => { itemCard.style.display = "none"; });
+
+  itemForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearError(errorBox);
+    const editingId = document.getElementById("editingId").value;
+    const costVal = document.getElementById("costImpact").value;
+    const timeVal = document.getElementById("timeImpact").value;
+    const payload = {
+      title: document.getElementById("title").value.trim(),
+      type: document.getElementById("type").value,
+      status: document.getElementById("status").value,
+      cost_impact: costVal === "" ? null : Number(costVal),
+      time_impact_days: timeVal === "" ? null : Number(timeVal),
+    };
+    try {
+      if (editingId) {
+        const { error } = await supabase.from("commercial_items").update(payload).eq("id", editingId);
+        if (error) throw error;
+      } else {
+        const { data: { user } } = await supabase.auth.getUser();
+        payload.project_id = projectId;
+        payload.created_by = user.id;
+        const { error } = await supabase.from("commercial_items").insert(payload);
+        if (error) throw error;
+      }
+      itemCard.style.display = "none";
+      load();
+    } catch (err) {
+      showError(errorBox, err);
+    }
+  });
+
+  async function deleteItem(id) {
+    if (!confirm("Delete this item?")) return;
+    await supabase.from("commercial_items").delete().eq("id", id);
+    load();
+  }
+  window.deleteItem = deleteItem;
+
+  function render() {
+    document.getElementById("emptyState").style.display = allItems.length ? "none" : "block";
+    document.getElementById("itemRows").innerHTML = allItems.map((it) => `
+      <tr>
+        <td><strong>${escapeHtml(it.title)}</strong></td>
+        <td>${typeLabel[it.type]}</td>
+        <td>${formatGBP(it.cost_impact) || "TBC"}</td>
+        <td>${it.time_impact_days === null || it.time_impact_days === undefined ? "Nil" : (it.time_impact_days > 0 ? `+${it.time_impact_days} days` : `${it.time_impact_days} days`)}</td>
+        <td><span class="badge ${statusBadge[it.status]}">${statusLabel[it.status]}</span></td>
+        <td class="btn-row">
+          <button class="btn btn-outline btn-sm" onclick="editItem('${it.id}')">Edit</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteItem('${it.id}')">Delete</button>
+        </td>
+      </tr>
+    `).join("");
+
+    const approvedTotal = allItems
+      .filter(it => it.type === "proposed_variation" && it.status === "approved" && it.cost_impact !== null)
+      .reduce((sum, it) => sum + Number(it.cost_impact), 0);
+    const pendingTotal = allItems
+      .filter(it => it.status === "pending_client_review" && it.cost_impact !== null)
+      .reduce((sum, it) => sum + Number(it.cost_impact), 0);
+    document.getElementById("approvedTotal").textContent = formatGBP(approvedTotal) || "£0";
+    document.getElementById("pendingTotal").textContent = formatGBP(pendingTotal) || "£0";
+  }
+
+  async function load() {
+    const { data, error } = await supabase
+      .from("commercial_items")
+      .select("*")
+      .eq("project_id", projectId)
+      .order("created_at", { ascending: false });
+    if (!error) allItems = data || [];
+    render();
+  }
+
+  async function init() {
+    const { data: project } = await supabase.from("projects").select("name").eq("id", projectId).single();
+    renderHeader([
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project?.name || "Site", href: `project.html?id=${projectId}` },
+      { label: "Commercials" },
+    ]);
+    document.getElementById("projectSub").textContent = project ? `${project.name} — early warnings & proposed variations.` : "";
+    load();
+  }
+
+  init();
+</script>
+</body>
+</html>

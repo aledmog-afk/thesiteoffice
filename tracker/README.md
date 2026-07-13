@@ -9,6 +9,10 @@ A small internal app for logging **weekly reports** and **snagging sheets** per 
 - **Weekly reports** — programme status, weather, itemised "progress this week" and "plan for next week" lists (add/edit/delete each line), H&S notes, deliveries, issues/risks, photos. Every report has a clean printable view.
 - **Snagging** — organised into named **snag lists** per site. Start a new list, add items to it (location, description, trade, priority, photo, open/closed — each editable and deletable), then export that specific list as a PDF.
 - **Sending to the contractor** — every report/snag list has a "Print / Save as PDF" button (uses your browser's print-to-PDF) and an "Email to Contractor" button that opens a pre-filled email to the contractor's saved address — attach the PDF you just saved.
+- **RAG status & progress** — set an overall Red/Amber/Green status and a baseline vs. actual progress % on each site (Site Details → Edit). Shown as a badge and dual progress bar on the dashboard and site page, with a plain-English slippage line ("-5% Behind Programme" / "On Programme" / "+X% Ahead").
+- **Quality Gates** — 4 standard hold-points per site (Substructure & Drainage, Frame & Wind/Watertight, Pre-Plaster/First Fix, Pre-Handover/PC), each with a status and a checklist of client-side requirements. Ticking an item timestamps the sign-off. Created automatically for every site, including ones that already existed.
+- **Commercials** — an early warning / proposed variation log per site, with cost and time impact, a status (pending/approved/rejected), and running totals for approved variations and pending exposure.
+- **Handover Checklist** — 5 statutory documents per site (Building Control, air permeability/acoustic certs, electrical & gas certs, warranty cover note, O&M manuals), each with a status and a real file upload (stored in Supabase, not a mock). Also created automatically for every site.
 
 There's no login for the contractor — they only ever receive the PDF/email you send them. Anyone who signs in to Site Tracker (your team) can see and edit everything; it's built as one shared internal workspace, not a multi-tenant SaaS.
 

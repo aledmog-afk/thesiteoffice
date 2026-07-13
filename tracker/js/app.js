@@ -103,6 +103,41 @@ export function renderHeader(crumbs = []) {
   document.getElementById("signOutBtn").addEventListener("click", signOut);
 }
 
+// ─── RAG / progress helpers ──────────────────────────────────────
+export const RAG_LABEL = { red: "Red", amber: "Amber", green: "Green" };
+
+export function formatGBP(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  if (Number.isNaN(n)) return null;
+  return n.toLocaleString("en-GB", { style: "currency", currency: "GBP", maximumFractionDigits: 0 });
+}
+
+// Renders the dual baseline-vs-actual progress bar + slippage line used on
+// dashboard site cards and the site detail page.
+export function renderProgressBlock(baselinePct, actualPct, ragStatus) {
+  const baseline = Number(baselinePct) || 0;
+  const actual = Number(actualPct) || 0;
+  const slip = actual - baseline;
+  let slipHtml;
+  if (slip > 0) slipHtml = `<span class="slip-green">+${slip.toFixed(0)}% Ahead of Programme</span>`;
+  else if (slip < 0) slipHtml = `<span class="slip-red">${slip.toFixed(0)}% Behind Programme</span>`;
+  else slipHtml = `<span class="slip-grey">On Programme</span>`;
+
+  return `
+    <div class="progress-block">
+      <div class="progress-track">
+        <div class="progress-fill-baseline" style="width:${baseline}%;"></div>
+        <div class="progress-fill-actual rag-${ragStatus}" style="width:${actual}%;"></div>
+      </div>
+      <div class="progress-legend">
+        <span>Baseline ${baseline.toFixed(0)}% · Actual ${actual.toFixed(0)}%</span>
+        ${slipHtml}
+      </div>
+    </div>
+  `;
+}
+
 // ─── Org logo ───────────────────────────────────────────────────
 // Returns the company logo URL (from org_settings) or null if none is set.
 export async function getOrgLogoUrl() {

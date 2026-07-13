@@ -197,6 +197,55 @@ tr:hover td { background: var(--off); }
 /* ─── LOGO SETTINGS ──────────────────────────────── */
 .logo-preview { max-width: 260px; max-height: 120px; object-fit: contain; border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem; background: var(--white); }
 
+/* ─── RAG STATUS ─────────────────────────────────── */
+.rag-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.rag-red { background: var(--red); }
+.rag-amber { background: var(--amber); }
+.rag-green { background: var(--green); }
+.rag-badge { display: inline-flex; align-items: center; gap: 0.4rem; }
+
+/* ─── DUAL PROGRESS BAR ──────────────────────────── */
+.progress-block { margin: 0.9rem 0; }
+.progress-track { position: relative; height: 8px; background: var(--rule); border-radius: 4px; overflow: visible; margin-bottom: 0.4rem; }
+.progress-fill-baseline { position: absolute; top: 0; left: 0; height: 100%; background: #c7cbd3; border-radius: 4px; }
+.progress-fill-actual { position: absolute; top: -3px; left: 0; height: 14px; border-radius: 7px; background: var(--ink); }
+.progress-fill-actual.rag-red { background: var(--red); }
+.progress-fill-actual.rag-amber { background: var(--amber); }
+.progress-fill-actual.rag-green { background: var(--green); }
+.progress-legend { display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--ink-soft); }
+.progress-legend .slip-red { color: var(--red); font-weight: 700; }
+.progress-legend .slip-green { color: var(--green); font-weight: 700; }
+.progress-legend .slip-grey { color: var(--ink-soft); font-weight: 600; }
+
+/* ─── SECTION TILES (within a site) ─────────────── */
+.tile-icon { font-size: 1.4rem; margin-bottom: 0.3rem; }
+
+/* ─── LEDGER / TOTALS BAR ────────────────────────── */
+.totals-bar { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 8px; overflow: hidden; margin-bottom: 1.2rem; }
+.totals-box { background: var(--white); padding: 1.2rem 1.4rem; }
+.totals-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-soft); margin-bottom: 0.3rem; }
+.totals-value { font-family: var(--font-display); font-size: 1.7rem; font-weight: 800; }
+.totals-value.approved { color: var(--green); }
+.totals-value.pending { color: var(--amber); }
+
+/* ─── CHECKLIST (quality gates) ──────────────────── */
+.gate-card + .gate-card { margin-top: 1.2rem; }
+.gate-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap; }
+.gate-head-title { font-family: var(--font-display); font-size: 1.15rem; font-weight: 700; }
+.gate-head select { width: auto; min-width: 150px; }
+.checklist { list-style: none; }
+.checklist-item { display: flex; align-items: flex-start; gap: 0.7rem; padding: 0.55rem 0; border-bottom: 1px solid var(--rule); }
+.checklist-item:last-child { border-bottom: none; }
+.checklist-item input[type="checkbox"] { width: auto; margin-top: 0.2rem; accent-color: var(--amber); cursor: pointer; }
+.checklist-item label { flex: 1; font-size: 0.9rem; cursor: pointer; }
+.checklist-item.checked label { text-decoration: line-through; color: var(--ink-soft); }
+.checklist-item .checked-at { font-size: 0.75rem; color: var(--ink-soft); white-space: nowrap; }
+
+/* ─── FILE UPLOAD ROW (handover) ─────────────────── */
+.file-row input[type="file"] { font-size: 0.8rem; }
+.file-link { font-size: 0.82rem; color: var(--blue); text-decoration: none; }
+.file-link:hover { text-decoration: underline; }
+
 @media print {
   #site-header, .doc-toolbar, .no-print { display: none !important; }
   body { background: #fff; }
