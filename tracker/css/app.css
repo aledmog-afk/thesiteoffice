@@ -246,6 +246,37 @@ tr:hover td { background: var(--off); }
 .file-link { font-size: 0.82rem; color: var(--blue); text-decoration: none; }
 .file-link:hover { text-decoration: underline; }
 
+/* ─── PINPOINT DRAWING CANVAS ─────────────────────── */
+.drawing-canvas-wrap {
+  background: var(--white); border: 1px solid var(--rule); border-radius: 8px;
+  padding: 1rem; overflow: auto; text-align: center;
+}
+.drawing-canvas { position: relative; display: inline-block; max-width: 100%; cursor: crosshair; line-height: 0; }
+.drawing-canvas img { display: block; max-width: 100%; height: auto; user-select: none; -webkit-user-drag: none; border-radius: 4px; }
+.pin {
+  position: absolute; width: 20px; height: 20px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%; background: var(--red);
+  border: 3px solid var(--white);
+  box-shadow: 0 1px 5px rgba(0,0,0,0.5);
+  cursor: pointer; transition: transform 0.1s;
+}
+.pin:hover { transform: translate(-50%, -50%) scale(1.2); }
+.pin.temp { background: var(--amber); animation: pin-pulse 1s ease-in-out infinite; }
+@keyframes pin-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+/* ─── MODAL ──────────────────────────────────────── */
+.modal-backdrop {
+  position: fixed; inset: 0; background: rgba(15,17,23,0.6);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 500; padding: 1rem;
+}
+.modal-box {
+  background: var(--white); border-radius: 8px;
+  max-width: 480px; width: 100%; max-height: 85vh; overflow-y: auto;
+  padding: 1.6rem;
+}
+
 @media print {
   #site-header, .doc-toolbar, .no-print { display: none !important; }
   body { background: #fff; }

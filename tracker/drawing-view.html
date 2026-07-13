@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Drawing – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title" id="drawingTitle">Loading…</div>
+      <div class="page-sub" id="projectSub"></div>
+    </div>
+  </div>
+
+  <p class="hint" style="margin-bottom:1rem;">Click/tap anywhere on the drawing to drop a pin and raise a snag at that exact spot. Click an existing pin to see what's already been raised there.</p>
+
+  <div class="drawing-canvas-wrap">
+    <div class="drawing-canvas" id="canvas">
+      <img id="drawingImg" alt="">
+    </div>
+  </div>
+</div>
+
+<!-- New pin action panel -->
+<div class="card no-print" id="newPinPanel" style="display:none; max-width:500px; margin:1.2rem auto 0;">
+  <div id="pinErrorBox" class="error-box"></div>
+  <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.8rem;">New Snag at This Location</h3>
+  <form id="pinForm">
+    <div class="field">
+      <label for="pinSnagList">Snag list *</label>
+      <select id="pinSnagList" required></select>
+    </div>
+    <div class="field"><label for="pinLocation">Location / Plot *</label><input type="text" id="pinLocation" required></div>
+    <div class="field"><label for="pinDescription">Description *</label><textarea id="pinDescription" rows="2" required placeholder="What's wrong, exactly here"></textarea></div>
+    <div class="form-grid">
+      <div class="field"><label for="pinTrade">Trade responsible</label><input type="text" id="pinTrade"></div>
+      <div class="field">
+        <label for="pinPriority">Priority</label>
+        <select id="pinPriority">
+          <option value="low">Low</option>
+          <option value="medium" selected>Medium</option>
+          <option value="high">High</option>
+        </select>
+      </div>
+    </div>
+    <div class="field">
+      <label>Photo</label>
+      <input type="file" id="pinPhotoInput" accept="image/*">
+      <div class="photo-grid" id="pinPhotoGrid"></div>
+    </div>
+    <div class="btn-row">
+      <button type="submit" class="btn btn-amber">Save Snag</button>
+      <button type="button" class="btn btn-outline" id="cancelPinBtn">Cancel</button>
+    </div>
+  </form>
+</div>
+
+<!-- Existing pin detail modal -->
+<div class="modal-backdrop no-print" id="pinModal" style="display:none;">
+  <div class="modal-box" id="pinModalBody"></div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, uploadImage } from "./js/app.js";
+
+  await requireAuth();
+  const drawingId = getParam("id");
+  if (!drawingId) window.location.href = "dashboard.html";
+
+  const priorityBadge = { high: "badge-red", medium: "badge-amber", low: "badge-grey" };
+  const statusBadgeCls = { open: "badge-red", closed: "badge-green" };
+
+  let drawing = null;
+  let pins = [];
+  let pendingCoords = null;
+  let pinPhotoUrl = null;
+
+  const canvas = document.getElementById("canvas");
+  const drawingImg = document.getElementById("drawingImg");
+  const newPinPanel = document.getElementById("newPinPanel");
+  const pinErrorBox = document.getElementById("pinErrorBox");
+  const pinModal = document.getElementById("pinModal");
+
+  function renderPins() {
+    canvas.querySelectorAll(".pin").forEach((el) => el.remove());
+    pins.forEach((p) => {
+      const dot = document.createElement("div");
+      dot.className = "pin";
+      dot.style.left = p.x_coordinate + "%";
+      dot.style.top = p.y_coordinate + "%";
+      dot.title = p.location || p.description;
+      dot.addEventListener("click", (e) => { e.stopPropagation(); openPinModal(p); });
+      canvas.appendChild(dot);
+    });
+  }
+
+  canvas.addEventListener("click", (e) => {
+    if (e.target.closest(".pin")) return;
+    const rect = drawingImg.getBoundingClientRect();
+    const xPct = ((e.clientX - rect.left) / rect.width) * 100;
+    const yPct = ((e.clientY - rect.top) / rect.height) * 100;
+    if (xPct < 0 || xPct > 100 || yPct < 0 || yPct > 100) return;
+    dropTempPin(xPct, yPct);
+  });
+
+  function dropTempPin(xPct, yPct) {
+    canvas.querySelectorAll(".pin.temp").forEach((el) => el.remove());
+    const dot = document.createElement("div");
+    dot.className = "pin temp";
+    dot.style.left = xPct + "%";
+    dot.style.top = yPct + "%";
+    canvas.appendChild(dot);
+    pendingCoords = { x: xPct, y: yPct };
+    openNewPinPanel();
+  }
+
+  function clearTempPin() {
+    canvas.querySelectorAll(".pin.temp").forEach((el) => el.remove());
+    pendingCoords = null;
+  }
+
+  async function openNewPinPanel() {
+    clearError(pinErrorBox);
+    document.getElementById("pinForm").reset();
+    document.getElementById("pinLocation").value = drawing.plot_number || drawing.drawing_name;
+    pinPhotoUrl = null;
+    document.getElementById("pinPhotoGrid").innerHTML = "";
+
+    const select = document.getElementById("pinSnagList");
+    const { data: lists } = await supabase.from("snag_lists").select("id, title").eq("project_id", drawing.project_id).order("created_at", { ascending: false });
+    select.innerHTML = (lists || []).map(l => `<option value="${l.id}">${escapeHtml(l.title)}</option>`).join("") + `<option value="__new__">+ New snag list…</option>`;
+
+    newPinPanel.style.display = "block";
+    newPinPanel.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
+  document.getElementById("cancelPinBtn").addEventListener("click", () => {
+    newPinPanel.style.display = "none";
+    clearTempPin();
+  });
+
+  document.getElementById("pinPhotoInput").addEventListener("change", async () => {
+    const file = document.getElementById("pinPhotoInput").files[0];
+    if (!file) return;
+    document.getElementById("pinPhotoInput").disabled = true;
+    try {
+      pinPhotoUrl = await uploadImage(file, `${drawing.project_id}/snags`);
+      document.getElementById("pinPhotoGrid").innerHTML = `<div class="photo-thumb"><img src="${pinPhotoUrl}"></div>`;
+    } catch (err) {
+      showError(pinErrorBox, err);
+    } finally {
+      document.getElementById("pinPhotoInput").disabled = false;
+    }
+  });
+
+  document.getElementById("pinForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearError(pinErrorBox);
+    if (!pendingCoords) return;
+
+    try {
+      let snagListId = document.getElementById("pinSnagList").value;
+      const { data: { user } } = await supabase.auth.getUser();
+
+      if (snagListId === "__new__") {
+        const title = prompt("Name this snag list:", `Snag List – ${formatDate(new Date().toISOString().slice(0, 10))}`);
+        if (!title) return;
+        const { data: newList, error: listErr } = await supabase.from("snag_lists").insert({ project_id: drawing.project_id, title: title.trim(), created_by: user.id }).select().single();
+        if (listErr) throw listErr;
+        snagListId = newList.id;
+      }
+
+      const payload = {
+        project_id: drawing.project_id,
+        snag_list_id: snagListId,
+        drawing_id: drawing.id,
+        x_coordinate: pendingCoords.x,
+        y_coordinate: pendingCoords.y,
+        location: document.getElementById("pinLocation").value.trim(),
+        description: document.getElementById("pinDescription").value.trim(),
+        trade: document.getElementById("pinTrade").value.trim() || null,
+        priority: document.getElementById("pinPriority").value,
+        photo_url: pinPhotoUrl,
+        raised_date: new Date().toISOString().slice(0, 10),
+        created_by: user.id,
+      };
+      const { error } = await supabase.from("snag_items").insert(payload);
+      if (error) throw error;
+
+      newPinPanel.style.display = "none";
+      clearTempPin();
+      loadPins();
+    } catch (err) {
+      showError(pinErrorBox, err);
+    }
+  });
+
+  function openPinModal(pin) {
+    document.getElementById("pinModalBody").innerHTML = `
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:1rem; margin-bottom:1rem;">
+        <div>
+          <div style="font-family:var(--font-display); font-weight:700; font-size:1.1rem;">${escapeHtml(pin.location) || "Untitled"}</div>
+          <div style="color:var(--ink-soft); font-size:0.8rem;">Raised ${formatDate(pin.raised_date)}${pin.trade ? " · " + escapeHtml(pin.trade) : ""}</div>
+        </div>
+        <div class="btn-row">
+          <span class="badge ${priorityBadge[pin.priority]}">${escapeHtml(pin.priority)}</span>
+          <span class="badge ${statusBadgeCls[pin.status]}">${escapeHtml(pin.status)}</span>
+        </div>
+      </div>
+      <p style="font-size:0.92rem; margin-bottom:1rem;">${escapeHtml(pin.description)}</p>
+      ${pin.photo_url ? `<div class="photo-grid" style="margin-bottom:1rem;"><div class="photo-thumb"><img src="${pin.photo_url}"></div></div>` : ""}
+      <div class="btn-row">
+        <a class="btn btn-amber btn-sm" href="snag-list-edit.html?id=${pin.snag_list_id}">View / Edit in Snag List</a>
+        <button type="button" class="btn btn-outline btn-sm" id="closePinModalBtn">Close</button>
+      </div>
+    `;
+    document.getElementById("closePinModalBtn").addEventListener("click", () => pinModal.style.display = "none");
+    pinModal.style.display = "flex";
+  }
+  pinModal.addEventListener("click", (e) => { if (e.target === pinModal) pinModal.style.display = "none"; });
+
+  async function loadPins() {
+    const { data } = await supabase
+      .from("snag_items")
+      .select("*")
+      .eq("drawing_id", drawingId)
+      .not("x_coordinate", "is", null)
+      .not("y_coordinate", "is", null);
+    pins = data || [];
+    renderPins();
+  }
+
+  async function init() {
+    const { data, error } = await supabase.from("drawings").select("*, projects(*)").eq("id", drawingId).single();
+    if (error) { document.getElementById("drawingTitle").textContent = "Drawing not found"; return; }
+    drawing = data;
+    const project = drawing.projects;
+
+    document.getElementById("drawingTitle").textContent = drawing.drawing_name;
+    document.getElementById("projectSub").textContent = drawing.plot_number ? `${project.name} · ${drawing.plot_number}` : project.name;
+    renderHeader([
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project.name, href: `project.html?id=${project.id}` },
+      { label: "Drawings & Layouts", href: `drawings.html?project=${project.id}` },
+      { label: drawing.drawing_name },
+    ]);
+
+    drawingImg.addEventListener("load", loadPins);
+    drawingImg.src = drawing.drawing_url;
+    if (drawingImg.complete) loadPins();
+  }
+
+  init();
+</script>
+</body>
+</html>

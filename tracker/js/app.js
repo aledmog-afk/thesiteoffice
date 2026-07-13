@@ -79,11 +79,11 @@ export async function uploadPhoto(file, path) {
 }
 
 // ─── Image compression ──────────────────────────────────────────
-// Resizes an image file to fit within maxDimension (longest side) and
-// re-encodes it as JPEG at the given quality, to keep storage usage down.
-// Non-image files (e.g. PDFs) and SVGs pass through unchanged. Falls back
-// to the original file if decoding/encoding fails for any reason.
-export async function compressImage(file, { maxDimension = 1920, quality = 0.78 } = {}) {
+// Shared resize + re-encode step used by compressImage/compressDrawing.
+// Non-image files and SVGs pass through unchanged. Falls back to the
+// original file if decoding/encoding fails for any reason (e.g. a PDF,
+// or a format the browser can't rasterise via Canvas).
+async function resizeAndEncode(file, { maxDimension, quality, mimeType, extension }) {
   if (!file.type || !file.type.startsWith("image/") || file.type === "image/svg+xml") return file;
 
   const bitmap = await createImageBitmap(file).catch(() => null);
@@ -103,11 +103,26 @@ export async function compressImage(file, { maxDimension = 1920, quality = 0.78 
   ctx.drawImage(bitmap, 0, 0, width, height);
   bitmap.close?.();
 
-  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, mimeType, quality));
   if (!blob) return file;
 
-  const newName = file.name.replace(/\.[^.]+$/, "") + ".jpg";
-  return new File([blob], newName, { type: "image/jpeg", lastModified: Date.now() });
+  const newName = file.name.replace(/\.[^.]+$/, "") + "." + extension;
+  return new File([blob], newName, { type: mimeType, lastModified: Date.now() });
+}
+
+// Resizes an image file to fit within maxDimension (longest side) and
+// re-encodes it as JPEG at the given quality, to keep storage usage down.
+export async function compressImage(file, { maxDimension = 1920, quality = 0.78 } = {}) {
+  return resizeAndEncode(file, { maxDimension, quality, mimeType: "image/jpeg", extension: "jpg" });
+}
+
+// Resizes a drawing/blueprint image to fit within maxDimension and
+// re-encodes it as WebP — smaller than JPEG at equivalent quality, and
+// still sharp enough for line work/text. PDFs can't be rasterised with
+// the Canvas API (no native browser support), so PDF drawings upload
+// unchanged; everything else (PNG, JPEG, WebP, ...) gets converted.
+export async function compressDrawing(file, { maxDimension = 2560, quality = 0.75 } = {}) {
+  return resizeAndEncode(file, { maxDimension, quality, mimeType: "image/webp", extension: "webp" });
 }
 
 // Compresses (if it's an image) then uploads to the "site-photos" bucket.
@@ -116,6 +131,13 @@ export async function compressImage(file, { maxDimension = 1920, quality = 0.78 
 export async function uploadImage(file, path) {
   const compressed = await compressImage(file);
   return uploadPhoto(compressed, path);
+}
+
+// Compresses (if it's an image) then uploads to the "drawings/" folder of
+// the "site-photos" bucket. Used for site layouts and plot floor plans.
+export async function uploadDrawing(file, path) {
+  const compressed = await compressDrawing(file);
+  return uploadPhoto(compressed, `drawings/${path}`);
 }
 
 // ─── Shared header ──────────────────────────────────────────────

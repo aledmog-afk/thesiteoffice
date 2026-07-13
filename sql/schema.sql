@@ -363,3 +363,44 @@ cross join (values
   ('om_manuals', 'Draft O&M Manuals')
 ) as d(doc_key, title)
 on conflict (project_id, doc_key) do nothing;
+
+-- ─── v4 ADDITIONS ─────────────────────────────────────────────────
+-- Pinpoint Snagging & QA: an overall site layout drawing plus per-plot
+-- floor plan drawings, with percentage-based pin coordinates on snags
+-- and quality gates so pins scale correctly on any screen size.
+
+-- Overall site master plan (one per site) lives directly on projects;
+-- individual plot/floor drawings live in the new drawings table below.
+alter table public.projects add column if not exists site_layout_url text;
+
+create table if not exists public.drawings (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  plot_number text,
+  drawing_name text not null,
+  drawing_url text not null,
+  created_by uuid references auth.users(id),
+  created_at timestamptz not null default now()
+);
+
+alter table public.drawings enable row level security;
+drop policy if exists "authenticated read drawings" on public.drawings;
+create policy "authenticated read drawings" on public.drawings for select using (auth.role() = 'authenticated');
+drop policy if exists "authenticated insert drawings" on public.drawings;
+create policy "authenticated insert drawings" on public.drawings for insert with check (auth.role() = 'authenticated');
+drop policy if exists "authenticated update drawings" on public.drawings;
+create policy "authenticated update drawings" on public.drawings for update using (auth.role() = 'authenticated');
+drop policy if exists "authenticated delete drawings" on public.drawings;
+create policy "authenticated delete drawings" on public.drawings for delete using (auth.role() = 'authenticated');
+
+-- Pin coordinates on snag items — percentage of drawing width/height
+-- (0-100), nullable so ordinary text-only snags still work with no pin.
+alter table public.snag_items add column if not exists drawing_id uuid references public.drawings(id) on delete set null;
+alter table public.snag_items add column if not exists x_coordinate numeric check (x_coordinate >= 0 and x_coordinate <= 100);
+alter table public.snag_items add column if not exists y_coordinate numeric check (y_coordinate >= 0 and y_coordinate <= 100);
+
+-- Pin coordinates on quality gates — one pin per gate, marking the
+-- area/zone that hold-point covers on a drawing.
+alter table public.quality_gates add column if not exists drawing_id uuid references public.drawings(id) on delete set null;
+alter table public.quality_gates add column if not exists x_coordinate numeric check (x_coordinate >= 0 and x_coordinate <= 100);
+alter table public.quality_gates add column if not exists y_coordinate numeric check (y_coordinate >= 0 and y_coordinate <= 100);

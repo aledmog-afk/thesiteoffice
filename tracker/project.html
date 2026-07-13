@@ -64,6 +64,11 @@
       <div class="tile-name">Handover Checklist</div>
       <div class="tile-stats"><div><strong id="handoverReadyCount">–</strong>/ 5 ready</div></div>
     </a>
+    <a class="tile" href="drawings.html?project=" id="drawingsTile">
+      <div class="tile-icon">📐</div>
+      <div class="tile-name">Drawings &amp; Layouts</div>
+      <div class="tile-stats"><div><strong id="drawingsCount">–</strong>drawings uploaded</div></div>
+    </a>
   </div>
 
   <div class="card" id="detailsCard">
@@ -118,6 +123,7 @@
   document.getElementById("gatesTile").href = `quality-gates.html?project=${projectId}`;
   document.getElementById("commercialsTile").href = `commercials.html?project=${projectId}`;
   document.getElementById("handoverTile").href = `handover-checklist.html?project=${projectId}`;
+  document.getElementById("drawingsTile").href = `drawings.html?project=${projectId}`;
 
   let project = null;
   const factsView = document.getElementById("factsView");
@@ -211,12 +217,13 @@
     project = data;
     renderHeaderAndFacts();
 
-    const [{ count: reportCount }, { data: snags }, { data: gates }, { data: commercials }, { data: handoverDocs }] = await Promise.all([
+    const [{ count: reportCount }, { data: snags }, { data: gates }, { data: commercials }, { data: handoverDocs }, { count: drawingsCount }] = await Promise.all([
       supabase.from("weekly_reports").select("id", { count: "exact", head: true }).eq("project_id", projectId),
       supabase.from("snag_items").select("status").eq("project_id", projectId),
       supabase.from("quality_gates").select("status").eq("project_id", projectId),
       supabase.from("commercial_items").select("status").eq("project_id", projectId),
       supabase.from("handover_documents").select("status").eq("project_id", projectId),
+      supabase.from("drawings").select("id", { count: "exact", head: true }).eq("project_id", projectId),
     ]);
     document.getElementById("reportCount").textContent = reportCount ?? 0;
     document.getElementById("openSnagCount").textContent = (snags || []).filter(s => s.status === "open").length;
@@ -224,6 +231,7 @@
     document.getElementById("gatesApprovedCount").textContent = (gates || []).filter(g => g.status === "approved").length;
     document.getElementById("commercialsPendingCount").textContent = (commercials || []).filter(c => c.status === "pending_client_review").length;
     document.getElementById("handoverReadyCount").textContent = (handoverDocs || []).filter(d => d.status === "approved_final").length;
+    document.getElementById("drawingsCount").textContent = drawingsCount ?? 0;
   }
 
   load();
