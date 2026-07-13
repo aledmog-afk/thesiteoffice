@@ -188,3 +188,219 @@ begin
   return new;
 end;
 $$ language plpgsql;
+
+-- ─── v3 ADDITIONS ─────────────────────────────────────────────────
+-- Client-side construction management: RAG/progress tracking, quality
+-- gates, a commercial early-warning/variation log, and a statutory
+-- handover document checklist. Additive and safe to re-run.
+
+-- Dashboard RAG status + baseline vs actual progress
+alter table public.projects add column if not exists rag_status text not null default 'amber' check (rag_status in ('red', 'amber', 'green'));
+alter table public.projects add column if not exists baseline_progress_pct numeric not null default 0 check (baseline_progress_pct >= 0 and baseline_progress_pct <= 100);
+alter table public.projects add column if not exists actual_progress_pct numeric not null default 0 check (actual_progress_pct >= 0 and actual_progress_pct <= 100);
+
+-- Quality Gates: 4 standard hold-points per site, each with a checklist.
+-- checklist is a jsonb array of {text, checked, checked_at}.
+create table if not exists public.quality_gates (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  gate_key text not null,
+  title text not null,
+  status text not null default 'not_started' check (status in ('not_started', 'in_progress', 'under_review', 'approved')),
+  checklist jsonb not null default '[]'::jsonb,
+  sort_order integer not null default 0,
+  created_at timestamptz not null default now(),
+  unique (project_id, gate_key)
+);
+
+alter table public.quality_gates enable row level security;
+drop policy if exists "authenticated read quality_gates" on public.quality_gates;
+create policy "authenticated read quality_gates" on public.quality_gates for select using (auth.role() = 'authenticated');
+drop policy if exists "authenticated insert quality_gates" on public.quality_gates;
+create policy "authenticated insert quality_gates" on public.quality_gates for insert with check (auth.role() = 'authenticated');
+drop policy if exists "authenticated update quality_gates" on public.quality_gates;
+create policy "authenticated update quality_gates" on public.quality_gates for update using (auth.role() = 'authenticated');
+drop policy if exists "authenticated delete quality_gates" on public.quality_gates;
+create policy "authenticated delete quality_gates" on public.quality_gates for delete using (auth.role() = 'authenticated');
+
+-- Commercial log: early warnings & proposed variations.
+-- cost_impact / time_impact_days left null to mean "TBC" / "Nil".
+create table if not exists public.commercial_items (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  title text not null,
+  type text not null check (type in ('early_warning', 'proposed_variation')),
+  cost_impact numeric,
+  time_impact_days integer,
+  status text not null default 'pending_client_review' check (status in ('pending_client_review', 'approved', 'rejected')),
+  created_by uuid references auth.users(id),
+  created_at timestamptz not null default now()
+);
+
+alter table public.commercial_items enable row level security;
+drop policy if exists "authenticated read commercial_items" on public.commercial_items;
+create policy "authenticated read commercial_items" on public.commercial_items for select using (auth.role() = 'authenticated');
+drop policy if exists "authenticated insert commercial_items" on public.commercial_items;
+create policy "authenticated insert commercial_items" on public.commercial_items for insert with check (auth.role() = 'authenticated');
+drop policy if exists "authenticated update commercial_items" on public.commercial_items;
+create policy "authenticated update commercial_items" on public.commercial_items for update using (auth.role() = 'authenticated');
+drop policy if exists "authenticated delete commercial_items" on public.commercial_items;
+create policy "authenticated delete commercial_items" on public.commercial_items for delete using (auth.role() = 'authenticated');
+
+-- Handover checklist: 5 standard statutory documents per site.
+create table if not exists public.handover_documents (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  doc_key text not null,
+  title text not null,
+  status text not null default 'missing' check (status in ('missing', 'draft_received', 'approved_final')),
+  file_url text,
+  file_name text,
+  updated_at timestamptz not null default now(),
+  unique (project_id, doc_key)
+);
+
+alter table public.handover_documents enable row level security;
+drop policy if exists "authenticated read handover_documents" on public.handover_documents;
+create policy "authenticated read handover_documents" on public.handover_documents for select using (auth.role() = 'authenticated');
+drop policy if exists "authenticated insert handover_documents" on public.handover_documents;
+create policy "authenticated insert handover_documents" on public.handover_documents for insert with check (auth.role() = 'authenticated');
+drop policy if exists "authenticated update handover_documents" on public.handover_documents;
+create policy "authenticated update handover_documents" on public.handover_documents for update using (auth.role() = 'authenticated');
+drop policy if exists "authenticated delete handover_documents" on public.handover_documents;
+create policy "authenticated delete handover_documents" on public.handover_documents for delete using (auth.role() = 'authenticated');
+
+-- Auto-create the 4 quality gates + 5 handover documents whenever a new
+-- site is created, pre-filled with standard checklist items.
+create or replace function public.seed_project_defaults()
+returns trigger as $$
+begin
+  insert into public.quality_gates (project_id, gate_key, title, sort_order, checklist) values
+    (new.id, 'substructure_drainage', 'Substructure & Drainage', 1, '[
+       {"text": "Foundation excavation inspected by Building Control", "checked": false, "checked_at": null},
+       {"text": "Drainage test (air/water) passed and recorded", "checked": false, "checked_at": null},
+       {"text": "DPC level verified", "checked": false, "checked_at": null},
+       {"text": "Building Control sign-off for substructure received", "checked": false, "checked_at": null}
+     ]'::jsonb),
+    (new.id, 'frame_watertight', 'Frame & Wind/Watertight', 2, '[
+       {"text": "Moisture readings recorded", "checked": false, "checked_at": null},
+       {"text": "Cavity barriers inspected", "checked": false, "checked_at": null},
+       {"text": "Structural engineer sign-off uploaded", "checked": false, "checked_at": null},
+       {"text": "Roof confirmed watertight", "checked": false, "checked_at": null}
+     ]'::jsonb),
+    (new.id, 'pre_plaster_first_fix', 'Pre-Plaster / First Fix', 3, '[
+       {"text": "First fix electrical inspected", "checked": false, "checked_at": null},
+       {"text": "First fix plumbing & heating inspected", "checked": false, "checked_at": null},
+       {"text": "Insulation installed and inspected", "checked": false, "checked_at": null},
+       {"text": "Pre-plaster inspection sign-off received", "checked": false, "checked_at": null}
+     ]'::jsonb),
+    (new.id, 'pre_handover_pc', 'Pre-Handover / PC', 4, '[
+       {"text": "Snagging list closed out", "checked": false, "checked_at": null},
+       {"text": "O&M manuals received", "checked": false, "checked_at": null},
+       {"text": "All statutory certificates received", "checked": false, "checked_at": null},
+       {"text": "Final client walkthrough completed", "checked": false, "checked_at": null}
+     ]'::jsonb)
+  on conflict (project_id, gate_key) do nothing;
+
+  insert into public.handover_documents (project_id, doc_key, title) values
+    (new.id, 'building_control', 'Building Control Sign-off (Initial/Final)'),
+    (new.id, 'air_acoustic_test', 'Air Permeability / Acoustic Test Certificates'),
+    (new.id, 'elec_gas_certs', 'Electrical & Gas Safety Certificates'),
+    (new.id, 'warranty_cover_note', 'NHBC/Structural Warranty Cover Note'),
+    (new.id, 'om_manuals', 'Draft O&M Manuals')
+  on conflict (project_id, doc_key) do nothing;
+
+  return new;
+end;
+$$ language plpgsql;
+
+drop trigger if exists trg_seed_project_defaults on public.projects;
+create trigger trg_seed_project_defaults
+after insert on public.projects
+for each row execute function public.seed_project_defaults();
+
+-- Backfill quality gates + handover documents for sites that already
+-- existed before this migration (e.g. any site you created while testing).
+insert into public.quality_gates (project_id, gate_key, title, sort_order, checklist)
+select p.id, g.gate_key, g.title, g.sort_order, g.checklist
+from public.projects p
+cross join (values
+  ('substructure_drainage', 'Substructure & Drainage', 1, '[
+     {"text": "Foundation excavation inspected by Building Control", "checked": false, "checked_at": null},
+     {"text": "Drainage test (air/water) passed and recorded", "checked": false, "checked_at": null},
+     {"text": "DPC level verified", "checked": false, "checked_at": null},
+     {"text": "Building Control sign-off for substructure received", "checked": false, "checked_at": null}
+   ]'::jsonb),
+  ('frame_watertight', 'Frame & Wind/Watertight', 2, '[
+     {"text": "Moisture readings recorded", "checked": false, "checked_at": null},
+     {"text": "Cavity barriers inspected", "checked": false, "checked_at": null},
+     {"text": "Structural engineer sign-off uploaded", "checked": false, "checked_at": null},
+     {"text": "Roof confirmed watertight", "checked": false, "checked_at": null}
+   ]'::jsonb),
+  ('pre_plaster_first_fix', 'Pre-Plaster / First Fix', 3, '[
+     {"text": "First fix electrical inspected", "checked": false, "checked_at": null},
+     {"text": "First fix plumbing & heating inspected", "checked": false, "checked_at": null},
+     {"text": "Insulation installed and inspected", "checked": false, "checked_at": null},
+     {"text": "Pre-plaster inspection sign-off received", "checked": false, "checked_at": null}
+   ]'::jsonb),
+  ('pre_handover_pc', 'Pre-Handover / PC', 4, '[
+     {"text": "Snagging list closed out", "checked": false, "checked_at": null},
+     {"text": "O&M manuals received", "checked": false, "checked_at": null},
+     {"text": "All statutory certificates received", "checked": false, "checked_at": null},
+     {"text": "Final client walkthrough completed", "checked": false, "checked_at": null}
+   ]'::jsonb)
+) as g(gate_key, title, sort_order, checklist)
+on conflict (project_id, gate_key) do nothing;
+
+insert into public.handover_documents (project_id, doc_key, title)
+select p.id, d.doc_key, d.title
+from public.projects p
+cross join (values
+  ('building_control', 'Building Control Sign-off (Initial/Final)'),
+  ('air_acoustic_test', 'Air Permeability / Acoustic Test Certificates'),
+  ('elec_gas_certs', 'Electrical & Gas Safety Certificates'),
+  ('warranty_cover_note', 'NHBC/Structural Warranty Cover Note'),
+  ('om_manuals', 'Draft O&M Manuals')
+) as d(doc_key, title)
+on conflict (project_id, doc_key) do nothing;
+
+-- ─── v4 ADDITIONS ─────────────────────────────────────────────────
+-- Pinpoint Snagging & QA: an overall site layout drawing plus per-plot
+-- floor plan drawings, with percentage-based pin coordinates on snags
+-- and quality gates so pins scale correctly on any screen size.
+
+-- Overall site master plan (one per site) lives directly on projects;
+-- individual plot/floor drawings live in the new drawings table below.
+alter table public.projects add column if not exists site_layout_url text;
+
+create table if not exists public.drawings (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  plot_number text,
+  drawing_name text not null,
+  drawing_url text not null,
+  created_by uuid references auth.users(id),
+  created_at timestamptz not null default now()
+);
+
+alter table public.drawings enable row level security;
+drop policy if exists "authenticated read drawings" on public.drawings;
+create policy "authenticated read drawings" on public.drawings for select using (auth.role() = 'authenticated');
+drop policy if exists "authenticated insert drawings" on public.drawings;
+create policy "authenticated insert drawings" on public.drawings for insert with check (auth.role() = 'authenticated');
+drop policy if exists "authenticated update drawings" on public.drawings;
+create policy "authenticated update drawings" on public.drawings for update using (auth.role() = 'authenticated');
+drop policy if exists "authenticated delete drawings" on public.drawings;
+create policy "authenticated delete drawings" on public.drawings for delete using (auth.role() = 'authenticated');
+
+-- Pin coordinates on snag items — percentage of drawing width/height
+-- (0-100), nullable so ordinary text-only snags still work with no pin.
+alter table public.snag_items add column if not exists drawing_id uuid references public.drawings(id) on delete set null;
+alter table public.snag_items add column if not exists x_coordinate numeric check (x_coordinate >= 0 and x_coordinate <= 100);
+alter table public.snag_items add column if not exists y_coordinate numeric check (y_coordinate >= 0 and y_coordinate <= 100);
+
+-- Pin coordinates on quality gates — one pin per gate, marking the
+-- area/zone that hold-point covers on a drawing.
+alter table public.quality_gates add column if not exists drawing_id uuid references public.drawings(id) on delete set null;
+alter table public.quality_gates add column if not exists x_coordinate numeric check (x_coordinate >= 0 and x_coordinate <= 100);
+alter table public.quality_gates add column if not exists y_coordinate numeric check (y_coordinate >= 0 and y_coordinate <= 100);

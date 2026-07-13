@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Quality Gates – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title">Quality Gates</div>
+      <div class="page-sub" id="projectSub">Structural hold-points — nothing proceeds past a gate until it's approved.</div>
+    </div>
+  </div>
+
+  <div id="gatesWrap">Loading…</div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml } from "./js/app.js";
+
+  await requireAuth();
+  const projectId = getParam("project");
+  if (!projectId) window.location.href = "dashboard.html";
+
+  const statusBadge = {
+    not_started: "badge-grey",
+    in_progress: "badge-blue",
+    under_review: "badge-amber",
+    approved: "badge-green",
+  };
+  const statusLabel = {
+    not_started: "Not Started",
+    in_progress: "In Progress",
+    under_review: "Under Review",
+    approved: "Approved",
+  };
+
+  const gatesWrap = document.getElementById("gatesWrap");
+
+  function gateCardHtml(gate) {
+    const checklist = Array.isArray(gate.checklist) ? gate.checklist : [];
+    return `
+      <div class="card gate-card" data-gate-id="${gate.id}">
+        <div class="gate-head">
+          <div>
+            <span class="badge ${statusBadge[gate.status]}" style="margin-bottom:0.4rem; display:inline-block;">${statusLabel[gate.status]}</span>
+            <div class="gate-head-title">${escapeHtml(gate.title)}</div>
+          </div>
+          <select class="gate-status-select" data-gate-id="${gate.id}">
+            <option value="not_started">Not Started</option>
+            <option value="in_progress">In Progress</option>
+            <option value="under_review">Under Review</option>
+            <option value="approved">Approved</option>
+          </select>
+        </div>
+        <ul class="checklist">
+          ${checklist.map((item, i) => `
+            <li class="checklist-item ${item.checked ? "checked" : ""}">
+              <input type="checkbox" id="chk-${gate.id}-${i}" data-gate-id="${gate.id}" data-index="${i}" ${item.checked ? "checked" : ""}>
+              <label for="chk-${gate.id}-${i}">${escapeHtml(item.text)}</label>
+              <span class="checked-at">${item.checked_at ? new Date(item.checked_at).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : ""}</span>
+            </li>
+          `).join("")}
+        </ul>
+      </div>
+    `;
+  }
+
+  function wireGateCard(gate) {
+    const select = document.querySelector(`select.gate-status-select[data-gate-id="${gate.id}"]`);
+    select.value = gate.status;
+    select.addEventListener("change", async () => {
+      await supabase.from("quality_gates").update({ status: select.value }).eq("id", gate.id);
+      gate.status = select.value;
+      rerenderCard(gate);
+    });
+
+    document.querySelectorAll(`input[type="checkbox"][data-gate-id="${gate.id}"]`).forEach((cb) => {
+      cb.addEventListener("change", async () => {
+        const i = Number(cb.dataset.index);
+        const checklist = Array.isArray(gate.checklist) ? [...gate.checklist] : [];
+        checklist[i] = { ...checklist[i], checked: cb.checked, checked_at: cb.checked ? new Date().toISOString() : null };
+        gate.checklist = checklist;
+        await supabase.from("quality_gates").update({ checklist }).eq("id", gate.id);
+        rerenderCard(gate);
+      });
+    });
+  }
+
+  function rerenderCard(gate) {
+    const el = document.querySelector(`.gate-card[data-gate-id="${gate.id}"]`);
+    el.outerHTML = gateCardHtml(gate);
+    wireGateCard(gate);
+  }
+
+  async function load() {
+    const { data: project } = await supabase.from("projects").select("name").eq("id", projectId).single();
+    renderHeader([
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project?.name || "Site", href: `project.html?id=${projectId}` },
+      { label: "Quality Gates" },
+    ]);
+    document.getElementById("projectSub").textContent = project ? `${project.name} — structural hold-points, in order.` : "";
+
+    const { data: gates, error } = await supabase
+      .from("quality_gates")
+      .select("*")
+      .eq("project_id", projectId)
+      .order("sort_order", { ascending: true });
+
+    if (error || !gates || !gates.length) {
+      gatesWrap.innerHTML = `<div class="empty"><p>No quality gates found for this site.</p></div>`;
+      return;
+    }
+
+    gatesWrap.innerHTML = gates.map(gateCardHtml).join("");
+    gates.forEach(wireGateCard);
+  }
+
+  load();
+</script>
+</body>
+</html>

@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Handover Checklist – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title">Handover Checklist</div>
+      <div class="page-sub" id="projectSub">Statutory documents required before Practical Completion.</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div id="errorBox" class="error-box"></div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Document</th><th>Status</th><th>File</th></tr>
+        </thead>
+        <tbody id="docRows"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, uploadImage } from "./js/app.js";
+
+  await requireAuth();
+  const projectId = getParam("project");
+  if (!projectId) window.location.href = "dashboard.html";
+
+  const statusBadge = { missing: "badge-red", draft_received: "badge-amber", approved_final: "badge-green" };
+  const statusLabel = { missing: "Missing", draft_received: "Draft Received", approved_final: "Approved / Final" };
+  const errorBox = document.getElementById("errorBox");
+
+  let docs = [];
+
+  function rowHtml(doc) {
+    return `
+      <tr data-doc-id="${doc.id}">
+        <td><strong>${escapeHtml(doc.title)}</strong></td>
+        <td>
+          <select class="status-select" data-doc-id="${doc.id}" style="width:auto;">
+            <option value="missing">Missing</option>
+            <option value="draft_received">Draft Received</option>
+            <option value="approved_final">Approved / Final</option>
+          </select>
+        </td>
+        <td class="file-row">
+          ${doc.file_url ? `<a class="file-link" href="${doc.file_url}" target="_blank">📄 ${escapeHtml(doc.file_name || "View file")}</a><br>` : ""}
+          <input type="file" data-doc-id="${doc.id}" accept="application/pdf,image/*">
+        </td>
+      </tr>
+    `;
+  }
+
+  function wireRow(doc) {
+    const select = document.querySelector(`select.status-select[data-doc-id="${doc.id}"]`);
+    select.value = doc.status;
+    select.addEventListener("change", async () => {
+      await supabase.from("handover_documents").update({ status: select.value, updated_at: new Date().toISOString() }).eq("id", doc.id);
+      doc.status = select.value;
+    });
+
+    const fileInput = document.querySelector(`input[type="file"][data-doc-id="${doc.id}"]`);
+    fileInput.addEventListener("change", async () => {
+      const file = fileInput.files[0];
+      if (!file) return;
+      clearError(errorBox);
+      fileInput.disabled = true;
+      try {
+        const url = await uploadImage(file, `${projectId}/handover`);
+        const patch = { file_url: url, file_name: file.name, updated_at: new Date().toISOString() };
+        if (doc.status === "missing") patch.status = "draft_received";
+        const { error } = await supabase.from("handover_documents").update(patch).eq("id", doc.id);
+        if (error) throw error;
+        Object.assign(doc, patch);
+        rerenderRow(doc);
+      } catch (err) {
+        showError(errorBox, err);
+      } finally {
+        fileInput.disabled = false;
+      }
+    });
+  }
+
+  function rerenderRow(doc) {
+    const el = document.querySelector(`tr[data-doc-id="${doc.id}"]`);
+    el.outerHTML = rowHtml(doc);
+    wireRow(doc);
+  }
+
+  async function load() {
+    const { data: project } = await supabase.from("projects").select("name").eq("id", projectId).single();
+    renderHeader([
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project?.name || "Site", href: `project.html?id=${projectId}` },
+      { label: "Handover Checklist" },
+    ]);
+    document.getElementById("projectSub").textContent = project ? `${project.name} — statutory documents for Practical Completion.` : "";
+
+    const { data, error } = await supabase
+      .from("handover_documents")
+      .select("*")
+      .eq("project_id", projectId)
+      .order("doc_key", { ascending: true });
+
+    if (error || !data || !data.length) {
+      document.getElementById("docRows").innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--ink-soft);">No handover documents found for this site.</td></tr>`;
+      return;
+    }
+
+    docs = data;
+    document.getElementById("docRows").innerHTML = docs.map(rowHtml).join("");
+    docs.forEach(wireRow);
+  }
+
+  load();
+</script>
+</body>
+</html>
