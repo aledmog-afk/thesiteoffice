@@ -178,6 +178,24 @@ tr:hover td { background: var(--off); }
 .doc-facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px,1fr)); gap: 0.8rem; font-size: 0.85rem; margin-bottom: 1.5rem; }
 .doc-facts dt { color: var(--ink-soft); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; }
 .doc-facts dd { font-weight: 600; }
+.doc-logo { max-height: 56px; max-width: 220px; object-fit: contain; margin-bottom: 0.8rem; display: block; }
+.doc-section ul.body-list { padding-left: 1.2rem; font-size: 0.9rem; }
+.doc-section ul.body-list li { margin-bottom: 0.3rem; }
+
+/* ─── ITEM LIST EDITOR ───────────────────────────── */
+.item-list { list-style: none; margin-bottom: 0.6rem; }
+.item-row {
+  display: flex; align-items: center; gap: 0.6rem;
+  padding: 0.5rem 0; border-bottom: 1px solid var(--rule);
+}
+.item-row span { flex: 1; font-size: 0.9rem; }
+.item-row.editing { align-items: center; }
+.item-row .item-edit-input { flex: 1; }
+.item-add-row { display: flex; gap: 0.6rem; }
+.item-add-row input { flex: 1; }
+
+/* ─── LOGO SETTINGS ──────────────────────────────── */
+.logo-preview { max-width: 260px; max-height: 120px; object-fit: contain; border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem; background: var(--white); }
 
 @media print {
   #site-header, .doc-toolbar, .no-print { display: none !important; }

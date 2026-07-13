@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Snagging Sheet – Site Tracker</title>
+<title>Snag List – Site Tracker</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/app.css">
@@ -17,6 +17,7 @@
 
 <div class="page">
   <div class="doc-toolbar no-print">
+    <a class="btn btn-outline btn-sm" id="editLink" href="#">Edit List</a>
     <button class="btn btn-outline btn-sm" id="printBtn">Print / Save as PDF</button>
     <a class="btn btn-amber btn-sm" id="emailLink" href="#">Email to Contractor</a>
   </div>
@@ -26,49 +27,55 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, todayISO } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, todayISO, getOrgLogoUrl } from "./js/app.js";
 
   await requireAuth();
-  const projectId = getParam("project");
-  const statusFilter = getParam("status") || "open";
-  if (!projectId) window.location.href = "dashboard.html";
+  const listId = getParam("id");
+  if (!listId) window.location.href = "dashboard.html";
 
   document.getElementById("printBtn").addEventListener("click", () => window.print());
 
   const priorityBadge = { high: "badge-red", medium: "badge-amber", low: "badge-grey" };
 
   async function load() {
-    const { data: project } = await supabase.from("projects").select("*").eq("id", projectId).single();
-    if (!project) { document.getElementById("doc").textContent = "Site not found."; return; }
+    const { data: list, error } = await supabase.from("snag_lists").select("*, projects(*)").eq("id", listId).single();
+    if (error) { document.getElementById("doc").textContent = "Snag list not found."; return; }
+    const project = list.projects;
 
     renderHeader([
       { label: "Dashboard", href: "dashboard.html" },
-      { label: project.name, href: `project.html?id=${projectId}` },
-      { label: "Snagging", href: `snagging.html?project=${projectId}` },
-      { label: "Export Sheet" },
+      { label: project.name, href: `project.html?id=${project.id}` },
+      { label: "Snagging", href: `snagging.html?project=${project.id}` },
+      { label: list.title },
     ]);
 
-    let query = supabase.from("snag_items").select("*").eq("project_id", projectId).order("item_no", { ascending: true });
-    if (statusFilter !== "all") query = query.eq("status", statusFilter);
-    const { data: snags } = await query;
+    document.getElementById("editLink").href = `snag-list-edit.html?id=${listId}`;
 
-    const subject = encodeURIComponent(`Snagging Sheet – ${project.name} – ${formatDate(todayISO())}`);
+    const { data: snags } = await supabase
+      .from("snag_items")
+      .select("*")
+      .eq("snag_list_id", listId)
+      .order("item_no", { ascending: true });
+
+    const openCount = (snags || []).filter(s => s.status === "open").length;
+
+    const subject = encodeURIComponent(`Snagging Sheet – ${project.name} – ${list.title}`);
     const body = encodeURIComponent(
-      `Hi,\n\nPlease find attached the ${statusFilter === "all" ? "" : statusFilter + " "}snagging sheet for ${project.name}, generated ${formatDate(todayISO())}.\n\n` +
-      `${(snags || []).length} item(s) listed.\n\n(Use "Print / Save as PDF" on this page and attach it here.)\n\nRegards,`
+      `Hi,\n\nPlease find attached "${list.title}" for ${project.name}, generated ${formatDate(todayISO())}.\n\n` +
+      `${(snags || []).length} item(s) listed, ${openCount} still open.\n\n(Use "Print / Save as PDF" on this page and attach it here.)\n\nRegards,`
     );
     document.getElementById("emailLink").href = `mailto:${project.main_contractor_email || ""}?subject=${subject}&body=${body}`;
 
-    const statusLabel = { open: "Open Items", closed: "Closed Items", all: "All Items" }[statusFilter];
+    const logoUrl = await getOrgLogoUrl();
 
     document.getElementById("doc").innerHTML = `
       <div class="doc-head">
         <div>
-          <h1>Snagging Sheet</h1>
-          <div style="color:var(--ink-soft); font-size:0.9rem; margin-top:0.2rem;">${escapeHtml(project.name)} — ${statusLabel}</div>
+          ${logoUrl ? `<img class="doc-logo" src="${logoUrl}" alt="">` : ""}
+          <h1>${escapeHtml(list.title)}</h1>
+          <div style="color:var(--ink-soft); font-size:0.9rem; margin-top:0.2rem;">${escapeHtml(project.name)}</div>
         </div>
         <div class="doc-meta">
-          ${project.address ? escapeHtml(project.address) + "<br>" : ""}
           ${project.contract_ref ? "Ref: " + escapeHtml(project.contract_ref) + "<br>" : ""}
           To: ${escapeHtml(project.main_contractor_name) || "Main Contractor"}<br>
           Generated: ${formatDate(todayISO())}

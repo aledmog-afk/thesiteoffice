@@ -128,3 +128,63 @@ create policy "authenticated upload site-photos" on storage.objects
 drop policy if exists "authenticated delete site-photos" on storage.objects;
 create policy "authenticated delete site-photos" on storage.objects
   for delete using (bucket_id = 'site-photos' and auth.role() = 'authenticated');
+
+-- ─── v2 ADDITIONS ─────────────────────────────────────────────────
+-- Everything below is additive and safe to run against a database that
+-- already has the tables above. Re-run this whole file any time it changes.
+
+-- Company logo (single row, shown on every printed report/snag sheet)
+create table if not exists public.org_settings (
+  id smallint primary key default 1 check (id = 1),
+  logo_url text,
+  updated_at timestamptz not null default now()
+);
+
+alter table public.org_settings enable row level security;
+drop policy if exists "authenticated read org_settings" on public.org_settings;
+create policy "authenticated read org_settings" on public.org_settings for select using (auth.role() = 'authenticated');
+drop policy if exists "authenticated insert org_settings" on public.org_settings;
+create policy "authenticated insert org_settings" on public.org_settings for insert with check (auth.role() = 'authenticated');
+drop policy if exists "authenticated update org_settings" on public.org_settings;
+create policy "authenticated update org_settings" on public.org_settings for update using (auth.role() = 'authenticated');
+
+-- Weekly reports: itemised progress / next-week lists.
+-- (Old progress_summary / next_week_plan / labour_on_site columns are left
+-- in place, unused, so no existing data is lost.)
+alter table public.weekly_reports add column if not exists progress_items jsonb not null default '[]'::jsonb;
+alter table public.weekly_reports add column if not exists next_week_items jsonb not null default '[]'::jsonb;
+
+-- Snagging is now organised into named snag lists per site, each with its
+-- own set of items, instead of one continuous list per project.
+create table if not exists public.snag_lists (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  title text not null,
+  created_by uuid references auth.users(id),
+  created_at timestamptz not null default now()
+);
+
+alter table public.snag_lists enable row level security;
+drop policy if exists "authenticated read snag_lists" on public.snag_lists;
+create policy "authenticated read snag_lists" on public.snag_lists for select using (auth.role() = 'authenticated');
+drop policy if exists "authenticated insert snag_lists" on public.snag_lists;
+create policy "authenticated insert snag_lists" on public.snag_lists for insert with check (auth.role() = 'authenticated');
+drop policy if exists "authenticated update snag_lists" on public.snag_lists;
+create policy "authenticated update snag_lists" on public.snag_lists for update using (auth.role() = 'authenticated');
+drop policy if exists "authenticated delete snag_lists" on public.snag_lists;
+create policy "authenticated delete snag_lists" on public.snag_lists for delete using (auth.role() = 'authenticated');
+
+alter table public.snag_items add column if not exists snag_list_id uuid references public.snag_lists(id) on delete cascade;
+
+-- Item numbers now restart at 1 within each snag list rather than per project.
+create or replace function public.set_snag_item_no()
+returns trigger as $$
+begin
+  if new.item_no is null then
+    select coalesce(max(item_no), 0) + 1 into new.item_no
+    from public.snag_items
+    where snag_list_id = new.snag_list_id;
+  end if;
+  return new;
+end;
+$$ language plpgsql;

@@ -38,12 +38,17 @@
         </div>
       </div>
       <div class="field"><label for="weather">Weather / lost time</label><input type="text" id="weather" placeholder="e.g. Dry all week, no lost time"></div>
-      <div class="field"><label for="labourOnSite">Labour on site</label><textarea id="labourOnSite" rows="2" placeholder="e.g. Groundworks: 4, Bricklaying: 6, M&E: 2"></textarea></div>
-      <div class="field"><label for="progressSummary">Progress this week *</label><textarea id="progressSummary" rows="4" required placeholder="Summary of works completed by area/plot/trade"></textarea></div>
+      <div class="field">
+        <label>Progress this week</label>
+        <div id="progressItems"></div>
+      </div>
       <div class="field"><label for="healthSafety">Health &amp; safety notes</label><textarea id="healthSafety" rows="3" placeholder="Inspections, incidents, near misses, toolbox talks held"></textarea></div>
       <div class="field"><label for="deliveries">Deliveries / materials</label><textarea id="deliveries" rows="2"></textarea></div>
       <div class="field"><label for="issuesRisks">Issues / risks / delays</label><textarea id="issuesRisks" rows="3"></textarea></div>
-      <div class="field"><label for="nextWeekPlan">Plan for next week</label><textarea id="nextWeekPlan" rows="3"></textarea></div>
+      <div class="field">
+        <label>Plan for next week</label>
+        <div id="nextWeekItems"></div>
+      </div>
 
       <div class="field">
         <label>Site photos</label>
@@ -61,12 +66,15 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, showError, clearError, mondayOf, uploadPhoto, todayISO } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, showError, clearError, mondayOf, uploadPhoto, todayISO, mountItemListEditor } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
   const reportId = getParam("id");
   if (!projectId) window.location.href = "dashboard.html";
+
+  let progressEditor = mountItemListEditor(document.getElementById("progressItems"), [], () => {});
+  let nextWeekEditor = mountItemListEditor(document.getElementById("nextWeekItems"), [], () => {});
 
   document.getElementById("cancelBtn").addEventListener("click", () => {
     window.location.href = reportId ? `weekly-report-view.html?id=${reportId}` : `weekly-reports.html?project=${projectId}`;
@@ -137,12 +145,19 @@
     document.getElementById("preparedBy").value = r.prepared_by || "";
     document.getElementById("programmeStatus").value = r.programme_status;
     document.getElementById("weather").value = r.weather || "";
-    document.getElementById("labourOnSite").value = r.labour_on_site || "";
-    document.getElementById("progressSummary").value = r.progress_summary || "";
     document.getElementById("healthSafety").value = r.health_safety_notes || "";
     document.getElementById("deliveries").value = r.deliveries_materials || "";
     document.getElementById("issuesRisks").value = r.issues_risks || "";
-    document.getElementById("nextWeekPlan").value = r.next_week_plan || "";
+
+    const progressItems = (Array.isArray(r.progress_items) && r.progress_items.length)
+      ? r.progress_items
+      : (r.progress_summary ? [r.progress_summary] : []);
+    const nextWeekItems = (Array.isArray(r.next_week_items) && r.next_week_items.length)
+      ? r.next_week_items
+      : (r.next_week_plan ? [r.next_week_plan] : []);
+    progressEditor = mountItemListEditor(document.getElementById("progressItems"), progressItems, () => {});
+    nextWeekEditor = mountItemListEditor(document.getElementById("nextWeekItems"), nextWeekItems, () => {});
+
     photos = Array.isArray(r.photos) ? r.photos : [];
     renderPhotos();
   }
@@ -158,12 +173,11 @@
       prepared_by: document.getElementById("preparedBy").value.trim() || null,
       programme_status: document.getElementById("programmeStatus").value,
       weather: document.getElementById("weather").value.trim() || null,
-      labour_on_site: document.getElementById("labourOnSite").value.trim() || null,
-      progress_summary: document.getElementById("progressSummary").value.trim(),
+      progress_items: progressEditor.getItems(),
       health_safety_notes: document.getElementById("healthSafety").value.trim() || null,
       deliveries_materials: document.getElementById("deliveries").value.trim() || null,
       issues_risks: document.getElementById("issuesRisks").value.trim() || null,
-      next_week_plan: document.getElementById("nextWeekPlan").value.trim() || null,
+      next_week_items: nextWeekEditor.getItems(),
       photos,
     };
     document.getElementById("saveBtn").disabled = true;

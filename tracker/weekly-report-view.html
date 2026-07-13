@@ -23,7 +23,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, getOrgLogoUrl } from "./js/app.js";
 
   await requireAuth();
   const reportId = getParam("id");
@@ -36,6 +36,12 @@
   function section(title, value) {
     if (!value) return "";
     return `<div class="doc-section"><h3>${escapeHtml(title)}</h3><div class="body-text">${escapeHtml(value)}</div></div>`;
+  }
+
+  function itemSection(title, items, fallbackText) {
+    const list = Array.isArray(items) && items.length ? items : (fallbackText ? [fallbackText] : []);
+    if (!list.length) return "";
+    return `<div class="doc-section"><h3>${escapeHtml(title)}</h3><ul class="body-list">${list.map(i => `<li>${escapeHtml(i)}</li>`).join("")}</ul></div>`;
   }
 
   async function load() {
@@ -52,26 +58,31 @@
 
     document.getElementById("editLink").href = `weekly-report-form.html?project=${project.id}&id=${r.id}`;
 
+    const progressText = (Array.isArray(r.progress_items) && r.progress_items.length)
+      ? r.progress_items.map(i => `- ${i}`).join("\n")
+      : (r.progress_summary || "—");
+
     const subject = encodeURIComponent(`Weekly Site Report – ${project.name} – w/c ${formatDate(r.week_starting)}`);
     const body = encodeURIComponent(
       `Hi,\n\nPlease find this week's site report for ${project.name} below.\n\n` +
       `Week: ${formatDate(r.week_starting)} – ${formatDate(r.week_ending)}\nProgramme status: ${programmeLabel[r.programme_status]}\n\n` +
-      `Progress summary:\n${r.progress_summary || "—"}\n\n` +
+      `Progress this week:\n${progressText}\n\n` +
       (r.issues_risks ? `Issues / risks:\n${r.issues_risks}\n\n` : "") +
       `(Full report with photos: use "Print / Save as PDF" on this page and attach it here.)\n\nRegards,`
     );
     document.getElementById("emailLink").href = `mailto:${project.main_contractor_email || ""}?subject=${subject}&body=${body}`;
 
     const photos = Array.isArray(r.photos) ? r.photos : [];
+    const logoUrl = await getOrgLogoUrl();
 
     document.getElementById("doc").innerHTML = `
       <div class="doc-head">
         <div>
+          ${logoUrl ? `<img class="doc-logo" src="${logoUrl}" alt="">` : ""}
           <h1>Weekly Site Report</h1>
           <div style="color:var(--ink-soft); font-size:0.9rem; margin-top:0.2rem;">${escapeHtml(project.name)}</div>
         </div>
         <div class="doc-meta">
-          ${project.address ? escapeHtml(project.address) + "<br>" : ""}
           ${project.contract_ref ? "Ref: " + escapeHtml(project.contract_ref) + "<br>" : ""}
           To: ${escapeHtml(project.main_contractor_name) || "Main Contractor"}
         </div>
@@ -85,12 +96,11 @@
       </dl>
 
       ${section("Weather / Lost Time", r.weather)}
-      ${section("Labour on Site", r.labour_on_site)}
-      ${section("Progress This Week", r.progress_summary)}
+      ${itemSection("Progress This Week", r.progress_items, r.progress_summary)}
       ${section("Health & Safety Notes", r.health_safety_notes)}
       ${section("Deliveries / Materials", r.deliveries_materials)}
       ${section("Issues / Risks / Delays", r.issues_risks)}
-      ${section("Plan for Next Week", r.next_week_plan)}
+      ${itemSection("Plan for Next Week", r.next_week_items, r.next_week_plan)}
 
       ${photos.length ? `
         <div class="doc-section">

@@ -5,9 +5,10 @@ A small internal app for logging **weekly reports** and **snagging sheets** per 
 ## What it does
 
 - **Sites** — one entry per project (address, contract ref, main contractor name/email, status).
-- **Weekly reports** — programme status, progress summary, H&S notes, deliveries, issues/risks, next week's plan, photos. Every report has a clean printable view.
-- **Snagging** — an ongoing, numbered list of snags per site (location, description, trade, priority, photo, open/closed). Export a filtered snagging sheet (open only / closed only / all) as a printable document at any point.
-- **Sending to the contractor** — every report/sheet has a "Print / Save as PDF" button (uses your browser's print-to-PDF) and an "Email to Contractor" button that opens a pre-filled email to the contractor's saved address — attach the PDF you just saved.
+- **Company logo** — set once in **Settings**, it appears on every printed weekly report and snag list.
+- **Weekly reports** — programme status, weather, itemised "progress this week" and "plan for next week" lists (add/edit/delete each line), H&S notes, deliveries, issues/risks, photos. Every report has a clean printable view.
+- **Snagging** — organised into named **snag lists** per site. Start a new list, add items to it (location, description, trade, priority, photo, open/closed — each editable and deletable), then export that specific list as a PDF.
+- **Sending to the contractor** — every report/snag list has a "Print / Save as PDF" button (uses your browser's print-to-PDF) and an "Email to Contractor" button that opens a pre-filled email to the contractor's saved address — attach the PDF you just saved.
 
 There's no login for the contractor — they only ever receive the PDF/email you send them. Anyone who signs in to Site Tracker (your team) can see and edit everything; it's built as one shared internal workspace, not a multi-tenant SaaS.
 
@@ -22,8 +23,12 @@ There's no login for the contractor — they only ever receive the PDF/email you
    export const SUPABASE_ANON_KEY = "eyJ...";
    ```
    The anon key is safe to ship in client-side code — the SQL script's Row Level Security policies are what actually control access (any signed-in user can read/write; nobody else can).
-5. Deploy as normal (Netlify picks up static files automatically). Visit `/tracker/`.
+5. Deploy as normal (this repo's Cloudflare Pages integration picks up static files automatically). Visit `/tracker/`.
 6. On first visit, click **Create one** on the sign-in page to make your first account (yourself). Anyone else on your team can do the same — Supabase's default settings will email a confirmation link.
+
+### Updating an existing project (schema changes)
+
+`sql/schema.sql` is written to be safe to re-run in full any time it changes — every statement is `if not exists` / `create or replace` / `drop policy if exists`. If you already have a Supabase project set up, just paste the **whole current file** into SQL Editor and run it again to pick up new tables/columns; nothing existing gets dropped or overwritten destructively.
 
 ### Turning off "confirm your email" (optional)
 

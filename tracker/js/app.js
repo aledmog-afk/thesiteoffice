@@ -96,8 +96,90 @@ export function renderHeader(crumbs = []) {
     <div class="header-inner">
       <a href="dashboard.html" class="brand">SITE <span>TRACKER</span></a>
       <nav class="crumbs">${crumbHtml}</nav>
+      <a href="settings.html" class="btn btn-ghost btn-sm">Settings</a>
       <button id="signOutBtn" class="btn btn-ghost btn-sm">Sign out</button>
     </div>
   `;
   document.getElementById("signOutBtn").addEventListener("click", signOut);
+}
+
+// ─── Org logo ───────────────────────────────────────────────────
+// Returns the company logo URL (from org_settings) or null if none is set.
+export async function getOrgLogoUrl() {
+  const { data } = await supabase.from("org_settings").select("logo_url").eq("id", 1).maybeSingle();
+  return data?.logo_url || null;
+}
+
+// ─── Itemised list editor ────────────────────────────────────────
+// Mounts an add/edit/delete list UI (plain text items) into `container`.
+// Calls onChange(items) whenever the list changes. Returns { getItems }.
+export function mountItemListEditor(container, initialItems, onChange) {
+  let items = [...(initialItems || [])];
+  let editingIndex = null;
+
+  function render() {
+    container.innerHTML = `
+      <ul class="item-list">
+        ${items.map((text, i) => editingIndex === i ? `
+          <li class="item-row editing">
+            <input type="text" class="item-edit-input" value="${escapeHtml(text)}">
+            <button type="button" class="btn btn-sm btn-amber" data-save="${i}">Save</button>
+            <button type="button" class="btn btn-sm btn-outline" data-cancel="${i}">Cancel</button>
+          </li>
+        ` : `
+          <li class="item-row">
+            <span>${escapeHtml(text)}</span>
+            <button type="button" class="btn btn-sm btn-outline" data-edit="${i}">Edit</button>
+            <button type="button" class="btn btn-sm btn-danger" data-delete="${i}">Delete</button>
+          </li>
+        `).join("")}
+      </ul>
+      <div class="item-add-row">
+        <input type="text" id="itemListNewInput" placeholder="Add an item…">
+        <button type="button" class="btn btn-outline btn-sm" id="itemListAddBtn">+ Add</button>
+      </div>
+    `;
+
+    container.querySelectorAll("[data-edit]").forEach((btn) =>
+      btn.addEventListener("click", () => { editingIndex = Number(btn.dataset.edit); render(); })
+    );
+    container.querySelectorAll("[data-delete]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        items.splice(Number(btn.dataset.delete), 1);
+        onChange(items);
+        render();
+      })
+    );
+    container.querySelectorAll("[data-save]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        const i = Number(btn.dataset.save);
+        const val = container.querySelector(".item-edit-input").value.trim();
+        if (val) items[i] = val;
+        editingIndex = null;
+        onChange(items);
+        render();
+      })
+    );
+    container.querySelectorAll("[data-cancel]").forEach((btn) =>
+      btn.addEventListener("click", () => { editingIndex = null; render(); })
+    );
+
+    const addBtn = container.querySelector("#itemListAddBtn");
+    const addInput = container.querySelector("#itemListNewInput");
+    function addItem() {
+      const val = addInput.value.trim();
+      if (!val) return;
+      items.push(val);
+      onChange(items);
+      render();
+      container.querySelector("#itemListNewInput").focus();
+    }
+    addBtn.addEventListener("click", addItem);
+    addInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); addItem(); }
+    });
+  }
+
+  render();
+  return { getItems: () => items };
 }

@@ -15,197 +15,102 @@
   <div class="page-head">
     <div>
       <div class="page-title">Snagging</div>
-      <div class="page-sub" id="projectSub"></div>
+      <div class="page-sub" id="projectSub">Start a new snag list, add items to it, then export it as a PDF.</div>
     </div>
-    <div class="btn-row">
-      <a class="btn btn-outline" id="exportLink" href="#" target="_blank">Export Sheet</a>
-      <button class="btn btn-amber" id="newSnagBtn">+ Add Snag</button>
-    </div>
-  </div>
-
-  <div class="card" id="newSnagCard" style="display:none;">
-    <div id="errorBox" class="error-box"></div>
-    <form id="snagForm">
-      <div class="form-grid">
-        <div class="field"><label for="location">Location / Plot *</label><input type="text" id="location" required placeholder="e.g. Plot 14, First floor bathroom"></div>
-        <div class="field"><label for="trade">Trade responsible</label><input type="text" id="trade" placeholder="e.g. Plumbing"></div>
-      </div>
-      <div class="field"><label for="description">Description *</label><textarea id="description" rows="2" required placeholder="What's wrong and where exactly"></textarea></div>
-      <div class="form-grid">
-        <div class="field">
-          <label for="priority">Priority</label>
-          <select id="priority">
-            <option value="low">Low</option>
-            <option value="medium" selected>Medium</option>
-            <option value="high">High</option>
-          </select>
-        </div>
-        <div class="field"><label for="raisedBy">Raised by</label><input type="text" id="raisedBy" placeholder="Your name"></div>
-      </div>
-      <div class="field">
-        <label>Photo</label>
-        <input type="file" id="photoInput" accept="image/*">
-        <div class="photo-grid" id="photoGrid"></div>
-      </div>
-      <div class="btn-row">
-        <button type="submit" class="btn btn-amber">Add Snag</button>
-        <button type="button" class="btn btn-outline" id="cancelBtn">Cancel</button>
-      </div>
-    </form>
-  </div>
-
-  <div class="filter-bar">
-    <select id="statusFilter">
-      <option value="open" selected>Open only</option>
-      <option value="closed">Closed only</option>
-      <option value="all">All</option>
-    </select>
-    <select id="priorityFilter">
-      <option value="all">All priorities</option>
-      <option value="high">High</option>
-      <option value="medium">Medium</option>
-      <option value="low">Low</option>
-    </select>
+    <button class="btn btn-amber" id="newListBtn">+ New Snag List</button>
   </div>
 
   <div class="card">
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>#</th><th>Location</th><th>Description</th><th>Trade</th><th>Priority</th><th>Status</th><th>Raised</th><th></th></tr>
+          <tr><th>List</th><th>Open</th><th>Closed</th><th>Created</th><th></th></tr>
         </thead>
-        <tbody id="snagRows"></tbody>
+        <tbody id="listRows"></tbody>
       </table>
     </div>
-    <div id="emptyState" class="empty" style="display:none;"><p>No snags match this filter.</p></div>
+    <div id="emptyState" class="empty" style="display:none;">
+      <p>No snag lists yet for this site.</p>
+      <button class="btn btn-amber" id="emptyNewBtn">+ New Snag List</button>
+    </div>
   </div>
 </div>
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, uploadPhoto, todayISO } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, todayISO } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
   if (!projectId) window.location.href = "dashboard.html";
 
-  const priorityBadge = { high: "badge-red", medium: "badge-amber", low: "badge-grey" };
-  let allSnags = [];
-  let photoUrl = null;
-
-  const errorBox = document.getElementById("errorBox");
-  const newSnagCard = document.getElementById("newSnagCard");
-  const photoGrid = document.getElementById("photoGrid");
-  const photoInput = document.getElementById("photoInput");
-
-  document.getElementById("newSnagBtn").addEventListener("click", () => newSnagCard.style.display = "block");
-  document.getElementById("cancelBtn").addEventListener("click", () => {
-    newSnagCard.style.display = "none";
-    document.getElementById("snagForm").reset();
-    photoUrl = null;
-    photoGrid.innerHTML = "";
-  });
-
-  photoInput.addEventListener("change", async () => {
-    const file = photoInput.files[0];
-    if (!file) return;
-    photoInput.disabled = true;
-    try {
-      photoUrl = await uploadPhoto(file, `${projectId}/snags`);
-      photoGrid.innerHTML = `<div class="photo-thumb"><img src="${photoUrl}"></div>`;
-    } catch (err) {
-      showError(errorBox, err);
-    } finally {
-      photoInput.disabled = false;
-    }
-  });
-
-  document.getElementById("snagForm").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    clearError(errorBox);
+  async function createList() {
+    const defaultTitle = `Snag List – ${formatDate(todayISO())}`;
+    const title = prompt("Name this snag list:", defaultTitle);
+    if (title === null) return;
     const { data: { user } } = await supabase.auth.getUser();
-    const payload = {
-      project_id: projectId,
-      location: document.getElementById("location").value.trim(),
-      trade: document.getElementById("trade").value.trim() || null,
-      description: document.getElementById("description").value.trim(),
-      priority: document.getElementById("priority").value,
-      raised_by: document.getElementById("raisedBy").value.trim() || null,
-      raised_date: todayISO(),
-      photo_url: photoUrl,
-      created_by: user.id,
-    };
-    try {
-      const { error } = await supabase.from("snag_items").insert(payload);
-      if (error) throw error;
-      document.getElementById("cancelBtn").click();
-      loadSnags();
-    } catch (err) {
-      showError(errorBox, err);
-    }
-  });
-
-  async function toggleStatus(id, current) {
-    const newStatus = current === "open" ? "closed" : "open";
-    const patch = { status: newStatus, closed_date: newStatus === "closed" ? todayISO() : null };
-    await supabase.from("snag_items").update(patch).eq("id", id);
-    loadSnags();
-  }
-  window.toggleStatus = toggleStatus;
-
-  function applyFilters() {
-    const statusFilter = document.getElementById("statusFilter").value;
-    const priorityFilter = document.getElementById("priorityFilter").value;
-    let rows = allSnags;
-    if (statusFilter !== "all") rows = rows.filter(s => s.status === statusFilter);
-    if (priorityFilter !== "all") rows = rows.filter(s => s.priority === priorityFilter);
-
-    document.getElementById("emptyState").style.display = rows.length ? "none" : "block";
-    document.getElementById("snagRows").innerHTML = rows.map((s) => `
-      <tr>
-        <td>${s.item_no}</td>
-        <td>${escapeHtml(s.location)}</td>
-        <td>${escapeHtml(s.description)}${s.photo_url ? ' <span title="Has photo">📷</span>' : ""}</td>
-        <td>${escapeHtml(s.trade) || "—"}</td>
-        <td><span class="badge ${priorityBadge[s.priority]}">${escapeHtml(s.priority)}</span></td>
-        <td><span class="badge ${s.status === "open" ? "badge-red" : "badge-green"}">${escapeHtml(s.status)}</span></td>
-        <td>${formatDate(s.raised_date)}</td>
-        <td><button class="btn btn-outline btn-sm" onclick="toggleStatus('${s.id}', '${s.status}')">${s.status === "open" ? "Close" : "Reopen"}</button></td>
-      </tr>
-    `).join("");
-  }
-  document.getElementById("statusFilter").addEventListener("change", applyFilters);
-  document.getElementById("priorityFilter").addEventListener("change", applyFilters);
-
-  function updateExportLink() {
-    const status = document.getElementById("statusFilter").value;
-    document.getElementById("exportLink").href = `snagging-sheet-view.html?project=${projectId}&status=${status}`;
-  }
-  document.getElementById("statusFilter").addEventListener("change", updateExportLink);
-
-  async function loadSnags() {
     const { data, error } = await supabase
-      .from("snag_items")
-      .select("*")
-      .eq("project_id", projectId)
-      .order("item_no", { ascending: true });
-    if (!error) allSnags = data || [];
-    applyFilters();
+      .from("snag_lists")
+      .insert({ project_id: projectId, title: title.trim() || defaultTitle, created_by: user.id })
+      .select()
+      .single();
+    if (!error) window.location.href = `snag-list-edit.html?id=${data.id}`;
   }
+  document.getElementById("newListBtn").addEventListener("click", createList);
+  document.getElementById("emptyNewBtn")?.addEventListener("click", createList);
 
-  async function init() {
+  async function deleteList(id, title) {
+    if (!confirm(`Delete "${title}" and all its items? This cannot be undone.`)) return;
+    await supabase.from("snag_lists").delete().eq("id", id);
+    load();
+  }
+  window.deleteList = deleteList;
+
+  async function load() {
     const { data: project } = await supabase.from("projects").select("name").eq("id", projectId).single();
     renderHeader([
       { label: "Dashboard", href: "dashboard.html" },
       { label: project?.name || "Site", href: `project.html?id=${projectId}` },
       { label: "Snagging" },
     ]);
-    document.getElementById("projectSub").textContent = project?.name || "";
-    updateExportLink();
-    loadSnags();
+
+    const { data: lists, error } = await supabase
+      .from("snag_lists")
+      .select("*")
+      .eq("project_id", projectId)
+      .order("created_at", { ascending: false });
+
+    if (error || !lists || !lists.length) {
+      document.getElementById("emptyState").style.display = "block";
+      return;
+    }
+
+    const { data: items } = await supabase
+      .from("snag_items")
+      .select("snag_list_id, status")
+      .eq("project_id", projectId);
+
+    const counts = {};
+    (items || []).forEach((it) => {
+      counts[it.snag_list_id] = counts[it.snag_list_id] || { open: 0, closed: 0 };
+      counts[it.snag_list_id][it.status]++;
+    });
+
+    document.getElementById("listRows").innerHTML = lists.map((l) => {
+      const c = counts[l.id] || { open: 0, closed: 0 };
+      return `
+        <tr class="row-link" onclick="window.location.href='snag-list-edit.html?id=${l.id}'">
+          <td><strong>${escapeHtml(l.title)}</strong></td>
+          <td><span class="badge badge-red">${c.open}</span></td>
+          <td><span class="badge badge-green">${c.closed}</span></td>
+          <td>${formatDate(l.created_at?.slice(0, 10))}</td>
+          <td onclick="event.stopPropagation()"><button class="btn btn-outline btn-sm" onclick="deleteList('${l.id}', '${escapeHtml(l.title).replace(/'/g, "\\'")}')">Delete</button></td>
+        </tr>
+      `;
+    }).join("");
   }
 
-  init();
+  load();
 </script>
 </body>
 </html>

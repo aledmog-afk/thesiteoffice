@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Settings – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page" style="max-width:600px;">
+  <div class="page-head">
+    <div>
+      <div class="page-title">Settings</div>
+      <div class="page-sub">Your company logo appears on every printed weekly report and snagging sheet.</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div id="errorBox" class="error-box"></div>
+    <div class="field">
+      <label>Company logo</label>
+      <div id="logoPreviewWrap" style="margin-bottom:1rem;">
+        <img id="logoPreview" class="logo-preview" style="display:none;">
+        <p id="noLogoText" style="color:var(--ink-soft); font-size:0.85rem;">No logo uploaded yet.</p>
+      </div>
+      <input type="file" id="logoInput" accept="image/*">
+      <p class="hint">PNG or JPG works best. It's shown small, so a wide logo (landscape) fits better than a tall one.</p>
+    </div>
+    <div class="btn-row">
+      <button type="button" class="btn btn-danger" id="removeBtn" style="display:none;">Remove Logo</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, showError, clearError, uploadPhoto } from "./js/app.js";
+
+  await requireAuth();
+  renderHeader([{ label: "Settings" }]);
+
+  const errorBox = document.getElementById("errorBox");
+  const logoPreview = document.getElementById("logoPreview");
+  const noLogoText = document.getElementById("noLogoText");
+  const removeBtn = document.getElementById("removeBtn");
+  const logoInput = document.getElementById("logoInput");
+
+  function showLogo(url) {
+    if (url) {
+      logoPreview.src = url;
+      logoPreview.style.display = "block";
+      noLogoText.style.display = "none";
+      removeBtn.style.display = "inline-flex";
+    } else {
+      logoPreview.style.display = "none";
+      noLogoText.style.display = "block";
+      removeBtn.style.display = "none";
+    }
+  }
+
+  async function load() {
+    const { data } = await supabase.from("org_settings").select("logo_url").eq("id", 1).maybeSingle();
+    showLogo(data?.logo_url || null);
+  }
+
+  logoInput.addEventListener("change", async () => {
+    const file = logoInput.files[0];
+    if (!file) return;
+    clearError(errorBox);
+    logoInput.disabled = true;
+    try {
+      const url = await uploadPhoto(file, "org-logo");
+      const { error } = await supabase.from("org_settings").upsert({ id: 1, logo_url: url, updated_at: new Date().toISOString() });
+      if (error) throw error;
+      showLogo(url);
+    } catch (err) {
+      showError(errorBox, err);
+    } finally {
+      logoInput.value = "";
+      logoInput.disabled = false;
+    }
+  });
+
+  removeBtn.addEventListener("click", async () => {
+    if (!confirm("Remove the company logo from all future printed reports?")) return;
+    const { error } = await supabase.from("org_settings").upsert({ id: 1, logo_url: null, updated_at: new Date().toISOString() });
+    if (error) { showError(errorBox, error); return; }
+    showLogo(null);
+  });
+
+  load();
+</script>
+</body>
+</html>
