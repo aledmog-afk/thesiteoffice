@@ -49,20 +49,18 @@
         <div><strong id="closedSnagCount">–</strong>closed</div>
       </div>
     </a>
-    <a class="tile" href="quality-gates.html?project=" id="gatesTile">
+    <a class="tile" href="plot-handovers.html?project=" id="plotHandoversTile">
       <div class="tile-icon">✅</div>
-      <div class="tile-name">Quality Gates</div>
-      <div class="tile-stats"><div><strong id="gatesApprovedCount">–</strong>/ 4 approved</div></div>
+      <div class="tile-name">Plot Handovers</div>
+      <div class="tile-stats">
+        <div><strong id="plotsCount">–</strong>plots</div>
+        <div><strong id="gatesApprovedCount">–</strong>gates approved</div>
+      </div>
     </a>
     <a class="tile" href="commercials.html?project=" id="commercialsTile">
       <div class="tile-icon">💷</div>
       <div class="tile-name">Commercials</div>
       <div class="tile-stats"><div><strong id="commercialsPendingCount">–</strong>pending review</div></div>
-    </a>
-    <a class="tile" href="handover-checklist.html?project=" id="handoverTile">
-      <div class="tile-icon">📁</div>
-      <div class="tile-name">Handover Checklist</div>
-      <div class="tile-stats"><div><strong id="handoverReadyCount">–</strong>/ 5 ready</div></div>
     </a>
     <a class="tile" href="drawings.html?project=" id="drawingsTile">
       <div class="tile-icon">📐</div>
@@ -120,9 +118,8 @@
 
   document.getElementById("reportsTile").href = `weekly-reports.html?project=${projectId}`;
   document.getElementById("snaggingTile").href = `snagging.html?project=${projectId}`;
-  document.getElementById("gatesTile").href = `quality-gates.html?project=${projectId}`;
+  document.getElementById("plotHandoversTile").href = `plot-handovers.html?project=${projectId}`;
   document.getElementById("commercialsTile").href = `commercials.html?project=${projectId}`;
-  document.getElementById("handoverTile").href = `handover-checklist.html?project=${projectId}`;
   document.getElementById("drawingsTile").href = `drawings.html?project=${projectId}`;
 
   let project = null;
@@ -217,20 +214,20 @@
     project = data;
     renderHeaderAndFacts();
 
-    const [{ count: reportCount }, { data: snags }, { data: gates }, { data: commercials }, { data: handoverDocs }, { count: drawingsCount }] = await Promise.all([
+    const [{ count: reportCount }, { data: snags }, { count: plotsCount }, { data: gates }, { data: commercials }, { count: drawingsCount }] = await Promise.all([
       supabase.from("weekly_reports").select("id", { count: "exact", head: true }).eq("project_id", projectId),
       supabase.from("snag_items").select("status").eq("project_id", projectId),
+      supabase.from("plots").select("id", { count: "exact", head: true }).eq("project_id", projectId),
       supabase.from("quality_gates").select("status").eq("project_id", projectId),
       supabase.from("commercial_items").select("status").eq("project_id", projectId),
-      supabase.from("handover_documents").select("status").eq("project_id", projectId),
       supabase.from("drawings").select("id", { count: "exact", head: true }).eq("project_id", projectId),
     ]);
     document.getElementById("reportCount").textContent = reportCount ?? 0;
     document.getElementById("openSnagCount").textContent = (snags || []).filter(s => s.status === "open").length;
     document.getElementById("closedSnagCount").textContent = (snags || []).filter(s => s.status === "closed").length;
-    document.getElementById("gatesApprovedCount").textContent = (gates || []).filter(g => g.status === "approved").length;
+    document.getElementById("plotsCount").textContent = plotsCount ?? 0;
+    document.getElementById("gatesApprovedCount").textContent = `${(gates || []).filter(g => g.status === "approved").length} / ${(gates || []).length}`;
     document.getElementById("commercialsPendingCount").textContent = (commercials || []).filter(c => c.status === "pending_client_review").length;
-    document.getElementById("handoverReadyCount").textContent = (handoverDocs || []).filter(d => d.status === "approved_final").length;
     document.getElementById("drawingsCount").textContent = drawingsCount ?? 0;
   }
 

@@ -404,3 +404,115 @@ alter table public.snag_items add column if not exists y_coordinate numeric chec
 alter table public.quality_gates add column if not exists drawing_id uuid references public.drawings(id) on delete set null;
 alter table public.quality_gates add column if not exists x_coordinate numeric check (x_coordinate >= 0 and x_coordinate <= 100);
 alter table public.quality_gates add column if not exists y_coordinate numeric check (y_coordinate >= 0 and y_coordinate <= 100);
+
+-- ─── v5 ADDITIONS ─────────────────────────────────────────────────
+-- Quality Gates and the Handover Checklist are now tracked per plot
+-- ("Plot Handovers") instead of once for the whole site, since each
+-- house/unit goes through its own sign-off. Any earlier site-level
+-- data is migrated into a default "Plot 1" so nothing is lost.
+
+create table if not exists public.plots (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  plot_number text not null,
+  created_by uuid references auth.users(id),
+  created_at timestamptz not null default now()
+);
+
+alter table public.plots enable row level security;
+drop policy if exists "authenticated read plots" on public.plots;
+create policy "authenticated read plots" on public.plots for select using (auth.role() = 'authenticated');
+drop policy if exists "authenticated insert plots" on public.plots;
+create policy "authenticated insert plots" on public.plots for insert with check (auth.role() = 'authenticated');
+drop policy if exists "authenticated update plots" on public.plots;
+create policy "authenticated update plots" on public.plots for update using (auth.role() = 'authenticated');
+drop policy if exists "authenticated delete plots" on public.plots;
+create policy "authenticated delete plots" on public.plots for delete using (auth.role() = 'authenticated');
+
+alter table public.quality_gates add column if not exists plot_id uuid references public.plots(id) on delete cascade;
+alter table public.handover_documents add column if not exists plot_id uuid references public.plots(id) on delete cascade;
+
+-- Backfill: any project with pre-existing (plot_id null) gates/handover
+-- docs from before plots existed gets a default "Plot 1" to own them.
+do $$
+declare
+  proj record;
+  new_plot_id uuid;
+begin
+  for proj in
+    select distinct project_id from public.quality_gates where plot_id is null
+    union
+    select distinct project_id from public.handover_documents where plot_id is null
+  loop
+    insert into public.plots (project_id, plot_number)
+    values (proj.project_id, 'Plot 1')
+    returning id into new_plot_id;
+
+    update public.quality_gates set plot_id = new_plot_id where project_id = proj.project_id and plot_id is null;
+    update public.handover_documents set plot_id = new_plot_id where project_id = proj.project_id and plot_id is null;
+  end loop;
+end $$;
+
+-- Now that every row has a plot, enforce it going forward.
+alter table public.quality_gates alter column plot_id set not null;
+alter table public.handover_documents alter column plot_id set not null;
+
+-- Uniqueness of a gate/doc is now per plot, not per project.
+alter table public.quality_gates drop constraint if exists quality_gates_project_id_gate_key_key;
+alter table public.quality_gates drop constraint if exists quality_gates_plot_id_gate_key_key;
+alter table public.quality_gates add constraint quality_gates_plot_id_gate_key_key unique (plot_id, gate_key);
+
+alter table public.handover_documents drop constraint if exists handover_documents_project_id_doc_key_key;
+alter table public.handover_documents drop constraint if exists handover_documents_plot_id_doc_key_key;
+alter table public.handover_documents add constraint handover_documents_plot_id_doc_key_key unique (plot_id, doc_key);
+
+-- Seed a new plot's 4 gates + 5 handover documents automatically.
+create or replace function public.seed_plot_defaults()
+returns trigger as $$
+begin
+  insert into public.quality_gates (project_id, plot_id, gate_key, title, sort_order, checklist) values
+    (new.project_id, new.id, 'substructure_drainage', 'Substructure & Drainage', 1, '[
+       {"text": "Foundation excavation inspected by Building Control", "checked": false, "checked_at": null},
+       {"text": "Drainage test (air/water) passed and recorded", "checked": false, "checked_at": null},
+       {"text": "DPC level verified", "checked": false, "checked_at": null},
+       {"text": "Building Control sign-off for substructure received", "checked": false, "checked_at": null}
+     ]'::jsonb),
+    (new.project_id, new.id, 'frame_watertight', 'Frame & Wind/Watertight', 2, '[
+       {"text": "Moisture readings recorded", "checked": false, "checked_at": null},
+       {"text": "Cavity barriers inspected", "checked": false, "checked_at": null},
+       {"text": "Structural engineer sign-off uploaded", "checked": false, "checked_at": null},
+       {"text": "Roof confirmed watertight", "checked": false, "checked_at": null}
+     ]'::jsonb),
+    (new.project_id, new.id, 'pre_plaster_first_fix', 'Pre-Plaster / First Fix', 3, '[
+       {"text": "First fix electrical inspected", "checked": false, "checked_at": null},
+       {"text": "First fix plumbing & heating inspected", "checked": false, "checked_at": null},
+       {"text": "Insulation installed and inspected", "checked": false, "checked_at": null},
+       {"text": "Pre-plaster inspection sign-off received", "checked": false, "checked_at": null}
+     ]'::jsonb),
+    (new.project_id, new.id, 'pre_handover_pc', 'Pre-Handover / PC', 4, '[
+       {"text": "Snagging list closed out", "checked": false, "checked_at": null},
+       {"text": "O&M manuals received", "checked": false, "checked_at": null},
+       {"text": "All statutory certificates received", "checked": false, "checked_at": null},
+       {"text": "Final client walkthrough completed", "checked": false, "checked_at": null}
+     ]'::jsonb)
+  on conflict (plot_id, gate_key) do nothing;
+
+  insert into public.handover_documents (project_id, plot_id, doc_key, title) values
+    (new.project_id, new.id, 'building_control', 'Building Control Sign-off (Initial/Final)'),
+    (new.project_id, new.id, 'air_acoustic_test', 'Air Permeability / Acoustic Test Certificates'),
+    (new.project_id, new.id, 'elec_gas_certs', 'Electrical & Gas Safety Certificates'),
+    (new.project_id, new.id, 'warranty_cover_note', 'NHBC/Structural Warranty Cover Note'),
+    (new.project_id, new.id, 'om_manuals', 'Draft O&M Manuals')
+  on conflict (plot_id, doc_key) do nothing;
+
+  return new;
+end;
+$$ language plpgsql;
+
+drop trigger if exists trg_seed_plot_defaults on public.plots;
+create trigger trg_seed_plot_defaults
+after insert on public.plots
+for each row execute function public.seed_plot_defaults();
+
+-- Sites no longer get gates/handover docs seeded directly — only plots do.
+drop trigger if exists trg_seed_project_defaults on public.projects;

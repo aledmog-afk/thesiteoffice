@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Plot Handovers – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title">Plot Handovers</div>
+      <div class="page-sub" id="projectSub">Quality gates and statutory documents, tracked per plot.</div>
+    </div>
+    <button class="btn btn-amber" id="newPlotBtn">+ Plot</button>
+  </div>
+
+  <div class="card">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Plot</th><th>Quality Gates</th><th>Handover Docs</th><th>Added</th><th></th></tr>
+        </thead>
+        <tbody id="plotRows"></tbody>
+      </table>
+    </div>
+    <div id="emptyState" class="empty" style="display:none;">
+      <p>No plots yet. Add your first plot to start tracking quality gates and handover documents.</p>
+      <button class="btn btn-amber" id="emptyNewPlotBtn">+ Plot</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate } from "./js/app.js";
+
+  await requireAuth();
+  const projectId = getParam("project");
+  if (!projectId) window.location.href = "dashboard.html";
+
+  async function createPlot() {
+    const plotNumber = prompt("Plot number / name:", "Plot ");
+    if (!plotNumber || !plotNumber.trim()) return;
+    const { data: { user } } = await supabase.auth.getUser();
+    const { data, error } = await supabase
+      .from("plots")
+      .insert({ project_id: projectId, plot_number: plotNumber.trim(), created_by: user.id })
+      .select()
+      .single();
+    if (!error) window.location.href = `plot-detail.html?id=${data.id}`;
+  }
+  document.getElementById("newPlotBtn").addEventListener("click", createPlot);
+  document.getElementById("emptyNewPlotBtn")?.addEventListener("click", createPlot);
+
+  async function deletePlot(id, name) {
+    if (!confirm(`Delete "${name}" and all its quality gates and handover documents? This cannot be undone.`)) return;
+    await supabase.from("plots").delete().eq("id", id);
+    load();
+  }
+  window.deletePlot = deletePlot;
+
+  async function load() {
+    const { data: project } = await supabase.from("projects").select("name").eq("id", projectId).single();
+    renderHeader([
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project?.name || "Site", href: `project.html?id=${projectId}` },
+      { label: "Plot Handovers" },
+    ]);
+    document.getElementById("projectSub").textContent = project ? `${project.name} — quality gates and statutory documents, tracked per plot.` : "";
+
+    const { data: plots, error } = await supabase
+      .from("plots")
+      .select("*")
+      .eq("project_id", projectId)
+      .order("plot_number", { ascending: true });
+
+    if (error || !plots || !plots.length) {
+      document.getElementById("emptyState").style.display = "block";
+      return;
+    }
+
+    const [{ data: gates }, { data: docs }] = await Promise.all([
+      supabase.from("quality_gates").select("plot_id, status").eq("project_id", projectId),
+      supabase.from("handover_documents").select("plot_id, status").eq("project_id", projectId),
+    ]);
+
+    const gatesByPlot = {};
+    (gates || []).forEach((g) => {
+      gatesByPlot[g.plot_id] = gatesByPlot[g.plot_id] || { approved: 0, total: 0 };
+      gatesByPlot[g.plot_id].total++;
+      if (g.status === "approved") gatesByPlot[g.plot_id].approved++;
+    });
+    const docsByPlot = {};
+    (docs || []).forEach((d) => {
+      docsByPlot[d.plot_id] = docsByPlot[d.plot_id] || { ready: 0, total: 0 };
+      docsByPlot[d.plot_id].total++;
+      if (d.status === "approved_final") docsByPlot[d.plot_id].ready++;
+    });
+
+    document.getElementById("plotRows").innerHTML = plots.map((p) => {
+      const g = gatesByPlot[p.id] || { approved: 0, total: 0 };
+      const d = docsByPlot[p.id] || { ready: 0, total: 0 };
+      return `
+        <tr class="row-link" onclick="window.location.href='plot-detail.html?id=${p.id}'">
+          <td><strong>${escapeHtml(p.plot_number)}</strong></td>
+          <td><span class="badge ${g.approved === g.total && g.total > 0 ? "badge-green" : "badge-amber"}">${g.approved} / ${g.total} approved</span></td>
+          <td><span class="badge ${d.ready === d.total && d.total > 0 ? "badge-green" : "badge-amber"}">${d.ready} / ${d.total} ready</span></td>
+          <td>${formatDate(p.created_at?.slice(0, 10))}</td>
+          <td onclick="event.stopPropagation()"><button class="btn btn-outline btn-sm" onclick="deletePlot('${p.id}', '${escapeHtml(p.plot_number).replace(/'/g, "\\'")}')">Delete</button></td>
+        </tr>
+      `;
+    }).join("");
+  }
+
+  load();
+</script>
+</body>
+</html>
