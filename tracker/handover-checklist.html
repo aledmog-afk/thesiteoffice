@@ -34,7 +34,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, uploadPhoto } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, uploadImage } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -80,7 +80,7 @@
       clearError(errorBox);
       fileInput.disabled = true;
       try {
-        const url = await uploadPhoto(file, `${projectId}/handover`);
+        const url = await uploadImage(file, `${projectId}/handover`);
         const patch = { file_url: url, file_name: file.name, updated_at: new Date().toISOString() };
         if (doc.status === "missing") patch.status = "draft_received";
         const { error } = await supabase.from("handover_documents").update(patch).eq("id", doc.id);

@@ -78,6 +78,46 @@ export async function uploadPhoto(file, path) {
   return data.publicUrl;
 }
 
+// ─── Image compression ──────────────────────────────────────────
+// Resizes an image file to fit within maxDimension (longest side) and
+// re-encodes it as JPEG at the given quality, to keep storage usage down.
+// Non-image files (e.g. PDFs) and SVGs pass through unchanged. Falls back
+// to the original file if decoding/encoding fails for any reason.
+export async function compressImage(file, { maxDimension = 1920, quality = 0.78 } = {}) {
+  if (!file.type || !file.type.startsWith("image/") || file.type === "image/svg+xml") return file;
+
+  const bitmap = await createImageBitmap(file).catch(() => null);
+  if (!bitmap) return file;
+
+  let { width, height } = bitmap;
+  if (width > maxDimension || height > maxDimension) {
+    const scale = maxDimension / Math.max(width, height);
+    width = Math.round(width * scale);
+    height = Math.round(height * scale);
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(bitmap, 0, 0, width, height);
+  bitmap.close?.();
+
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+  if (!blob) return file;
+
+  const newName = file.name.replace(/\.[^.]+$/, "") + ".jpg";
+  return new File([blob], newName, { type: "image/jpeg", lastModified: Date.now() });
+}
+
+// Compresses (if it's an image) then uploads to the "site-photos" bucket.
+// Used for weekly report / snag / handover photos, where storage volume
+// adds up. The logo upload deliberately skips this — see settings.html.
+export async function uploadImage(file, path) {
+  const compressed = await compressImage(file);
+  return uploadPhoto(compressed, path);
+}
+
 // ─── Shared header ──────────────────────────────────────────────
 // Renders the top nav bar into #site-header. `crumbs` is an array of
 // {label, href} — href omitted on the last (current page) crumb.
