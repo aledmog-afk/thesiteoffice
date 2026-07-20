@@ -41,7 +41,10 @@
   function itemSection(title, items, fallbackText) {
     const list = Array.isArray(items) && items.length ? items : (fallbackText ? [fallbackText] : []);
     if (!list.length) return "";
-    return `<div class="doc-section"><h3>${escapeHtml(title)}</h3><ul class="body-list">${list.map(i => `<li>${escapeHtml(i)}</li>`).join("")}</ul></div>`;
+    return `<div class="doc-section"><h3>${escapeHtml(title)}</h3><ul class="body-list">${list.map(i => {
+      if (typeof i === "string") return `<li>${escapeHtml(i)}</li>`;
+      return `<li>${i.plot ? `<strong>${escapeHtml(i.plot)}:</strong> ` : ""}${escapeHtml(i.text)}</li>`;
+    }).join("")}</ul></div>`;
   }
 
   async function load() {
@@ -59,7 +62,7 @@
     document.getElementById("editLink").href = `weekly-report-form.html?project=${project.id}&id=${r.id}`;
 
     const progressText = (Array.isArray(r.progress_items) && r.progress_items.length)
-      ? r.progress_items.map(i => `- ${i}`).join("\n")
+      ? r.progress_items.map(i => typeof i === "string" ? `- ${i}` : `- ${i.plot ? `[${i.plot}] ` : ""}${i.text}`).join("\n")
       : (r.progress_summary || "—");
 
     const subject = encodeURIComponent(`Weekly Site Report – ${project.name} – w/c ${formatDate(r.week_starting)}`);

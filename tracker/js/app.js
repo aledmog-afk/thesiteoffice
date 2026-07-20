@@ -208,30 +208,39 @@ export async function getOrgLogoUrl() {
 }
 
 // ─── Itemised list editor ────────────────────────────────────────
-// Mounts an add/edit/delete list UI (plain text items) into `container`.
+// Mounts an add/edit/delete list UI into `container`. Each item is
+// { plot, text } — plot is an optional tag (e.g. "Plot 4"), shown
+// alongside the item text. Plain-string items (from before plot
+// numbers existed) are normalised into { plot: "", text }.
 // Calls onChange(items) whenever the list changes. Returns { getItems }.
 export function mountItemListEditor(container, initialItems, onChange) {
-  let items = [...(initialItems || [])];
+  function normalise(item) {
+    return typeof item === "string" ? { plot: "", text: item } : { plot: item.plot || "", text: item.text || "" };
+  }
+  let items = (initialItems || []).map(normalise);
   let editingIndex = null;
 
   function render() {
     container.innerHTML = `
       <ul class="item-list">
-        ${items.map((text, i) => editingIndex === i ? `
+        ${items.map((item, i) => editingIndex === i ? `
           <li class="item-row editing">
-            <input type="text" class="item-edit-input" value="${escapeHtml(text)}">
+            <input type="text" class="item-edit-plot" placeholder="Plot (optional)" value="${escapeHtml(item.plot)}">
+            <input type="text" class="item-edit-input" placeholder="Item" value="${escapeHtml(item.text)}">
             <button type="button" class="btn btn-sm btn-amber" data-save="${i}">Save</button>
             <button type="button" class="btn btn-sm btn-outline" data-cancel="${i}">Cancel</button>
           </li>
         ` : `
           <li class="item-row">
-            <span>${escapeHtml(text)}</span>
+            ${item.plot ? `<span class="plot-tag">${escapeHtml(item.plot)}</span>` : ""}
+            <span>${escapeHtml(item.text)}</span>
             <button type="button" class="btn btn-sm btn-outline" data-edit="${i}">Edit</button>
             <button type="button" class="btn btn-sm btn-danger" data-delete="${i}">Delete</button>
           </li>
         `).join("")}
       </ul>
       <div class="item-add-row">
+        <input type="text" id="itemListNewPlot" class="item-plot-input" placeholder="Plot (optional)">
         <input type="text" id="itemListNewInput" placeholder="Add an item…">
         <button type="button" class="btn btn-outline btn-sm" id="itemListAddBtn">+ Add</button>
       </div>
@@ -250,8 +259,9 @@ export function mountItemListEditor(container, initialItems, onChange) {
     container.querySelectorAll("[data-save]").forEach((btn) =>
       btn.addEventListener("click", () => {
         const i = Number(btn.dataset.save);
-        const val = container.querySelector(".item-edit-input").value.trim();
-        if (val) items[i] = val;
+        const plotVal = container.querySelector(".item-edit-plot").value.trim();
+        const textVal = container.querySelector(".item-edit-input").value.trim();
+        if (textVal) items[i] = { plot: plotVal, text: textVal };
         editingIndex = null;
         onChange(items);
         render();
@@ -262,19 +272,20 @@ export function mountItemListEditor(container, initialItems, onChange) {
     );
 
     const addBtn = container.querySelector("#itemListAddBtn");
+    const plotInput = container.querySelector("#itemListNewPlot");
     const addInput = container.querySelector("#itemListNewInput");
     function addItem() {
-      const val = addInput.value.trim();
-      if (!val) return;
-      items.push(val);
+      const textVal = addInput.value.trim();
+      if (!textVal) return;
+      items.push({ plot: plotInput.value.trim(), text: textVal });
       onChange(items);
       render();
       container.querySelector("#itemListNewInput").focus();
     }
     addBtn.addEventListener("click", addItem);
-    addInput.addEventListener("keydown", (e) => {
+    [plotInput, addInput].forEach((el) => el.addEventListener("keydown", (e) => {
       if (e.key === "Enter") { e.preventDefault(); addItem(); }
-    });
+    }));
   }
 
   render();

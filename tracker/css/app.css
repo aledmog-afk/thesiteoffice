@@ -191,8 +191,22 @@ tr:hover td { background: var(--off); }
 .item-row span { flex: 1; font-size: 0.9rem; }
 .item-row.editing { align-items: center; }
 .item-row .item-edit-input { flex: 1; }
+.item-row .item-edit-plot { flex: 0 0 140px; }
+.item-row .plot-tag {
+  flex: 0 0 auto; display: inline-block;
+  background: var(--rule); color: var(--ink-soft);
+  font-size: 0.75rem; font-weight: 700; letter-spacing: 0.02em;
+  padding: 0.2rem 0.6rem; border-radius: 3px; white-space: nowrap;
+}
 .item-add-row { display: flex; gap: 0.6rem; }
 .item-add-row input { flex: 1; }
+.item-add-row input.item-plot-input { flex: 0 0 140px; }
+@media (max-width: 640px) {
+  .item-add-row { flex-wrap: wrap; }
+  .item-add-row input.item-plot-input { flex: 1 1 100%; }
+  .item-row.editing { flex-wrap: wrap; }
+  .item-row .item-edit-plot { flex: 1 1 100%; }
+}
 
 /* ─── LOGO SETTINGS ──────────────────────────────── */
 .logo-preview { max-width: 260px; max-height: 120px; object-fit: contain; border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem; background: var(--white); }
