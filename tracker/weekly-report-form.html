@@ -43,8 +43,8 @@
         <div id="progressItems"></div>
       </div>
       <div class="field"><label for="healthSafety">Health &amp; safety notes</label><textarea id="healthSafety" rows="3" placeholder="Inspections, incidents, near misses, toolbox talks held"></textarea></div>
-      <div class="field"><label for="deliveries">Deliveries / materials</label><textarea id="deliveries" rows="2"></textarea></div>
       <div class="field"><label for="issuesRisks">Issues / risks / delays</label><textarea id="issuesRisks" rows="3"></textarea></div>
+      <div class="field"><label for="otherComments">Other comments</label><textarea id="otherComments" rows="3"></textarea></div>
       <div class="field">
         <label>Plan for next week</label>
         <div id="nextWeekItems"></div>
@@ -146,8 +146,8 @@
     document.getElementById("programmeStatus").value = r.programme_status;
     document.getElementById("weather").value = r.weather || "";
     document.getElementById("healthSafety").value = r.health_safety_notes || "";
-    document.getElementById("deliveries").value = r.deliveries_materials || "";
     document.getElementById("issuesRisks").value = r.issues_risks || "";
+    document.getElementById("otherComments").value = r.other_comments || r.deliveries_materials || "";
 
     const progressItems = (Array.isArray(r.progress_items) && r.progress_items.length)
       ? r.progress_items
@@ -175,8 +175,8 @@
       weather: document.getElementById("weather").value.trim() || null,
       progress_items: progressEditor.getItems(),
       health_safety_notes: document.getElementById("healthSafety").value.trim() || null,
-      deliveries_materials: document.getElementById("deliveries").value.trim() || null,
       issues_risks: document.getElementById("issuesRisks").value.trim() || null,
+      other_comments: document.getElementById("otherComments").value.trim() || null,
       next_week_items: nextWeekEditor.getItems(),
       photos,
     };

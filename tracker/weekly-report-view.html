@@ -101,9 +101,9 @@
       ${section("Weather / Lost Time", r.weather)}
       ${itemSection("Progress This Week", r.progress_items, r.progress_summary)}
       ${section("Health & Safety Notes", r.health_safety_notes)}
-      ${section("Deliveries / Materials", r.deliveries_materials)}
       ${section("Issues / Risks / Delays", r.issues_risks)}
       ${itemSection("Plan for Next Week", r.next_week_items, r.next_week_plan)}
+      ${section("Other Comments", r.other_comments || r.deliveries_materials)}
 
       ${photos.length ? `
         <div class="doc-section">

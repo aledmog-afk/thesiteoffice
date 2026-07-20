@@ -6,7 +6,7 @@ A small internal app for logging **weekly reports** and **snagging sheets** per 
 
 - **Sites** — one entry per project (address, contract ref, main contractor name/email, status).
 - **Company logo** — set once in **Settings**, it appears on every printed weekly report and snag list.
-- **Weekly reports** — programme status, weather, itemised "progress this week" and "plan for next week" lists (each line has an optional plot number tag plus the item text — add/edit/delete each line), H&S notes, deliveries, issues/risks, photos. Every report has a clean printable view.
+- **Weekly reports** — programme status, weather, itemised "progress this week" and "plan for next week" lists (each line has an optional plot number tag plus the item text — add/edit/delete each line), H&S notes, issues/risks, a general "other comments" field, and photos. Every report has a clean printable view.
 - **Snagging** — organised into named **snag lists** per site. Start a new list, add items to it (location, description, trade, priority, photo, open/closed — each editable and deletable), then export that specific list as a PDF.
 - **Sending to the contractor** — every report/snag list has a "Print / Save as PDF" button (uses your browser's print-to-PDF) and an "Email to Contractor" button that opens a pre-filled email to the contractor's saved address — attach the PDF you just saved.
 - **RAG status & progress** — set an overall Red/Amber/Green status and a baseline vs. actual progress % on each site (Site Details → Edit). Shown as a badge and dual progress bar on the dashboard and site page, with a plain-English slippage line ("-5% Behind Programme" / "On Programme" / "+X% Ahead").

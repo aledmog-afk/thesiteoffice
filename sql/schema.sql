@@ -321,48 +321,63 @@ for each row execute function public.seed_project_defaults();
 
 -- Backfill quality gates + handover documents for sites that already
 -- existed before this migration (e.g. any site you created while testing).
-insert into public.quality_gates (project_id, gate_key, title, sort_order, checklist)
-select p.id, g.gate_key, g.title, g.sort_order, g.checklist
-from public.projects p
-cross join (values
-  ('substructure_drainage', 'Substructure & Drainage', 1, '[
-     {"text": "Foundation excavation inspected by Building Control", "checked": false, "checked_at": null},
-     {"text": "Drainage test (air/water) passed and recorded", "checked": false, "checked_at": null},
-     {"text": "DPC level verified", "checked": false, "checked_at": null},
-     {"text": "Building Control sign-off for substructure received", "checked": false, "checked_at": null}
-   ]'::jsonb),
-  ('frame_watertight', 'Frame & Wind/Watertight', 2, '[
-     {"text": "Moisture readings recorded", "checked": false, "checked_at": null},
-     {"text": "Cavity barriers inspected", "checked": false, "checked_at": null},
-     {"text": "Structural engineer sign-off uploaded", "checked": false, "checked_at": null},
-     {"text": "Roof confirmed watertight", "checked": false, "checked_at": null}
-   ]'::jsonb),
-  ('pre_plaster_first_fix', 'Pre-Plaster / First Fix', 3, '[
-     {"text": "First fix electrical inspected", "checked": false, "checked_at": null},
-     {"text": "First fix plumbing & heating inspected", "checked": false, "checked_at": null},
-     {"text": "Insulation installed and inspected", "checked": false, "checked_at": null},
-     {"text": "Pre-plaster inspection sign-off received", "checked": false, "checked_at": null}
-   ]'::jsonb),
-  ('pre_handover_pc', 'Pre-Handover / PC', 4, '[
-     {"text": "Snagging list closed out", "checked": false, "checked_at": null},
-     {"text": "O&M manuals received", "checked": false, "checked_at": null},
-     {"text": "All statutory certificates received", "checked": false, "checked_at": null},
-     {"text": "Final client walkthrough completed", "checked": false, "checked_at": null}
-   ]'::jsonb)
-) as g(gate_key, title, sort_order, checklist)
-on conflict (project_id, gate_key) do nothing;
+-- Guarded to only run before the v5 migration below has ever been applied
+-- (i.e. while quality_gates.plot_id doesn't exist yet) — once v5 has run,
+-- this step is obsolete: v5's own backfill takes over, and re-running this
+-- unconditionally would break for any site with no plots yet (plot_id is
+-- required from v5 onwards) and would target a unique constraint that v5
+-- has since replaced. Safe to leave in place permanently as a no-op after
+-- the first time v5 runs.
+do $$
+begin
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'quality_gates' and column_name = 'plot_id'
+  ) then
+    insert into public.quality_gates (project_id, gate_key, title, sort_order, checklist)
+    select p.id, g.gate_key, g.title, g.sort_order, g.checklist
+    from public.projects p
+    cross join (values
+      ('substructure_drainage', 'Substructure & Drainage', 1, '[
+         {"text": "Foundation excavation inspected by Building Control", "checked": false, "checked_at": null},
+         {"text": "Drainage test (air/water) passed and recorded", "checked": false, "checked_at": null},
+         {"text": "DPC level verified", "checked": false, "checked_at": null},
+         {"text": "Building Control sign-off for substructure received", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      ('frame_watertight', 'Frame & Wind/Watertight', 2, '[
+         {"text": "Moisture readings recorded", "checked": false, "checked_at": null},
+         {"text": "Cavity barriers inspected", "checked": false, "checked_at": null},
+         {"text": "Structural engineer sign-off uploaded", "checked": false, "checked_at": null},
+         {"text": "Roof confirmed watertight", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      ('pre_plaster_first_fix', 'Pre-Plaster / First Fix', 3, '[
+         {"text": "First fix electrical inspected", "checked": false, "checked_at": null},
+         {"text": "First fix plumbing & heating inspected", "checked": false, "checked_at": null},
+         {"text": "Insulation installed and inspected", "checked": false, "checked_at": null},
+         {"text": "Pre-plaster inspection sign-off received", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      ('pre_handover_pc', 'Pre-Handover / PC', 4, '[
+         {"text": "Snagging list closed out", "checked": false, "checked_at": null},
+         {"text": "O&M manuals received", "checked": false, "checked_at": null},
+         {"text": "All statutory certificates received", "checked": false, "checked_at": null},
+         {"text": "Final client walkthrough completed", "checked": false, "checked_at": null}
+       ]'::jsonb)
+    ) as g(gate_key, title, sort_order, checklist)
+    on conflict (project_id, gate_key) do nothing;
 
-insert into public.handover_documents (project_id, doc_key, title)
-select p.id, d.doc_key, d.title
-from public.projects p
-cross join (values
-  ('building_control', 'Building Control Sign-off (Initial/Final)'),
-  ('air_acoustic_test', 'Air Permeability / Acoustic Test Certificates'),
-  ('elec_gas_certs', 'Electrical & Gas Safety Certificates'),
-  ('warranty_cover_note', 'NHBC/Structural Warranty Cover Note'),
-  ('om_manuals', 'Draft O&M Manuals')
-) as d(doc_key, title)
-on conflict (project_id, doc_key) do nothing;
+    insert into public.handover_documents (project_id, doc_key, title)
+    select p.id, d.doc_key, d.title
+    from public.projects p
+    cross join (values
+      ('building_control', 'Building Control Sign-off (Initial/Final)'),
+      ('air_acoustic_test', 'Air Permeability / Acoustic Test Certificates'),
+      ('elec_gas_certs', 'Electrical & Gas Safety Certificates'),
+      ('warranty_cover_note', 'NHBC/Structural Warranty Cover Note'),
+      ('om_manuals', 'Draft O&M Manuals')
+    ) as d(doc_key, title)
+    on conflict (project_id, doc_key) do nothing;
+  end if;
+end $$;
 
 -- ─── v4 ADDITIONS ─────────────────────────────────────────────────
 -- Pinpoint Snagging & QA: an overall site layout drawing plus per-plot
@@ -516,3 +531,9 @@ for each row execute function public.seed_plot_defaults();
 
 -- Sites no longer get gates/handover docs seeded directly — only plots do.
 drop trigger if exists trg_seed_project_defaults on public.projects;
+
+-- ─── v6 ADDITIONS ─────────────────────────────────────────────────
+-- Weekly reports: "Deliveries / Materials" replaced with a general
+-- "Other Comments" field. The old column is left in place, unused, so
+-- no existing data is lost.
+alter table public.weekly_reports add column if not exists other_comments text;
