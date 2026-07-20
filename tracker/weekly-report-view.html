@@ -23,7 +23,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, getOrgLogoUrl } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, getOrgLogoUrl, formatGBP } from "./js/app.js";
 
   await requireAuth();
   const reportId = getParam("id");
@@ -47,6 +47,20 @@
     }).join("")}</ul></div>`;
   }
 
+  const commercialTypeLabel = { early_warning: "Early Warning", proposed_variation: "Proposed Variation", instruction: "Instruction" };
+
+  function commercialSection(items) {
+    const list = Array.isArray(items) ? items : [];
+    if (!list.length) return "";
+    return `<div class="doc-section"><h3>Commercial Items This Week</h3><ul class="body-list">${list.map(i => {
+      const cost = (i.cost_impact !== null && i.cost_impact !== undefined) ? formatGBP(i.cost_impact) : "TBC";
+      const time = (i.time_impact_days !== null && i.time_impact_days !== undefined)
+        ? (i.time_impact_days > 0 ? `+${i.time_impact_days} days` : `${i.time_impact_days} days`)
+        : "Nil";
+      return `<li><strong>[${escapeHtml(commercialTypeLabel[i.type] || i.type)}]</strong> ${escapeHtml(i.title)} — ${cost}, ${time}</li>`;
+    }).join("")}</ul></div>`;
+  }
+
   async function load() {
     const { data: r, error } = await supabase.from("weekly_reports").select("*, projects(*)").eq("id", reportId).single();
     if (error) { document.getElementById("doc").textContent = "Report not found."; return; }
@@ -65,12 +79,18 @@
       ? r.progress_items.map(i => typeof i === "string" ? `- ${i}` : `- ${i.plot ? `[${i.plot}] ` : ""}${i.text}`).join("\n")
       : (r.progress_summary || "—");
 
+    const commercialItems = Array.isArray(r.commercial_items) ? r.commercial_items : [];
+    const commercialText = commercialItems.length
+      ? commercialItems.map(i => `- [${commercialTypeLabel[i.type] || i.type}] ${i.title}`).join("\n")
+      : "";
+
     const subject = encodeURIComponent(`Weekly Site Report – ${project.name} – w/c ${formatDate(r.week_starting)}`);
     const body = encodeURIComponent(
       `Hi,\n\nPlease find this week's site report for ${project.name} below.\n\n` +
       `Week: ${formatDate(r.week_starting)} – ${formatDate(r.week_ending)}\nProgramme status: ${programmeLabel[r.programme_status]}\n\n` +
       `Progress this week:\n${progressText}\n\n` +
       (r.issues_risks ? `Issues / risks:\n${r.issues_risks}\n\n` : "") +
+      (commercialText ? `Commercial items:\n${commercialText}\n\n` : "") +
       `(Full report with photos: use "Print / Save as PDF" on this page and attach it here.)\n\nRegards,`
     );
     document.getElementById("emailLink").href = `mailto:${project.main_contractor_email || ""}?subject=${subject}&body=${body}`;
@@ -102,6 +122,7 @@
       ${itemSection("Progress This Week", r.progress_items, r.progress_summary)}
       ${section("Health & Safety Notes", r.health_safety_notes)}
       ${section("Issues / Risks / Delays", r.issues_risks)}
+      ${commercialSection(r.commercial_items)}
       ${itemSection("Plan for Next Week", r.next_week_items, r.next_week_plan)}
       ${section("Other Comments", r.other_comments || r.deliveries_materials)}
 

@@ -537,3 +537,23 @@ drop trigger if exists trg_seed_project_defaults on public.projects;
 -- "Other Comments" field. The old column is left in place, unused, so
 -- no existing data is lost.
 alter table public.weekly_reports add column if not exists other_comments text;
+
+-- ─── v7 ADDITIONS ─────────────────────────────────────────────────
+-- Formal client Instructions alongside Early Warnings / Proposed
+-- Variations, and a "Commercial Items This Week" section on the
+-- weekly report that pushes new entries straight into the ledger.
+
+alter table public.commercial_items drop constraint if exists commercial_items_type_check;
+alter table public.commercial_items add constraint commercial_items_type_check
+  check (type in ('early_warning', 'proposed_variation', 'instruction'));
+
+-- Traceability: which weekly report (if any) a ledger entry was raised in.
+-- Kept even if the report is later deleted — the ledger entry is the
+-- durable commercial record, independent of the report once it exists.
+alter table public.commercial_items add column if not exists weekly_report_id uuid references public.weekly_reports(id) on delete set null;
+
+-- The report's own printable snapshot of commercial items noted that
+-- week. Each item is { id, title, type, cost_impact, time_impact_days,
+-- ledger_id } — ledger_id is set once the item has been pushed to
+-- commercial_items, so re-saving the report never creates duplicates.
+alter table public.weekly_reports add column if not exists commercial_items jsonb not null default '[]'::jsonb;

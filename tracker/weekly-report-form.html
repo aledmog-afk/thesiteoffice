@@ -46,6 +46,11 @@
       <div class="field"><label for="issuesRisks">Issues / risks / delays</label><textarea id="issuesRisks" rows="3"></textarea></div>
       <div class="field"><label for="otherComments">Other comments</label><textarea id="otherComments" rows="3"></textarea></div>
       <div class="field">
+        <label>Commercial items this week</label>
+        <div id="commercialItems"></div>
+        <p class="hint">Early warnings, proposed variations, or instructions raised this week — each one is added to the site's Commercials ledger when you save.</p>
+      </div>
+      <div class="field">
         <label>Plan for next week</label>
         <div id="nextWeekItems"></div>
       </div>
@@ -66,7 +71,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, formatGBP } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -75,6 +80,148 @@
 
   let progressEditor = mountItemListEditor(document.getElementById("progressItems"), [], () => {});
   let nextWeekEditor = mountItemListEditor(document.getElementById("nextWeekItems"), [], () => {});
+
+  // ─── Commercial items mini-editor ───────────────────────────────
+  // Each item is { id, title, type, cost_impact, time_impact_days, ledger_id }.
+  // ledger_id is set once the item has been pushed to the commercial_items
+  // ledger (on save) — items with a ledger_id are updated in place on
+  // future saves rather than re-created; deleting one here only removes
+  // it from this report's list, never the ledger entry itself.
+  const commercialTypeLabel = { early_warning: "Early Warning", proposed_variation: "Proposed Variation", instruction: "Instruction" };
+
+  function mountCommercialEditor(container, initialItems) {
+    let items = (initialItems || []).map((it) => ({
+      id: it.id || crypto.randomUUID(),
+      title: it.title || "",
+      type: it.type || "early_warning",
+      cost_impact: it.cost_impact ?? null,
+      time_impact_days: it.time_impact_days ?? null,
+      ledger_id: it.ledger_id || null,
+    }));
+    let editingId = null;
+
+    function typeOptions(selected) {
+      return Object.entries(commercialTypeLabel)
+        .map(([val, label]) => `<option value="${val}" ${selected === val ? "selected" : ""}>${label}</option>`)
+        .join("");
+    }
+
+    function render() {
+      container.innerHTML = `
+        <ul class="item-list">
+          ${items.map((item) => editingId === item.id ? `
+            <li class="item-row editing" style="flex-wrap:wrap;">
+              <input type="text" class="ci-edit-title" placeholder="Title" value="${escapeHtml(item.title)}" style="flex:1 1 100%;">
+              <select class="ci-edit-type" style="flex:0 0 170px;">${typeOptions(item.type)}</select>
+              <input type="number" class="ci-edit-cost" placeholder="Cost £ (blank = TBC)" value="${item.cost_impact ?? ""}" style="flex:0 0 170px;">
+              <input type="number" class="ci-edit-time" placeholder="Days (blank = Nil)" value="${item.time_impact_days ?? ""}" style="flex:0 0 150px;">
+              <button type="button" class="btn btn-sm btn-amber" data-save="${item.id}">Save</button>
+              <button type="button" class="btn btn-sm btn-outline" data-cancel="${item.id}">Cancel</button>
+            </li>
+          ` : `
+            <li class="item-row">
+              <span class="badge badge-grey" style="flex:0 0 auto;">${commercialTypeLabel[item.type]}</span>
+              <span>${escapeHtml(item.title)}</span>
+              <span class="hint" style="flex:0 0 auto; white-space:nowrap;">${formatGBP(item.cost_impact) || "TBC"}${item.time_impact_days !== null ? " · " + (item.time_impact_days > 0 ? "+" : "") + item.time_impact_days + "d" : ""}</span>
+              ${item.ledger_id ? `<span class="badge badge-green" style="flex:0 0 auto;" title="Added to the Commercials ledger">In Ledger</span>` : ""}
+              <button type="button" class="btn btn-sm btn-outline" data-edit="${item.id}">Edit</button>
+              <button type="button" class="btn btn-sm btn-danger" data-delete="${item.id}">Delete</button>
+            </li>
+          `).join("")}
+        </ul>
+        <div class="item-add-row" style="flex-wrap:wrap;">
+          <input type="text" id="ciNewTitle" placeholder="Title / description" style="flex:1 1 100%;">
+          <select id="ciNewType" style="flex:0 0 170px;">${typeOptions("early_warning")}</select>
+          <input type="number" id="ciNewCost" placeholder="Cost £ (blank = TBC)" style="flex:0 0 170px;">
+          <input type="number" id="ciNewTime" placeholder="Days (blank = Nil)" style="flex:0 0 150px;">
+          <button type="button" class="btn btn-outline btn-sm" id="ciAddBtn">+ Add</button>
+        </div>
+      `;
+
+      container.querySelectorAll("[data-edit]").forEach((btn) =>
+        btn.addEventListener("click", () => { editingId = btn.dataset.edit; render(); })
+      );
+      container.querySelectorAll("[data-delete]").forEach((btn) =>
+        btn.addEventListener("click", () => {
+          items = items.filter((it) => it.id !== btn.dataset.delete);
+          render();
+        })
+      );
+      container.querySelectorAll("[data-cancel]").forEach((btn) =>
+        btn.addEventListener("click", () => { editingId = null; render(); })
+      );
+      container.querySelectorAll("[data-save]").forEach((btn) =>
+        btn.addEventListener("click", () => {
+          const id = btn.dataset.save;
+          const title = container.querySelector(".ci-edit-title").value.trim();
+          if (!title) return;
+          const type = container.querySelector(".ci-edit-type").value;
+          const costVal = container.querySelector(".ci-edit-cost").value;
+          const timeVal = container.querySelector(".ci-edit-time").value;
+          items = items.map((it) => it.id === id ? {
+            ...it, title, type,
+            cost_impact: costVal === "" ? null : Number(costVal),
+            time_impact_days: timeVal === "" ? null : Number(timeVal),
+          } : it);
+          editingId = null;
+          render();
+        })
+      );
+
+      container.querySelector("#ciAddBtn").addEventListener("click", () => {
+        const title = container.querySelector("#ciNewTitle").value.trim();
+        if (!title) return;
+        const type = container.querySelector("#ciNewType").value;
+        const costVal = container.querySelector("#ciNewCost").value;
+        const timeVal = container.querySelector("#ciNewTime").value;
+        items.push({
+          id: crypto.randomUUID(),
+          title, type,
+          cost_impact: costVal === "" ? null : Number(costVal),
+          time_impact_days: timeVal === "" ? null : Number(timeVal),
+          ledger_id: null,
+        });
+        render();
+      });
+    }
+
+    render();
+    return { getItems: () => items };
+  }
+
+  let commercialEditor = mountCommercialEditor(document.getElementById("commercialItems"), []);
+
+  // Pushes new items (no ledger_id) into the commercial_items ledger, and
+  // targeted-updates items that were already pushed on a previous save.
+  // Never deletes a ledger row — removing an item here only drops it from
+  // this report's own list.
+  async function syncCommercialItems(items, weeklyReportId, userId) {
+    const synced = [];
+    for (const item of items) {
+      if (item.ledger_id) {
+        await supabase.from("commercial_items").update({
+          title: item.title,
+          type: item.type,
+          cost_impact: item.cost_impact,
+          time_impact_days: item.time_impact_days,
+        }).eq("id", item.ledger_id);
+        synced.push(item);
+      } else {
+        const { data, error } = await supabase.from("commercial_items").insert({
+          project_id: projectId,
+          weekly_report_id: weeklyReportId,
+          title: item.title,
+          type: item.type,
+          cost_impact: item.cost_impact,
+          time_impact_days: item.time_impact_days,
+          status: "pending_client_review",
+          created_by: userId,
+        }).select().single();
+        synced.push(error ? item : { ...item, ledger_id: data.id });
+      }
+    }
+    return synced;
+  }
 
   document.getElementById("cancelBtn").addEventListener("click", () => {
     window.location.href = reportId ? `weekly-report-view.html?id=${reportId}` : `weekly-reports.html?project=${projectId}`;
@@ -157,6 +304,7 @@
       : (r.next_week_plan ? [r.next_week_plan] : []);
     progressEditor = mountItemListEditor(document.getElementById("progressItems"), progressItems, () => {});
     nextWeekEditor = mountItemListEditor(document.getElementById("nextWeekItems"), nextWeekItems, () => {});
+    commercialEditor = mountCommercialEditor(document.getElementById("commercialItems"), r.commercial_items);
 
     photos = Array.isArray(r.photos) ? r.photos : [];
     renderPhotos();
@@ -178,20 +326,26 @@
       issues_risks: document.getElementById("issuesRisks").value.trim() || null,
       other_comments: document.getElementById("otherComments").value.trim() || null,
       next_week_items: nextWeekEditor.getItems(),
+      commercial_items: commercialEditor.getItems(),
       photos,
     };
     document.getElementById("saveBtn").disabled = true;
     try {
+      let finalReportId = reportId;
       if (reportId) {
         const { error } = await supabase.from("weekly_reports").update(payload).eq("id", reportId);
         if (error) throw error;
-        window.location.href = `weekly-report-view.html?id=${reportId}`;
       } else {
         payload.created_by = user.id;
         const { data, error } = await supabase.from("weekly_reports").insert(payload).select().single();
         if (error) throw error;
-        window.location.href = `weekly-report-view.html?id=${data.id}`;
+        finalReportId = data.id;
       }
+
+      const syncedItems = await syncCommercialItems(commercialEditor.getItems(), finalReportId, user.id);
+      await supabase.from("weekly_reports").update({ commercial_items: syncedItems }).eq("id", finalReportId);
+
+      window.location.href = `weekly-report-view.html?id=${finalReportId}`;
     } catch (err) {
       showError(errorBox, err);
       document.getElementById("saveBtn").disabled = false;

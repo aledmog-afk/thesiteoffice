@@ -42,6 +42,7 @@
           <select id="type">
             <option value="early_warning">Early Warning</option>
             <option value="proposed_variation">Proposed Variation</option>
+            <option value="instruction">Instruction</option>
           </select>
         </div>
         <div class="field">
@@ -91,7 +92,7 @@
   const projectId = getParam("project");
   if (!projectId) window.location.href = "dashboard.html";
 
-  const typeLabel = { early_warning: "Early Warning", proposed_variation: "Proposed Variation" };
+  const typeLabel = { early_warning: "Early Warning", proposed_variation: "Proposed Variation", instruction: "Instruction" };
   const statusBadge = { pending_client_review: "badge-amber", approved: "badge-green", rejected: "badge-red" };
   const statusLabel = { pending_client_review: "Pending Client Review", approved: "Approved", rejected: "Rejected" };
 
@@ -163,7 +164,7 @@
     document.getElementById("emptyState").style.display = allItems.length ? "none" : "block";
     document.getElementById("itemRows").innerHTML = allItems.map((it) => `
       <tr>
-        <td><strong>${escapeHtml(it.title)}</strong></td>
+        <td><strong>${escapeHtml(it.title)}</strong>${it.weekly_report_id ? ` <a href="weekly-report-view.html?id=${it.weekly_report_id}" class="hint" style="text-decoration:none;" title="Raised in a weekly report">📋</a>` : ""}</td>
         <td>${typeLabel[it.type]}</td>
         <td>${formatGBP(it.cost_impact) || "TBC"}</td>
         <td>${it.time_impact_days === null || it.time_impact_days === undefined ? "Nil" : (it.time_impact_days > 0 ? `+${it.time_impact_days} days` : `${it.time_impact_days} days`)}</td>
