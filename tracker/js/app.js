@@ -209,16 +209,35 @@ export async function getOrgLogoUrl() {
 
 // ─── Itemised list editor ────────────────────────────────────────
 // Mounts an add/edit/delete list UI into `container`. Each item is
-// { plot, text } — plot is an optional tag (e.g. "Plot 4"), shown
-// alongside the item text. Plain-string items (from before plot
-// numbers existed) are normalised into { plot: "", text }.
+// { id, plot, text } — plot is an optional tag (e.g. "Plot 4"), shown
+// alongside the item text. `id` is stable across saves (and across
+// reports, when an item is carried forward — see weekly-report-form.html)
+// so items can be matched by identity rather than text. Plain-string
+// items (from before plot numbers existed) are normalised into
+// { id, plot: "", text }.
+// Pass { withPercent: true } to add a 0-100 "% complete" field to every
+// item (used for progress items; next-week items don't have one).
 // Calls onChange(items) whenever the list changes. Returns { getItems }.
-export function mountItemListEditor(container, initialItems, onChange) {
+export function mountItemListEditor(container, initialItems, onChange, { withPercent = false } = {}) {
   function normalise(item) {
-    return typeof item === "string" ? { plot: "", text: item } : { plot: item.plot || "", text: item.text || "" };
+    if (typeof item === "string") {
+      return { id: crypto.randomUUID(), plot: "", text: item, ...(withPercent ? { percent: 0 } : {}) };
+    }
+    return {
+      id: item.id || crypto.randomUUID(),
+      plot: item.plot || "",
+      text: item.text || "",
+      ...(withPercent ? { percent: typeof item.percent === "number" ? item.percent : 0 } : {}),
+    };
   }
   let items = (initialItems || []).map(normalise);
   let editingIndex = null;
+
+  function percentBadge(percent) {
+    if (!withPercent) return "";
+    const cls = percent >= 100 ? "badge-green" : percent > 0 ? "badge-amber" : "badge-grey";
+    return `<span class="badge ${cls}" style="flex:0 0 auto;">${percent}%</span>`;
+  }
 
   function render() {
     container.innerHTML = `
@@ -227,6 +246,7 @@ export function mountItemListEditor(container, initialItems, onChange) {
           <li class="item-row editing">
             <input type="text" class="item-edit-plot" placeholder="Plot (optional)" value="${escapeHtml(item.plot)}">
             <input type="text" class="item-edit-input" placeholder="Item" value="${escapeHtml(item.text)}">
+            ${withPercent ? `<input type="number" class="item-edit-percent" min="0" max="100" step="5" placeholder="%" value="${item.percent}" style="flex:0 0 80px;">` : ""}
             <button type="button" class="btn btn-sm btn-amber" data-save="${i}">Save</button>
             <button type="button" class="btn btn-sm btn-outline" data-cancel="${i}">Cancel</button>
           </li>
@@ -234,6 +254,7 @@ export function mountItemListEditor(container, initialItems, onChange) {
           <li class="item-row">
             ${item.plot ? `<span class="plot-tag">${escapeHtml(item.plot)}</span>` : ""}
             <span>${escapeHtml(item.text)}</span>
+            ${percentBadge(item.percent)}
             <button type="button" class="btn btn-sm btn-outline" data-edit="${i}">Edit</button>
             <button type="button" class="btn btn-sm btn-danger" data-delete="${i}">Delete</button>
           </li>
@@ -242,6 +263,7 @@ export function mountItemListEditor(container, initialItems, onChange) {
       <div class="item-add-row">
         <input type="text" id="itemListNewPlot" class="item-plot-input" placeholder="Plot (optional)">
         <input type="text" id="itemListNewInput" placeholder="Add an item…">
+        ${withPercent ? `<input type="number" id="itemListNewPercent" min="0" max="100" step="5" placeholder="%" style="flex:0 0 80px;">` : ""}
         <button type="button" class="btn btn-outline btn-sm" id="itemListAddBtn">+ Add</button>
       </div>
     `;
@@ -261,7 +283,13 @@ export function mountItemListEditor(container, initialItems, onChange) {
         const i = Number(btn.dataset.save);
         const plotVal = container.querySelector(".item-edit-plot").value.trim();
         const textVal = container.querySelector(".item-edit-input").value.trim();
-        if (textVal) items[i] = { plot: plotVal, text: textVal };
+        if (textVal) {
+          items[i] = { ...items[i], plot: plotVal, text: textVal };
+          if (withPercent) {
+            const percentVal = container.querySelector(".item-edit-percent").value;
+            items[i].percent = percentVal === "" ? 0 : Math.max(0, Math.min(100, Number(percentVal)));
+          }
+        }
         editingIndex = null;
         onChange(items);
         render();
@@ -274,16 +302,23 @@ export function mountItemListEditor(container, initialItems, onChange) {
     const addBtn = container.querySelector("#itemListAddBtn");
     const plotInput = container.querySelector("#itemListNewPlot");
     const addInput = container.querySelector("#itemListNewInput");
+    const percentInput = container.querySelector("#itemListNewPercent");
     function addItem() {
       const textVal = addInput.value.trim();
       if (!textVal) return;
-      items.push({ plot: plotInput.value.trim(), text: textVal });
+      const newItem = { id: crypto.randomUUID(), plot: plotInput.value.trim(), text: textVal };
+      if (withPercent) {
+        const percentVal = percentInput.value;
+        newItem.percent = percentVal === "" ? 0 : Math.max(0, Math.min(100, Number(percentVal)));
+      }
+      items.push(newItem);
       onChange(items);
       render();
       container.querySelector("#itemListNewInput").focus();
     }
     addBtn.addEventListener("click", addItem);
-    [plotInput, addInput].forEach((el) => el.addEventListener("keydown", (e) => {
+    const enterTriggers = withPercent ? [plotInput, addInput, percentInput] : [plotInput, addInput];
+    enterTriggers.forEach((el) => el.addEventListener("keydown", (e) => {
       if (e.key === "Enter") { e.preventDefault(); addItem(); }
     }));
   }

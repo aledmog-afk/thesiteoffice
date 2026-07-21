@@ -43,7 +43,8 @@
     if (!list.length) return "";
     return `<div class="doc-section"><h3>${escapeHtml(title)}</h3><ul class="body-list">${list.map(i => {
       if (typeof i === "string") return `<li>${escapeHtml(i)}</li>`;
-      return `<li>${i.plot ? `<strong>${escapeHtml(i.plot)}:</strong> ` : ""}${escapeHtml(i.text)}</li>`;
+      const percentSuffix = (typeof i.percent === "number") ? ` <strong>(${i.percent}% complete)</strong>` : "";
+      return `<li>${i.plot ? `<strong>${escapeHtml(i.plot)}:</strong> ` : ""}${escapeHtml(i.text)}${percentSuffix}</li>`;
     }).join("")}</ul></div>`;
   }
 
@@ -76,7 +77,11 @@
     document.getElementById("editLink").href = `weekly-report-form.html?project=${project.id}&id=${r.id}`;
 
     const progressText = (Array.isArray(r.progress_items) && r.progress_items.length)
-      ? r.progress_items.map(i => typeof i === "string" ? `- ${i}` : `- ${i.plot ? `[${i.plot}] ` : ""}${i.text}`).join("\n")
+      ? r.progress_items.map(i => {
+          if (typeof i === "string") return `- ${i}`;
+          const pct = typeof i.percent === "number" ? ` (${i.percent}%)` : "";
+          return `- ${i.plot ? `[${i.plot}] ` : ""}${i.text}${pct}`;
+        }).join("\n")
       : (r.progress_summary || "—");
 
     const commercialItems = Array.isArray(r.commercial_items) ? r.commercial_items : [];
