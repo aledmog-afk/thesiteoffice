@@ -44,8 +44,9 @@
     return `<div class="doc-section"><h3>${escapeHtml(title)}</h3><ul class="body-list">${list.map(i => {
       if (typeof i === "string") return `<li>${escapeHtml(i)}</li>`;
       const percentSuffix = (typeof i.percent === "number") ? ` <strong>(${i.percent}% complete)</strong>` : "";
-      const milestonePrefix = i.milestone ? `<span class="milestone-tag">${escapeHtml(i.milestone)}</span> ` : "";
-      return `<li>${milestonePrefix}${i.plot ? `<strong>${escapeHtml(i.plot)}:</strong> ` : ""}${escapeHtml(i.text)}${percentSuffix}</li>`;
+      const plotPrefix = i.plot ? `<strong>${escapeHtml(i.plot)}:</strong> ` : "";
+      const milestoneTag = i.milestone ? `<span class="milestone-tag">${escapeHtml(i.milestone)}</span> ` : "";
+      return `<li>${plotPrefix}${milestoneTag}${escapeHtml(i.text)}${percentSuffix}</li>`;
     }).join("")}</ul></div>`;
   }
 
@@ -81,8 +82,9 @@
       ? r.progress_items.map(i => {
           if (typeof i === "string") return `- ${i}`;
           const pct = typeof i.percent === "number" ? ` (${i.percent}%)` : "";
+          const plot = i.plot ? `[${i.plot}] ` : "";
           const milestone = i.milestone ? `[${i.milestone}] ` : "";
-          return `- ${milestone}${i.plot ? `[${i.plot}] ` : ""}${i.text}${pct}`;
+          return `- ${plot}${milestone}${i.text}${pct}`;
         }).join("\n")
       : (r.progress_summary || "—");
 
