@@ -207,6 +207,39 @@ export async function getOrgLogoUrl() {
   return data?.logo_url || null;
 }
 
+// Standard UK residential new-build stages, groundworks through handover,
+// offered as the milestone dropdown on weekly report progress/next-week
+// items. Not exhaustive for every build type (e.g. covers both timber
+// frame and brick & block) — "Other" lets you type anything not listed.
+export const BUILD_MILESTONES = [
+  "Site Set-Up / Enabling Works",
+  "Groundworks",
+  "Foundations (Foots)",
+  "Drainage (Below Ground)",
+  "Slab Pour / Oversite",
+  "Timber Frame Erect",
+  "Brick & Block Superstructure",
+  "Scaffold Erect",
+  "Roofing",
+  "Windows & External Doors",
+  "Scaffold Drop",
+  "Render",
+  "Cladding / External Finishes",
+  "1st Fix (All Trades)",
+  "Plastering / Drylining",
+  "2nd Fix (All Trades)",
+  "Kitchen Fit",
+  "Bathroom Fit",
+  "Painting & Decorating",
+  "Flooring",
+  "Solar Panels (PV)",
+  "External Works / Landscaping",
+  "Testing & Commissioning",
+  "Snagging",
+  "Handover / Practical Completion",
+];
+const MILESTONE_CUSTOM_VALUE = "__custom__";
+
 // ─── Itemised list editor ────────────────────────────────────────
 // Mounts an add/edit/delete list UI into `container`. Each item is
 // { id, plot, text } — plot is an optional tag (e.g. "Plot 4"), shown
@@ -217,17 +250,20 @@ export async function getOrgLogoUrl() {
 // { id, plot: "", text }.
 // Pass { withPercent: true } to add a 0-100 "% complete" field to every
 // item (used for progress items; next-week items don't have one).
+// Pass { withMilestone: true } to add a build-stage dropdown (from
+// BUILD_MILESTONES, plus a free-text "Other" option) to every item.
 // Calls onChange(items) whenever the list changes. Returns { getItems }.
-export function mountItemListEditor(container, initialItems, onChange, { withPercent = false } = {}) {
+export function mountItemListEditor(container, initialItems, onChange, { withPercent = false, withMilestone = false } = {}) {
   function normalise(item) {
     if (typeof item === "string") {
-      return { id: crypto.randomUUID(), plot: "", text: item, ...(withPercent ? { percent: 0 } : {}) };
+      return { id: crypto.randomUUID(), plot: "", text: item, ...(withPercent ? { percent: 0 } : {}), ...(withMilestone ? { milestone: "" } : {}) };
     }
     return {
       id: item.id || crypto.randomUUID(),
       plot: item.plot || "",
       text: item.text || "",
       ...(withPercent ? { percent: typeof item.percent === "number" ? item.percent : 0 } : {}),
+      ...(withMilestone ? { milestone: item.milestone || "" } : {}),
     };
   }
   let items = (initialItems || []).map(normalise);
@@ -239,13 +275,35 @@ export function mountItemListEditor(container, initialItems, onChange, { withPer
     return `<span class="badge ${cls}" style="flex:0 0 auto;">${percent}%</span>`;
   }
 
+  // Renders a milestone <select> + a companion free-text input that only
+  // shows when "Other" is picked. `attrs` distinguishes the always-present
+  // add-row instance (ids) from the single edit-row instance (classes).
+  function milestoneFieldHtml(attrs, currentValue) {
+    if (!withMilestone) return "";
+    const isCustom = currentValue && !BUILD_MILESTONES.includes(currentValue);
+    return `
+      <select ${attrs.select} style="flex:0 0 190px;">
+        <option value="">Milestone (optional)</option>
+        ${BUILD_MILESTONES.map((m) => `<option value="${escapeHtml(m)}" ${currentValue === m ? "selected" : ""}>${escapeHtml(m)}</option>`).join("")}
+        <option value="${MILESTONE_CUSTOM_VALUE}" ${isCustom ? "selected" : ""}>Other (type your own)…</option>
+      </select>
+      <input type="text" ${attrs.custom} placeholder="Custom milestone" value="${isCustom ? escapeHtml(currentValue) : ""}" style="flex:0 0 160px; display:${isCustom ? "inline-block" : "none"};">
+    `;
+  }
+
+  function readMilestone(selectEl, customEl) {
+    if (!selectEl) return "";
+    return selectEl.value === MILESTONE_CUSTOM_VALUE ? customEl.value.trim() : selectEl.value;
+  }
+
   function render() {
     container.innerHTML = `
       <ul class="item-list">
         ${items.map((item, i) => editingIndex === i ? `
           <li class="item-row editing">
             <input type="text" class="item-edit-plot" placeholder="Plot (optional)" value="${escapeHtml(item.plot)}">
-            <input type="text" class="item-edit-input" placeholder="Item" value="${escapeHtml(item.text)}">
+            ${milestoneFieldHtml({ select: 'class="item-edit-milestone"', custom: 'class="item-edit-milestone-custom"' }, item.milestone || "")}
+            <input type="text" class="item-edit-input" placeholder="Item (optional if milestone set)" value="${escapeHtml(item.text)}">
             ${withPercent ? `<input type="number" class="item-edit-percent" min="0" max="100" step="5" placeholder="%" value="${item.percent}" style="flex:0 0 80px;">` : ""}
             <button type="button" class="btn btn-sm btn-amber" data-save="${i}">Save</button>
             <button type="button" class="btn btn-sm btn-outline" data-cancel="${i}">Cancel</button>
@@ -253,6 +311,7 @@ export function mountItemListEditor(container, initialItems, onChange, { withPer
         ` : `
           <li class="item-row">
             ${item.plot ? `<span class="plot-tag">${escapeHtml(item.plot)}</span>` : ""}
+            ${item.milestone ? `<span class="milestone-tag">${escapeHtml(item.milestone)}</span>` : ""}
             <span>${escapeHtml(item.text)}</span>
             ${percentBadge(item.percent)}
             <button type="button" class="btn btn-sm btn-outline" data-edit="${i}">Edit</button>
@@ -262,11 +321,31 @@ export function mountItemListEditor(container, initialItems, onChange, { withPer
       </ul>
       <div class="item-add-row">
         <input type="text" id="itemListNewPlot" class="item-plot-input" placeholder="Plot (optional)">
-        <input type="text" id="itemListNewInput" placeholder="Add an item…">
+        ${milestoneFieldHtml({ select: 'id="itemListNewMilestone"', custom: 'id="itemListNewMilestoneCustom"' }, "")}
+        <input type="text" id="itemListNewInput" placeholder="Add an item… (optional if milestone set)">
         ${withPercent ? `<input type="number" id="itemListNewPercent" min="0" max="100" step="5" placeholder="%" style="flex:0 0 80px;">` : ""}
         <button type="button" class="btn btn-outline btn-sm" id="itemListAddBtn">+ Add</button>
       </div>
     `;
+
+    // Reveal the free-text input only when "Other" is selected in its
+    // adjacent milestone dropdown.
+    if (withMilestone) {
+      [container.querySelector("#itemListNewMilestone"), container.querySelector(".item-edit-milestone")]
+        .filter(Boolean)
+        .forEach((sel) => {
+          sel.addEventListener("change", () => {
+            const customInput = sel.nextElementSibling;
+            if (sel.value === MILESTONE_CUSTOM_VALUE) {
+              customInput.style.display = "inline-block";
+              customInput.focus();
+            } else {
+              customInput.style.display = "none";
+              customInput.value = "";
+            }
+          });
+        });
+    }
 
     container.querySelectorAll("[data-edit]").forEach((btn) =>
       btn.addEventListener("click", () => { editingIndex = Number(btn.dataset.edit); render(); })
@@ -283,8 +362,10 @@ export function mountItemListEditor(container, initialItems, onChange, { withPer
         const i = Number(btn.dataset.save);
         const plotVal = container.querySelector(".item-edit-plot").value.trim();
         const textVal = container.querySelector(".item-edit-input").value.trim();
-        if (textVal) {
+        const milestoneVal = withMilestone ? readMilestone(container.querySelector(".item-edit-milestone"), container.querySelector(".item-edit-milestone-custom")) : "";
+        if (textVal || milestoneVal) {
           items[i] = { ...items[i], plot: plotVal, text: textVal };
+          if (withMilestone) items[i].milestone = milestoneVal;
           if (withPercent) {
             const percentVal = container.querySelector(".item-edit-percent").value;
             items[i].percent = percentVal === "" ? 0 : Math.max(0, Math.min(100, Number(percentVal)));
@@ -305,8 +386,10 @@ export function mountItemListEditor(container, initialItems, onChange, { withPer
     const percentInput = container.querySelector("#itemListNewPercent");
     function addItem() {
       const textVal = addInput.value.trim();
-      if (!textVal) return;
+      const milestoneVal = withMilestone ? readMilestone(container.querySelector("#itemListNewMilestone"), container.querySelector("#itemListNewMilestoneCustom")) : "";
+      if (!textVal && !milestoneVal) return;
       const newItem = { id: crypto.randomUUID(), plot: plotInput.value.trim(), text: textVal };
+      if (withMilestone) newItem.milestone = milestoneVal;
       if (withPercent) {
         const percentVal = percentInput.value;
         newItem.percent = percentVal === "" ? 0 : Math.max(0, Math.min(100, Number(percentVal)));
@@ -317,7 +400,7 @@ export function mountItemListEditor(container, initialItems, onChange, { withPer
       container.querySelector("#itemListNewInput").focus();
     }
     addBtn.addEventListener("click", addItem);
-    const enterTriggers = withPercent ? [plotInput, addInput, percentInput] : [plotInput, addInput];
+    const enterTriggers = [plotInput, addInput, percentInput, container.querySelector("#itemListNewMilestoneCustom")].filter(Boolean);
     enterTriggers.forEach((el) => el.addEventListener("keydown", (e) => {
       if (e.key === "Enter") { e.preventDefault(); addItem(); }
     }));

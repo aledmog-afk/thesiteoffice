@@ -198,6 +198,12 @@ tr:hover td { background: var(--off); }
   font-size: 0.75rem; font-weight: 700; letter-spacing: 0.02em;
   padding: 0.2rem 0.6rem; border-radius: 3px; white-space: nowrap;
 }
+.item-row .milestone-tag {
+  flex: 0 0 auto; display: inline-block;
+  background: var(--blue-light); color: var(--blue);
+  font-size: 0.75rem; font-weight: 700; letter-spacing: 0.02em;
+  padding: 0.2rem 0.6rem; border-radius: 3px; white-space: nowrap;
+}
 .item-add-row { display: flex; gap: 0.6rem; }
 .item-add-row input { flex: 1; }
 .item-add-row input.item-plot-input { flex: 0 0 140px; }

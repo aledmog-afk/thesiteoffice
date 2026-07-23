@@ -79,8 +79,8 @@
   const reportId = getParam("id");
   if (!projectId) window.location.href = "dashboard.html";
 
-  let progressEditor = mountItemListEditor(document.getElementById("progressItems"), [], () => {}, { withPercent: true });
-  let nextWeekEditor = mountItemListEditor(document.getElementById("nextWeekItems"), [], () => {});
+  let progressEditor = mountItemListEditor(document.getElementById("progressItems"), [], () => {}, { withPercent: true, withMilestone: true });
+  let nextWeekEditor = mountItemListEditor(document.getElementById("nextWeekItems"), [], () => {}, { withMilestone: true });
 
   // ─── Commercial items mini-editor ───────────────────────────────
   // Each item is { id, title, type, cost_impact, time_impact_days, ledger_id }.
@@ -236,7 +236,7 @@
     const keptIds = new Set(kept.map((nw) => nw.id));
     const toCarry = progressItems
       .filter((p) => p.percent < 100 && !keptIds.has(p.id))
-      .map((p) => ({ id: p.id, plot: p.plot, text: p.text }));
+      .map((p) => ({ id: p.id, plot: p.plot, text: p.text, milestone: p.milestone || "" }));
     return [...kept, ...toCarry];
   }
 
@@ -308,7 +308,7 @@
         .limit(1);
       const carried = prevReports?.[0]?.next_week_items;
       if (Array.isArray(carried) && carried.length) {
-        progressEditor = mountItemListEditor(document.getElementById("progressItems"), carried, () => {}, { withPercent: true });
+        progressEditor = mountItemListEditor(document.getElementById("progressItems"), carried, () => {}, { withPercent: true, withMilestone: true });
         document.getElementById("carriedOverHint").style.display = "block";
       }
       return;
@@ -331,8 +331,8 @@
     const nextWeekItems = (Array.isArray(r.next_week_items) && r.next_week_items.length)
       ? r.next_week_items
       : (r.next_week_plan ? [r.next_week_plan] : []);
-    progressEditor = mountItemListEditor(document.getElementById("progressItems"), progressItems, () => {}, { withPercent: true });
-    nextWeekEditor = mountItemListEditor(document.getElementById("nextWeekItems"), nextWeekItems, () => {});
+    progressEditor = mountItemListEditor(document.getElementById("progressItems"), progressItems, () => {}, { withPercent: true, withMilestone: true });
+    nextWeekEditor = mountItemListEditor(document.getElementById("nextWeekItems"), nextWeekItems, () => {}, { withMilestone: true });
     commercialEditor = mountCommercialEditor(document.getElementById("commercialItems"), r.commercial_items);
 
     photos = Array.isArray(r.photos) ? r.photos : [];
