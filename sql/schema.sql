@@ -557,3 +557,96 @@ alter table public.commercial_items add column if not exists weekly_report_id uu
 -- ledger_id } — ledger_id is set once the item has been pushed to
 -- commercial_items, so re-saving the report never creates duplicates.
 alter table public.weekly_reports add column if not exists commercial_items jsonb not null default '[]'::jsonb;
+
+-- ─── v8 ADDITIONS ─────────────────────────────────────────────────
+-- Snagging is now organised per plot (the same `plots` table used by
+-- Plot Handovers) instead of freely-named lists — each plot gets exactly
+-- one snag list, auto-created alongside its quality gates and handover
+-- documents. Priority and "raised by" are no longer collected in the
+-- app; the columns stay in place (unused) so no existing data is lost.
+
+alter table public.snag_lists add column if not exists plot_id uuid references public.plots(id) on delete cascade;
+
+-- Nulls don't conflict with each other in a unique index, so this still
+-- allows any pre-existing (plot_id null) lists to coexist untouched.
+create unique index if not exists snag_lists_plot_id_uidx on public.snag_lists (plot_id);
+
+-- Seed a new plot's snag list alongside its quality gates + handover docs.
+create or replace function public.seed_plot_defaults()
+returns trigger as $$
+begin
+  insert into public.quality_gates (project_id, plot_id, gate_key, title, sort_order, checklist) values
+    (new.project_id, new.id, 'substructure_drainage', 'Substructure & Drainage', 1, '[
+       {"text": "Foundation excavation inspected by Building Control", "checked": false, "checked_at": null},
+       {"text": "Drainage test (air/water) passed and recorded", "checked": false, "checked_at": null},
+       {"text": "DPC level verified", "checked": false, "checked_at": null},
+       {"text": "Building Control sign-off for substructure received", "checked": false, "checked_at": null}
+     ]'::jsonb),
+    (new.project_id, new.id, 'frame_watertight', 'Frame & Wind/Watertight', 2, '[
+       {"text": "Moisture readings recorded", "checked": false, "checked_at": null},
+       {"text": "Cavity barriers inspected", "checked": false, "checked_at": null},
+       {"text": "Structural engineer sign-off uploaded", "checked": false, "checked_at": null},
+       {"text": "Roof confirmed watertight", "checked": false, "checked_at": null}
+     ]'::jsonb),
+    (new.project_id, new.id, 'pre_plaster_first_fix', 'Pre-Plaster / First Fix', 3, '[
+       {"text": "First fix electrical inspected", "checked": false, "checked_at": null},
+       {"text": "First fix plumbing & heating inspected", "checked": false, "checked_at": null},
+       {"text": "Insulation installed and inspected", "checked": false, "checked_at": null},
+       {"text": "Pre-plaster inspection sign-off received", "checked": false, "checked_at": null}
+     ]'::jsonb),
+    (new.project_id, new.id, 'pre_handover_pc', 'Pre-Handover / PC', 4, '[
+       {"text": "Snagging list closed out", "checked": false, "checked_at": null},
+       {"text": "O&M manuals received", "checked": false, "checked_at": null},
+       {"text": "All statutory certificates received", "checked": false, "checked_at": null},
+       {"text": "Final client walkthrough completed", "checked": false, "checked_at": null}
+     ]'::jsonb)
+  on conflict (plot_id, gate_key) do nothing;
+
+  insert into public.handover_documents (project_id, plot_id, doc_key, title) values
+    (new.project_id, new.id, 'building_control', 'Building Control Sign-off (Initial/Final)'),
+    (new.project_id, new.id, 'air_acoustic_test', 'Air Permeability / Acoustic Test Certificates'),
+    (new.project_id, new.id, 'elec_gas_certs', 'Electrical & Gas Safety Certificates'),
+    (new.project_id, new.id, 'warranty_cover_note', 'NHBC/Structural Warranty Cover Note'),
+    (new.project_id, new.id, 'om_manuals', 'Draft O&M Manuals')
+  on conflict (plot_id, doc_key) do nothing;
+
+  insert into public.snag_lists (project_id, plot_id, title)
+  values (new.project_id, new.id, new.plot_number)
+  on conflict (plot_id) do nothing;
+
+  return new;
+end;
+$$ language plpgsql;
+
+-- Any plot created before this migration existed doesn't have a snag
+-- list yet — give it one now.
+insert into public.snag_lists (project_id, plot_id, title)
+select p.project_id, p.id, p.plot_number
+from public.plots p
+where not exists (select 1 from public.snag_lists sl where sl.plot_id = p.id);
+
+-- Backfill: any project with a pre-existing (snag_list_id null) snag item
+-- from before plots/snag-per-plot existed gets a default "Plot 1" to own
+-- it, same pattern used for quality gates/handover docs in v5.
+do $$
+declare
+  proj record;
+  target_plot_id uuid;
+  target_list_id uuid;
+begin
+  for proj in
+    select distinct project_id from public.snag_items where snag_list_id is null
+  loop
+    select id into target_plot_id from public.plots where project_id = proj.project_id and plot_number = 'Plot 1' limit 1;
+    if target_plot_id is null then
+      insert into public.plots (project_id, plot_number) values (proj.project_id, 'Plot 1') returning id into target_plot_id;
+    end if;
+
+    select id into target_list_id from public.snag_lists where plot_id = target_plot_id limit 1;
+    if target_list_id is null then
+      insert into public.snag_lists (project_id, plot_id, title) values (proj.project_id, target_plot_id, 'Plot 1') returning id into target_list_id;
+    end if;
+
+    update public.snag_items set snag_list_id = target_list_id where project_id = proj.project_id and snag_list_id is null;
+  end loop;
+end $$;

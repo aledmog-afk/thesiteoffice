@@ -15,56 +15,57 @@
   <div class="page-head">
     <div>
       <div class="page-title">Snagging</div>
-      <div class="page-sub" id="projectSub">Start a new snag list, add items to it, then export it as a PDF.</div>
+      <div class="page-sub" id="projectSub">One snag list per plot — click a plot to add items to it, then export that plot's list as a PDF.</div>
     </div>
-    <button class="btn btn-amber" id="newListBtn">+ New Snag List</button>
+    <button class="btn btn-amber" id="newPlotBtn">+ Plot</button>
   </div>
 
   <div class="card">
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>List</th><th>Open</th><th>Closed</th><th>Created</th><th></th></tr>
+          <tr><th>Plot</th><th>Open</th><th>Closed</th><th>Added</th></tr>
         </thead>
-        <tbody id="listRows"></tbody>
+        <tbody id="plotRows"></tbody>
       </table>
     </div>
     <div id="emptyState" class="empty" style="display:none;">
-      <p>No snag lists yet for this site.</p>
-      <button class="btn btn-amber" id="emptyNewBtn">+ New Snag List</button>
+      <p>No plots yet. Add your first plot to start a snag list for it.</p>
+      <button class="btn btn-amber" id="emptyNewPlotBtn">+ Plot</button>
     </div>
+    <p class="hint">Plots are shared with Plot Handovers — to rename or delete a plot, use the Plot Handovers page.</p>
   </div>
 </div>
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, todayISO } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
   if (!projectId) window.location.href = "dashboard.html";
 
-  async function createList() {
-    const defaultTitle = `Snag List – ${formatDate(todayISO())}`;
-    const title = prompt("Name this snag list:", defaultTitle);
-    if (title === null) return;
+  async function goToPlotList(plotId) {
+    const { data: list } = await supabase.from("snag_lists").select("id").eq("plot_id", plotId).single();
+    if (list) window.location.href = `snag-list-edit.html?id=${list.id}`;
+  }
+  window.goToPlotList = goToPlotList;
+
+  async function createPlot() {
+    const plotNumber = prompt("Plot number / name:", "Plot ");
+    if (!plotNumber || !plotNumber.trim()) return;
     const { data: { user } } = await supabase.auth.getUser();
-    const { data, error } = await supabase
-      .from("snag_lists")
-      .insert({ project_id: projectId, title: title.trim() || defaultTitle, created_by: user.id })
+    const { data: plot, error } = await supabase
+      .from("plots")
+      .insert({ project_id: projectId, plot_number: plotNumber.trim(), created_by: user.id })
       .select()
       .single();
-    if (!error) window.location.href = `snag-list-edit.html?id=${data.id}`;
+    if (error) return;
+    const { data: list } = await supabase.from("snag_lists").select("id").eq("plot_id", plot.id).single();
+    window.location.href = `snag-list-edit.html?id=${list.id}`;
   }
-  document.getElementById("newListBtn").addEventListener("click", createList);
-  document.getElementById("emptyNewBtn")?.addEventListener("click", createList);
-
-  async function deleteList(id, title) {
-    if (!confirm(`Delete "${title}" and all its items? This cannot be undone.`)) return;
-    await supabase.from("snag_lists").delete().eq("id", id);
-    load();
-  }
-  window.deleteList = deleteList;
+  document.getElementById("newPlotBtn").addEventListener("click", createPlot);
+  document.getElementById("emptyNewPlotBtn")?.addEventListener("click", createPlot);
 
   async function load() {
     const { data: project } = await supabase.from("projects").select("name").eq("id", projectId).single();
@@ -74,21 +75,24 @@
       { label: "Snagging" },
     ]);
 
-    const { data: lists, error } = await supabase
-      .from("snag_lists")
+    const { data: plots, error } = await supabase
+      .from("plots")
       .select("*")
       .eq("project_id", projectId)
-      .order("created_at", { ascending: false });
+      .order("plot_number", { ascending: true });
 
-    if (error || !lists || !lists.length) {
+    if (error || !plots || !plots.length) {
       document.getElementById("emptyState").style.display = "block";
       return;
     }
 
-    const { data: items } = await supabase
-      .from("snag_items")
-      .select("snag_list_id, status")
-      .eq("project_id", projectId);
+    const [{ data: lists }, { data: items }] = await Promise.all([
+      supabase.from("snag_lists").select("id, plot_id").eq("project_id", projectId),
+      supabase.from("snag_items").select("snag_list_id, status").eq("project_id", projectId),
+    ]);
+
+    const listByPlot = {};
+    (lists || []).forEach((l) => { listByPlot[l.plot_id] = l.id; });
 
     const counts = {};
     (items || []).forEach((it) => {
@@ -96,15 +100,15 @@
       counts[it.snag_list_id][it.status]++;
     });
 
-    document.getElementById("listRows").innerHTML = lists.map((l) => {
-      const c = counts[l.id] || { open: 0, closed: 0 };
+    document.getElementById("plotRows").innerHTML = plots.map((p) => {
+      const listId = listByPlot[p.id];
+      const c = counts[listId] || { open: 0, closed: 0 };
       return `
-        <tr class="row-link" onclick="window.location.href='snag-list-edit.html?id=${l.id}'">
-          <td><strong>${escapeHtml(l.title)}</strong></td>
+        <tr class="row-link" onclick="goToPlotList('${p.id}')">
+          <td><strong>${escapeHtml(p.plot_number)}</strong></td>
           <td><span class="badge badge-red">${c.open}</span></td>
           <td><span class="badge badge-green">${c.closed}</span></td>
-          <td>${formatDate(l.created_at?.slice(0, 10))}</td>
-          <td onclick="event.stopPropagation()"><button class="btn btn-outline btn-sm" onclick="deleteList('${l.id}', '${escapeHtml(l.title).replace(/'/g, "\\'")}')">Delete</button></td>
+          <td>${formatDate(p.created_at?.slice(0, 10))}</td>
         </tr>
       `;
     }).join("");

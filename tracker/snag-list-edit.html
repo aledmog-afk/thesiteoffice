@@ -28,21 +28,10 @@
     <form id="snagForm">
       <input type="hidden" id="editingId">
       <div class="form-grid">
-        <div class="field"><label for="location">Location / Plot *</label><input type="text" id="location" required placeholder="e.g. Plot 14, First floor bathroom"></div>
+        <div class="field"><label for="location">Location *</label><input type="text" id="location" required placeholder="e.g. First floor bathroom, Kitchen"></div>
         <div class="field"><label for="trade">Trade responsible</label><input type="text" id="trade" placeholder="e.g. Plumbing"></div>
       </div>
       <div class="field"><label for="description">Description *</label><textarea id="description" rows="2" required placeholder="What's wrong and where exactly"></textarea></div>
-      <div class="form-grid">
-        <div class="field">
-          <label for="priority">Priority</label>
-          <select id="priority">
-            <option value="low">Low</option>
-            <option value="medium" selected>Medium</option>
-            <option value="high">High</option>
-          </select>
-        </div>
-        <div class="field"><label for="raisedBy">Raised by</label><input type="text" id="raisedBy" placeholder="Your name"></div>
-      </div>
       <div class="field">
         <label>Photo</label>
         <input type="file" id="photoInput" accept="image/*">
@@ -59,7 +48,7 @@
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>#</th><th>Location</th><th>Description</th><th>Trade</th><th>Priority</th><th>Status</th><th></th></tr>
+          <tr><th>#</th><th>Location</th><th>Description</th><th>Trade</th><th>Status</th><th></th></tr>
         </thead>
         <tbody id="snagRows"></tbody>
       </table>
@@ -78,7 +67,6 @@
 
   document.getElementById("viewLink").href = `snag-list-view.html?id=${listId}`;
 
-  const priorityBadge = { high: "badge-red", medium: "badge-amber", low: "badge-grey" };
   let snagList = null;
   let allSnags = [];
   let photoUrl = null;
@@ -102,8 +90,6 @@
     document.getElementById("location").value = s.location || "";
     document.getElementById("trade").value = s.trade || "";
     document.getElementById("description").value = s.description || "";
-    document.getElementById("priority").value = s.priority;
-    document.getElementById("raisedBy").value = s.raised_by || "";
     photoUrl = s.photo_url || null;
     photoGrid.innerHTML = photoUrl ? `<div class="photo-thumb"><img src="${photoUrl}"></div>` : "";
     document.getElementById("saveBtn").textContent = "Save Changes";
@@ -136,8 +122,6 @@
       location: document.getElementById("location").value.trim(),
       trade: document.getElementById("trade").value.trim() || null,
       description: document.getElementById("description").value.trim(),
-      priority: document.getElementById("priority").value,
-      raised_by: document.getElementById("raisedBy").value.trim() || null,
       photo_url: photoUrl,
     };
     try {
@@ -183,7 +167,6 @@
         <td>${escapeHtml(s.location)}</td>
         <td>${escapeHtml(s.description)}${s.photo_url ? ' <span title="Has photo">📷</span>' : ""}</td>
         <td>${escapeHtml(s.trade) || "—"}</td>
-        <td><span class="badge ${priorityBadge[s.priority]}">${escapeHtml(s.priority)}</span></td>
         <td><span class="badge ${s.status === "open" ? "badge-red" : "badge-green"}">${escapeHtml(s.status)}</span></td>
         <td class="btn-row">
           <button class="btn btn-outline btn-sm" onclick="editSnag('${s.id}')">Edit</button>
@@ -205,18 +188,19 @@
   }
 
   async function init() {
-    const { data: list, error } = await supabase.from("snag_lists").select("*, projects(*)").eq("id", listId).single();
+    const { data: list, error } = await supabase.from("snag_lists").select("*, projects(*), plots(*)").eq("id", listId).single();
     if (error) { document.getElementById("listTitle").textContent = "Snag list not found"; return; }
     snagList = list;
     const project = list.projects;
+    const plotLabel = list.plots ? `${list.plots.plot_number} – Snag List` : list.title;
 
-    document.getElementById("listTitle").textContent = list.title;
+    document.getElementById("listTitle").textContent = plotLabel;
     document.getElementById("projectSub").textContent = project.name;
     renderHeader([
       { label: "Dashboard", href: "dashboard.html" },
       { label: project.name, href: `project.html?id=${project.id}` },
       { label: "Snagging", href: `snagging.html?project=${project.id}` },
-      { label: list.title },
+      { label: plotLabel },
     ]);
 
     loadSnags();
