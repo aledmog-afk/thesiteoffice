@@ -1,0 +1,131 @@
+/* JCT Compensation Event Platform — shared app styles.
+   Standalone product; visually related to thesiteoffice.uk but not the
+   same codebase or design system as the tracker app. */
+
+@import url('https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;800&family=Barlow:wght@300;400;500;600&display=swap');
+
+:root {
+  --ink: #0f1117;
+  --ink-mid: #2a2d35;
+  --ink-soft: #4a4d58;
+  --rule: #e2e4e9;
+  --off: #f7f8fa;
+  --white: #ffffff;
+  --amber: #e8a020;
+  --amber-light: #fef3dc;
+  --blue: #1a4fa0;
+  --blue-light: #dce8ff;
+  --green: #1e6b3c;
+  --green-light: #dff0e8;
+  --red: #c0392b;
+  --red-light: #fce8e6;
+  --font-display: 'Barlow Condensed', sans-serif;
+  --font-body: 'Barlow', sans-serif;
+}
+
+* , *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--font-body);
+  color: var(--ink);
+  background: var(--off);
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: var(--blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+h1, h2, h3 { font-family: var(--font-display); font-weight: 700; letter-spacing: 0.01em; color: var(--ink); }
+h1 { font-size: 1.9rem; }
+h2 { font-size: 1.35rem; margin-bottom: 0.75rem; }
+h3 { font-size: 1.05rem; margin-bottom: 0.5rem; }
+
+/* ── topbar ─────────────────────────────────────────── */
+.topbar {
+  background: var(--ink);
+  border-bottom: 3px solid var(--amber);
+  padding: 0 1.5rem;
+  height: 60px;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.topbar-logo { font-family: var(--font-display); font-weight: 800; font-size: 1.25rem; color: var(--white); letter-spacing: 0.02em; }
+.topbar-logo span { color: var(--amber); }
+.topbar-right { display: flex; align-items: center; gap: 1.25rem; }
+.topbar-user { color: #aab0bc; font-size: 0.85rem; }
+.topbar-link { color: #aab0bc; font-size: 0.85rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.04em; }
+.topbar-link:hover { color: var(--white); }
+
+/* ── layout ─────────────────────────────────────────── */
+.shell { max-width: 1080px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
+.shell-narrow { max-width: 460px; margin: 4rem auto; padding: 0 1.5rem; }
+
+.card {
+  background: var(--white);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: 1.5rem;
+  margin-bottom: 1.25rem;
+}
+.card-flush { padding: 0; overflow: hidden; }
+
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
+.grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.25rem; }
+@media (max-width: 720px) { .grid-2, .grid-3 { grid-template-columns: 1fr; } }
+
+/* ── forms ──────────────────────────────────────────── */
+label { display: block; font-size: 0.8rem; font-weight: 600; color: var(--ink-soft); margin-bottom: 0.3rem; text-transform: uppercase; letter-spacing: 0.03em; }
+input, select, textarea {
+  width: 100%; font-family: var(--font-body); font-size: 0.95rem;
+  padding: 0.6rem 0.7rem; border: 1px solid var(--rule); border-radius: 4px;
+  background: var(--white); color: var(--ink);
+}
+input:focus, select:focus, textarea:focus { outline: none; border-color: var(--amber); }
+textarea { resize: vertical; min-height: 90px; }
+.field { margin-bottom: 1rem; }
+.field-row { display: flex; gap: 1rem; }
+.field-row > * { flex: 1; }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.4rem;
+  font-family: var(--font-body); font-weight: 600; font-size: 0.9rem;
+  padding: 0.65rem 1.3rem; border-radius: 4px; border: none; cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+.btn-primary { background: var(--amber); color: var(--ink); }
+.btn-primary:hover { background: #f5b840; }
+.btn-secondary { background: var(--ink); color: var(--white); }
+.btn-secondary:hover { background: var(--ink-mid); }
+.btn-outline { background: transparent; color: var(--ink); border: 1px solid var(--rule); }
+.btn-outline:hover { border-color: var(--ink-soft); }
+.btn-sm { padding: 0.4rem 0.85rem; font-size: 0.8rem; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ── badges ─────────────────────────────────────────── */
+.badge { display: inline-block; padding: 0.2rem 0.55rem; border-radius: 3px; font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; }
+.badge-amber { background: var(--amber-light); color: #8a5c0d; }
+.badge-blue { background: var(--blue-light); color: var(--blue); }
+.badge-green { background: var(--green-light); color: var(--green); }
+.badge-red { background: var(--red-light); color: var(--red); }
+.badge-grey { background: var(--rule); color: var(--ink-soft); }
+
+/* ── table ──────────────────────────────────────────── */
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-soft); padding: 0.6rem 0.9rem; border-bottom: 2px solid var(--rule); }
+td { padding: 0.7rem 0.9rem; border-bottom: 1px solid var(--rule); font-size: 0.9rem; vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+tr.clickable { cursor: pointer; }
+tr.clickable:hover { background: var(--off); }
+
+/* ── misc ───────────────────────────────────────────── */
+.muted { color: var(--ink-soft); font-size: 0.85rem; }
+.error-box { background: var(--red-light); color: var(--red); border-radius: 4px; padding: 0.75rem 1rem; margin-bottom: 1rem; font-size: 0.88rem; }
+.success-box { background: var(--green-light); color: var(--green); border-radius: 4px; padding: 0.75rem 1rem; margin-bottom: 1rem; font-size: 0.88rem; }
+.empty-state { text-align: center; padding: 2.5rem 1rem; color: var(--ink-soft); }
+.tabs { display: flex; gap: 0.25rem; border-bottom: 2px solid var(--rule); margin-bottom: 1.5rem; }
+.tab { padding: 0.65rem 1.1rem; font-size: 0.85rem; font-weight: 600; color: var(--ink-soft); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; }
+.tab.active { color: var(--ink); border-bottom-color: var(--amber); }
+.stack { display: flex; flex-direction: column; gap: 0.75rem; }
+.row-between { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.spinner-text { color: var(--ink-soft); font-size: 0.9rem; padding: 1rem 0; }

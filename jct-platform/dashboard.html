@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Dashboard — JCT Compensation Event Platform</title>
+<link rel="stylesheet" href="/jct-platform/assets/app.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-logo">JCT<span>Platform</span></div>
+  <div class="topbar-right">
+    <span class="topbar-user" id="topbar-user"></span>
+    <a href="#" class="topbar-link" id="topbar-signout">Sign Out</a>
+  </div>
+</div>
+
+<div class="shell">
+  <div class="row-between" style="margin-bottom:1.5rem">
+    <h1>Your Projects</h1>
+    <button class="btn btn-primary" id="new-project-btn">+ New Project</button>
+  </div>
+
+  <div id="error-box"></div>
+
+  <div class="card" id="new-project-card" style="display:none">
+    <h3>Create a project</h3>
+    <form id="new-project-form">
+      <div class="field-row">
+        <div class="field">
+          <label for="np-name">Project Name</label>
+          <input type="text" id="np-name" required placeholder="e.g. 42 Riverside Court">
+        </div>
+        <div class="field">
+          <label for="np-contract">Contract Type</label>
+          <select id="np-contract">
+            <option value="jct_db">JCT Design &amp; Build 2016</option>
+            <option value="jct_sbc">JCT Standard Building Contract</option>
+            <option value="jct_ic">JCT Intermediate Building Contract</option>
+          </select>
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary">Create</button>
+      <button type="button" class="btn btn-outline" id="cancel-new-project">Cancel</button>
+    </form>
+  </div>
+
+  <div class="card card-flush">
+    <table>
+      <thead>
+        <tr><th>Project</th><th>Contract</th><th>Your Role</th><th>Flagged Events</th></tr>
+      </thead>
+      <tbody id="projects-tbody">
+        <tr><td colspan="4" class="spinner-text">Loading projects…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="/jct-platform/assets/app.js"></script>
+<script>
+(async () => {
+  const client = await JCT.initClient();
+  const session = await JCT.requireSession(client);
+  if (!session) return;
+
+  const profile = await JCT.getProfile(client, session.user.id);
+  if (!profile) { window.location.href = '/jct-platform/index.html'; return; }
+
+  await JCT.setTopbarUser(client);
+
+  const errorBox = document.getElementById('error-box');
+  const showError = (m) => { errorBox.innerHTML = `<div class="error-box">${JCT.escapeHtml(m)}</div>`; };
+
+  const CONTRACT_LABELS = { jct_db: 'JCT D&B 2016', jct_sbc: 'JCT SBC', jct_ic: 'JCT IC' };
+
+  document.getElementById('new-project-btn').addEventListener('click', () => {
+    document.getElementById('new-project-card').style.display = 'block';
+  });
+  document.getElementById('cancel-new-project').addEventListener('click', () => {
+    document.getElementById('new-project-card').style.display = 'none';
+  });
+
+  document.getElementById('new-project-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = document.getElementById('np-name').value.trim();
+    const contract_type = document.getElementById('np-contract').value;
+    const { data, error } = await client
+      .from('projects')
+      .insert({ name, contract_type, owner_org_id: profile.org_id })
+      .select()
+      .single();
+    if (error) { showError(error.message); return; }
+
+    // The owner org is automatically an active member, acting as its own tier.
+    const ownerTier = profile.organizations ? profile.organizations.tier_type : 'main_contractor';
+    await client.from('project_memberships').insert({
+      project_id: data.id, org_id: profile.org_id, tier_type: ownerTier, status: 'active',
+    });
+
+    window.location.href = `/jct-platform/project.html?id=${data.id}`;
+  });
+
+  async function loadProjects() {
+    const { data: projects, error } = await client
+      .from('projects')
+      .select('id, name, contract_type, owner_org_id')
+      .order('created_at', { ascending: false });
+    if (error) { showError(error.message); return; }
+
+    const { data: memberships } = await client
+      .from('project_memberships')
+      .select('project_id, tier_type')
+      .eq('org_id', profile.org_id);
+    const tierByProject = {};
+    (memberships || []).forEach((m) => { tierByProject[m.project_id] = m.tier_type; });
+
+    const tbody = document.getElementById('projects-tbody');
+    if (!projects || projects.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="4"><div class="empty-state">No projects yet. Create one to get started, or ask another organization to invite you onto theirs.</div></td></tr>`;
+      return;
+    }
+
+    const rows = await Promise.all(projects.map(async (p) => {
+      const role = p.owner_org_id === profile.org_id
+        ? 'Owner'
+        : JCT.tierLabel(tierByProject[p.id] || '');
+      const { count } = await client
+        .from('flagged_events')
+        .select('id', { count: 'exact', head: true })
+        .eq('project_id', p.id)
+        .eq('status', 'new');
+      return `<tr class="clickable" data-id="${p.id}">
+        <td><strong>${JCT.escapeHtml(p.name)}</strong></td>
+        <td>${CONTRACT_LABELS[p.contract_type] || p.contract_type}</td>
+        <td>${JCT.escapeHtml(role)}</td>
+        <td>${count ? `<span class="badge badge-amber">${count} new</span>` : '<span class="muted">—</span>'}</td>
+      </tr>`;
+    }));
+    tbody.innerHTML = rows.join('');
+    tbody.querySelectorAll('tr.clickable').forEach((tr) => {
+      tr.addEventListener('click', () => {
+        window.location.href = `/jct-platform/project.html?id=${tr.dataset.id}`;
+      });
+    });
+  }
+
+  await loadProjects();
+})();
+</script>
+</body>
+</html>

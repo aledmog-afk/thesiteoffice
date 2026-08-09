@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Accept Invitation — JCT Compensation Event Platform</title>
+<link rel="stylesheet" href="/jct-platform/assets/app.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-logo">JCT<span>Platform</span></div>
+</div>
+
+<div class="shell-narrow">
+  <div class="card">
+    <h2>Project Invitation</h2>
+    <div id="content"><p class="spinner-text">Checking invitation…</p></div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="/jct-platform/assets/app.js"></script>
+<script>
+(async () => {
+  const content = document.getElementById('content');
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get('token');
+
+  if (!token) {
+    content.innerHTML = '<div class="error-box">No invitation token in the link.</div>';
+    return;
+  }
+
+  const client = await JCT.initClient();
+  const { data: { session } } = await client.auth.getSession();
+
+  if (!session) {
+    localStorage.setItem('jct_pending_invite_token', token);
+    content.innerHTML = `
+      <p class="muted" style="margin-bottom:1rem">Sign in (or create an account for your organization) to accept this invitation.</p>
+      <a class="btn btn-primary" href="/jct-platform/index.html">Continue</a>`;
+    return;
+  }
+
+  const profile = await JCT.getProfile(client, session.user.id);
+  if (!profile) {
+    localStorage.setItem('jct_pending_invite_token', token);
+    content.innerHTML = `
+      <p class="muted" style="margin-bottom:1rem">Finish setting up your organization first, then this invitation will be applied automatically.</p>
+      <a class="btn btn-primary" href="/jct-platform/index.html">Continue</a>`;
+    return;
+  }
+
+  content.innerHTML = '<p class="spinner-text">Accepting invitation…</p>';
+  try {
+    const resp = await fetch('/.netlify/functions/accept-invite', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+      body: JSON.stringify({ token }),
+    });
+    const result = await resp.json();
+    if (!resp.ok) throw new Error(result.error || 'Could not accept invitation');
+
+    content.innerHTML = `
+      <div class="success-box">You've joined the project as ${JCT.escapeHtml(JCT.tierLabel(result.tier_type))}.</div>
+      <a class="btn btn-primary" href="/jct-platform/project.html?id=${result.project_id}">Go to project</a>`;
+  } catch (err) {
+    content.innerHTML = `<div class="error-box">${JCT.escapeHtml(err.message)}</div>`;
+  }
+})();
+</script>
+</body>
+</html>

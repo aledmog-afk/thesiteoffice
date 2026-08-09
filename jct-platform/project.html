@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Project — JCT Compensation Event Platform</title>
+<link rel="stylesheet" href="/jct-platform/assets/app.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-logo"><a href="/jct-platform/dashboard.html" style="color:inherit;text-decoration:none">JCT<span>Platform</span></a></div>
+  <div class="topbar-right">
+    <span class="topbar-user" id="topbar-user"></span>
+    <a href="#" class="topbar-link" id="topbar-signout">Sign Out</a>
+  </div>
+</div>
+
+<div class="shell">
+  <p class="muted"><a href="/jct-platform/dashboard.html">&larr; All Projects</a></p>
+  <div class="row-between" style="margin-bottom:0.25rem">
+    <h1 id="project-name">Loading…</h1>
+    <span class="badge badge-blue" id="my-tier-badge"></span>
+  </div>
+  <p class="muted" id="project-contract" style="margin-bottom:1.5rem"></p>
+
+  <div id="error-box"></div>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="diary">Diary</div>
+    <div class="tab" data-tab="flagged">Events Requiring Action</div>
+    <div class="tab" data-tab="team">Team &amp; Invites</div>
+  </div>
+
+  <!-- ── Diary tab ─────────────────────────────────────── -->
+  <div class="tab-panel" id="panel-diary">
+    <div class="card">
+      <h3>New diary entry</h3>
+      <form id="entry-form">
+        <div class="field-row">
+          <div class="field">
+            <label for="e-date">Date</label>
+            <input type="date" id="e-date" required>
+          </div>
+          <div class="field">
+            <label for="e-category">Category</label>
+            <select id="e-category">
+              <option value="progress">Progress</option>
+              <option value="instruction">Instruction</option>
+              <option value="weather">Weather</option>
+              <option value="delay">Delay</option>
+              <option value="access">Access</option>
+              <option value="comment">Comment</option>
+            </select>
+          </div>
+        </div>
+        <div class="field">
+          <label for="e-text">What happened</label>
+          <textarea id="e-text" required placeholder="Dated, factual notes — instruction references, quantities, who was on site, what was delayed and why…"></textarea>
+        </div>
+        <div class="field">
+          <label for="e-photo">Photo URL (optional)</label>
+          <input type="url" id="e-photo" placeholder="https://…">
+        </div>
+        <button type="submit" class="btn btn-primary">Save Entry</button>
+        <span class="muted" id="entry-status" style="margin-left:0.75rem"></span>
+      </form>
+    </div>
+
+    <div class="card card-flush">
+      <table>
+        <thead><tr><th>Date</th><th>Category</th><th>Entry</th><th>Logged by</th></tr></thead>
+        <tbody id="entries-tbody"><tr><td colspan="4" class="spinner-text">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── Flagged events tab ────────────────────────────── -->
+  <div class="tab-panel" id="panel-flagged" style="display:none">
+    <div class="card card-flush">
+      <table>
+        <thead><tr><th>Clause</th><th>Category</th><th>Summary</th><th>Days since trigger</th><th>Status</th><th></th></tr></thead>
+        <tbody id="flagged-tbody"><tr><td colspan="6" class="spinner-text">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── Team tab ──────────────────────────────────────── -->
+  <div class="tab-panel" id="panel-team" style="display:none">
+    <div class="card" id="invite-card">
+      <h3>Invite an organization</h3>
+      <form id="invite-form">
+        <div class="field-row">
+          <div class="field">
+            <label for="i-email">Organization contact email</label>
+            <input type="email" id="i-email" required placeholder="ops@theircompany.co.uk">
+          </div>
+          <div class="field">
+            <label for="i-tier">Role on this project</label>
+            <select id="i-tier">
+              <option value="subcontractor">Subcontractor</option>
+              <option value="main_contractor">Main Contractor</option>
+              <option value="client">Client</option>
+              <option value="employers_agent">Employer's Agent</option>
+            </select>
+          </div>
+        </div>
+        <button type="submit" class="btn btn-primary">Send Invite</button>
+      </form>
+      <div id="invite-result" style="margin-top:1rem"></div>
+    </div>
+
+    <div class="card card-flush">
+      <table>
+        <thead><tr><th>Organization</th><th>Role</th><th>Status</th></tr></thead>
+        <tbody id="members-tbody"><tr><td colspan="3" class="spinner-text">Loading…</td></tr></tbody>
+      </table>
+    </div>
+
+    <div class="card card-flush">
+      <h3 style="padding:1rem 1.25rem 0">Pending Invitations</h3>
+      <table>
+        <thead><tr><th>Email</th><th>Role</th><th>Status</th><th>Expires</th></tr></thead>
+        <tbody id="invites-tbody"><tr><td colspan="4" class="spinner-text">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="/jct-platform/assets/app.js"></script>
+<script>
+(async () => {
+  const client = await JCT.initClient();
+  const session = await JCT.requireSession(client);
+  if (!session) return;
+
+  const profile = await JCT.getProfile(client, session.user.id);
+  if (!profile) { window.location.href = '/jct-platform/index.html'; return; }
+  await JCT.setTopbarUser(client);
+
+  const params = new URLSearchParams(window.location.search);
+  const projectId = params.get('id');
+  const errorBox = document.getElementById('error-box');
+  const showError = (m) => { errorBox.innerHTML = `<div class="error-box">${JCT.escapeHtml(m)}</div>`; };
+
+  if (!projectId) { showError('No project specified.'); return; }
+
+  const CONTRACT_LABELS = { jct_db: 'JCT Design & Build 2016', jct_sbc: 'JCT Standard Building Contract', jct_ic: 'JCT Intermediate Building Contract' };
+
+  // ── tabs ──────────────────────────────────────────
+  document.querySelectorAll('.tabs .tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.tabs .tab').forEach((t) => t.classList.remove('active'));
+      tab.classList.add('active');
+      document.querySelectorAll('.tab-panel').forEach((p) => { p.style.display = 'none'; });
+      document.getElementById(`panel-${tab.dataset.tab}`).style.display = 'block';
+    });
+  });
+
+  // ── load project ──────────────────────────────────
+  let myTier = null;
+  let isOwner = false;
+  let project = null;
+
+  async function loadProject() {
+    const { data, error } = await client.from('projects').select('*').eq('id', projectId).single();
+    if (error) { showError(error.message); return; }
+    project = data;
+    isOwner = project.owner_org_id === profile.org_id;
+    document.getElementById('project-name').textContent = project.name;
+    document.getElementById('project-contract').textContent = CONTRACT_LABELS[project.contract_type] || project.contract_type;
+
+    const { data: membership } = await client
+      .from('project_memberships')
+      .select('tier_type')
+      .eq('project_id', projectId).eq('org_id', profile.org_id).maybeSingle();
+    myTier = membership ? membership.tier_type : null;
+    document.getElementById('my-tier-badge').textContent = isOwner ? `Owner · ${JCT.tierLabel(myTier || '')}` : JCT.tierLabel(myTier || '');
+
+    // Client tier is read-only on invites and flagged-event actions.
+    if (myTier === 'client' && !isOwner) {
+      document.getElementById('invite-card').style.display = 'none';
+    }
+  }
+
+  // ── diary ─────────────────────────────────────────
+  document.getElementById('e-date').valueAsDate = new Date();
+
+  document.getElementById('entry-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const statusEl = document.getElementById('entry-status');
+    statusEl.textContent = 'Saving…';
+    const entry = {
+      project_id: projectId,
+      org_id: profile.org_id,
+      author_id: session.user.id,
+      entry_date: document.getElementById('e-date').value,
+      category: document.getElementById('e-category').value,
+      free_text: document.getElementById('e-text').value.trim(),
+      photo_urls: document.getElementById('e-photo').value.trim() ? [document.getElementById('e-photo').value.trim()] : [],
+    };
+    const { data, error } = await client.from('diary_entries').insert(entry).select().single();
+    if (error) { statusEl.textContent = ''; showError(error.message); return; }
+
+    document.getElementById('entry-form').reset();
+    document.getElementById('e-date').valueAsDate = new Date();
+    statusEl.textContent = 'Saved. Checking against JCT clauses…';
+
+    try {
+      const resp = await fetch('/.netlify/functions/match-entry', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ entry_id: data.id }),
+      });
+      const result = await resp.json();
+      if (resp.ok && result.flagged && result.flagged.length) {
+        statusEl.textContent = `Saved — flagged against clause(s): ${result.flagged.join(', ')}. See "Events Requiring Action".`;
+      } else {
+        statusEl.textContent = 'Saved.';
+      }
+    } catch (err) {
+      statusEl.textContent = 'Saved (AI matching unavailable right now).';
+    }
+
+    await loadEntries();
+    await loadFlagged();
+  });
+
+  async function loadEntries() {
+    const { data, error } = await client
+      .from('diary_entries')
+      .select('id, entry_date, category, free_text, org_id, author_id, organizations(name)')
+      .eq('project_id', projectId)
+      .order('entry_date', { ascending: false });
+    const tbody = document.getElementById('entries-tbody');
+    if (error) { tbody.innerHTML = `<tr><td colspan="4"><div class="error-box">${JCT.escapeHtml(error.message)}</div></td></tr>`; return; }
+    if (!data || data.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="4"><div class="empty-state">No diary entries yet.</div></td></tr>`;
+      return;
+    }
+    tbody.innerHTML = data.map((e) => `
+      <tr>
+        <td style="white-space:nowrap">${JCT.fmtDate(e.entry_date)}</td>
+        <td><span class="badge badge-grey">${JCT.categoryLabel(e.category)}</span></td>
+        <td>${JCT.escapeHtml(e.free_text)}</td>
+        <td class="muted">${JCT.escapeHtml(e.organizations ? e.organizations.name : '')}</td>
+      </tr>`).join('');
+  }
+
+  // ── flagged events ────────────────────────────────
+  async function loadFlagged() {
+    const { data, error } = await client
+      .from('flagged_events')
+      .select('*')
+      .eq('project_id', projectId)
+      .order('days_since_trigger', { ascending: false });
+    const tbody = document.getElementById('flagged-tbody');
+    if (error) { tbody.innerHTML = `<tr><td colspan="6"><div class="error-box">${JCT.escapeHtml(error.message)}</div></td></tr>`; return; }
+    if (!data || data.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state">Nothing flagged yet. As diary entries are saved, AI-matched Relevant Events / Relevant Matters will show up here.</div></td></tr>`;
+      return;
+    }
+    const canAction = isOwner || myTier === 'main_contractor' || myTier === 'employers_agent';
+    tbody.innerHTML = data.map((f) => {
+      const dayBadge = f.days_since_trigger >= 7 ? 'badge-red' : f.days_since_trigger >= 3 ? 'badge-amber' : 'badge-green';
+      const statusBadge = { new: 'badge-amber', reviewed: 'badge-blue', notice_drafted: 'badge-green', dismissed: 'badge-grey' }[f.status] || 'badge-grey';
+      const canEdit = canAction || f.org_id === profile.org_id;
+      const actions = canEdit ? `
+        <select class="status-select" data-id="${f.id}" style="width:auto;padding:0.3rem 0.5rem;font-size:0.8rem">
+          <option value="new" ${f.status === 'new' ? 'selected' : ''}>New</option>
+          <option value="reviewed" ${f.status === 'reviewed' ? 'selected' : ''}>Reviewed</option>
+          <option value="notice_drafted" ${f.status === 'notice_drafted' ? 'selected' : ''}>Notice Drafted</option>
+          <option value="dismissed" ${f.status === 'dismissed' ? 'selected' : ''}>Dismissed</option>
+        </select>` : '';
+      return `<tr>
+        <td><strong>${JCT.escapeHtml(f.clause_ref)}</strong></td>
+        <td>${f.category === 'relevant_event' ? 'Relevant Event' : 'Relevant Matter'}</td>
+        <td>${JCT.escapeHtml(f.extracted_summary)}</td>
+        <td><span class="badge ${dayBadge}">${f.days_since_trigger}d</span></td>
+        <td><span class="badge ${statusBadge}">${f.status.replace('_', ' ')}</span></td>
+        <td>${actions}</td>
+      </tr>`;
+    }).join('');
+
+    tbody.querySelectorAll('.status-select').forEach((sel) => {
+      sel.addEventListener('change', async () => {
+        const { error: updErr } = await client.from('flagged_events').update({ status: sel.value }).eq('id', sel.dataset.id);
+        if (updErr) showError(updErr.message);
+      });
+    });
+  }
+
+  // ── team & invites ────────────────────────────────
+  document.getElementById('invite-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const resultEl = document.getElementById('invite-result');
+    resultEl.innerHTML = '<span class="muted">Sending…</span>';
+    const invited_org_email = document.getElementById('i-email').value.trim();
+    const tier_type = document.getElementById('i-tier').value;
+    try {
+      const resp = await fetch('/.netlify/functions/invite-org', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({ project_id: projectId, invited_org_email, tier_type }),
+      });
+      const result = await resp.json();
+      if (!resp.ok) throw new Error(result.error || 'Could not send invite');
+      resultEl.innerHTML = `<div class="success-box">Invitation created${result.emailSent ? ' and emailed' : ''}. Share this link if needed: <a href="${result.acceptLink}">${result.acceptLink}</a></div>`;
+      document.getElementById('invite-form').reset();
+      await loadInvites();
+    } catch (err) {
+      resultEl.innerHTML = `<div class="error-box">${JCT.escapeHtml(err.message)}</div>`;
+    }
+  });
+
+  async function loadMembers() {
+    const { data, error } = await client
+      .from('project_memberships')
+      .select('org_id, tier_type, status, organizations(name)')
+      .eq('project_id', projectId);
+    const tbody = document.getElementById('members-tbody');
+    if (error) { tbody.innerHTML = `<tr><td colspan="3"><div class="error-box">${JCT.escapeHtml(error.message)}</div></td></tr>`; return; }
+    tbody.innerHTML = (data || []).map((m) => `
+      <tr>
+        <td>${JCT.escapeHtml(m.organizations ? m.organizations.name : m.org_id)}</td>
+        <td>${JCT.tierLabel(m.tier_type)}</td>
+        <td><span class="badge ${m.status === 'active' ? 'badge-green' : 'badge-grey'}">${m.status}</span></td>
+      </tr>`).join('') || `<tr><td colspan="3"><div class="empty-state">No members yet.</div></td></tr>`;
+  }
+
+  async function loadInvites() {
+    const { data, error } = await client
+      .from('project_invitations')
+      .select('*')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false });
+    const tbody = document.getElementById('invites-tbody');
+    if (error) { tbody.innerHTML = ''; return; } // not the owner org — RLS hides these, that's fine
+    tbody.innerHTML = (data || []).map((i) => `
+      <tr>
+        <td>${JCT.escapeHtml(i.invited_org_email)}</td>
+        <td>${JCT.tierLabel(i.tier_type)}</td>
+        <td><span class="badge ${i.status === 'pending' ? 'badge-amber' : i.status === 'accepted' ? 'badge-green' : 'badge-grey'}">${i.status}</span></td>
+        <td class="muted">${JCT.fmtDate(i.expires_at.slice(0, 10))}</td>
+      </tr>`).join('') || `<tr><td colspan="4"><div class="empty-state">No pending invitations.</div></td></tr>`;
+  }
+
+  await loadProject();
+  await loadEntries();
+  await loadFlagged();
+  await loadMembers();
+  await loadInvites();
+})();
+</script>
+</body>
+</html>

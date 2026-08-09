@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JCT Compensation Event Platform</title>
+<meta name="description" content="Diary capture and AI-assisted JCT Relevant Event / Relevant Matter matching for Client, Main Contractor, Subcontractor and Employer's Agent teams.">
+<link rel="stylesheet" href="/jct-platform/assets/app.css">
+<style>
+  .hero { background: var(--ink); color: var(--white); padding: 3rem 1.5rem 3.5rem; text-align: center; border-bottom: 3px solid var(--amber); }
+  .hero h1 { color: var(--white); font-size: clamp(2rem, 4vw, 2.8rem); margin-bottom: 0.75rem; }
+  .hero h1 em { color: var(--amber); font-style: normal; }
+  .hero p { color: #aab0bc; max-width: 560px; margin: 0 auto; font-weight: 300; }
+  .auth-wrap { max-width: 420px; margin: -2rem auto 4rem; padding: 0 1.5rem; }
+  .auth-card { background: var(--white); border-radius: 8px; border: 1px solid var(--rule); box-shadow: 0 12px 30px rgba(15,17,23,0.12); padding: 1.75rem; }
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <h1>Evidence &amp; notice compliance for <em>every</em> tier of the contract</h1>
+  <p>Log site diary entries, let AI flag JCT Relevant Events and Relevant Matters against your contract clauses, and keep on top of notice deadlines &mdash; whether you're the Client, Main Contractor, Subcontractor or Employer's Agent.</p>
+</div>
+
+<div class="auth-wrap">
+  <div class="auth-card">
+    <div class="tabs" id="auth-tabs">
+      <div class="tab active" data-tab="signin">Sign In</div>
+      <div class="tab" data-tab="signup">Create Account</div>
+    </div>
+
+    <div id="error-box"></div>
+
+    <form id="signin-form">
+      <div class="field">
+        <label for="si-email">Email</label>
+        <input type="email" id="si-email" required autocomplete="email">
+      </div>
+      <div class="field">
+        <label for="si-password">Password</label>
+        <input type="password" id="si-password" required autocomplete="current-password">
+      </div>
+      <button type="submit" class="btn btn-primary" style="width:100%">Sign In</button>
+    </form>
+
+    <form id="signup-form" style="display:none">
+      <div class="field">
+        <label for="su-org-name">Organization Name</label>
+        <input type="text" id="su-org-name" required placeholder="e.g. Riverside Construction Ltd">
+      </div>
+      <div class="field">
+        <label for="su-tier">Your Organization's Role</label>
+        <select id="su-tier" required>
+          <option value="main_contractor">Main Contractor</option>
+          <option value="subcontractor">Subcontractor</option>
+          <option value="client">Client</option>
+          <option value="employers_agent">Employer's Agent / Contract Administrator</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="su-name">Your Name</label>
+        <input type="text" id="su-name" required autocomplete="name">
+      </div>
+      <div class="field">
+        <label for="su-email">Email</label>
+        <input type="email" id="su-email" required autocomplete="email">
+      </div>
+      <div class="field">
+        <label for="su-password">Password</label>
+        <input type="password" id="su-password" required minlength="8" autocomplete="new-password">
+      </div>
+      <button type="submit" class="btn btn-primary" style="width:100%">Create Organization</button>
+      <p class="muted" style="margin-top:0.75rem">Every organization gets its own private workspace. You'll invite other companies onto a project only when you choose to.</p>
+    </form>
+
+    <form id="complete-org-form" style="display:none">
+      <p class="muted" style="margin-bottom:1rem">You're signed in — finish setting up your organization to continue.</p>
+      <div class="field">
+        <label for="co-org-name">Organization Name</label>
+        <input type="text" id="co-org-name" required>
+      </div>
+      <div class="field">
+        <label for="co-tier">Your Organization's Role</label>
+        <select id="co-tier" required>
+          <option value="main_contractor">Main Contractor</option>
+          <option value="subcontractor">Subcontractor</option>
+          <option value="client">Client</option>
+          <option value="employers_agent">Employer's Agent / Contract Administrator</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="co-name">Your Name</label>
+        <input type="text" id="co-name" required>
+      </div>
+      <button type="submit" class="btn btn-primary" style="width:100%">Finish Setup</button>
+    </form>
+  </div>
+</div>
+
+<script src="https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="/jct-platform/assets/app.js"></script>
+<script>
+(async () => {
+  const errorBox = document.getElementById('error-box');
+  function showError(msg) {
+    errorBox.innerHTML = `<div class="error-box">${JCT.escapeHtml(msg)}</div>`;
+  }
+  function clearError() { errorBox.innerHTML = ''; }
+
+  let client;
+  try {
+    client = await JCT.initClient();
+  } catch (e) {
+    showError(e.message);
+    return;
+  }
+
+  // Tabs
+  document.querySelectorAll('#auth-tabs .tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('#auth-tabs .tab').forEach((t) => t.classList.remove('active'));
+      tab.classList.add('active');
+      document.getElementById('signin-form').style.display = tab.dataset.tab === 'signin' ? 'block' : 'none';
+      document.getElementById('signup-form').style.display = tab.dataset.tab === 'signup' ? 'block' : 'none';
+      document.getElementById('complete-org-form').style.display = 'none';
+      clearError();
+    });
+  });
+
+  function redirectAfterAuth() {
+    const pendingToken = localStorage.getItem('jct_pending_invite_token');
+    if (pendingToken) {
+      localStorage.removeItem('jct_pending_invite_token');
+      window.location.href = `/jct-platform/accept-invite.html?token=${encodeURIComponent(pendingToken)}`;
+      return;
+    }
+    window.location.href = '/jct-platform/dashboard.html';
+  }
+
+  async function afterAuth() {
+    const { data: { session } } = await client.auth.getSession();
+    if (!session) return;
+    const profile = await JCT.getProfile(client, session.user.id);
+    if (profile) {
+      redirectAfterAuth();
+      return;
+    }
+    // Signed in but no org/profile yet (e.g. confirmed email after signup
+    // without an immediate session, or an account created before this flow).
+    document.getElementById('signin-form').style.display = 'none';
+    document.getElementById('signup-form').style.display = 'none';
+    document.getElementById('complete-org-form').style.display = 'block';
+  }
+
+  document.getElementById('signin-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    clearError();
+    const email = document.getElementById('si-email').value.trim();
+    const password = document.getElementById('si-password').value;
+    const { error } = await client.auth.signInWithPassword({ email, password });
+    if (error) { showError(error.message); return; }
+    await afterAuth();
+  });
+
+  document.getElementById('signup-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    clearError();
+    const orgName = document.getElementById('su-org-name').value.trim();
+    const tier = document.getElementById('su-tier').value;
+    const name = document.getElementById('su-name').value.trim();
+    const email = document.getElementById('su-email').value.trim();
+    const password = document.getElementById('su-password').value;
+
+    const { data, error } = await client.auth.signUp({ email, password });
+    if (error) { showError(error.message); return; }
+
+    if (!data.session) {
+      showError('');
+      errorBox.innerHTML = `<div class="success-box">Check your email to confirm your account, then sign in here to finish setting up ${JCT.escapeHtml(orgName)}.</div>`;
+      return;
+    }
+
+    try {
+      await createOrgAndProfile(orgName, tier, name, email);
+      redirectAfterAuth();
+    } catch (err) {
+      showError(err.message);
+    }
+  });
+
+  document.getElementById('complete-org-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    clearError();
+    const orgName = document.getElementById('co-org-name').value.trim();
+    const tier = document.getElementById('co-tier').value;
+    const name = document.getElementById('co-name').value.trim();
+    const { data: { session } } = await client.auth.getSession();
+    try {
+      await createOrgAndProfile(orgName, tier, name, session.user.email);
+      redirectAfterAuth();
+    } catch (err) {
+      showError(err.message);
+    }
+  });
+
+  async function createOrgAndProfile(orgName, tier, name, email) {
+    const { data: { session } } = await client.auth.getSession();
+    const { data: org, error: orgErr } = await client
+      .from('organizations')
+      .insert({ name: orgName, tier_type: tier })
+      .select()
+      .single();
+    if (orgErr) throw orgErr;
+
+    const { error: profileErr } = await client
+      .from('profiles')
+      .insert({ id: session.user.id, org_id: org.id, name, email, role: 'admin' });
+    if (profileErr) throw profileErr;
+  }
+
+  await afterAuth();
+})();
+</script>
+</body>
+</html>
