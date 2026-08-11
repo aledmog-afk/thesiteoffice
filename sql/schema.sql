@@ -650,3 +650,52 @@ begin
     update public.snag_items set snag_list_id = target_list_id where project_id = proj.project_id and snag_list_id is null;
   end loop;
 end $$;
+
+-- ─── v9 ADDITIONS ─────────────────────────────────────────────────
+-- Monthly reports: a saved snapshot rolling up a calendar month's worth
+-- of weekly reports into one document, generated on demand from the
+-- Monthly Reports page rather than computed fresh on every view. All the
+-- rollup content (progress, H&S, issues, commercial items, snag/plot
+-- handover snapshots, photos) is computed client-side at generation time
+-- and stored here, so viewing/printing/emailing a past monthly report
+-- never changes even if the underlying weekly reports are later edited.
+
+create table if not exists public.monthly_reports (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  month date not null, -- first day of the calendar month this report covers
+  weekly_report_ids uuid[] not null default '{}',
+  rag_status text,
+  baseline_progress_pct numeric,
+  actual_progress_pct numeric,
+  -- [{ id, plot, milestone, text, percent, completed_this_month }], deduped
+  -- across the month's weekly reports by item id, taking the max percent
+  -- reached and the most recent plot/milestone/text seen for that id.
+  progress_items jsonb not null default '[]'::jsonb,
+  -- [{ week_starting, week_ending, weather, health_safety_notes }]
+  health_safety_notes jsonb not null default '[]'::jsonb,
+  -- [{ week_starting, week_ending, issues_risks }]
+  issues_risks jsonb not null default '[]'::jsonb,
+  -- flattened commercial items raised across the month's reports, each
+  -- tagged with the week it came from: [{ week_starting, title, type,
+  -- cost_impact, time_impact_days, ledger_id }]
+  commercial_items jsonb not null default '[]'::jsonb,
+  outstanding_items jsonb not null default '[]'::jsonb, -- last report's next_week_items, as-is
+  snags_raised_count integer not null default 0,
+  snags_closed_count integer not null default 0,
+  -- plot handover snapshot as of generation time: [{ plot_number,
+  -- gates_approved, gates_total, docs_ready, docs_total }]
+  plot_handovers jsonb not null default '[]'::jsonb,
+  photos jsonb not null default '[]'::jsonb,
+  created_by uuid references auth.users(id),
+  created_at timestamptz not null default now(),
+  unique (project_id, month)
+);
+
+alter table public.monthly_reports enable row level security;
+drop policy if exists "authenticated read monthly_reports" on public.monthly_reports;
+create policy "authenticated read monthly_reports" on public.monthly_reports for select using (auth.role() = 'authenticated');
+drop policy if exists "authenticated insert monthly_reports" on public.monthly_reports;
+create policy "authenticated insert monthly_reports" on public.monthly_reports for insert with check (auth.role() = 'authenticated');
+drop policy if exists "authenticated delete monthly_reports" on public.monthly_reports;
+create policy "authenticated delete monthly_reports" on public.monthly_reports for delete using (auth.role() = 'authenticated');

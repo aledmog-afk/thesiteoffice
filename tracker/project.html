@@ -41,6 +41,11 @@
       <div class="tile-name">Weekly Reports</div>
       <div class="tile-stats"><div><strong id="reportCount">–</strong>reports logged</div></div>
     </a>
+    <a class="tile" href="monthly-reports.html?project=" id="monthlyReportsTile">
+      <div class="tile-icon">🗓️</div>
+      <div class="tile-name">Monthly Reports</div>
+      <div class="tile-stats"><div><strong id="monthlyReportCount">–</strong>generated</div></div>
+    </a>
     <a class="tile" href="snagging.html?project=" id="snaggingTile">
       <div class="tile-icon">🔧</div>
       <div class="tile-name">Snagging</div>
@@ -117,6 +122,7 @@
   if (!projectId) window.location.href = "dashboard.html";
 
   document.getElementById("reportsTile").href = `weekly-reports.html?project=${projectId}`;
+  document.getElementById("monthlyReportsTile").href = `monthly-reports.html?project=${projectId}`;
   document.getElementById("snaggingTile").href = `snagging.html?project=${projectId}`;
   document.getElementById("plotHandoversTile").href = `plot-handovers.html?project=${projectId}`;
   document.getElementById("commercialsTile").href = `commercials.html?project=${projectId}`;
@@ -214,8 +220,9 @@
     project = data;
     renderHeaderAndFacts();
 
-    const [{ count: reportCount }, { data: snags }, { count: plotsCount }, { data: gates }, { data: commercials }, { count: drawingsCount }] = await Promise.all([
+    const [{ count: reportCount }, { count: monthlyReportCount }, { data: snags }, { count: plotsCount }, { data: gates }, { data: commercials }, { count: drawingsCount }] = await Promise.all([
       supabase.from("weekly_reports").select("id", { count: "exact", head: true }).eq("project_id", projectId),
+      supabase.from("monthly_reports").select("id", { count: "exact", head: true }).eq("project_id", projectId),
       supabase.from("snag_items").select("status").eq("project_id", projectId),
       supabase.from("plots").select("id", { count: "exact", head: true }).eq("project_id", projectId),
       supabase.from("quality_gates").select("status").eq("project_id", projectId),
@@ -223,6 +230,7 @@
       supabase.from("drawings").select("id", { count: "exact", head: true }).eq("project_id", projectId),
     ]);
     document.getElementById("reportCount").textContent = reportCount ?? 0;
+    document.getElementById("monthlyReportCount").textContent = monthlyReportCount ?? 0;
     document.getElementById("openSnagCount").textContent = (snags || []).filter(s => s.status === "open").length;
     document.getElementById("closedSnagCount").textContent = (snags || []).filter(s => s.status === "closed").length;
     document.getElementById("plotsCount").textContent = plotsCount ?? 0;
