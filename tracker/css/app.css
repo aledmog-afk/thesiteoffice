@@ -182,6 +182,11 @@ tr:hover td { background: var(--off); }
 .doc-section ul.body-list { padding-left: 1.2rem; font-size: 0.9rem; }
 .doc-section ul.body-list li { margin-bottom: 0.3rem; }
 
+/* ─── WEATHER TRACKER ────────────────────────────── */
+.weather-tracker-table td { padding: 0.4rem 0.5rem; }
+.weather-tracker-table input, .weather-tracker-table select { width: 100%; margin: 0; }
+.weather-tracker-table input[type="number"] { max-width: 90px; }
+
 /* ─── ITEM LIST EDITOR ───────────────────────────── */
 .item-list { list-style: none; margin-bottom: 0.6rem; }
 .item-row {

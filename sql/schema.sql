@@ -699,3 +699,19 @@ drop policy if exists "authenticated insert monthly_reports" on public.monthly_r
 create policy "authenticated insert monthly_reports" on public.monthly_reports for insert with check (auth.role() = 'authenticated');
 drop policy if exists "authenticated delete monthly_reports" on public.monthly_reports;
 create policy "authenticated delete monthly_reports" on public.monthly_reports for delete using (auth.role() = 'authenticated');
+
+-- ─── v10 ADDITIONS ────────────────────────────────────────────────
+-- Weather tracker: a day-by-day weather + lost-time log per weekly
+-- report. The old single freetext "weather" column is kept (now shown
+-- as "Weather Notes") for any commentary that doesn't belong to one
+-- specific day — no existing data is lost.
+
+-- [{ date, condition, lost_hours, notes }] — one entry per day of the
+-- report's week, generated client-side from week_starting.
+alter table public.weekly_reports add column if not exists weather_days jsonb not null default '[]'::jsonb;
+
+-- Monthly rollup: per-week lost-time subtotals, a flattened list of just
+-- the days where time was actually lost that month, and a month total.
+alter table public.monthly_reports add column if not exists weather_summary jsonb not null default '[]'::jsonb;
+alter table public.monthly_reports add column if not exists weather_lost_days jsonb not null default '[]'::jsonb;
+alter table public.monthly_reports add column if not exists total_lost_hours numeric not null default 0;

@@ -50,6 +50,27 @@
     }).join("")}</ul></div>`;
   }
 
+  function weatherSection(days) {
+    const list = Array.isArray(days) ? days : [];
+    if (!list.length) return "";
+    const total = list.reduce((sum, d) => sum + (Number(d.lost_hours) || 0), 0);
+    return `<div class="doc-section">
+      <h3>Weather / Lost Time</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Date</th><th>Condition</th><th>Lost Time (hrs)</th><th>Notes</th></tr></thead>
+        <tbody>${list.map((d) => `
+          <tr>
+            <td>${new Date(d.date + "T00:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })}</td>
+            <td>${escapeHtml(d.condition) || "—"}</td>
+            <td>${d.lost_hours || 0}</td>
+            <td>${escapeHtml(d.notes) || "—"}</td>
+          </tr>
+        `).join("")}</tbody>
+      </table></div>
+      <p class="hint" style="margin-top:0.4rem;">Total lost time this week: <strong>${total}</strong> hours</p>
+    </div>`;
+  }
+
   const commercialTypeLabel = { early_warning: "Early Warning", proposed_variation: "Proposed Variation", instruction: "Instruction" };
 
   function commercialSection(items) {
@@ -93,11 +114,14 @@
       ? commercialItems.map(i => `- [${commercialTypeLabel[i.type] || i.type}] ${i.title}`).join("\n")
       : "";
 
+    const totalLostHours = (Array.isArray(r.weather_days) ? r.weather_days : []).reduce((sum, d) => sum + (Number(d.lost_hours) || 0), 0);
+
     const subject = encodeURIComponent(`Weekly Site Report – ${project.name} – w/c ${formatDate(r.week_starting)}`);
     const body = encodeURIComponent(
       `Hi,\n\nPlease find this week's site report for ${project.name} below.\n\n` +
-      `Week: ${formatDate(r.week_starting)} – ${formatDate(r.week_ending)}\nProgramme status: ${programmeLabel[r.programme_status]}\n\n` +
-      `Progress this week:\n${progressText}\n\n` +
+      `Week: ${formatDate(r.week_starting)} – ${formatDate(r.week_ending)}\nProgramme status: ${programmeLabel[r.programme_status]}\n` +
+      (totalLostHours > 0 ? `Weather lost time this week: ${totalLostHours} hours\n` : "") +
+      `\nProgress this week:\n${progressText}\n\n` +
       (r.issues_risks ? `Issues / risks:\n${r.issues_risks}\n\n` : "") +
       (commercialText ? `Commercial items:\n${commercialText}\n\n` : "") +
       `(Full report with photos: use "Print / Save as PDF" on this page and attach it here.)\n\nRegards,`
@@ -127,7 +151,8 @@
         <div><dt>Prepared By</dt><dd>${escapeHtml(r.prepared_by) || "—"}</dd></div>
       </dl>
 
-      ${section("Weather / Lost Time", r.weather)}
+      ${weatherSection(r.weather_days)}
+      ${section("Weather Notes", r.weather)}
       ${itemSection("Progress This Week", r.progress_items, r.progress_summary)}
       ${section("Health & Safety Notes", r.health_safety_notes)}
       ${section("Issues / Risks / Delays", r.issues_risks)}

@@ -83,6 +83,29 @@
     </div>`;
   }
 
+  function weatherSection(summary, lostDays, totalHours) {
+    const weeks = Array.isArray(summary) ? summary.filter((w) => w.lost_hours > 0) : [];
+    const days = Array.isArray(lostDays) ? lostDays : [];
+    if (!weeks.length && !days.length) return "";
+    return `<div class="doc-section">
+      <h3>Weather / Lost Time</h3>
+      <p class="hint" style="margin-bottom:0.5rem;">Total lost time this month: <strong>${totalHours || 0} hours</strong>${weeks.length ? " · " + weeks.map((w) => `w/c ${formatDate(w.week_starting)}: ${w.lost_hours}h`).join(" · ") : ""}</p>
+      ${days.length ? `
+        <div class="table-wrap"><table>
+          <thead><tr><th>Date</th><th>Condition</th><th>Lost Time (hrs)</th><th>Notes</th></tr></thead>
+          <tbody>${days.map((d) => `
+            <tr>
+              <td>${new Date(d.date + "T00:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })}</td>
+              <td>${escapeHtml(d.condition) || "—"}</td>
+              <td>${d.lost_hours || 0}</td>
+              <td>${escapeHtml(d.notes) || "—"}</td>
+            </tr>
+          `).join("")}</tbody>
+        </table></div>
+      ` : ""}
+    </div>`;
+  }
+
   function plotHandoversSection(plots) {
     if (!plots || !plots.length) return "";
     return `<div class="doc-section">
@@ -126,6 +149,7 @@
       `Month: ${monthLabel}\nWeekly reports covered: ${(r.weekly_report_ids || []).length}\n` +
       (r.rag_status ? `Overall status: ${RAG_LABEL[r.rag_status] || r.rag_status}\n` : "") +
       `Snags raised: ${r.snags_raised_count} · Snags closed: ${r.snags_closed_count}\n` +
+      (r.total_lost_hours > 0 ? `Weather lost time this month: ${r.total_lost_hours} hours\n` : "") +
       (openCommercial ? `Commercial items this month: ${openCommercial}\n` : "") +
       `\n(Full report with photos: use "Print / Save as PDF" on this page and attach it here.)\n\nRegards,`
     );
@@ -153,10 +177,12 @@
         <div><dt>Weekly Reports Covered</dt><dd>${(r.weekly_report_ids || []).length}</dd></div>
         <div><dt>Overall Status</dt><dd>${ragBadge}</dd></div>
         <div><dt>Snags Raised / Closed</dt><dd>${r.snags_raised_count} / ${r.snags_closed_count}</dd></div>
+        <div><dt>Weather Lost Time</dt><dd>${r.total_lost_hours || 0} hours</dd></div>
       </dl>
 
       ${r.baseline_progress_pct !== null && r.actual_progress_pct !== null ? `<div class="doc-section">${renderProgressBlock(r.baseline_progress_pct, r.actual_progress_pct, r.rag_status)}</div>` : ""}
 
+      ${weatherSection(r.weather_summary, r.weather_lost_days, r.total_lost_hours)}
       ${progressSection(r.progress_items)}
       ${outstandingSection(r.outstanding_items)}
       ${weeklyNotesSection("Health & Safety Notes", r.health_safety_notes, "health_safety_notes")}

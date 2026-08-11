@@ -29,7 +29,7 @@
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>Month</th><th>Weeks Covered</th><th>Programme</th><th>Generated</th></tr>
+          <tr><th>Month</th><th>Weeks Covered</th><th>Programme</th><th>Lost Time</th><th>Generated</th></tr>
         </thead>
         <tbody id="reportRows"></tbody>
       </table>
@@ -140,6 +140,21 @@
     const lastReport = reports[reports.length - 1];
     const outstandingItems = Array.isArray(lastReport.next_week_items) ? lastReport.next_week_items : [];
 
+    // Weather: a lost-time subtotal per week, plus a flattened detail list
+    // of just the days where time was actually lost across the month.
+    const weatherSummary = reports.map((r) => {
+      const days = Array.isArray(r.weather_days) ? r.weather_days : [];
+      return {
+        week_starting: r.week_starting,
+        week_ending: r.week_ending,
+        lost_hours: days.reduce((sum, d) => sum + (Number(d.lost_hours) || 0), 0),
+      };
+    });
+    const weatherLostDays = reports.flatMap((r) =>
+      (Array.isArray(r.weather_days) ? r.weather_days : []).filter((d) => Number(d.lost_hours) > 0)
+    ).sort((a, b) => a.date.localeCompare(b.date));
+    const totalLostHours = weatherSummary.reduce((sum, w) => sum + w.lost_hours, 0);
+
     const photos = reports.flatMap((r) => (Array.isArray(r.photos) ? r.photos : []));
 
     const [{ count: snagsRaised }, { count: snagsClosed }] = await Promise.all([
@@ -188,6 +203,9 @@
       snags_raised_count: snagsRaised || 0,
       snags_closed_count: snagsClosed || 0,
       plot_handovers: plotHandovers,
+      weather_summary: weatherSummary,
+      weather_lost_days: weatherLostDays,
+      total_lost_hours: totalLostHours,
       photos,
       created_by: user.id,
     };
@@ -229,6 +247,7 @@
           <td><strong>${monthLabel}</strong></td>
           <td>${(r.weekly_report_ids || []).length} report(s)</td>
           <td>${ragBadge}</td>
+          <td>${r.total_lost_hours || 0} hrs</td>
           <td>${formatDate(r.created_at?.slice(0, 10))}</td>
         </tr>
       `;

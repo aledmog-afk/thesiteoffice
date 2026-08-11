@@ -37,7 +37,11 @@
           </select>
         </div>
       </div>
-      <div class="field"><label for="weather">Weather / lost time</label><input type="text" id="weather" placeholder="e.g. Dry all week, no lost time"></div>
+      <div class="field">
+        <label>Weather Tracker</label>
+        <div id="weatherTracker"></div>
+      </div>
+      <div class="field"><label for="weather">Weather Notes (optional)</label><input type="text" id="weather" placeholder="Any general commentary not captured in the day-by-day tracker above"></div>
       <div class="field">
         <label>Progress this week</label>
         <div id="progressItems"></div>
@@ -81,6 +85,86 @@
 
   let progressEditor = mountItemListEditor(document.getElementById("progressItems"), [], () => {}, { withPercent: true, withMilestone: true });
   let nextWeekEditor = mountItemListEditor(document.getElementById("nextWeekItems"), [], () => {}, { withMilestone: true });
+
+  // ─── Weather tracker ─────────────────────────────────────────────
+  // A fixed 7-day grid (Mon–Sun of the report's week, derived from
+  // weekStarting) capturing condition + lost hours + notes per day, with
+  // a live total. Rebuilds whenever weekStarting changes, carrying over
+  // any already-entered day (matched by date) that still falls in range.
+  const WEATHER_CONDITIONS = ["Dry", "Overcast", "Light Rain", "Heavy Rain", "Snow / Ice", "High Wind", "Frost", "Extreme Heat", "Site Closed"];
+
+  function mountWeatherTracker(container, weekStartingInput) {
+    let days = [];
+
+    function buildDays(weekStartingStr, existingDays) {
+      if (!weekStartingStr) return [];
+      const start = new Date(weekStartingStr + "T00:00:00");
+      const byDate = new Map((existingDays || []).map((d) => [d.date, d]));
+      return Array.from({ length: 7 }, (_, i) => {
+        const d = new Date(start);
+        d.setDate(d.getDate() + i);
+        const dateStr = d.toISOString().slice(0, 10);
+        const existing = byDate.get(dateStr);
+        return {
+          date: dateStr,
+          condition: existing?.condition || "",
+          lost_hours: typeof existing?.lost_hours === "number" ? existing.lost_hours : 0,
+          notes: existing?.notes || "",
+        };
+      });
+    }
+
+    function totalLostHours() {
+      return days.reduce((sum, d) => sum + (Number(d.lost_hours) || 0), 0);
+    }
+
+    function render() {
+      if (!days.length) { container.innerHTML = `<p class="hint">Set a week starting date above to build the tracker.</p>`; return; }
+      container.innerHTML = `
+        <div class="table-wrap">
+          <table class="weather-tracker-table">
+            <thead><tr><th>Date</th><th>Condition</th><th>Lost Time (hrs)</th><th>Notes</th></tr></thead>
+            <tbody>
+              ${days.map((d, i) => {
+                const dateLabel = new Date(d.date + "T00:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+                return `
+                  <tr>
+                    <td>${dateLabel}</td>
+                    <td><select data-i="${i}" class="wt-condition"><option value="">—</option>${WEATHER_CONDITIONS.map((c) => `<option value="${c}" ${d.condition === c ? "selected" : ""}>${c}</option>`).join("")}</select></td>
+                    <td><input type="number" data-i="${i}" class="wt-lost" min="0" step="0.5" value="${d.lost_hours}"></td>
+                    <td><input type="text" data-i="${i}" class="wt-notes" value="${escapeHtml(d.notes)}" placeholder="optional"></td>
+                  </tr>
+                `;
+              }).join("")}
+            </tbody>
+          </table>
+        </div>
+        <p class="hint">Total lost time this week: <strong id="wtTotal">${totalLostHours()}</strong> hours</p>
+      `;
+
+      container.querySelectorAll(".wt-condition").forEach((el) => el.addEventListener("change", () => {
+        days[Number(el.dataset.i)].condition = el.value;
+      }));
+      container.querySelectorAll(".wt-lost").forEach((el) => el.addEventListener("input", () => {
+        days[Number(el.dataset.i)].lost_hours = el.value === "" ? 0 : Number(el.value);
+        container.querySelector("#wtTotal").textContent = totalLostHours();
+      }));
+      container.querySelectorAll(".wt-notes").forEach((el) => el.addEventListener("input", () => {
+        days[Number(el.dataset.i)].notes = el.value;
+      }));
+    }
+
+    function setWeek(weekStartingStr, existingDays) {
+      days = buildDays(weekStartingStr, existingDays !== undefined ? existingDays : days);
+      render();
+    }
+
+    weekStartingInput.addEventListener("change", () => setWeek(weekStartingInput.value));
+
+    return { setWeek, getDays: () => days };
+  }
+
+  const weatherTracker = mountWeatherTracker(document.getElementById("weatherTracker"), document.getElementById("weekStarting"));
 
   // ─── Commercial items mini-editor ───────────────────────────────
   // Each item is { id, title, type, cost_impact, time_impact_days, ledger_id }.
@@ -299,6 +383,7 @@
       end.setDate(end.getDate() + 6);
       document.getElementById("weekStarting").value = start;
       document.getElementById("weekEnding").value = end.toISOString().slice(0, 10);
+      weatherTracker.setWeek(start, []);
 
       const { data: prevReports } = await supabase
         .from("weekly_reports")
@@ -321,6 +406,7 @@
     document.getElementById("preparedBy").value = r.prepared_by || "";
     document.getElementById("programmeStatus").value = r.programme_status;
     document.getElementById("weather").value = r.weather || "";
+    weatherTracker.setWeek(r.week_starting, r.weather_days);
     document.getElementById("healthSafety").value = r.health_safety_notes || "";
     document.getElementById("issuesRisks").value = r.issues_risks || "";
     document.getElementById("otherComments").value = r.other_comments || r.deliveries_materials || "";
@@ -350,6 +436,7 @@
       prepared_by: document.getElementById("preparedBy").value.trim() || null,
       programme_status: document.getElementById("programmeStatus").value,
       weather: document.getElementById("weather").value.trim() || null,
+      weather_days: weatherTracker.getDays(),
       progress_items: progressEditor.getItems(),
       health_safety_notes: document.getElementById("healthSafety").value.trim() || null,
       issues_risks: document.getElementById("issuesRisks").value.trim() || null,
