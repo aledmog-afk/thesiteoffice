@@ -17,10 +17,12 @@ clicking through the web UI for every file.
    gumroad auth login --no-input
    ```
 
-3. Open `products.csv`. It's pre-filled with the ~120 product names,
-   categories, and prices pulled from the old draft checkout page, as a
-   starting point — check these against what you actually intend to sell,
-   fix anything wrong, and delete rows you don't want.
+3. Open `products.csv`. It's pre-filled with the 49 products that are
+   currently advertised on the live site but have no real Gumroad listing
+   yet (cross-checked against the actual Gumroad product list on
+   2026-08-18 — everything already for sale on Gumroad is excluded). Check
+   these against what you actually intend to sell, fix anything wrong, and
+   delete rows you don't want.
 
    Columns:
    - `sku` — your own reference code (kept local, not sent to Gumroad)
@@ -45,12 +47,17 @@ set, then published. Progress is recorded in `upload_log.json` — already-
 uploaded rows are skipped on re-run, so you can add file paths gradually and
 re-run the script instead of tracking by hand what's done.
 
+6. Once a product is live on Gumroad, note its `gumroad.com/l/...` URL
+   (from `upload_log.json` or the Gumroad dashboard) and update that
+   product's card on the site — it currently shows a disabled
+   "Coming Soon" button instead of "Buy Now" until that's done.
+
 ## Notes
 
 - Products upload as-is from the CLI's defaults — no description, cover
   image, or custom sales page copy. Add those in the Gumroad dashboard after,
   or extend `upload.py` with `--description` / `--cover` once you decide on
   copy per product.
-- This does not touch the website — it only populates your Gumroad catalog.
-  You'd still update the site's product cards with the resulting
-  `gumroad.com/l/...` links, same as today.
+- This does not touch the website by itself — it only populates your
+  Gumroad catalog. Step 6 above is what connects a newly created product
+  back to its "Coming Soon" card on the site.
