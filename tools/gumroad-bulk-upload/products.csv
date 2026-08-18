@@ -1,50 +1,50 @@
-sku,name,category,price_gbp,file_path
-TSO-CP-001,Carpentry & Joinery RAMS,Health & Safety,9.00,
-TSO-BW-001,Brickwork & Blockwork RAMS,Health & Safety,9.00,
-TSO-PS-001,Plastering & Drylining RAMS,Health & Safety,9.00,
-TSO-PD-001,Painting & Decorating RAMS,Health & Safety,9.00,
-TSO-PM-001,Plumbing & Mechanical RAMS,Health & Safety,9.00,
-TSO-SE-001,Steel Erection RAMS,Health & Safety,12.00,
-TSO-EL-001,Electrical First Fix RAMS,Health & Safety,9.00,
-TSO-DR-001,Drainage & Utilities RAMS,Health & Safety,9.00,
-TSO-PCI-001,Pre-Construction Information,CDM & Construction Phase,12.00,
-TSO-CC-001,Competency Checklist,CDM & Construction Phase,8.00,
-TSO-F10-001,F10 Notification Guide,CDM & Construction Phase,8.00,
-TSO-DRR-001,Designer Risk Register,CDM & Construction Phase,8.00,
-TSO-SIR-001,Site Induction Record,CDM & Construction Phase,5.00,
-TSO-WIC-001,Welfare Inspection Checklist,CDM & Construction Phase,5.00,
-TSO-HSF-001,H&S File Handover Checklist,CDM & Construction Phase,8.00,
-TSO-CDM-PACK,CDM Full Pack - All 10 Documents,CDM & Construction Phase,49.00,
-TSO-VO-001,Variation Order Form,Commercial & Estimating,8.00,
-TSO-BOQ-001,Bill of Quantities Template,Commercial & Estimating,12.00,
-TSO-QL-001,Quotation Letter,Commercial & Estimating,6.00,
-TSO-DW-001,Daywork Sheet,Commercial & Estimating,6.00,
-TSO-WO-001,Works Order,Commercial & Estimating,8.00,
-TSO-PN-001,Payment Notice,Commercial & Estimating,6.00,
-TSO-PLN-001,Pay Less Notice,Commercial & Estimating,6.00,
-TSO-SCQ-001,Small Contractor Quote,Commercial & Estimating,8.00,
-TSO-EC-001,Employment Contract,HR & Workforce,12.00,
-TSO-LOA-001,Labour Only Agreement,HR & Workforce,10.00,
-TSO-ZHC-001,Zero Hours Contract,HR & Workforce,10.00,
-TSO-NSC-001,New Starter Checklist,HR & Workforce,5.00,
-TSO-TM-001,Training Matrix,HR & Workforce,8.00,
-TSO-DP-001,Disciplinary Procedure,HR & Workforce,10.00,
-TSO-SAR-001,Sickness & Absence Record,HR & Workforce,5.00,
-TSO-PR-001,Performance Review,HR & Workforce,6.00,
-TSO-HR-PACK,HR Full Pack - All 20 Documents,HR & Workforce,49.00,
-TSO-EMP-001,Environmental Management Plan,Quality & Environmental,12.00,
-TSO-WMP-001,Waste Management Plan,Quality & Environmental,10.00,
-TSO-NCR-001,Non-Conformance Report,Quality & Environmental,8.00,
-TSO-SS-001,Sustainability Statement,Quality & Environmental,10.00,
-TSO-QE-PACK,Quality & Environmental Pack,Quality & Environmental,39.00,
-TSO-SD-001,Site Diary,Site Management,6.00,
-TSO-SIS-001,Sign In Sheet,Site Management,5.00,
-TSO-MDR-001,Material Delivery Record,Site Management,5.00,
-TSO-CPR-001,Concrete Pour Record,Site Management,6.00,
-TSO-ITP-001,Inspection & Test Plan,Site Management,8.00,
-TSO-SL-001,Snagging List,Site Management,6.00,
-TSO-SHC-001,Site Handover Checklist,Site Management,8.00,
-TSO-PPI-001,Plant Pre-Use Inspection,Site Management,5.00,
-TSO-AIR-001,Accident & Incident Report,Site Management,5.00,
-TSO-NMR-001,Near Miss Report,Site Management,5.00,
-TSO-SM-PACK,Site Management Bundle - All 20 Forms,Site Management,29.00,
+sku,name,category,price_gbp,file_path,drive_folder,drive_filename
+TSO-CP-001,Carpentry & Joinery RAMS,Health & Safety,9.00,,RAMS,RAMS-Carpentry-TSO-CP-001-1.docx
+TSO-BW-001,Brickwork & Blockwork RAMS,Health & Safety,9.00,,RAMS,RAMS-Brickwork-TSO-BW-001.docx
+TSO-PS-001,Plastering & Drylining RAMS,Health & Safety,9.00,,RAMS,RAMS-Plastering-TSO-PS-001.docx
+TSO-PD-001,Painting & Decorating RAMS,Health & Safety,9.00,,RAMS,RAMS-Painting-TSO-PD-001.docx
+TSO-PM-001,Plumbing & Mechanical RAMS,Health & Safety,9.00,,RAMS,RAMS-Plumbing-TSO-PL-001.docx
+TSO-SE-001,Steel Erection RAMS,Health & Safety,12.00,,RAMS,RAMS-SteelErection-TSO-SE-001.docx
+TSO-EL-001,Electrical First Fix RAMS,Health & Safety,9.00,,RAMS,RAMS-Electrical-TSO-EL-001.docx
+TSO-DR-001,Drainage & Utilities RAMS,Health & Safety,9.00,,RAMS,RAMS-Drainage-TSO-DR-001.docx
+TSO-PCI-001,Pre-Construction Information,CDM & Construction Phase,12.00,,CDM Pack,CDM-02-PreConstructionInformation.docx
+TSO-CC-001,Competency Checklist,CDM & Construction Phase,8.00,,CDM Pack,CDM-03-CompetencyChecklist.docx
+TSO-F10-001,F10 Notification Guide,CDM & Construction Phase,8.00,,CDM Pack,CDM-04-F10NotificationGuide.docx
+TSO-DRR-001,Designer Risk Register,CDM & Construction Phase,8.00,,CDM Pack,CDM-05-DesignerRiskRegister.docx
+TSO-SIR-001,Site Induction Record,CDM & Construction Phase,5.00,,CDM Pack,CDM-07-SiteInductionRecord.docx
+TSO-WIC-001,Welfare Inspection Checklist,CDM & Construction Phase,5.00,,CDM Pack,CDM-08-WelfareInspectionChecklist.docx
+TSO-HSF-001,H&S File Handover Checklist,CDM & Construction Phase,8.00,,CDM Pack,CDM-10-HSFileHandoverChecklist.docx
+TSO-CDM-PACK,CDM Full Pack - All 10 Documents,CDM & Construction Phase,49.00,,CDM Pack,ALL 10 FILES (CDM-01 to CDM-10) - select all in folder and download as zip
+TSO-VO-001,Variation Order Form,Commercial & Estimating,8.00,,Commercial,COM-10-VariationOrder.docx
+TSO-BOQ-001,Bill of Quantities Template,Commercial & Estimating,12.00,,Commercial,COM-09-BillOfQuantities.docx
+TSO-QL-001,Quotation Letter,Commercial & Estimating,6.00,,Commercial,COM-01-QuotationLetter.docx
+TSO-DW-001,Daywork Sheet,Commercial & Estimating,6.00,,Commercial,COM-11-DayworkSheet.docx
+TSO-WO-001,Works Order,Commercial & Estimating,8.00,,Commercial,COM-06-WorksOrder.docx
+TSO-PN-001,Payment Notice,Commercial & Estimating,6.00,,Commercial,COM-13-PaymentNotice.docx
+TSO-PLN-001,Pay Less Notice,Commercial & Estimating,6.00,,Commercial,COM-14-PayLessNotice.docx
+TSO-SCQ-001,Small Contractor Quote,Commercial & Estimating,8.00,,Commercial,COM-16-SmallContractorQuote.docx
+TSO-EC-001,Employment Contract,HR & Workforce,12.00,,HR,HR-05-EmploymentContract.docx
+TSO-LOA-001,Labour Only Agreement,HR & Workforce,10.00,,HR,HR-02-LabourOnlyAgreement.docx
+TSO-ZHC-001,Zero Hours Contract,HR & Workforce,10.00,,HR,HR-04-ZeroHoursContract.docx
+TSO-NSC-001,New Starter Checklist,HR & Workforce,5.00,,HR,HR-06-NewStarterChecklist.docx
+TSO-TM-001,Training Matrix,HR & Workforce,8.00,,HR,HR-08-TrainingMatrix.docx
+TSO-DP-001,Disciplinary Procedure,HR & Workforce,10.00,,HR,HR-11-DisciplinaryProcedure.docx
+TSO-SAR-001,Sickness & Absence Record,HR & Workforce,5.00,,HR,HR-18-SicknessAbsenceRecord.docx
+TSO-PR-001,Performance Review,HR & Workforce,6.00,,HR,HR-20-PerformanceReview.docx
+TSO-HR-PACK,HR Full Pack - All 20 Documents,HR & Workforce,49.00,,HR,ALL 20 FILES (HR-01 to HR-20) - select all in folder and download as zip
+TSO-EMP-001,Environmental Management Plan,Quality & Environmental,12.00,,QMP,TSO-EMP-001-Environmental-Management-Plan.docx
+TSO-WMP-001,Waste Management Plan,Quality & Environmental,10.00,,QMP,TSO-WMP-001-Waste-Management-Plan.docx
+TSO-NCR-001,Non-Conformance Report,Quality & Environmental,8.00,,QMP,TSO-NCR-001-Non-Conformance-Report.docx
+TSO-SS-001,Sustainability Statement,Quality & Environmental,10.00,,,NOT FOUND IN DRIVE - needs drafting
+TSO-QE-PACK,Quality & Environmental Pack,Quality & Environmental,39.00,,,BLOCKED - depends on TSO-SS-001, or ship as 4-doc pack without it
+TSO-SD-001,Site Diary,Site Management,6.00,,Site Management Docs,SM-01-SiteDiary-1.docx
+TSO-SIS-001,Sign In Sheet,Site Management,5.00,,Site Management Docs,SM-02-SignInSheet.docx
+TSO-MDR-001,Material Delivery Record,Site Management,5.00,,Site Management Docs,SM-05-MaterialDeliveryRecord.docx
+TSO-CPR-001,Concrete Pour Record,Site Management,6.00,,Site Management Docs,SM-06-ConcretePourRecord.docx
+TSO-ITP-001,Inspection & Test Plan,Site Management,8.00,,Site Management Docs,SM-08-InspectionTestPlan.docx
+TSO-SL-001,Snagging List,Site Management,6.00,,Site Management Docs,SM-10-SnaggingList.docx
+TSO-SHC-001,Site Handover Checklist,Site Management,8.00,,Site Management Docs,SM-11-SiteHandoverChecklist.docx
+TSO-PPI-001,Plant Pre-Use Inspection,Site Management,5.00,,Site Management Docs,SM-13-PlantPreUseInspection.docx
+TSO-AIR-001,Accident & Incident Report,Site Management,5.00,,Site Management Docs,SM-15-AccidentIncidentReport.docx
+TSO-NMR-001,Near Miss Report,Site Management,5.00,,Site Management Docs,SM-16-NearMissReport.docx
+TSO-SM-PACK,Site Management Bundle - All 20 Forms,Site Management,29.00,,Site Management Docs,ALL 20 FILES (SM-01 to SM-20) - select all in folder and download as zip
