@@ -31,6 +31,20 @@ clicking through the web UI for every file.
    - `price_gbp` — price in pounds, e.g. `9.00`
    - `file_path` — **local path to the file for this product.** Leave blank
      to skip a row for now; fill it in whenever the file is ready and re-run.
+   - `drive_folder` / `drive_filename` — where the finished document already
+     lives in your "TSO Documents" Google Drive folder, as of 2026-08-18.
+     47 of the 49 rows have this filled in — the file already exists, you
+     just need to download it and put the resulting local path into
+     `file_path`. Two rows (`TSO-SS-001`, `TSO-QE-PACK`) have no source
+     file yet and are marked as such — those need drafting first.
+
+   For the three "Pack"/"Bundle" rows (`TSO-CDM-PACK`, `TSO-HR-PACK`,
+   `TSO-SM-PACK`), the `drive_filename` column says "select all in folder
+   and download as zip" — every file that bundle needs is already sitting
+   together in that one Drive folder (10, 20, and 20 files respectively).
+   In Drive: open the folder, Ctrl/Cmd+A to select everything, right-click
+   → Download. Drive zips the selection automatically — that zip is the
+   `file_path` for the pack row.
 
 4. Dry run (prints the commands it *would* run, touches nothing):
    ```
