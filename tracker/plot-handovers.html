@@ -59,7 +59,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, comparePlotNumbers } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, comparePlotNumbers, generateMissingFlats } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -83,6 +83,9 @@
   async function createBlock() {
     const blockName = prompt("Block name:", "Building ");
     if (!blockName || !blockName.trim()) return;
+    const flatsInput = prompt("Number of flats in this block? (leave blank to add them one at a time later)", "");
+    const totalFlats = flatsInput && flatsInput.trim() ? Math.max(0, parseInt(flatsInput, 10) || 0) : 0;
+
     const { data: { user } } = await supabase.auth.getUser();
     const { data, error } = await supabase
       .from("blocks")
@@ -90,6 +93,14 @@
       .select()
       .single();
     if (error) { alert(`Could not create block: ${error.message}`); return; }
+
+    if (totalFlats > 0) {
+      try {
+        await generateMissingFlats(projectId, data.id, totalFlats);
+      } catch (err) {
+        alert(`Block created, but couldn't auto-create its flats: ${err.message}`);
+      }
+    }
     window.location.href = `block-detail.html?id=${data.id}`;
   }
   document.getElementById("newBlockBtn").addEventListener("click", createBlock);

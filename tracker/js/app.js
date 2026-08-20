@@ -332,6 +332,31 @@ export async function generateMissingPlots(projectId, totalPlots) {
   return toCreate.length;
 }
 
+// Same idea as generateMissingPlots() above, but scoped to one apartment
+// block: tops it up to `totalFlats` flats named "Flat 1", "Flat 2", …,
+// skipping any that already exist by name. Each new row still gets the
+// project_id (flats are plots under the hood) plus this block's id, so
+// seed_plot_defaults() seeds it with the reduced flat gate/document set
+// instead of the full house set.
+export async function generateMissingFlats(projectId, blockId, totalFlats) {
+  const { data: existing } = await supabase.from("plots").select("plot_number").eq("block_id", blockId);
+  const existingNames = new Set((existing || []).map((p) => p.plot_number.trim().toLowerCase()));
+
+  const { data: { user } } = await supabase.auth.getUser();
+  const toCreate = [];
+  for (let i = 1; i <= totalFlats; i++) {
+    const name = `Flat ${i}`;
+    if (!existingNames.has(name.toLowerCase())) {
+      toCreate.push({ project_id: projectId, block_id: blockId, plot_number: name, created_by: user.id });
+    }
+  }
+  if (!toCreate.length) return 0;
+
+  const { error } = await supabase.from("plots").insert(toCreate);
+  if (error) throw error;
+  return toCreate.length;
+}
+
 // ─── Weather auto-fill (postcodes.io + Open-Meteo) ───────────────
 // Deliberately just the conditions that actually affect site works —
 // dry/overcast days aren't worth a dropdown entry, so leaving a day
