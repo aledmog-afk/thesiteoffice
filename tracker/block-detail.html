@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Plot – Site Tracker</title>
+<title>Block – Site Tracker</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/app.css">
@@ -14,20 +14,21 @@
 <div class="page">
   <div class="page-head">
     <div>
-      <div class="page-title" id="plotTitle">Loading…</div>
+      <div class="page-title" id="blockTitle">Loading…</div>
       <div class="page-sub" id="projectSub"></div>
     </div>
-    <button class="btn btn-danger btn-sm" id="deletePlotBtn">Delete Plot</button>
+    <button class="btn btn-danger btn-sm" id="deleteBlockBtn">Delete Block</button>
   </div>
 
   <div id="errorBox" class="error-box"></div>
 
-  <h3 style="font-family:var(--font-display); font-size:1.1rem; margin-bottom:1rem;">Plot Progress</h3>
+  <h3 style="font-family:var(--font-display); font-size:1.1rem; margin-bottom:1rem;">Block Progress</h3>
   <div class="card" style="margin-bottom:2.5rem;">
+    <p class="hint" style="margin-bottom:0.8rem;">Shared structure and civils for the whole block — foundations, frame, roof, communal areas. Each flat's own fit-out progress is tracked separately, on the flat itself.</p>
     <div class="form-grid" style="align-items:end;">
       <div class="field">
-        <label for="plotProgressInput">Progress complete (%)</label>
-        <input type="number" id="plotProgressInput" min="0" max="100" step="1">
+        <label for="blockProgressInput">Progress complete (%)</label>
+        <input type="number" id="blockProgressInput" min="0" max="100" step="1">
       </div>
       <div class="btn-row">
         <button type="button" class="btn btn-outline" id="suggestProgressBtn">Suggest from Milestones</button>
@@ -37,11 +38,11 @@
     <p class="hint" id="progressSavedHint" style="margin-top:0.5rem;"></p>
   </div>
 
-  <h3 style="font-family:var(--font-display); font-size:1.1rem; margin-bottom:1rem;">Quality Gates</h3>
+  <h3 style="font-family:var(--font-display); font-size:1.1rem; margin-bottom:1rem;">Quality Gates (Block)</h3>
   <div id="gatesWrap" style="margin-bottom:2.5rem;">Loading…</div>
 
-  <h3 style="font-family:var(--font-display); font-size:1.1rem; margin-bottom:1rem;">Handover Documents</h3>
-  <div class="card">
+  <h3 style="font-family:var(--font-display); font-size:1.1rem; margin-bottom:1rem;">Handover Documents (Block)</h3>
+  <div class="card" style="margin-bottom:2.5rem;">
     <div class="table-wrap">
       <table>
         <thead>
@@ -51,20 +52,39 @@
       </table>
     </div>
   </div>
+
+  <div class="page-head" style="margin-bottom:1rem;">
+    <h3 style="font-family:var(--font-display); font-size:1.1rem;">Flats</h3>
+    <button class="btn btn-amber" id="newFlatBtn">+ Flat</button>
+  </div>
+  <div class="card">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Flat</th><th>Progress</th><th>Quality Gates</th><th>Handover Docs</th><th>Added</th><th></th></tr>
+        </thead>
+        <tbody id="flatRows"></tbody>
+      </table>
+    </div>
+    <div id="flatsEmptyState" class="empty" style="display:none;">
+      <p>No flats added yet.</p>
+      <button class="btn btn-amber" id="emptyNewFlatBtn">+ Flat</button>
+    </div>
+  </div>
 </div>
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, uploadImage, suggestPlotProgress, recalculateActualProgress } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, uploadImage, suggestPlotProgress, recalculateActualProgress, comparePlotNumbers } from "./js/app.js";
 
   await requireAuth();
-  const plotId = getParam("id");
-  if (!plotId) window.location.href = "dashboard.html";
+  const blockId = getParam("id");
+  if (!blockId) window.location.href = "dashboard.html";
 
   const errorBox = document.getElementById("errorBox");
-  let plot = null;
+  let block = null;
 
-  // ─── Quality Gates ──────────────────────────────────────────────
+  // ─── Quality Gates (block-scoped) ────────────────────────────────
   const gateStatusBadge = { not_started: "badge-grey", in_progress: "badge-blue", under_review: "badge-amber", approved: "badge-green", not_applicable: "badge-grey" };
   const gateStatusLabel = { not_started: "Not Started", in_progress: "In Progress", under_review: "Under Review", approved: "Approved", not_applicable: "N/A" };
   const gatesWrap = document.getElementById("gatesWrap");
@@ -130,18 +150,18 @@
     const { data: gates, error } = await supabase
       .from("quality_gates")
       .select("*")
-      .eq("plot_id", plotId)
+      .eq("block_id", blockId)
       .order("sort_order", { ascending: true });
 
     if (error || !gates || !gates.length) {
-      gatesWrap.innerHTML = `<div class="empty"><p>No quality gates found for this plot.</p></div>`;
+      gatesWrap.innerHTML = `<div class="empty"><p>No quality gates found for this block.</p></div>`;
       return;
     }
     gatesWrap.innerHTML = gates.map(gateCardHtml).join("");
     gates.forEach(wireGateCard);
   }
 
-  // ─── Handover Documents ─────────────────────────────────────────
+  // ─── Handover Documents (block-scoped) ───────────────────────────
   const docStatusBadge = { missing: "badge-red", draft_received: "badge-amber", approved_final: "badge-green" };
   const docStatusLabel = { missing: "Missing", draft_received: "Draft Received", approved_final: "Approved / Final" };
 
@@ -179,7 +199,7 @@
       clearError(errorBox);
       fileInput.disabled = true;
       try {
-        const url = await uploadImage(file, `${plot.project_id}/handover`);
+        const url = await uploadImage(file, `${block.project_id}/handover`);
         const patch = { file_url: url, file_name: file.name, updated_at: new Date().toISOString() };
         if (doc.status === "missing") patch.status = "draft_received";
         const { error } = await supabase.from("handover_documents").update(patch).eq("id", doc.id);
@@ -204,24 +224,24 @@
     const { data, error } = await supabase
       .from("handover_documents")
       .select("*")
-      .eq("plot_id", plotId)
+      .eq("block_id", blockId)
       .order("doc_key", { ascending: true });
 
     if (error || !data || !data.length) {
-      document.getElementById("docRows").innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--ink-soft);">No handover documents found for this plot.</td></tr>`;
+      document.getElementById("docRows").innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--ink-soft);">No handover documents found for this block.</td></tr>`;
       return;
     }
     document.getElementById("docRows").innerHTML = data.map(docRowHtml).join("");
     data.forEach(wireDocRow);
   }
 
-  // ─── Plot progress ──────────────────────────────────────────────
+  // ─── Block progress ───────────────────────────────────────────────
   document.getElementById("suggestProgressBtn").addEventListener("click", async () => {
     const btn = document.getElementById("suggestProgressBtn");
     btn.disabled = true;
     btn.textContent = "Checking weekly reports…";
-    const suggested = await suggestPlotProgress(plot.project_id, plot.plot_number);
-    document.getElementById("plotProgressInput").value = suggested;
+    const suggested = await suggestPlotProgress(block.project_id, block.block_name);
+    document.getElementById("blockProgressInput").value = suggested;
     document.getElementById("progressSavedHint").textContent = `Suggested from logged milestones — review and hit Save to apply.`;
     btn.disabled = false;
     btn.textContent = "Suggest from Milestones";
@@ -229,15 +249,15 @@
 
   document.getElementById("saveProgressBtn").addEventListener("click", async () => {
     clearError(errorBox);
-    const val = document.getElementById("plotProgressInput").value;
+    const val = document.getElementById("blockProgressInput").value;
     const pct = Math.max(0, Math.min(100, Number(val) || 0));
     const saveBtn = document.getElementById("saveProgressBtn");
     saveBtn.disabled = true;
     try {
-      const { error } = await supabase.from("plots").update({ progress_pct: pct }).eq("id", plotId);
+      const { error } = await supabase.from("blocks").update({ progress_pct: pct }).eq("id", blockId);
       if (error) throw error;
-      plot.progress_pct = pct;
-      await recalculateActualProgress(plot.project_id);
+      block.progress_pct = pct;
+      await recalculateActualProgress(block.project_id);
       document.getElementById("progressSavedHint").textContent = "Saved — site's Actual Progress has been updated.";
     } catch (err) {
       showError(errorBox, err);
@@ -246,43 +266,105 @@
     }
   });
 
-  // ─── Delete plot ────────────────────────────────────────────────
-  document.getElementById("deletePlotBtn").addEventListener("click", async () => {
-    if (!confirm(`Delete "${plot.plot_number}" and all its quality gates and handover documents? This cannot be undone.`)) return;
-    const { error } = await supabase.from("plots").delete().eq("id", plotId);
+  // ─── Flats within this block ──────────────────────────────────────
+  async function createFlat() {
+    const flatName = prompt("Flat number / name:", "Flat ");
+    if (!flatName || !flatName.trim()) return;
+    const { data: { user } } = await supabase.auth.getUser();
+    const { data, error } = await supabase
+      .from("plots")
+      .insert({ project_id: block.project_id, block_id: blockId, plot_number: flatName.trim(), created_by: user.id })
+      .select()
+      .single();
+    if (!error) window.location.href = `plot-detail.html?id=${data.id}`;
+  }
+  document.getElementById("newFlatBtn").addEventListener("click", createFlat);
+  document.getElementById("emptyNewFlatBtn")?.addEventListener("click", createFlat);
+
+  async function deleteFlat(id, name) {
+    if (!confirm(`Delete "${name}" and all its quality gates and handover documents? This cannot be undone.`)) return;
+    await supabase.from("plots").delete().eq("id", id);
+    loadFlats();
+  }
+  window.deleteFlat = deleteFlat;
+
+  async function loadFlats() {
+    const { data: flats, error } = await supabase
+      .from("plots")
+      .select("*")
+      .eq("block_id", blockId);
+
+    if (error || !flats || !flats.length) {
+      document.getElementById("flatsEmptyState").style.display = "block";
+      document.getElementById("flatRows").innerHTML = "";
+      return;
+    }
+    document.getElementById("flatsEmptyState").style.display = "none";
+    flats.sort((a, b) => comparePlotNumbers(a.plot_number, b.plot_number));
+
+    const [{ data: gates }, { data: docs }] = await Promise.all([
+      supabase.from("quality_gates").select("plot_id, status").in("plot_id", flats.map((f) => f.id)),
+      supabase.from("handover_documents").select("plot_id, status").in("plot_id", flats.map((f) => f.id)),
+    ]);
+
+    const gatesByFlat = {};
+    (gates || []).forEach((g) => {
+      if (g.status === "not_applicable") return;
+      gatesByFlat[g.plot_id] = gatesByFlat[g.plot_id] || { approved: 0, total: 0 };
+      gatesByFlat[g.plot_id].total++;
+      if (g.status === "approved") gatesByFlat[g.plot_id].approved++;
+    });
+    const docsByFlat = {};
+    (docs || []).forEach((d) => {
+      docsByFlat[d.plot_id] = docsByFlat[d.plot_id] || { ready: 0, total: 0 };
+      docsByFlat[d.plot_id].total++;
+      if (d.status === "approved_final") docsByFlat[d.plot_id].ready++;
+    });
+
+    document.getElementById("flatRows").innerHTML = flats.map((f) => {
+      const g = gatesByFlat[f.id] || { approved: 0, total: 0 };
+      const d = docsByFlat[f.id] || { ready: 0, total: 0 };
+      return `
+        <tr class="row-link" onclick="window.location.href='plot-detail.html?id=${f.id}'">
+          <td><strong>${escapeHtml(f.plot_number)}</strong></td>
+          <td><span class="badge ${f.progress_pct >= 100 ? "badge-green" : "badge-amber"}">${f.progress_pct || 0}%</span></td>
+          <td><span class="badge ${g.approved === g.total ? "badge-green" : "badge-amber"}">${g.approved} / ${g.total} approved${g.total === 0 ? " (N/A)" : ""}</span></td>
+          <td><span class="badge ${d.ready === d.total && d.total > 0 ? "badge-green" : "badge-amber"}">${d.ready} / ${d.total} ready</span></td>
+          <td>${formatDate(f.created_at?.slice(0, 10))}</td>
+          <td onclick="event.stopPropagation()"><button class="btn btn-outline btn-sm" onclick="deleteFlat('${f.id}', '${escapeHtml(f.plot_number).replace(/'/g, "\\'")}')">Delete</button></td>
+        </tr>
+      `;
+    }).join("");
+  }
+
+  // ─── Delete block ───────────────────────────────────────────────
+  document.getElementById("deleteBlockBtn").addEventListener("click", async () => {
+    if (!confirm(`Delete "${block.block_name}", all its flats, and every flat's quality gates and handover documents? This cannot be undone.`)) return;
+    const { error } = await supabase.from("blocks").delete().eq("id", blockId);
     if (error) { showError(errorBox, error); return; }
-    window.location.href = plot.block_id
-      ? `block-detail.html?id=${plot.block_id}`
-      : `plot-handovers.html?project=${plot.project_id}`;
+    window.location.href = `plot-handovers.html?project=${block.project_id}`;
   });
 
   // ─── Init ───────────────────────────────────────────────────────
   async function init() {
-    const { data, error } = await supabase.from("plots").select("*, projects(*), blocks(*)").eq("id", plotId).single();
-    if (error) { document.getElementById("plotTitle").textContent = "Plot not found"; return; }
-    plot = data;
-    const project = plot.projects;
-    const block = plot.blocks;
+    const { data, error } = await supabase.from("blocks").select("*, projects(*)").eq("id", blockId).single();
+    if (error) { document.getElementById("blockTitle").textContent = "Block not found"; return; }
+    block = data;
+    const project = block.projects;
 
-    document.getElementById("plotTitle").textContent = plot.plot_number;
-    document.getElementById("projectSub").textContent = block ? `${project.name} — part of ${block.block_name}` : project.name;
-    document.getElementById("plotProgressInput").value = plot.progress_pct || 0;
-    document.getElementById("deletePlotBtn").textContent = block ? "Delete Flat" : "Delete Plot";
-    renderHeader(block ? [
+    document.getElementById("blockTitle").textContent = block.block_name;
+    document.getElementById("projectSub").textContent = project.name;
+    document.getElementById("blockProgressInput").value = block.progress_pct || 0;
+    renderHeader([
       { label: "Dashboard", href: "dashboard.html" },
       { label: project.name, href: `project.html?id=${project.id}` },
       { label: "Plot Handovers", href: `plot-handovers.html?project=${project.id}` },
-      { label: block.block_name, href: `block-detail.html?id=${block.id}` },
-      { label: plot.plot_number },
-    ] : [
-      { label: "Dashboard", href: "dashboard.html" },
-      { label: project.name, href: `project.html?id=${project.id}` },
-      { label: "Plot Handovers", href: `plot-handovers.html?project=${project.id}` },
-      { label: plot.plot_number },
+      { label: block.block_name },
     ]);
 
     loadGates();
     loadDocs();
+    loadFlats();
   }
 
   init();

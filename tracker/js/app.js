@@ -233,20 +233,26 @@ export async function getOrgLogoUrl() {
 }
 
 // ─── Automatic progress ───────────────────────────────────────────
-// Actual Progress % is the average of every plot's own progress_pct
-// plus the site's external_works_pct (civils/drainage/landscaping —
-// work that isn't any one plot), as N+1 equally-weighted numbers. Both
-// inputs are set directly (by hand, or via suggestPlotProgress() below)
-// rather than being locked to an automatic calculation — the point is
-// that they're always correctable when a milestone gets missed in a
-// weekly report.
+// Actual Progress % is the average of every plot's own progress_pct,
+// every block's own progress_pct (shared structure/civils tracked once
+// for the whole apartment block, not duplicated per flat), plus the
+// site's external_works_pct (civils/drainage/landscaping that isn't any
+// one plot or block) — all equally weighted. Every input is set
+// directly (by hand, or via suggestPlotProgress() below) rather than
+// being locked to an automatic calculation — the point is that they're
+// always correctable when a milestone gets missed in a weekly report.
 export async function recalculateActualProgress(projectId) {
-  const [{ data: project }, { data: plots }] = await Promise.all([
+  const [{ data: project }, { data: plots }, { data: blocks }] = await Promise.all([
     supabase.from("projects").select("external_works_pct").eq("id", projectId).single(),
     supabase.from("plots").select("progress_pct").eq("project_id", projectId),
+    supabase.from("blocks").select("progress_pct").eq("project_id", projectId),
   ]);
 
-  const values = [...(plots || []).map((p) => Number(p.progress_pct) || 0), Number(project?.external_works_pct) || 0];
+  const values = [
+    ...(plots || []).map((p) => Number(p.progress_pct) || 0),
+    ...(blocks || []).map((b) => Number(b.progress_pct) || 0),
+    Number(project?.external_works_pct) || 0,
+  ];
   const pct = Math.round((values.reduce((sum, v) => sum + v, 0) / values.length) * 10) / 10;
 
   await supabase.from("projects").update({ actual_progress_pct: pct }).eq("id", projectId);

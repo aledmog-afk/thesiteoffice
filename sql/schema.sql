@@ -449,28 +449,53 @@ alter table public.handover_documents add column if not exists plot_id uuid refe
 
 -- Backfill: any project with pre-existing (plot_id null) gates/handover
 -- docs from before plots existed gets a default "Plot 1" to own them.
+-- (v15, much later, reopens plot_id to nullable for block-scoped
+-- gates/documents — those are a different, intentional kind of "plot_id
+-- null" row, never legacy orphans, so this only ever touches a row that
+-- is ALSO block_id null once that column exists. On a truly fresh
+-- database block_id doesn't exist yet at this point in the script, so
+-- the plain plot_id-only check below is used — safe, since no
+-- block-scoped rows can possibly exist yet either.)
 do $$
 declare
   proj record;
   new_plot_id uuid;
+  has_block_id boolean;
+  block_filter text;
 begin
-  for proj in
-    select distinct project_id from public.quality_gates where plot_id is null
-    union
-    select distinct project_id from public.handover_documents where plot_id is null
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'quality_gates' and column_name = 'block_id'
+  ) into has_block_id;
+  -- block_id doesn't exist as a column until this file's v15 additions
+  -- run, further down — can't reference it in a static query before
+  -- that, even behind a runtime boolean, since the query planner needs
+  -- the column to exist. Build the filter dynamically instead.
+  block_filter := case when has_block_id then 'and block_id is null' else '' end;
+
+  for proj in execute format(
+    'select distinct project_id from public.quality_gates where plot_id is null %1$s
+     union
+     select distinct project_id from public.handover_documents where plot_id is null %1$s',
+    block_filter
+  )
   loop
     insert into public.plots (project_id, plot_number)
     values (proj.project_id, 'Plot 1')
     returning id into new_plot_id;
 
-    update public.quality_gates set plot_id = new_plot_id where project_id = proj.project_id and plot_id is null;
-    update public.handover_documents set plot_id = new_plot_id where project_id = proj.project_id and plot_id is null;
+    execute format('update public.quality_gates set plot_id = $1 where project_id = $2 and plot_id is null %s', block_filter)
+      using new_plot_id, proj.project_id;
+    execute format('update public.handover_documents set plot_id = $1 where project_id = $2 and plot_id is null %s', block_filter)
+      using new_plot_id, proj.project_id;
   end loop;
 end $$;
 
--- Now that every row has a plot, enforce it going forward.
-alter table public.quality_gates alter column plot_id set not null;
-alter table public.handover_documents alter column plot_id set not null;
+-- (v5 originally enforced plot_id not null here, once every legacy row
+-- had been backfilled onto a plot above. v15 later reopens plot_id to
+-- nullable — a block-scoped gate/document has no plot_id at all — so
+-- that enforcement no longer belongs here; seeing it removed on a diff
+-- is expected, not a regression.)
 
 -- Uniqueness of a gate/doc is now per plot, not per project.
 alter table public.quality_gates drop constraint if exists quality_gates_project_id_gate_key_key;
@@ -759,3 +784,185 @@ alter table public.projects add constraint projects_external_works_pct_check che
 alter table public.quality_gates drop constraint if exists quality_gates_status_check;
 alter table public.quality_gates add constraint quality_gates_status_check
   check (status in ('not_started', 'in_progress', 'under_review', 'approved', 'not_applicable'));
+
+-- ─── v15 ADDITIONS ────────────────────────────────────────────────
+-- Apartment blocks: a Block groups several flats under shared
+-- structural gates/documents (foundations, frame, roof, communal
+-- areas) tracked ONCE, instead of duplicated on every flat. Houses
+-- keep working exactly as before — a plot with no block_id.
+
+create table if not exists public.blocks (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  block_name text not null,
+  progress_pct numeric not null default 0 check (progress_pct >= 0 and progress_pct <= 100),
+  created_by uuid references auth.users(id),
+  created_at timestamptz not null default now()
+);
+
+alter table public.blocks enable row level security;
+drop policy if exists "authenticated read blocks" on public.blocks;
+create policy "authenticated read blocks" on public.blocks for select using (auth.role() = 'authenticated');
+drop policy if exists "authenticated insert blocks" on public.blocks;
+create policy "authenticated insert blocks" on public.blocks for insert with check (auth.role() = 'authenticated');
+drop policy if exists "authenticated update blocks" on public.blocks;
+create policy "authenticated update blocks" on public.blocks for update using (auth.role() = 'authenticated');
+drop policy if exists "authenticated delete blocks" on public.blocks;
+create policy "authenticated delete blocks" on public.blocks for delete using (auth.role() = 'authenticated');
+
+-- A flat is a plot that belongs to a block; a standalone house is a
+-- plot with block_id null.
+alter table public.plots add column if not exists block_id uuid references public.blocks(id) on delete cascade;
+
+-- quality_gates and handover_documents can now be scoped to either a
+-- plot (house or flat) or a block (shared structure) — exactly one.
+alter table public.quality_gates alter column plot_id drop not null;
+alter table public.quality_gates add column if not exists block_id uuid references public.blocks(id) on delete cascade;
+alter table public.quality_gates drop constraint if exists quality_gates_scope_check;
+alter table public.quality_gates add constraint quality_gates_scope_check
+  check ((plot_id is not null and block_id is null) or (plot_id is null and block_id is not null));
+alter table public.quality_gates drop constraint if exists quality_gates_block_id_gate_key_key;
+alter table public.quality_gates add constraint quality_gates_block_id_gate_key_key unique (block_id, gate_key);
+
+alter table public.handover_documents alter column plot_id drop not null;
+alter table public.handover_documents add column if not exists block_id uuid references public.blocks(id) on delete cascade;
+alter table public.handover_documents drop constraint if exists handover_documents_scope_check;
+alter table public.handover_documents add constraint handover_documents_scope_check
+  check ((plot_id is not null and block_id is null) or (plot_id is null and block_id is not null));
+alter table public.handover_documents drop constraint if exists handover_documents_block_id_doc_key_key;
+alter table public.handover_documents add constraint handover_documents_block_id_doc_key_key unique (block_id, doc_key);
+
+-- Seed a new block's shared structural gates + statutory documents.
+create or replace function public.seed_block_defaults()
+returns trigger as $$
+begin
+  insert into public.quality_gates (project_id, block_id, gate_key, title, sort_order, checklist) values
+    (new.project_id, new.id, 'block_substructure_drainage', 'Substructure & Drainage (Block)', 1, '[
+       {"text": "Foundation excavation inspected by Building Control", "checked": false, "checked_at": null},
+       {"text": "Drainage test (air/water) passed and recorded", "checked": false, "checked_at": null},
+       {"text": "DPC level verified across the block", "checked": false, "checked_at": null},
+       {"text": "Building Control sign-off for substructure received", "checked": false, "checked_at": null}
+     ]'::jsonb),
+    (new.project_id, new.id, 'block_frame_superstructure', 'Frame & Superstructure (Block)', 2, '[
+       {"text": "Structural frame inspected at each floor", "checked": false, "checked_at": null},
+       {"text": "Structural engineer sign-off uploaded", "checked": false, "checked_at": null},
+       {"text": "Fire-stopping / compartmentation between floors installed", "checked": false, "checked_at": null},
+       {"text": "Superstructure Building Control inspection passed", "checked": false, "checked_at": null}
+     ]'::jsonb),
+    (new.project_id, new.id, 'block_envelope_watertight', 'Roof & Building Envelope (Wind/Watertight)', 3, '[
+       {"text": "Roof covering complete and inspected", "checked": false, "checked_at": null},
+       {"text": "Moisture readings recorded", "checked": false, "checked_at": null},
+       {"text": "Cladding / render system signed off", "checked": false, "checked_at": null},
+       {"text": "Building confirmed wind and watertight", "checked": false, "checked_at": null}
+     ]'::jsonb),
+    (new.project_id, new.id, 'block_communal_fire', 'Communal Areas, M&E & Fire Strategy', 4, '[
+       {"text": "Lift(s) commissioned and certified", "checked": false, "checked_at": null},
+       {"text": "Communal M&E systems (AOV, sprinklers, fire alarm) commissioned", "checked": false, "checked_at": null},
+       {"text": "Fire strategy walk-through completed with Building Control / Fire Officer", "checked": false, "checked_at": null},
+       {"text": "Communal areas snagging closed out", "checked": false, "checked_at": null}
+     ]'::jsonb)
+  on conflict (block_id, gate_key) do nothing;
+
+  insert into public.handover_documents (project_id, block_id, doc_key, title) values
+    (new.project_id, new.id, 'block_building_control', 'Building Control Sign-off (Block)'),
+    (new.project_id, new.id, 'block_warranty', 'NHBC/Structural Warranty Cover Note (Block)'),
+    (new.project_id, new.id, 'block_fire_strategy', 'Fire Strategy & Compartmentation Report'),
+    (new.project_id, new.id, 'block_communal_me', 'Communal M&E Handover Pack (Lifts, AOV, Sprinklers)'),
+    (new.project_id, new.id, 'block_insurance', 'Building Insurance / Buildings Warranty')
+  on conflict (block_id, doc_key) do nothing;
+
+  return new;
+end;
+$$ language plpgsql;
+
+drop trigger if exists trg_seed_block_defaults on public.blocks;
+create trigger trg_seed_block_defaults
+after insert on public.blocks
+for each row execute function public.seed_block_defaults();
+
+-- Seed a new plot's gates/documents/snag list — a reduced,
+-- flat-appropriate set if it belongs to a block (structural items are
+-- the block's job, not this flat's), otherwise the full house set as
+-- before.
+create or replace function public.seed_plot_defaults()
+returns trigger as $$
+begin
+  if new.block_id is null then
+    insert into public.quality_gates (project_id, plot_id, gate_key, title, sort_order, checklist) values
+      (new.project_id, new.id, 'substructure_drainage', 'Substructure & Drainage', 1, '[
+         {"text": "Foundation excavation inspected by Building Control", "checked": false, "checked_at": null},
+         {"text": "Drainage test (air/water) passed and recorded", "checked": false, "checked_at": null},
+         {"text": "DPC level verified", "checked": false, "checked_at": null},
+         {"text": "Building Control sign-off for substructure received", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      (new.project_id, new.id, 'frame_watertight', 'Frame & Wind/Watertight', 2, '[
+         {"text": "Moisture readings recorded", "checked": false, "checked_at": null},
+         {"text": "Cavity barriers inspected", "checked": false, "checked_at": null},
+         {"text": "Structural engineer sign-off uploaded", "checked": false, "checked_at": null},
+         {"text": "Roof confirmed watertight", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      (new.project_id, new.id, 'pre_plaster_first_fix', 'Pre-Plaster / First Fix', 3, '[
+         {"text": "First fix electrical inspected", "checked": false, "checked_at": null},
+         {"text": "First fix plumbing & heating inspected", "checked": false, "checked_at": null},
+         {"text": "Insulation installed and inspected", "checked": false, "checked_at": null},
+         {"text": "Pre-plaster inspection sign-off received", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      (new.project_id, new.id, 'pre_handover_pc', 'Pre-Handover / PC', 4, '[
+         {"text": "Snagging list closed out", "checked": false, "checked_at": null},
+         {"text": "O&M manuals received", "checked": false, "checked_at": null},
+         {"text": "All statutory certificates received", "checked": false, "checked_at": null},
+         {"text": "Final client walkthrough completed", "checked": false, "checked_at": null}
+       ]'::jsonb)
+    on conflict (plot_id, gate_key) do nothing;
+
+    insert into public.handover_documents (project_id, plot_id, doc_key, title) values
+      (new.project_id, new.id, 'building_control', 'Building Control Sign-off (Initial/Final)'),
+      (new.project_id, new.id, 'air_acoustic_test', 'Air Permeability / Acoustic Test Certificates'),
+      (new.project_id, new.id, 'elec_gas_certs', 'Electrical & Gas Safety Certificates'),
+      (new.project_id, new.id, 'warranty_cover_note', 'NHBC/Structural Warranty Cover Note'),
+      (new.project_id, new.id, 'om_manuals', 'Draft O&M Manuals')
+    on conflict (plot_id, doc_key) do nothing;
+  else
+    insert into public.quality_gates (project_id, plot_id, gate_key, title, sort_order, checklist) values
+      (new.project_id, new.id, 'flat_first_fix', '1st Fix (All Trades)', 1, '[
+         {"text": "First fix electrical inspected", "checked": false, "checked_at": null},
+         {"text": "First fix plumbing & heating inspected", "checked": false, "checked_at": null},
+         {"text": "Insulation installed and inspected", "checked": false, "checked_at": null},
+         {"text": "Pre-plaster inspection sign-off received", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      (new.project_id, new.id, 'flat_second_fix', '2nd Fix (All Trades)', 2, '[
+         {"text": "Second fix electrical complete and tested", "checked": false, "checked_at": null},
+         {"text": "Second fix plumbing & heating complete and tested", "checked": false, "checked_at": null},
+         {"text": "Sockets, switches and fittings installed", "checked": false, "checked_at": null},
+         {"text": "Heating system commissioned", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      (new.project_id, new.id, 'flat_kitchen_bathroom', 'Kitchen & Bathroom Fit', 3, '[
+         {"text": "Kitchen units, worktops and appliances installed", "checked": false, "checked_at": null},
+         {"text": "Bathroom / en-suite sanitaryware and tiling complete", "checked": false, "checked_at": null},
+         {"text": "Water pressure and drainage tested", "checked": false, "checked_at": null},
+         {"text": "Extractor fans tested", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      (new.project_id, new.id, 'flat_pre_handover', 'Decoration, Flooring & Pre-Handover Snagging', 4, '[
+         {"text": "Decoration (walls, ceilings, woodwork) complete", "checked": false, "checked_at": null},
+         {"text": "Flooring / carpets fitted", "checked": false, "checked_at": null},
+         {"text": "Unit snagging list closed out", "checked": false, "checked_at": null},
+         {"text": "Final clean completed", "checked": false, "checked_at": null}
+       ]'::jsonb)
+    on conflict (plot_id, gate_key) do nothing;
+
+    insert into public.handover_documents (project_id, plot_id, doc_key, title) values
+      (new.project_id, new.id, 'flat_air_acoustic_test', 'Air Permeability / Acoustic Test Certificate'),
+      (new.project_id, new.id, 'flat_elec_gas_certs', 'Electrical & Gas Safety Certificates'),
+      (new.project_id, new.id, 'flat_epc', 'EPC (Energy Performance Certificate)'),
+      (new.project_id, new.id, 'flat_warranty', 'Unit Warranty Cover Note'),
+      (new.project_id, new.id, 'flat_om_manuals', 'O&M Manuals (Unit)')
+    on conflict (plot_id, doc_key) do nothing;
+  end if;
+
+  insert into public.snag_lists (project_id, plot_id, title)
+  values (new.project_id, new.id, new.plot_number)
+  on conflict (plot_id) do nothing;
+
+  return new;
+end;
+$$ language plpgsql;

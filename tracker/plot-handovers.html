@@ -15,11 +15,29 @@
   <div class="page-head">
     <div>
       <div class="page-title">Plot Handovers</div>
-      <div class="page-sub" id="projectSub">Quality gates and statutory documents, tracked per plot.</div>
+      <div class="page-sub" id="projectSub">Quality gates and statutory documents, tracked per plot — or per apartment block.</div>
     </div>
-    <button class="btn btn-amber" id="newPlotBtn">+ Plot</button>
+    <div class="btn-row">
+      <button class="btn btn-outline" id="newBlockBtn">+ Block</button>
+      <button class="btn btn-amber" id="newPlotBtn">+ Plot</button>
+    </div>
   </div>
 
+  <div id="blocksSection" style="display:none;">
+    <h3 style="font-family:var(--font-display); font-size:1.1rem; margin-bottom:1rem;">Apartment Blocks</h3>
+    <div class="card" style="margin-bottom:2rem;">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Block</th><th>Flats</th><th>Progress</th><th>Quality Gates</th><th>Handover Docs</th><th>Added</th><th></th></tr>
+          </thead>
+          <tbody id="blockRows"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <h3 id="plotsHeading" style="font-family:var(--font-display); font-size:1.1rem; margin-bottom:1rem; display:none;">Plots</h3>
   <div class="card">
     <div class="table-wrap">
       <table>
@@ -30,8 +48,11 @@
       </table>
     </div>
     <div id="emptyState" class="empty" style="display:none;">
-      <p>No plots yet. Add your first plot to start tracking quality gates and handover documents.</p>
-      <button class="btn btn-amber" id="emptyNewPlotBtn">+ Plot</button>
+      <p>No plots or apartment blocks yet. Add a standalone house with <strong>+ Plot</strong>, or an apartment building with <strong>+ Block</strong> (its flats then live inside the block).</p>
+      <div class="btn-row" style="justify-content:center;">
+        <button class="btn btn-outline" id="emptyNewBlockBtn">+ Block</button>
+        <button class="btn btn-amber" id="emptyNewPlotBtn">+ Plot</button>
+      </div>
     </div>
   </div>
 </div>
@@ -58,12 +79,33 @@
   document.getElementById("newPlotBtn").addEventListener("click", createPlot);
   document.getElementById("emptyNewPlotBtn")?.addEventListener("click", createPlot);
 
+  async function createBlock() {
+    const blockName = prompt("Block name:", "Building ");
+    if (!blockName || !blockName.trim()) return;
+    const { data: { user } } = await supabase.auth.getUser();
+    const { data, error } = await supabase
+      .from("blocks")
+      .insert({ project_id: projectId, block_name: blockName.trim(), created_by: user.id })
+      .select()
+      .single();
+    if (!error) window.location.href = `block-detail.html?id=${data.id}`;
+  }
+  document.getElementById("newBlockBtn").addEventListener("click", createBlock);
+  document.getElementById("emptyNewBlockBtn")?.addEventListener("click", createBlock);
+
   async function deletePlot(id, name) {
     if (!confirm(`Delete "${name}" and all its quality gates and handover documents? This cannot be undone.`)) return;
     await supabase.from("plots").delete().eq("id", id);
     load();
   }
   window.deletePlot = deletePlot;
+
+  async function deleteBlock(id, name) {
+    if (!confirm(`Delete "${name}", all its flats, and every flat's quality gates and handover documents? This cannot be undone.`)) return;
+    await supabase.from("blocks").delete().eq("id", id);
+    load();
+  }
+  window.deleteBlock = deleteBlock;
 
   async function load() {
     const { data: project } = await supabase.from("projects").select("name").eq("id", projectId).single();
@@ -72,52 +114,82 @@
       { label: project?.name || "Site", href: `project.html?id=${projectId}` },
       { label: "Plot Handovers" },
     ]);
-    document.getElementById("projectSub").textContent = project ? `${project.name} — quality gates and statutory documents, tracked per plot.` : "";
+    document.getElementById("projectSub").textContent = project ? `${project.name} — quality gates and statutory documents, tracked per plot or per apartment block.` : "";
 
-    const { data: plots, error } = await supabase
-      .from("plots")
-      .select("*")
-      .eq("project_id", projectId);
-
-    if (error || !plots || !plots.length) {
-      document.getElementById("emptyState").style.display = "block";
-      return;
-    }
-    plots.sort((a, b) => comparePlotNumbers(a.plot_number, b.plot_number));
-
-    const [{ data: gates }, { data: docs }] = await Promise.all([
-      supabase.from("quality_gates").select("plot_id, status").eq("project_id", projectId),
-      supabase.from("handover_documents").select("plot_id, status").eq("project_id", projectId),
+    const [{ data: allPlots }, { data: blocks }, { data: gates }, { data: docs }] = await Promise.all([
+      supabase.from("plots").select("*").eq("project_id", projectId),
+      supabase.from("blocks").select("*").eq("project_id", projectId),
+      supabase.from("quality_gates").select("plot_id, block_id, status").eq("project_id", projectId),
+      supabase.from("handover_documents").select("plot_id, block_id, status").eq("project_id", projectId),
     ]);
 
-    const gatesByPlot = {};
-    (gates || []).forEach((g) => {
-      if (g.status === "not_applicable") return;
-      gatesByPlot[g.plot_id] = gatesByPlot[g.plot_id] || { approved: 0, total: 0 };
-      gatesByPlot[g.plot_id].total++;
-      if (g.status === "approved") gatesByPlot[g.plot_id].approved++;
-    });
-    const docsByPlot = {};
-    (docs || []).forEach((d) => {
-      docsByPlot[d.plot_id] = docsByPlot[d.plot_id] || { ready: 0, total: 0 };
-      docsByPlot[d.plot_id].total++;
-      if (d.status === "approved_final") docsByPlot[d.plot_id].ready++;
+    const plots = (allPlots || []).filter((p) => !p.block_id);
+    const flatsByBlock = {};
+    (allPlots || []).filter((p) => p.block_id).forEach((p) => {
+      flatsByBlock[p.block_id] = (flatsByBlock[p.block_id] || 0) + 1;
     });
 
-    document.getElementById("plotRows").innerHTML = plots.map((p) => {
-      const g = gatesByPlot[p.id] || { approved: 0, total: 0 };
-      const d = docsByPlot[p.id] || { ready: 0, total: 0 };
-      return `
-        <tr class="row-link" onclick="window.location.href='plot-detail.html?id=${p.id}'">
-          <td><strong>${escapeHtml(p.plot_number)}</strong></td>
-          <td><span class="badge ${p.progress_pct >= 100 ? "badge-green" : "badge-amber"}">${p.progress_pct || 0}%</span></td>
-          <td><span class="badge ${g.approved === g.total ? "badge-green" : "badge-amber"}">${g.approved} / ${g.total} approved${g.total === 0 ? " (N/A)" : ""}</span></td>
-          <td><span class="badge ${d.ready === d.total && d.total > 0 ? "badge-green" : "badge-amber"}">${d.ready} / ${d.total} ready</span></td>
-          <td>${formatDate(p.created_at?.slice(0, 10))}</td>
-          <td onclick="event.stopPropagation()"><button class="btn btn-outline btn-sm" onclick="deletePlot('${p.id}', '${escapeHtml(p.plot_number).replace(/'/g, "\\'")}')">Delete</button></td>
-        </tr>
-      `;
-    }).join("");
+    if (!plots.length && !(blocks || []).length) {
+      document.getElementById("emptyState").style.display = "block";
+      document.getElementById("plotsHeading").style.display = "none";
+      return;
+    }
+
+    plots.sort((a, b) => comparePlotNumbers(a.plot_number, b.plot_number));
+    (blocks || []).sort((a, b) => comparePlotNumbers(a.block_name, b.block_name));
+
+    const gatesByScope = {};
+    (gates || []).forEach((g) => {
+      if (g.status === "not_applicable") return;
+      const key = g.plot_id || `block:${g.block_id}`;
+      gatesByScope[key] = gatesByScope[key] || { approved: 0, total: 0 };
+      gatesByScope[key].total++;
+      if (g.status === "approved") gatesByScope[key].approved++;
+    });
+    const docsByScope = {};
+    (docs || []).forEach((d) => {
+      const key = d.plot_id || `block:${d.block_id}`;
+      docsByScope[key] = docsByScope[key] || { ready: 0, total: 0 };
+      docsByScope[key].total++;
+      if (d.status === "approved_final") docsByScope[key].ready++;
+    });
+
+    if ((blocks || []).length) {
+      document.getElementById("blocksSection").style.display = "block";
+      document.getElementById("blockRows").innerHTML = blocks.map((b) => {
+        const g = gatesByScope[`block:${b.id}`] || { approved: 0, total: 0 };
+        const d = docsByScope[`block:${b.id}`] || { ready: 0, total: 0 };
+        return `
+          <tr class="row-link" onclick="window.location.href='block-detail.html?id=${b.id}'">
+            <td><strong>${escapeHtml(b.block_name)}</strong></td>
+            <td>${flatsByBlock[b.id] || 0}</td>
+            <td><span class="badge ${b.progress_pct >= 100 ? "badge-green" : "badge-amber"}">${b.progress_pct || 0}%</span></td>
+            <td><span class="badge ${g.approved === g.total ? "badge-green" : "badge-amber"}">${g.approved} / ${g.total} approved${g.total === 0 ? " (N/A)" : ""}</span></td>
+            <td><span class="badge ${d.ready === d.total && d.total > 0 ? "badge-green" : "badge-amber"}">${d.ready} / ${d.total} ready</span></td>
+            <td>${formatDate(b.created_at?.slice(0, 10))}</td>
+            <td onclick="event.stopPropagation()"><button class="btn btn-outline btn-sm" onclick="deleteBlock('${b.id}', '${escapeHtml(b.block_name).replace(/'/g, "\\'")}')">Delete</button></td>
+          </tr>
+        `;
+      }).join("");
+    }
+
+    if (plots.length) {
+      document.getElementById("plotsHeading").style.display = "block";
+      document.getElementById("plotRows").innerHTML = plots.map((p) => {
+        const g = gatesByScope[p.id] || { approved: 0, total: 0 };
+        const d = docsByScope[p.id] || { ready: 0, total: 0 };
+        return `
+          <tr class="row-link" onclick="window.location.href='plot-detail.html?id=${p.id}'">
+            <td><strong>${escapeHtml(p.plot_number)}</strong></td>
+            <td><span class="badge ${p.progress_pct >= 100 ? "badge-green" : "badge-amber"}">${p.progress_pct || 0}%</span></td>
+            <td><span class="badge ${g.approved === g.total ? "badge-green" : "badge-amber"}">${g.approved} / ${g.total} approved${g.total === 0 ? " (N/A)" : ""}</span></td>
+            <td><span class="badge ${d.ready === d.total && d.total > 0 ? "badge-green" : "badge-amber"}">${d.ready} / ${d.total} ready</span></td>
+            <td>${formatDate(p.created_at?.slice(0, 10))}</td>
+            <td onclick="event.stopPropagation()"><button class="btn btn-outline btn-sm" onclick="deletePlot('${p.id}', '${escapeHtml(p.plot_number).replace(/'/g, "\\'")}')">Delete</button></td>
+          </tr>
+        `;
+      }).join("");
+    }
   }
 
   load();
