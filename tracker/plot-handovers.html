@@ -24,7 +24,7 @@
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>Plot</th><th>Quality Gates</th><th>Handover Docs</th><th>Added</th><th></th></tr>
+          <tr><th>Plot</th><th>Progress</th><th>Quality Gates</th><th>Handover Docs</th><th>Added</th><th></th></tr>
         </thead>
         <tbody id="plotRows"></tbody>
       </table>
@@ -109,6 +109,7 @@
       return `
         <tr class="row-link" onclick="window.location.href='plot-detail.html?id=${p.id}'">
           <td><strong>${escapeHtml(p.plot_number)}</strong></td>
+          <td><span class="badge ${p.progress_pct >= 100 ? "badge-green" : "badge-amber"}">${p.progress_pct || 0}%</span></td>
           <td><span class="badge ${g.approved === g.total && g.total > 0 ? "badge-green" : "badge-amber"}">${g.approved} / ${g.total} approved</span></td>
           <td><span class="badge ${d.ready === d.total && d.total > 0 ? "badge-green" : "badge-amber"}">${d.ready} / ${d.total} ready</span></td>
           <td>${formatDate(p.created_at?.slice(0, 10))}</td>

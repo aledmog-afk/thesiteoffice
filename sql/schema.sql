@@ -733,3 +733,20 @@ alter table public.projects add column if not exists longitude numeric;
 alter table public.projects add column if not exists total_plots integer;
 alter table public.projects drop constraint if exists projects_total_plots_check;
 alter table public.projects add constraint projects_total_plots_check check (total_plots is null or total_plots > 0);
+
+-- ─── v13 ADDITIONS ────────────────────────────────────────────────
+-- Automatic progress, take two: milestone-only auto-calc gave no way to
+-- correct it when a milestone was missed in a weekly report. Actual
+-- Progress is now the average of every plot's own progress % (set
+-- directly, or filled from a "Suggest from Milestones" button you have
+-- to explicitly click — it never overwrites a number you've typed)
+-- plus a single site-wide External / Engineering Works %, for civils
+-- work that isn't any one plot. total_plots is left in place, unused —
+-- the real plot count is now just however many rows exist in `plots`.
+alter table public.plots add column if not exists progress_pct numeric not null default 0;
+alter table public.plots drop constraint if exists plots_progress_pct_check;
+alter table public.plots add constraint plots_progress_pct_check check (progress_pct >= 0 and progress_pct <= 100);
+
+alter table public.projects add column if not exists external_works_pct numeric not null default 0;
+alter table public.projects drop constraint if exists projects_external_works_pct_check;
+alter table public.projects add constraint projects_external_works_pct_check check (external_works_pct >= 0 and external_works_pct <= 100);

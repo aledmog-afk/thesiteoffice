@@ -33,7 +33,7 @@
       <span class="hint" style="color:var(--ink-soft); font-size:0.8rem;">Overall status &amp; programme progress — edit below</span>
     </div>
     <div id="progressDisplay"></div>
-    <p class="hint" id="noPlotsHint" style="display:none; margin-top:0.5rem;">Set <strong>Total Plots</strong> below to start tracking Actual Progress automatically from weekly report milestones.</p>
+    <p class="hint" style="margin-top:0.5rem;">Actual Progress is the average of every plot's own progress (set on its Plot Handovers page) plus External / Engineering Works below.</p>
   </div>
 
   <div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(220px,1fr)); margin-bottom:2rem;">
@@ -109,11 +109,11 @@
       <div class="form-grid">
         <div class="field"><label for="baselinePct">Planned / baseline progress (%)</label><input type="number" id="baselinePct" min="0" max="100" step="1"></div>
         <div class="field">
-          <label for="totalPlots">Total plots on site</label>
-          <input type="number" id="totalPlots" min="1" step="1" placeholder="e.g. 24">
+          <label for="externalWorksPct">External / Engineering Works (%)</label>
+          <input type="number" id="externalWorksPct" min="0" max="100" step="1">
         </div>
       </div>
-      <p class="hint">Actual Progress is calculated automatically from milestones logged on weekly reports, weighted against the total plot count above — it's no longer typed in by hand.</p>
+      <p class="hint">Each plot's own progress is set on its Plot Handovers page. External / Engineering Works covers civils, drainage, and landscaping — work that isn't any one plot.</p>
       <div class="btn-row">
         <button type="submit" class="btn btn-amber">Save Changes</button>
         <button type="button" class="btn btn-outline" id="cancelEditBtn">Cancel</button>
@@ -152,7 +152,7 @@
       <div><dt>Main Contractor</dt><dd>${escapeHtml(project.main_contractor_name) || "—"}</dd></div>
       <div><dt>Contractor Email</dt><dd>${escapeHtml(project.main_contractor_email) || "—"}</dd></div>
       <div><dt>Start Date</dt><dd>${project.start_date ? formatDate(project.start_date) : "—"}</dd></div>
-      <div><dt>Total Plots</dt><dd>${project.total_plots || "—"}</dd></div>
+      <div><dt>External / Engineering Works</dt><dd>${project.external_works_pct || 0}%</dd></div>
     `;
   }
 
@@ -166,7 +166,7 @@
     document.getElementById("startDate").value = project.start_date || "";
     document.getElementById("ragStatusInput").value = project.rag_status;
     document.getElementById("baselinePct").value = project.baseline_progress_pct;
-    document.getElementById("totalPlots").value = project.total_plots || "";
+    document.getElementById("externalWorksPct").value = project.external_works_pct || 0;
   }
 
   document.getElementById("editBtn").addEventListener("click", () => {
@@ -185,7 +185,6 @@
     e.preventDefault();
     clearError(errorBox);
     const postcode = document.getElementById("postcode").value.trim() || null;
-    const totalPlotsVal = document.getElementById("totalPlots").value;
     const payload = {
       name: document.getElementById("name").value.trim(),
       contract_ref: document.getElementById("contractRef").value.trim() || null,
@@ -196,7 +195,7 @@
       start_date: document.getElementById("startDate").value || null,
       rag_status: document.getElementById("ragStatusInput").value,
       baseline_progress_pct: Number(document.getElementById("baselinePct").value) || 0,
-      total_plots: totalPlotsVal === "" ? null : Number(totalPlotsVal),
+      external_works_pct: Math.max(0, Math.min(100, Number(document.getElementById("externalWorksPct").value) || 0)),
     };
 
     // Only re-geocode when the postcode actually changed — avoids an
@@ -223,13 +222,12 @@
     project = data;
 
     // Recalculating can change actual_progress_pct on the row we just
-    // fetched (e.g. total_plots was just set for the first time), so
-    // pull the fresh value back in rather than trusting the pre-recalc
-    // `data`. A failure here is non-fatal — the site details themselves
-    // already saved fine.
+    // fetched (external_works_pct may have just changed), so pull the
+    // fresh value back in rather than trusting the pre-recalc `data`. A
+    // failure here is non-fatal — the site details themselves already
+    // saved fine.
     try {
-      const pct = await recalculateActualProgress(projectId);
-      if (pct !== null) project.actual_progress_pct = pct;
+      project.actual_progress_pct = await recalculateActualProgress(projectId);
     } catch { /* non-fatal — details are already saved */ }
 
     renderHeaderAndFacts();
@@ -259,7 +257,6 @@
     ragBadge.className = `badge badge-${project.rag_status} rag-badge`;
     ragBadge.innerHTML = `<span class="rag-dot rag-${project.rag_status}"></span>${RAG_LABEL[project.rag_status]}`;
     document.getElementById("progressDisplay").innerHTML = renderProgressBlock(project.baseline_progress_pct, project.actual_progress_pct, project.rag_status);
-    document.getElementById("noPlotsHint").style.display = project.total_plots ? "none" : "block";
   }
 
   async function load() {

@@ -22,6 +22,21 @@
 
   <div id="errorBox" class="error-box"></div>
 
+  <h3 style="font-family:var(--font-display); font-size:1.1rem; margin-bottom:1rem;">Plot Progress</h3>
+  <div class="card" style="margin-bottom:2.5rem;">
+    <div class="form-grid" style="align-items:end;">
+      <div class="field">
+        <label for="plotProgressInput">Progress complete (%)</label>
+        <input type="number" id="plotProgressInput" min="0" max="100" step="1">
+      </div>
+      <div class="btn-row">
+        <button type="button" class="btn btn-outline" id="suggestProgressBtn">Suggest from Milestones</button>
+        <button type="button" class="btn btn-amber" id="saveProgressBtn">Save</button>
+      </div>
+    </div>
+    <p class="hint" id="progressSavedHint" style="margin-top:0.5rem;"></p>
+  </div>
+
   <h3 style="font-family:var(--font-display); font-size:1.1rem; margin-bottom:1rem;">Quality Gates</h3>
   <div id="gatesWrap" style="margin-bottom:2.5rem;">Loading…</div>
 
@@ -40,7 +55,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, uploadImage } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, uploadImage, suggestPlotProgress, recalculateActualProgress } from "./js/app.js";
 
   await requireAuth();
   const plotId = getParam("id");
@@ -199,6 +214,37 @@
     data.forEach(wireDocRow);
   }
 
+  // ─── Plot progress ──────────────────────────────────────────────
+  document.getElementById("suggestProgressBtn").addEventListener("click", async () => {
+    const btn = document.getElementById("suggestProgressBtn");
+    btn.disabled = true;
+    btn.textContent = "Checking weekly reports…";
+    const suggested = await suggestPlotProgress(plot.project_id, plot.plot_number);
+    document.getElementById("plotProgressInput").value = suggested;
+    document.getElementById("progressSavedHint").textContent = `Suggested from logged milestones — review and hit Save to apply.`;
+    btn.disabled = false;
+    btn.textContent = "Suggest from Milestones";
+  });
+
+  document.getElementById("saveProgressBtn").addEventListener("click", async () => {
+    clearError(errorBox);
+    const val = document.getElementById("plotProgressInput").value;
+    const pct = Math.max(0, Math.min(100, Number(val) || 0));
+    const saveBtn = document.getElementById("saveProgressBtn");
+    saveBtn.disabled = true;
+    try {
+      const { error } = await supabase.from("plots").update({ progress_pct: pct }).eq("id", plotId);
+      if (error) throw error;
+      plot.progress_pct = pct;
+      await recalculateActualProgress(plot.project_id);
+      document.getElementById("progressSavedHint").textContent = "Saved — site's Actual Progress has been updated.";
+    } catch (err) {
+      showError(errorBox, err);
+    } finally {
+      saveBtn.disabled = false;
+    }
+  });
+
   // ─── Delete plot ────────────────────────────────────────────────
   document.getElementById("deletePlotBtn").addEventListener("click", async () => {
     if (!confirm(`Delete "${plot.plot_number}" and all its quality gates and handover documents? This cannot be undone.`)) return;
@@ -216,6 +262,7 @@
 
     document.getElementById("plotTitle").textContent = plot.plot_number;
     document.getElementById("projectSub").textContent = project.name;
+    document.getElementById("plotProgressInput").value = plot.progress_pct || 0;
     renderHeader([
       { label: "Dashboard", href: "dashboard.html" },
       { label: project.name, href: `project.html?id=${project.id}` },

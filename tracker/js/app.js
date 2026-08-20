@@ -219,51 +219,69 @@ export async function getOrgLogoUrl() {
 }
 
 // ─── Automatic progress ───────────────────────────────────────────
-// Recomputes a project's "Actual Progress %" from its logged milestone
-// progress and total_plots, and writes it back onto the project row.
-// No-ops (returns null, touches nothing) if total_plots isn't set —
-// there's no denominator to work with yet.
-//
-// Dedupes by (plot token, milestone) across the project's ENTIRE weekly
-// report history, not just the report just saved, taking the highest
-// percent ever recorded for each pair — so a milestone finished months
-// ago still counts even once it's dropped off every current week's
-// list. A progress item's plot field can list several plots at once
-// ("5,6,7"), so each token is credited separately; an item with no plot
-// tag is treated as a site-wide milestone and credited as if it applied
-// to every plot at once (finishing it once is worth as much as
-// finishing it on each individual plot). Items with no milestone, or a
-// custom "Other" milestone outside BUILD_MILESTONES, aren't weighted at
-// all — there's no fixed slot for them in the scale.
+// Actual Progress % is the average of every plot's own progress_pct
+// plus the site's external_works_pct (civils/drainage/landscaping —
+// work that isn't any one plot), as N+1 equally-weighted numbers. Both
+// inputs are set directly (by hand, or via suggestPlotProgress() below)
+// rather than being locked to an automatic calculation — the point is
+// that they're always correctable when a milestone gets missed in a
+// weekly report.
 export async function recalculateActualProgress(projectId) {
-  const { data: project } = await supabase.from("projects").select("total_plots").eq("id", projectId).single();
-  if (!project?.total_plots || project.total_plots <= 0) return null;
+  const [{ data: project }, { data: plots }] = await Promise.all([
+    supabase.from("projects").select("external_works_pct").eq("id", projectId).single(),
+    supabase.from("plots").select("progress_pct").eq("project_id", projectId),
+  ]);
 
-  const { data: reports } = await supabase.from("weekly_reports").select("progress_items").eq("project_id", projectId);
-
-  const best = new Map(); // key: `${plotToken}::${milestone}` -> { percent, isSiteWide }
-  (reports || []).forEach((r) => {
-    (Array.isArray(r.progress_items) ? r.progress_items : []).forEach((item) => {
-      if (typeof item === "string" || !item.milestone || !BUILD_MILESTONES.includes(item.milestone)) return;
-      const percent = typeof item.percent === "number" ? item.percent : 0;
-      const plotTokens = item.plot ? item.plot.split(",").map((p) => p.trim()).filter(Boolean) : ["__sitewide__"];
-      plotTokens.forEach((token) => {
-        const key = `${token}::${item.milestone}`;
-        const prev = best.get(key);
-        if (!prev || percent > prev.percent) best.set(key, { percent, isSiteWide: token === "__sitewide__" });
-      });
-    });
-  });
-
-  const totalPoints = BUILD_MILESTONES.length * project.total_plots;
-  let achieved = 0;
-  best.forEach(({ percent, isSiteWide }) => {
-    achieved += (percent / 100) * (isSiteWide ? project.total_plots : 1);
-  });
-  const pct = Math.round(Math.min(100, Math.max(0, (achieved / totalPoints) * 100)) * 10) / 10;
+  const values = [...(plots || []).map((p) => Number(p.progress_pct) || 0), Number(project?.external_works_pct) || 0];
+  const pct = Math.round((values.reduce((sum, v) => sum + v, 0) / values.length) * 10) / 10;
 
   await supabase.from("projects").update({ actual_progress_pct: pct }).eq("id", projectId);
   return pct;
+}
+
+// A weekly report's plot tag is freetext ("5", "5,6,7") and a plot's own
+// name is also freetext ("Plot 5", or just "5") — normalise both to
+// their digits where possible so "Plot 5" and "5" are recognised as the
+// same plot, falling back to a case-insensitive exact match for
+// non-numeric plot names.
+function normalisePlotToken(s) {
+  const digits = (s.match(/\d+/) || [])[0];
+  return digits || s.trim().toLowerCase();
+}
+
+// Suggests a starting point for one plot's progress_pct, computed from
+// the build milestones logged against it in weekly reports — purely a
+// value for the caller to pre-fill an input with; it never writes
+// anything itself, so it can never silently overwrite a manually-typed
+// correction.
+//
+// Dedupes by milestone across the project's ENTIRE weekly report
+// history, not just the most recent report, taking the highest percent
+// ever recorded for each — so a milestone finished months ago still
+// counts even once it's dropped off every current week's list. A
+// progress item's plot field can list several plots at once ("5,6,7"),
+// so an item counts toward this plot if its plot list includes this
+// plot's number. Items with no milestone, or a custom "Other" milestone
+// outside BUILD_MILESTONES, aren't weighted — there's no fixed slot for
+// them in the scale.
+export async function suggestPlotProgress(projectId, plotNumber) {
+  const { data: reports } = await supabase.from("weekly_reports").select("progress_items").eq("project_id", projectId);
+  const target = normalisePlotToken(plotNumber);
+
+  const best = new Map(); // milestone -> highest percent seen
+  (reports || []).forEach((r) => {
+    (Array.isArray(r.progress_items) ? r.progress_items : []).forEach((item) => {
+      if (typeof item === "string" || !item.milestone || !BUILD_MILESTONES.includes(item.milestone) || !item.plot) return;
+      const plotTokens = item.plot.split(",").map((p) => p.trim());
+      if (!plotTokens.some((t) => normalisePlotToken(t) === target)) return;
+      const percent = typeof item.percent === "number" ? item.percent : 0;
+      if (!best.has(item.milestone) || percent > best.get(item.milestone)) best.set(item.milestone, percent);
+    });
+  });
+
+  if (best.size === 0) return 0;
+  const sum = [...best.values()].reduce((s, v) => s + v, 0);
+  return Math.round((sum / BUILD_MILESTONES.length) * 10) / 10;
 }
 
 // ─── Weather auto-fill (postcodes.io + Open-Meteo) ───────────────
