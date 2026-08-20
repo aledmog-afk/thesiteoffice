@@ -32,6 +32,20 @@ export function escapeHtml(str) {
     .replace(/'/g, "&#39;");
 }
 
+// Sorts plot_number values numerically ("Plot 2" before "Plot 10")
+// rather than as plain text, which would otherwise put "Plot 10" before
+// "Plot 2". Falls back to a locale-aware string compare for plot names
+// with no digits in them, and numeric-vs-non-numeric names sort the
+// numeric ones first.
+export function comparePlotNumbers(a, b) {
+  const numA = (a.match(/\d+/) || [])[0];
+  const numB = (b.match(/\d+/) || [])[0];
+  if (numA && numB) return Number(numA) - Number(numB) || a.localeCompare(b);
+  if (numA) return -1;
+  if (numB) return 1;
+  return a.localeCompare(b);
+}
+
 export function formatDate(d) {
   if (!d) return "";
   const date = new Date(d + "T00:00:00");

@@ -42,7 +42,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, formatDate, RAG_LABEL, BUILD_MILESTONES, toLocalISODate } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, formatDate, RAG_LABEL, BUILD_MILESTONES, toLocalISODate, comparePlotNumbers } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -163,10 +163,11 @@
     ]);
 
     const [{ data: plots }, { data: gates }, { data: docs }] = await Promise.all([
-      supabase.from("plots").select("*").eq("project_id", projectId).order("plot_number", { ascending: true }),
+      supabase.from("plots").select("*").eq("project_id", projectId),
       supabase.from("quality_gates").select("plot_id, status").eq("project_id", projectId),
       supabase.from("handover_documents").select("plot_id, status").eq("project_id", projectId),
     ]);
+    (plots || []).sort((a, b) => comparePlotNumbers(a.plot_number, b.plot_number));
     const gatesByPlot = {};
     (gates || []).forEach((g) => {
       gatesByPlot[g.plot_id] = gatesByPlot[g.plot_id] || { approved: 0, total: 0 };

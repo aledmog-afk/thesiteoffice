@@ -38,7 +38,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, comparePlotNumbers } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -77,13 +77,13 @@
     const { data: plots, error } = await supabase
       .from("plots")
       .select("*")
-      .eq("project_id", projectId)
-      .order("plot_number", { ascending: true });
+      .eq("project_id", projectId);
 
     if (error || !plots || !plots.length) {
       document.getElementById("emptyState").style.display = "block";
       return;
     }
+    plots.sort((a, b) => comparePlotNumbers(a.plot_number, b.plot_number));
 
     const [{ data: gates }, { data: docs }] = await Promise.all([
       supabase.from("quality_gates").select("plot_id, status").eq("project_id", projectId),
