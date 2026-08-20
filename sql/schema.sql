@@ -750,3 +750,12 @@ alter table public.plots add constraint plots_progress_pct_check check (progress
 alter table public.projects add column if not exists external_works_pct numeric not null default 0;
 alter table public.projects drop constraint if exists projects_external_works_pct_check;
 alter table public.projects add constraint projects_external_works_pct_check check (external_works_pct >= 0 and external_works_pct <= 100);
+
+-- ─── v14 ADDITIONS ────────────────────────────────────────────────
+-- Quality gates: some plots (e.g. flats within a block) don't need
+-- every gate a house does — add a Not Applicable status alongside the
+-- existing ones. N/A gates are excluded from "approved" ratio stats
+-- entirely (both sides of the fraction), not counted as a failure.
+alter table public.quality_gates drop constraint if exists quality_gates_status_check;
+alter table public.quality_gates add constraint quality_gates_status_check
+  check (status in ('not_started', 'in_progress', 'under_review', 'approved', 'not_applicable'));

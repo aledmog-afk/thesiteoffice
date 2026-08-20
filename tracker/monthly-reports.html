@@ -170,6 +170,7 @@
     (plots || []).sort((a, b) => comparePlotNumbers(a.plot_number, b.plot_number));
     const gatesByPlot = {};
     (gates || []).forEach((g) => {
+      if (g.status === "not_applicable") return;
       gatesByPlot[g.plot_id] = gatesByPlot[g.plot_id] || { approved: 0, total: 0 };
       gatesByPlot[g.plot_id].total++;
       if (g.status === "approved") gatesByPlot[g.plot_id].approved++;

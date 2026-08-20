@@ -320,7 +320,8 @@
     document.getElementById("closedSnagCount").textContent = (snags || []).filter(s => s.status === "closed").length;
     plotsCount = fetchedPlotsCount ?? 0;
     document.getElementById("plotsCount").textContent = plotsCount;
-    document.getElementById("gatesApprovedCount").textContent = `${(gates || []).filter(g => g.status === "approved").length} / ${(gates || []).length}`;
+    const applicableGates = (gates || []).filter(g => g.status !== "not_applicable");
+    document.getElementById("gatesApprovedCount").textContent = `${applicableGates.filter(g => g.status === "approved").length} / ${applicableGates.length}`;
     document.getElementById("commercialsPendingCount").textContent = (commercials || []).filter(c => c.status === "pending_client_review").length;
     document.getElementById("drawingsCount").textContent = drawingsCount ?? 0;
     updateGeneratePlotsButton();

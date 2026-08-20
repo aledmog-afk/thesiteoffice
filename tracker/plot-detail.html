@@ -65,8 +65,8 @@
   let plot = null;
 
   // ─── Quality Gates ──────────────────────────────────────────────
-  const gateStatusBadge = { not_started: "badge-grey", in_progress: "badge-blue", under_review: "badge-amber", approved: "badge-green" };
-  const gateStatusLabel = { not_started: "Not Started", in_progress: "In Progress", under_review: "Under Review", approved: "Approved" };
+  const gateStatusBadge = { not_started: "badge-grey", in_progress: "badge-blue", under_review: "badge-amber", approved: "badge-green", not_applicable: "badge-grey" };
+  const gateStatusLabel = { not_started: "Not Started", in_progress: "In Progress", under_review: "Under Review", approved: "Approved", not_applicable: "N/A" };
   const gatesWrap = document.getElementById("gatesWrap");
 
   function gateCardHtml(gate) {
@@ -83,6 +83,7 @@
             <option value="in_progress">In Progress</option>
             <option value="under_review">Under Review</option>
             <option value="approved">Approved</option>
+            <option value="not_applicable">N/A</option>
           </select>
         </div>
         <ul class="checklist">

@@ -92,6 +92,7 @@
 
     const gatesByPlot = {};
     (gates || []).forEach((g) => {
+      if (g.status === "not_applicable") return;
       gatesByPlot[g.plot_id] = gatesByPlot[g.plot_id] || { approved: 0, total: 0 };
       gatesByPlot[g.plot_id].total++;
       if (g.status === "approved") gatesByPlot[g.plot_id].approved++;
@@ -110,7 +111,7 @@
         <tr class="row-link" onclick="window.location.href='plot-detail.html?id=${p.id}'">
           <td><strong>${escapeHtml(p.plot_number)}</strong></td>
           <td><span class="badge ${p.progress_pct >= 100 ? "badge-green" : "badge-amber"}">${p.progress_pct || 0}%</span></td>
-          <td><span class="badge ${g.approved === g.total && g.total > 0 ? "badge-green" : "badge-amber"}">${g.approved} / ${g.total} approved</span></td>
+          <td><span class="badge ${g.approved === g.total ? "badge-green" : "badge-amber"}">${g.approved} / ${g.total} approved${g.total === 0 ? " (N/A)" : ""}</span></td>
           <td><span class="badge ${d.ready === d.total && d.total > 0 ? "badge-green" : "badge-amber"}">${d.ready} / ${d.total} ready</span></td>
           <td>${formatDate(p.created_at?.slice(0, 10))}</td>
           <td onclick="event.stopPropagation()"><button class="btn btn-outline btn-sm" onclick="deletePlot('${p.id}', '${escapeHtml(p.plot_number).replace(/'/g, "\\'")}')">Delete</button></td>

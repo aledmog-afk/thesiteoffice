@@ -115,7 +115,7 @@
         <tbody>${plots.map((p) => `
           <tr>
             <td>${escapeHtml(p.plot_number)}</td>
-            <td>${p.gates_approved} / ${p.gates_total} approved</td>
+            <td>${p.gates_approved} / ${p.gates_total} approved${p.gates_total === 0 ? " (N/A)" : ""}</td>
             <td>${p.docs_ready} / ${p.docs_total} ready</td>
           </tr>
         `).join("")}</tbody>
