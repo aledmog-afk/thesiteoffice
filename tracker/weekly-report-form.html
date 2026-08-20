@@ -76,7 +76,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, formatGBP, toLocalISODate } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -91,8 +91,10 @@
   // weekStarting) capturing condition + lost hours + notes per day, with
   // a live total. Rebuilds whenever weekStarting changes, carrying over
   // any already-entered day (matched by date) that still falls in range.
-  const WEATHER_CONDITIONS = ["Dry", "Overcast", "Light Rain", "Heavy Rain", "Snow / Ice", "High Wind", "Frost", "Extreme Heat", "Site Closed"];
-
+  // If the site has a geocoded location, each rebuild also fires an
+  // async Open-Meteo lookup that fills in only the still-blank
+  // conditions — it never overwrites a day the user (or a previous
+  // save) already set.
   function mountWeatherTracker(container, weekStartingInput) {
     let days = [];
 
@@ -154,17 +156,43 @@
       }));
     }
 
+    function autoFillConditions(conditionsByDate) {
+      let changed = false;
+      days.forEach((d) => {
+        if (!d.condition && conditionsByDate.has(d.date)) {
+          d.condition = conditionsByDate.get(d.date);
+          changed = true;
+        }
+      });
+      if (changed) render();
+    }
+
     function setWeek(weekStartingStr, existingDays) {
       days = buildDays(weekStartingStr, existingDays !== undefined ? existingDays : days);
       render();
+      tryAutoFillWeather();
     }
 
     weekStartingInput.addEventListener("change", () => setWeek(weekStartingInput.value));
 
-    return { setWeek, getDays: () => days };
+    return { setWeek, getDays: () => days, autoFillConditions };
   }
 
   const weatherTracker = mountWeatherTracker(document.getElementById("weatherTracker"), document.getElementById("weekStarting"));
+
+  // Fire-and-forget: looks up the site's location (geocoded once from its
+  // postcode on the site details page) and, if set, fetches real weather
+  // for the tracker's current date range to pre-fill any blank days.
+  // Never awaited by callers and never throws — a network hiccup or a
+  // site with no postcode set just means no auto-fill this time, not a
+  // broken form.
+  async function tryAutoFillWeather() {
+    if (!siteProject?.latitude || !siteProject?.longitude) return;
+    const days = weatherTracker.getDays();
+    if (!days.length) return;
+    const conditions = await fetchWeatherConditions(siteProject.latitude, siteProject.longitude, days[0].date, days[days.length - 1].date);
+    weatherTracker.autoFillConditions(conditions);
+  }
 
   // ─── Commercial items mini-editor ───────────────────────────────
   // Each item is { id, title, type, cost_impact, time_impact_days, ledger_id }.
@@ -365,8 +393,11 @@
     }
   });
 
+  let siteProject = null;
+
   async function initHeader() {
-    const { data: project } = await supabase.from("projects").select("name").eq("id", projectId).single();
+    const { data: project } = await supabase.from("projects").select("*").eq("id", projectId).single();
+    siteProject = project;
     renderHeader([
       { label: "Dashboard", href: "dashboard.html" },
       { label: project?.name || "Site", href: `project.html?id=${projectId}` },
@@ -468,8 +499,7 @@
     }
   });
 
-  initHeader();
-  loadExisting();
+  initHeader().then(loadExisting);
 </script>
 </body>
 </html>

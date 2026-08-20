@@ -715,3 +715,12 @@ alter table public.weekly_reports add column if not exists weather_days jsonb no
 alter table public.monthly_reports add column if not exists weather_summary jsonb not null default '[]'::jsonb;
 alter table public.monthly_reports add column if not exists weather_lost_days jsonb not null default '[]'::jsonb;
 alter table public.monthly_reports add column if not exists total_lost_hours numeric not null default 0;
+
+-- ─── v11 ADDITIONS ────────────────────────────────────────────────
+-- Weather auto-fill: a site's postcode is geocoded (via postcodes.io,
+-- a free UK postcode lookup) into lat/long once and cached here, so the
+-- weekly report's weather tracker can look up real weather (via
+-- Open-Meteo) for that site without re-geocoding on every report.
+alter table public.projects add column if not exists postcode text;
+alter table public.projects add column if not exists latitude numeric;
+alter table public.projects add column if not exists longitude numeric;

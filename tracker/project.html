@@ -85,6 +85,11 @@
         <div class="field"><label for="contractRef">Contract reference</label><input type="text" id="contractRef"></div>
       </div>
       <div class="field"><label for="address">Site address</label><input type="text" id="address"></div>
+      <div class="field">
+        <label for="postcode">Postcode</label>
+        <input type="text" id="postcode" placeholder="e.g. B91 3XX" style="max-width:180px;">
+        <p class="hint" id="postcodeHint">Used to auto-fill weather on weekly reports.</p>
+      </div>
       <div class="form-grid">
         <div class="field"><label for="contractorName">Main contractor name</label><input type="text" id="contractorName"></div>
         <div class="field"><label for="contractorEmail">Main contractor email</label><input type="email" id="contractorEmail"></div>
@@ -115,7 +120,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, geocodePostcode } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("id");
@@ -137,6 +142,7 @@
   function renderFacts() {
     factsView.innerHTML = `
       <div><dt>Address</dt><dd>${escapeHtml(project.address) || "—"}</dd></div>
+      <div><dt>Postcode</dt><dd>${escapeHtml(project.postcode) || "—"}${project.postcode && !project.latitude ? ` <span class="hint">(location not found)</span>` : ""}</dd></div>
       <div><dt>Contract Ref</dt><dd>${escapeHtml(project.contract_ref) || "—"}</dd></div>
       <div><dt>Main Contractor</dt><dd>${escapeHtml(project.main_contractor_name) || "—"}</dd></div>
       <div><dt>Contractor Email</dt><dd>${escapeHtml(project.main_contractor_email) || "—"}</dd></div>
@@ -148,6 +154,7 @@
     document.getElementById("name").value = project.name || "";
     document.getElementById("contractRef").value = project.contract_ref || "";
     document.getElementById("address").value = project.address || "";
+    document.getElementById("postcode").value = project.postcode || "";
     document.getElementById("contractorName").value = project.main_contractor_name || "";
     document.getElementById("contractorEmail").value = project.main_contractor_email || "";
     document.getElementById("startDate").value = project.start_date || "";
@@ -171,10 +178,12 @@
   editForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     clearError(errorBox);
+    const postcode = document.getElementById("postcode").value.trim() || null;
     const payload = {
       name: document.getElementById("name").value.trim(),
       contract_ref: document.getElementById("contractRef").value.trim() || null,
       address: document.getElementById("address").value.trim() || null,
+      postcode,
       main_contractor_name: document.getElementById("contractorName").value.trim() || null,
       main_contractor_email: document.getElementById("contractorEmail").value.trim() || null,
       start_date: document.getElementById("startDate").value || null,
@@ -182,11 +191,31 @@
       baseline_progress_pct: Number(document.getElementById("baselinePct").value) || 0,
       actual_progress_pct: Number(document.getElementById("actualPct").value) || 0,
     };
+
+    // Only re-geocode when the postcode actually changed — avoids an
+    // unnecessary lookup (and possible failure) on every unrelated edit.
+    if (postcode !== (project.postcode || null)) {
+      if (postcode) {
+        const saveBtn = editForm.querySelector('button[type="submit"]');
+        saveBtn.disabled = true;
+        saveBtn.textContent = "Looking up postcode…";
+        const coords = await geocodePostcode(postcode);
+        saveBtn.disabled = false;
+        saveBtn.textContent = "Save Changes";
+        payload.latitude = coords?.latitude ?? null;
+        payload.longitude = coords?.longitude ?? null;
+        if (!coords) showError(errorBox, { message: `Couldn't find a location for "${postcode}" — saved anyway, but weather auto-fill won't work until this is fixed.` });
+      } else {
+        payload.latitude = null;
+        payload.longitude = null;
+      }
+    }
+
     const { data, error } = await supabase.from("projects").update(payload).eq("id", projectId).select().single();
     if (error) { showError(errorBox, error); return; }
     project = data;
     renderHeaderAndFacts();
-    document.getElementById("cancelEditBtn").click();
+    if (!errorBox.textContent) document.getElementById("cancelEditBtn").click();
   });
 
   document.getElementById("deleteBtn").addEventListener("click", async () => {
