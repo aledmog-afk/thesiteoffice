@@ -21,6 +21,12 @@ Setup (one-time):
 Safe to re-run: products already uploaded (recorded in upload_log.json) are
 skipped, so you can fill in more rows and re-run without duplicating anything
 already live on Gumroad.
+
+Note: Gumroad limits new product *creation* to 10/day per account. Updating
+or publishing an already-created product doesn't count against that limit —
+only `products create` does. If you hit the daily cap partway through a run,
+re-run the same command the next day; already-created rows are remembered
+via RECOVERED_PRODUCT_IDS/upload_log.json and won't be recreated.
 """
 import argparse
 import csv
@@ -32,6 +38,25 @@ from pathlib import Path
 HERE = Path(__file__).parent
 CSV_PATH = HERE / "products.csv"
 LOG_PATH = HERE / "upload_log.json"
+
+# One-off recovery: these 10 products were successfully created by an
+# earlier buggy run (which failed to read the new product's id back out of
+# the `create` response, so the follow-up file/price/publish steps failed
+# against a bad id). Reusing their real ids here avoids recreating them,
+# which would burn more of the 10/day creation limit for no reason. Safe to
+# delete this block once these rows show up in upload_log.json.
+RECOVERED_PRODUCT_IDS = {
+    "TSO-CC-001": "gll_jvcLx6SY3GqVUo-NiA==",
+    "TSO-PCI-001": "K7Su97sRPLvyPhl52ew7fw==",
+    "TSO-DR-001": "HQQ5Ns1E8LxQgpyUPgPIOA==",
+    "TSO-EL-001": "swDdnKnwB5_LmSuOhEtA2A==",
+    "TSO-SE-001": "ars0Ucu58-0I_RfRHrqGLA==",
+    "TSO-PM-001": "b5Vcj3P1HQnREZDY32akkQ==",
+    "TSO-PD-001": "Fje49tlqA4mkB7390d3Yrg==",
+    "TSO-PS-001": "mO05DVpE-jphv-pnssF-kQ==",
+    "TSO-BW-001": "dgxFSvUCzSQnG0z3h1fFsg==",
+    "TSO-CP-001": "Bf1fq_gzMpO0PRxtA8xA4Q==",
+}
 
 
 def load_log():
@@ -54,6 +79,21 @@ def run_cli(args, live):
         raise RuntimeError(f"CLI command failed: {result.stderr.strip() or result.stdout.strip()}")
     out = result.stdout.strip()
     return json.loads(out) if out else {}
+
+
+def extract_product_id(response):
+    """Gumroad's create response nests the new product under different
+    possible keys depending on CLI version. Check them all rather than
+    guessing one and silently proceeding with a bad id."""
+    if not isinstance(response, dict):
+        return None
+    if response.get("id"):
+        return response["id"]
+    for key in ("product", "data"):
+        nested = response.get(key)
+        if isinstance(nested, dict) and nested.get("id"):
+            return nested["id"]
+    return None
 
 
 def slug(category):
@@ -79,8 +119,18 @@ def process_row(row, log, live):
 
     print(f"[upload] {sku} — {name} (£{price})")
 
-    created = run_cli(["products", "create", "--name", name, "--price", price], live)
-    product_id = created.get("id") if live else "<dry-run-id>"
+    recovered_id = RECOVERED_PRODUCT_IDS.get(sku)
+    if recovered_id:
+        product_id = recovered_id
+        print(f"  (reusing already-created product {product_id} — not calling 'create' again)")
+    else:
+        created = run_cli(["products", "create", "--name", name, "--price", price], live)
+        if live:
+            product_id = extract_product_id(created)
+            if not product_id:
+                raise RuntimeError(f"could not find new product id in create response: {json.dumps(created)}")
+        else:
+            product_id = "<dry-run-id>"
 
     run_cli(["products", "update", str(product_id), "--file", file_path], live)
 
@@ -116,8 +166,8 @@ def main():
             print(f"[error] {row.get('sku')}: {e}\n")
 
     uploaded = sum(1 for r in rows if r["sku"] in log)
-    pending = sum(1 for r in rows if not r.get("file_path", "").strip())
-    print(f"Done. {uploaded} uploaded so far, {pending} rows still need a file_path.")
+    pending = sum(1 for r in rows if r["sku"] not in log)
+    print(f"Done. {uploaded} uploaded so far, {pending} rows still need attention.")
 
 
 if __name__ == "__main__":
