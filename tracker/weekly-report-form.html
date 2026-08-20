@@ -76,7 +76,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, formatGBP } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, formatGBP, toLocalISODate } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -103,7 +103,7 @@
       return Array.from({ length: 5 }, (_, i) => {
         const d = new Date(start);
         d.setDate(d.getDate() + i);
-        const dateStr = d.toISOString().slice(0, 10);
+        const dateStr = toLocalISODate(d);
         const existing = byDate.get(dateStr);
         return {
           date: dateStr,
@@ -382,7 +382,7 @@
       const end = new Date(start);
       end.setDate(end.getDate() + 6);
       document.getElementById("weekStarting").value = start;
-      document.getElementById("weekEnding").value = end.toISOString().slice(0, 10);
+      document.getElementById("weekEnding").value = toLocalISODate(end);
       weatherTracker.setWeek(start, []);
 
       const { data: prevReports } = await supabase

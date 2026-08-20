@@ -39,8 +39,19 @@ export function formatDate(d) {
   return date.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 }
 
+// Formats a Date as YYYY-MM-DD using its LOCAL calendar date. Prefer this
+// over `date.toISOString().slice(0, 10)`, which converts through UTC first
+// and silently shifts the date back a day for anyone in a UTC-ahead
+// timezone (e.g. the UK during BST) — every date field in this app means
+// a calendar date, never a UTC instant.
+export function toLocalISODate(date) {
+  const d = new Date(date);
+  const offsetMs = d.getTimezoneOffset() * 60000;
+  return new Date(d.getTime() - offsetMs).toISOString().slice(0, 10);
+}
+
 export function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+  return toLocalISODate(new Date());
 }
 
 // Given a Date, return the Monday of that week as an ISO date string.
@@ -49,7 +60,7 @@ export function mondayOf(date) {
   const day = d.getDay();
   const diff = (day === 0 ? -6 : 1) - day;
   d.setDate(d.getDate() + diff);
-  return d.toISOString().slice(0, 10);
+  return toLocalISODate(d);
 }
 
 export function showError(el, err) {

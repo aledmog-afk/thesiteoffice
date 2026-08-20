@@ -42,7 +42,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, formatDate, RAG_LABEL, BUILD_MILESTONES } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, formatDate, RAG_LABEL, BUILD_MILESTONES, toLocalISODate } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -70,7 +70,7 @@
     const [y, m] = monthValue.split("-").map(Number);
     const monthStart = `${y}-${String(m).padStart(2, "0")}-01`;
     const monthEndDate = new Date(y, m, 0); // last day of the chosen month
-    const monthEnd = monthEndDate.toISOString().slice(0, 10);
+    const monthEnd = toLocalISODate(monthEndDate);
 
     // Already generated? Just go straight to it.
     const { data: existing } = await supabase
