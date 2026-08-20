@@ -966,3 +966,345 @@ begin
   return new;
 end;
 $$ language plpgsql;
+
+-- ─── v16 ADDITIONS ────────────────────────────────────────────────
+-- Multi-account collaboration: sites move from "every signed-in user
+-- sees everything" to owned/invite-only. Whoever creates a site becomes
+-- its owner; they can invite others (who join as collaborators with
+-- full edit rights) via a shareable link. Deleting a site or managing
+-- who has access stays owner-only. org_settings (company logo) and
+-- storage stay shared across everyone, unchanged — they're
+-- organisation-wide, not site-scoped.
+
+create table if not exists public.project_members (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  role text not null default 'collaborator' check (role in ('owner', 'collaborator')),
+  created_at timestamptz not null default now(),
+  unique (project_id, user_id)
+);
+alter table public.project_members enable row level security;
+
+-- Helper predicates used throughout the RLS policies below. security
+-- definer so they can read project_members regardless of that table's
+-- own RLS (avoids recursive-policy issues) — safe, since all they ever
+-- expose is a true/false answer scoped to auth.uid(), the caller's own
+-- identity, never another user's data.
+create or replace function public.is_project_member(p_project_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1 from public.project_members
+    where project_id = p_project_id and user_id = auth.uid()
+  );
+$$;
+grant execute on function public.is_project_member(uuid) to authenticated;
+
+create or replace function public.is_project_owner(p_project_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1 from public.project_members
+    where project_id = p_project_id and user_id = auth.uid() and role = 'owner'
+  );
+$$;
+grant execute on function public.is_project_owner(uuid) to authenticated;
+
+-- Whoever creates a site becomes its owner automatically.
+create or replace function public.seed_project_owner()
+returns trigger as $$
+begin
+  if new.created_by is not null then
+    insert into public.project_members (project_id, user_id, role)
+    values (new.id, new.created_by, 'owner')
+    on conflict (project_id, user_id) do nothing;
+  end if;
+  -- created_by is nullable, so a project can in principle be created
+  -- without one — nothing to seed here in that case; the fallback-owner
+  -- repair further down (which runs every time this file does) picks it
+  -- up and assigns someone next time, rather than this trigger raising
+  -- and blocking project creation outright.
+  return new;
+end;
+$$ language plpgsql security definer set search_path = public;
+
+drop trigger if exists trg_seed_project_owner on public.projects;
+create trigger trg_seed_project_owner
+after insert on public.projects
+for each row execute function public.seed_project_owner();
+
+-- Grandfather every existing user into every existing site, so nobody
+-- loses access to something they could see before this shipped. Runs
+-- exactly once — guarded on project_members still being empty, since
+-- from here on every new site gets its owner via the trigger above and
+-- every new collaborator via accepting an invite, so project_members is
+-- never empty again after the first real site/join. Re-running this
+-- file later (e.g. for a future migration) must NOT re-grant newly
+-- signed-up users access to old sites, so this has to fire at most once.
+do $$
+begin
+  if not exists (select 1 from public.project_members limit 1) then
+    insert into public.project_members (project_id, user_id, role)
+    select p.id, u.id, case when p.created_by = u.id then 'owner' else 'collaborator' end
+    from public.projects p
+    cross join auth.users u
+    on conflict (project_id, user_id) do nothing;
+  end if;
+end $$;
+
+-- Belt and braces: guarantee every site has at least one owner, even if
+-- its created_by user no longer exists (deleted account) or was never
+-- set. Cheap no-op once the above has run. Not gated to first-run only,
+-- since a site could end up ownerless later too (e.g. its owner account
+-- gets deleted) and ought to be repaired the next time this file runs.
+do $$
+declare
+  proj record;
+  fallback_user uuid;
+begin
+  for proj in
+    select p.id from public.projects p
+    where not exists (
+      select 1 from public.project_members pm where pm.project_id = p.id and pm.role = 'owner'
+    )
+  loop
+    select id into fallback_user from auth.users order by created_at asc limit 1;
+    exit when fallback_user is null;
+    insert into public.project_members (project_id, user_id, role)
+    values (proj.id, fallback_user, 'owner')
+    on conflict (project_id, user_id) do update set role = 'owner';
+  end loop;
+end $$;
+
+-- Shareable invite link: a random code on the project itself. Null
+-- until an owner first generates one. Regenerating invalidates the old
+-- link (it's just overwritten); revoking sets it back to null.
+alter table public.projects add column if not exists invite_code text unique;
+
+create or replace function public.regenerate_invite_code(p_project_id uuid)
+returns text
+language plpgsql security definer set search_path = public
+as $$
+declare
+  new_code text;
+begin
+  if not public.is_project_owner(p_project_id) then
+    raise exception 'Only the site owner can manage the invite link';
+  end if;
+  new_code := encode(gen_random_bytes(16), 'hex');
+  update public.projects set invite_code = new_code where id = p_project_id;
+  return new_code;
+end;
+$$;
+grant execute on function public.regenerate_invite_code(uuid) to authenticated;
+
+create or replace function public.revoke_invite_code(p_project_id uuid)
+returns void
+language plpgsql security definer set search_path = public
+as $$
+begin
+  if not public.is_project_owner(p_project_id) then
+    raise exception 'Only the site owner can manage the invite link';
+  end if;
+  update public.projects set invite_code = null where id = p_project_id;
+end;
+$$;
+grant execute on function public.revoke_invite_code(uuid) to authenticated;
+
+-- Joining is a function, not a direct table read/insert, so an invite
+-- code can only ever be used as a targeted lookup (one guess at a time)
+-- rather than something a broad RLS select policy could be tricked into
+-- enumerating. Returns the joined project's id, or null if the code is
+-- invalid/revoked.
+create or replace function public.join_project_by_invite(invite_code_param text)
+returns uuid
+language plpgsql security definer set search_path = public
+as $$
+declare
+  proj_id uuid;
+begin
+  select id into proj_id from public.projects where invite_code = invite_code_param;
+  if proj_id is null then
+    return null;
+  end if;
+  insert into public.project_members (project_id, user_id, role)
+  values (proj_id, auth.uid(), 'collaborator')
+  on conflict (project_id, user_id) do nothing;
+  return proj_id;
+end;
+$$;
+grant execute on function public.join_project_by_invite(text) to authenticated;
+
+-- Member list with emails, for the Collaborators UI. Client code can't
+-- query auth.users directly, so this does the join server-side —
+-- security definer, but scoped to members of that one project only.
+create or replace function public.get_project_members(p_project_id uuid)
+returns table (member_id uuid, user_id uuid, email text, role text, joined_at timestamptz)
+language sql stable security definer set search_path = public
+as $$
+  select pm.id, pm.user_id, u.email, pm.role, pm.created_at
+  from public.project_members pm
+  join auth.users u on u.id = pm.user_id
+  where pm.project_id = p_project_id
+    and public.is_project_member(p_project_id)
+  order by (pm.role = 'owner') desc, u.email;
+$$;
+grant execute on function public.get_project_members(uuid) to authenticated;
+
+drop policy if exists "members read project_members" on public.project_members;
+create policy "members read project_members" on public.project_members for select using (public.is_project_member(project_id));
+drop policy if exists "owner or self delete project_members" on public.project_members;
+create policy "owner or self delete project_members" on public.project_members for delete using (public.is_project_owner(project_id) or user_id = auth.uid());
+-- No insert/update policy for regular clients — membership is only ever
+-- granted via the trigger above (creating a site) or join_project_by_invite
+-- (accepting one), both of which run as security definer.
+
+-- ─── RLS rewrite: from "any signed-in user" to "members of this site" ───
+drop policy if exists "authenticated read projects" on public.projects;
+drop policy if exists "members read projects" on public.projects;
+-- "or created_by = auth.uid()" isn't redundant with is_project_member():
+-- creating a project and reading back its id via `.insert().select()`
+-- (RETURNING) happens in the same statement as the AFTER INSERT trigger
+-- that adds the creator to project_members, and RETURNING's own select
+-- check can run before that trigger's row is visible to it — so without
+-- this clause, creating a project intermittently fails to hand back its
+-- own id. The creator can always see a row they just created regardless.
+create policy "members read projects" on public.projects for select using (public.is_project_member(id) or created_by = auth.uid());
+drop policy if exists "authenticated insert projects" on public.projects;
+create policy "authenticated insert projects" on public.projects for insert with check (auth.role() = 'authenticated');
+drop policy if exists "authenticated update projects" on public.projects;
+drop policy if exists "members update projects" on public.projects;
+create policy "members update projects" on public.projects for update using (public.is_project_member(id));
+drop policy if exists "authenticated delete projects" on public.projects;
+drop policy if exists "owner delete projects" on public.projects;
+create policy "owner delete projects" on public.projects for delete using (public.is_project_owner(id));
+
+drop policy if exists "authenticated read weekly_reports" on public.weekly_reports;
+drop policy if exists "members read weekly_reports" on public.weekly_reports;
+create policy "members read weekly_reports" on public.weekly_reports for select using (public.is_project_member(project_id));
+drop policy if exists "authenticated insert weekly_reports" on public.weekly_reports;
+drop policy if exists "members insert weekly_reports" on public.weekly_reports;
+create policy "members insert weekly_reports" on public.weekly_reports for insert with check (public.is_project_member(project_id));
+drop policy if exists "authenticated update weekly_reports" on public.weekly_reports;
+drop policy if exists "members update weekly_reports" on public.weekly_reports;
+create policy "members update weekly_reports" on public.weekly_reports for update using (public.is_project_member(project_id));
+drop policy if exists "authenticated delete weekly_reports" on public.weekly_reports;
+drop policy if exists "members delete weekly_reports" on public.weekly_reports;
+create policy "members delete weekly_reports" on public.weekly_reports for delete using (public.is_project_member(project_id));
+
+drop policy if exists "authenticated read snag_items" on public.snag_items;
+drop policy if exists "members read snag_items" on public.snag_items;
+create policy "members read snag_items" on public.snag_items for select using (public.is_project_member(project_id));
+drop policy if exists "authenticated insert snag_items" on public.snag_items;
+drop policy if exists "members insert snag_items" on public.snag_items;
+create policy "members insert snag_items" on public.snag_items for insert with check (public.is_project_member(project_id));
+drop policy if exists "authenticated update snag_items" on public.snag_items;
+drop policy if exists "members update snag_items" on public.snag_items;
+create policy "members update snag_items" on public.snag_items for update using (public.is_project_member(project_id));
+drop policy if exists "authenticated delete snag_items" on public.snag_items;
+drop policy if exists "members delete snag_items" on public.snag_items;
+create policy "members delete snag_items" on public.snag_items for delete using (public.is_project_member(project_id));
+
+drop policy if exists "authenticated read snag_lists" on public.snag_lists;
+drop policy if exists "members read snag_lists" on public.snag_lists;
+create policy "members read snag_lists" on public.snag_lists for select using (public.is_project_member(project_id));
+drop policy if exists "authenticated insert snag_lists" on public.snag_lists;
+drop policy if exists "members insert snag_lists" on public.snag_lists;
+create policy "members insert snag_lists" on public.snag_lists for insert with check (public.is_project_member(project_id));
+drop policy if exists "authenticated update snag_lists" on public.snag_lists;
+drop policy if exists "members update snag_lists" on public.snag_lists;
+create policy "members update snag_lists" on public.snag_lists for update using (public.is_project_member(project_id));
+drop policy if exists "authenticated delete snag_lists" on public.snag_lists;
+drop policy if exists "members delete snag_lists" on public.snag_lists;
+create policy "members delete snag_lists" on public.snag_lists for delete using (public.is_project_member(project_id));
+
+drop policy if exists "authenticated read quality_gates" on public.quality_gates;
+drop policy if exists "members read quality_gates" on public.quality_gates;
+create policy "members read quality_gates" on public.quality_gates for select using (public.is_project_member(project_id));
+drop policy if exists "authenticated insert quality_gates" on public.quality_gates;
+drop policy if exists "members insert quality_gates" on public.quality_gates;
+create policy "members insert quality_gates" on public.quality_gates for insert with check (public.is_project_member(project_id));
+drop policy if exists "authenticated update quality_gates" on public.quality_gates;
+drop policy if exists "members update quality_gates" on public.quality_gates;
+create policy "members update quality_gates" on public.quality_gates for update using (public.is_project_member(project_id));
+drop policy if exists "authenticated delete quality_gates" on public.quality_gates;
+drop policy if exists "members delete quality_gates" on public.quality_gates;
+create policy "members delete quality_gates" on public.quality_gates for delete using (public.is_project_member(project_id));
+
+drop policy if exists "authenticated read commercial_items" on public.commercial_items;
+drop policy if exists "members read commercial_items" on public.commercial_items;
+create policy "members read commercial_items" on public.commercial_items for select using (public.is_project_member(project_id));
+drop policy if exists "authenticated insert commercial_items" on public.commercial_items;
+drop policy if exists "members insert commercial_items" on public.commercial_items;
+create policy "members insert commercial_items" on public.commercial_items for insert with check (public.is_project_member(project_id));
+drop policy if exists "authenticated update commercial_items" on public.commercial_items;
+drop policy if exists "members update commercial_items" on public.commercial_items;
+create policy "members update commercial_items" on public.commercial_items for update using (public.is_project_member(project_id));
+drop policy if exists "authenticated delete commercial_items" on public.commercial_items;
+drop policy if exists "members delete commercial_items" on public.commercial_items;
+create policy "members delete commercial_items" on public.commercial_items for delete using (public.is_project_member(project_id));
+
+drop policy if exists "authenticated read handover_documents" on public.handover_documents;
+drop policy if exists "members read handover_documents" on public.handover_documents;
+create policy "members read handover_documents" on public.handover_documents for select using (public.is_project_member(project_id));
+drop policy if exists "authenticated insert handover_documents" on public.handover_documents;
+drop policy if exists "members insert handover_documents" on public.handover_documents;
+create policy "members insert handover_documents" on public.handover_documents for insert with check (public.is_project_member(project_id));
+drop policy if exists "authenticated update handover_documents" on public.handover_documents;
+drop policy if exists "members update handover_documents" on public.handover_documents;
+create policy "members update handover_documents" on public.handover_documents for update using (public.is_project_member(project_id));
+drop policy if exists "authenticated delete handover_documents" on public.handover_documents;
+drop policy if exists "members delete handover_documents" on public.handover_documents;
+create policy "members delete handover_documents" on public.handover_documents for delete using (public.is_project_member(project_id));
+
+drop policy if exists "authenticated read drawings" on public.drawings;
+drop policy if exists "members read drawings" on public.drawings;
+create policy "members read drawings" on public.drawings for select using (public.is_project_member(project_id));
+drop policy if exists "authenticated insert drawings" on public.drawings;
+drop policy if exists "members insert drawings" on public.drawings;
+create policy "members insert drawings" on public.drawings for insert with check (public.is_project_member(project_id));
+drop policy if exists "authenticated update drawings" on public.drawings;
+drop policy if exists "members update drawings" on public.drawings;
+create policy "members update drawings" on public.drawings for update using (public.is_project_member(project_id));
+drop policy if exists "authenticated delete drawings" on public.drawings;
+drop policy if exists "members delete drawings" on public.drawings;
+create policy "members delete drawings" on public.drawings for delete using (public.is_project_member(project_id));
+
+drop policy if exists "authenticated read plots" on public.plots;
+drop policy if exists "members read plots" on public.plots;
+create policy "members read plots" on public.plots for select using (public.is_project_member(project_id));
+drop policy if exists "authenticated insert plots" on public.plots;
+drop policy if exists "members insert plots" on public.plots;
+create policy "members insert plots" on public.plots for insert with check (public.is_project_member(project_id));
+drop policy if exists "authenticated update plots" on public.plots;
+drop policy if exists "members update plots" on public.plots;
+create policy "members update plots" on public.plots for update using (public.is_project_member(project_id));
+drop policy if exists "authenticated delete plots" on public.plots;
+drop policy if exists "members delete plots" on public.plots;
+create policy "members delete plots" on public.plots for delete using (public.is_project_member(project_id));
+
+drop policy if exists "authenticated read monthly_reports" on public.monthly_reports;
+drop policy if exists "members read monthly_reports" on public.monthly_reports;
+create policy "members read monthly_reports" on public.monthly_reports for select using (public.is_project_member(project_id));
+drop policy if exists "authenticated insert monthly_reports" on public.monthly_reports;
+drop policy if exists "members insert monthly_reports" on public.monthly_reports;
+create policy "members insert monthly_reports" on public.monthly_reports for insert with check (public.is_project_member(project_id));
+drop policy if exists "authenticated delete monthly_reports" on public.monthly_reports;
+drop policy if exists "members delete monthly_reports" on public.monthly_reports;
+create policy "members delete monthly_reports" on public.monthly_reports for delete using (public.is_project_member(project_id));
+
+drop policy if exists "authenticated read blocks" on public.blocks;
+drop policy if exists "members read blocks" on public.blocks;
+create policy "members read blocks" on public.blocks for select using (public.is_project_member(project_id));
+drop policy if exists "authenticated insert blocks" on public.blocks;
+drop policy if exists "members insert blocks" on public.blocks;
+create policy "members insert blocks" on public.blocks for insert with check (public.is_project_member(project_id));
+drop policy if exists "authenticated update blocks" on public.blocks;
+drop policy if exists "members update blocks" on public.blocks;
+create policy "members update blocks" on public.blocks for update using (public.is_project_member(project_id));
+drop policy if exists "authenticated delete blocks" on public.blocks;
+drop policy if exists "members delete blocks" on public.blocks;
+create policy "members delete blocks" on public.blocks for delete using (public.is_project_member(project_id));

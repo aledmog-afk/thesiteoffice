@@ -128,6 +128,26 @@
       </div>
     </form>
   </div>
+
+  <div class="card" id="collaboratorsCard" style="margin-top:2rem;">
+    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Collaborators</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Email</th><th>Role</th><th>Joined</th><th></th></tr></thead>
+        <tbody id="memberRows"></tbody>
+      </table>
+    </div>
+    <div id="inviteSection" style="margin-top:1rem; display:none;">
+      <p class="hint" style="margin-bottom:0.5rem;">Share this link with anyone you want to collaborate on this site — they'll join the moment they open it while signed in.</p>
+      <div class="btn-row" id="inviteLinkRow" style="display:none;">
+        <input type="text" id="inviteLinkInput" readonly style="flex:1; min-width:220px;">
+        <button type="button" class="btn btn-outline btn-sm" id="copyInviteBtn">Copy Link</button>
+        <button type="button" class="btn btn-outline btn-sm" id="regenerateInviteBtn">Regenerate</button>
+        <button type="button" class="btn btn-outline btn-sm" id="revokeInviteBtn">Revoke</button>
+      </div>
+      <button type="button" class="btn btn-outline btn-sm" id="getInviteLinkBtn">Get Invite Link</button>
+    </div>
+  </div>
 </div>
 
 <script type="module">
@@ -147,10 +167,108 @@
 
   let project = null;
   let plotsCount = 0;
+  let currentUserId = null;
   const factsView = document.getElementById("factsView");
   const detailsCard = document.getElementById("detailsCard");
   const editForm = document.getElementById("editForm");
   const errorBox = document.getElementById("errorBox");
+
+  // ─── Collaborators ──────────────────────────────────────────────
+  function inviteLinkFor(code) {
+    return new URL(`join.html?code=${code}`, window.location.href).href;
+  }
+
+  async function copyToClipboard(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      prompt("Copy this link:", text);
+    }
+  }
+
+  function renderInviteSection(isOwner) {
+    const section = document.getElementById("inviteSection");
+    section.style.display = isOwner ? "block" : "none";
+    if (!isOwner) return;
+
+    const linkRow = document.getElementById("inviteLinkRow");
+    const getBtn = document.getElementById("getInviteLinkBtn");
+    if (project.invite_code) {
+      linkRow.style.display = "flex";
+      getBtn.style.display = "none";
+      document.getElementById("inviteLinkInput").value = inviteLinkFor(project.invite_code);
+    } else {
+      linkRow.style.display = "none";
+      getBtn.style.display = "inline-flex";
+    }
+  }
+
+  function renderMembers(members, isOwner) {
+    document.getElementById("memberRows").innerHTML = members.map((m) => {
+      const isYou = m.user_id === currentUserId;
+      const canRemove = m.role !== "owner" && (isOwner || isYou);
+      return `
+        <tr>
+          <td>${escapeHtml(m.email)}${isYou ? ` <span class="hint">(you)</span>` : ""}</td>
+          <td><span class="badge ${m.role === "owner" ? "badge-green" : "badge-grey"}">${m.role === "owner" ? "Owner" : "Collaborator"}</span></td>
+          <td>${formatDate(m.joined_at?.slice(0, 10))}</td>
+          <td>${canRemove ? `<button class="btn btn-outline btn-sm" onclick="removeMember('${m.member_id}', '${escapeHtml(m.email).replace(/'/g, "\\'")}', ${isYou})">${isYou ? "Leave" : "Remove"}</button>` : ""}</td>
+        </tr>
+      `;
+    }).join("");
+  }
+
+  async function loadMembers() {
+    const { data: members, error } = await supabase.rpc("get_project_members", { p_project_id: projectId });
+    if (error) { showError(errorBox, error); return; }
+    const isOwner = (members || []).some((m) => m.user_id === currentUserId && m.role === "owner");
+    renderMembers(members || [], isOwner);
+    renderInviteSection(isOwner);
+    // Deleting the whole site is owner-only at the database level too —
+    // hide the button for collaborators rather than let them hit an error.
+    document.getElementById("deleteBtn").style.display = isOwner ? "inline-flex" : "none";
+  }
+
+  async function removeMember(memberId, email, isYou) {
+    const msg = isYou
+      ? `Leave this site? You'll need a new invite link to get back in.`
+      : `Remove "${email}" from this site? They'll lose access immediately.`;
+    if (!confirm(msg)) return;
+    const { error } = await supabase.from("project_members").delete().eq("id", memberId);
+    if (error) { showError(errorBox, error); return; }
+    if (isYou) { window.location.href = "dashboard.html"; return; }
+    loadMembers();
+  }
+  window.removeMember = removeMember;
+
+  async function getOrRegenerateInvite(e) {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    try {
+      const { data, error } = await supabase.rpc("regenerate_invite_code", { p_project_id: projectId });
+      if (error) throw error;
+      project.invite_code = data;
+      renderInviteSection(true);
+    } catch (err) {
+      showError(errorBox, err);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+  document.getElementById("getInviteLinkBtn").addEventListener("click", getOrRegenerateInvite);
+  document.getElementById("regenerateInviteBtn").addEventListener("click", getOrRegenerateInvite);
+
+  document.getElementById("revokeInviteBtn").addEventListener("click", async () => {
+    if (!confirm("Revoke this invite link? Anyone who hasn't already joined won't be able to use it any more.")) return;
+    const { error } = await supabase.rpc("revoke_invite_code", { p_project_id: projectId });
+    if (error) { showError(errorBox, error); return; }
+    project.invite_code = null;
+    renderInviteSection(true);
+  });
+
+  document.getElementById("copyInviteBtn").addEventListener("click", () => {
+    copyToClipboard(document.getElementById("inviteLinkInput").value);
+  });
 
   function renderFacts() {
     factsView.innerHTML = `
@@ -300,10 +418,14 @@
   }
 
   async function load() {
+    const { data: { user } } = await supabase.auth.getUser();
+    currentUserId = user.id;
+
     const { data, error } = await supabase.from("projects").select("*").eq("id", projectId).single();
     if (error) { document.getElementById("projectName").textContent = "Site not found"; return; }
     project = data;
     renderHeaderAndFacts();
+    loadMembers();
 
     const [{ count: reportCount }, { count: monthlyReportCount }, { data: snags }, { count: fetchedPlotsCount }, { data: gates }, { data: commercials }, { count: drawingsCount }] = await Promise.all([
       supabase.from("weekly_reports").select("id", { count: "exact", head: true }).eq("project_id", projectId),

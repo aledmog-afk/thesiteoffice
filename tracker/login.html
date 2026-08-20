@@ -38,7 +38,9 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { showError, clearError } from "./js/app.js";
+  import { showError, clearError, getParam } from "./js/app.js";
+
+  const next = getParam("next") || "dashboard.html";
 
   const form = document.getElementById("authForm");
   const errorBox = document.getElementById("errorBox");
@@ -48,9 +50,9 @@
   const toggleText = document.getElementById("toggleText");
   let mode = "signin";
 
-  // If already signed in, go straight to the dashboard.
+  // If already signed in, go straight to the dashboard (or wherever "next" points).
   supabase.auth.getSession().then(({ data: { session } }) => {
-    if (session) window.location.href = "dashboard.html";
+    if (session) window.location.href = next;
   });
 
   toggleBtn.addEventListener("click", () => {
@@ -74,12 +76,12 @@
       if (mode === "signin") {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
-        window.location.href = "dashboard.html";
+        window.location.href = next;
       } else {
         const { data, error } = await supabase.auth.signUp({ email, password });
         if (error) throw error;
         if (data.session) {
-          window.location.href = "dashboard.html";
+          window.location.href = next;
         } else {
           infoBox.style.background = "var(--green-light)";
           infoBox.style.color = "var(--green)";
