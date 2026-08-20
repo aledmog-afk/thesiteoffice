@@ -35,8 +35,8 @@ TSO-HR-PACK,HR Full Pack - All 20 Documents,HR & Workforce,49.00,,HR,ALL 20 FILE
 TSO-EMP-001,Environmental Management Plan,Quality & Environmental,12.00,,QMP,TSO-EMP-001-Environmental-Management-Plan.docx
 TSO-WMP-001,Waste Management Plan,Quality & Environmental,10.00,,QMP,TSO-WMP-001-Waste-Management-Plan.docx
 TSO-NCR-001,Non-Conformance Report,Quality & Environmental,8.00,,QMP,TSO-NCR-001-Non-Conformance-Report.docx
-TSO-SS-001,Sustainability Statement,Quality & Environmental,10.00,,,Drafted by Claude 2026-08-18 - not in Drive yet, review the delivered .docx then save it into this folder and fill in file_path
-TSO-QE-PACK,Quality & Environmental Pack,Quality & Environmental,39.00,,QMP,ALL 5 FILES (QMP + EMP + WMP + NCR + the new Sustainability Statement) - once SS-001 is reviewed and saved into the QMP Drive folder, select all 5 and download as zip
+TSO-SS-001,Sustainability Statement,Quality & Environmental,10.00,,,"Drafted by Claude 2026-08-18 - not in Drive yet, review the delivered .docx then save it into this folder and fill in file_path"
+TSO-QE-PACK,Quality & Environmental Pack,Quality & Environmental,39.00,,QMP,"ALL 5 FILES (QMP + EMP + WMP + NCR + the new Sustainability Statement) - once SS-001 is reviewed and saved into the QMP Drive folder, select all 5 and download as zip"
 TSO-SD-001,Site Diary,Site Management,6.00,,Site Management Docs,SM-01-SiteDiary-1.docx
 TSO-SIS-001,Sign In Sheet,Site Management,5.00,,Site Management Docs,SM-02-SignInSheet.docx
 TSO-MDR-001,Material Delivery Record,Site Management,5.00,,Site Management Docs,SM-05-MaterialDeliveryRecord.docx
