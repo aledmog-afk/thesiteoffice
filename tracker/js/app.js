@@ -219,7 +219,10 @@ export async function getOrgLogoUrl() {
 }
 
 // ─── Weather auto-fill (postcodes.io + Open-Meteo) ───────────────
-export const WEATHER_CONDITIONS = ["Dry", "Overcast", "Light Rain", "Heavy Rain", "Snow / Ice", "High Wind", "Frost", "Extreme Heat", "Site Closed"];
+// Deliberately just the conditions that actually affect site works —
+// dry/overcast days aren't worth a dropdown entry, so leaving a day
+// blank means "nothing to report".
+export const WEATHER_CONDITIONS = ["Light Rain", "Heavy Rain", "Snow / Ice"];
 
 // Geocodes a UK postcode via postcodes.io (free, no API key). Returns
 // { latitude, longitude } or null if the postcode isn't found or the
@@ -238,26 +241,19 @@ export async function geocodePostcode(postcode) {
   }
 }
 
-// Maps an Open-Meteo WMO weather code (plus the day's wind/temperature
-// extremes) to one of WEATHER_CONDITIONS. An explicit snow/ice code wins
-// first (most specific + severe), then a plain temperature-based frost
-// reading, then wind/rain/heat extremes — these are usually what
-// actually stops site work, so they take priority over the general sky
-// condition (a "clear sky" day with 50km/h gusts is a High Wind day).
+// Maps an Open-Meteo WMO weather code to one of WEATHER_CONDITIONS.
+// Anything that isn't rain or snow/ice returns "" (no auto-fill) — a
+// clear or overcast day just stays blank, since it doesn't affect site
+// works.
 const WMO_RAIN_LIGHT = new Set([51, 53, 55, 61, 63, 80, 81]);
 const WMO_RAIN_HEAVY = new Set([65, 82, 95, 96, 99]);
 const WMO_SNOW_ICE = new Set([56, 57, 66, 67, 71, 73, 75, 77, 85, 86]);
-const WMO_OVERCAST = new Set([3, 45, 48]);
 
-export function conditionFromWeatherCode(code, { windMaxKmh, tempMinC, tempMaxC } = {}) {
+export function conditionFromWeatherCode(code) {
   if (WMO_SNOW_ICE.has(code)) return "Snow / Ice";
-  if (typeof tempMinC === "number" && tempMinC < 0) return "Frost";
-  if (typeof windMaxKmh === "number" && windMaxKmh >= 50) return "High Wind";
   if (WMO_RAIN_HEAVY.has(code)) return "Heavy Rain";
   if (WMO_RAIN_LIGHT.has(code)) return "Light Rain";
-  if (typeof tempMaxC === "number" && tempMaxC >= 30) return "Extreme Heat";
-  if (WMO_OVERCAST.has(code)) return "Overcast";
-  return "Dry";
+  return "";
 }
 
 // Fetches a daily condition summary for a lat/long + date range from
@@ -270,7 +266,7 @@ export function conditionFromWeatherCode(code, { windMaxKmh, tempMinC, tempMaxC 
 export async function fetchWeatherConditions(latitude, longitude, startDate, endDate) {
   if (latitude == null || longitude == null) return new Map();
   try {
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&start_date=${startDate}&end_date=${endDate}&daily=weathercode,temperature_2m_max,temperature_2m_min,windspeed_10m_max&timezone=auto`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&start_date=${startDate}&end_date=${endDate}&daily=weathercode&timezone=auto`;
     const res = await fetch(url);
     if (!res.ok) return new Map();
     const json = await res.json();
@@ -278,12 +274,8 @@ export async function fetchWeatherConditions(latitude, longitude, startDate, end
     if (!daily || !Array.isArray(daily.time)) return new Map();
     const result = new Map();
     daily.time.forEach((date, i) => {
-      const condition = conditionFromWeatherCode(daily.weathercode?.[i], {
-        windMaxKmh: daily.windspeed_10m_max?.[i],
-        tempMinC: daily.temperature_2m_min?.[i],
-        tempMaxC: daily.temperature_2m_max?.[i],
-      });
-      result.set(date, condition);
+      const condition = conditionFromWeatherCode(daily.weathercode?.[i]);
+      if (condition) result.set(date, condition);
     });
     return result;
   } catch {
