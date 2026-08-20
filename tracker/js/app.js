@@ -284,6 +284,34 @@ export async function suggestPlotProgress(projectId, plotNumber) {
   return Math.round((sum / BUILD_MILESTONES.length) * 10) / 10;
 }
 
+// Tops a project up to `totalPlots` plots, naming any it creates
+// "Plot 1", "Plot 2", … and skipping any of those exact names that
+// already exist (case-insensitively) — so re-running this after some
+// plots already exist only fills the gaps, it never creates duplicates.
+// Each new plot row fires the existing seed_plot_defaults() DB trigger,
+// which gives it its own quality gates, handover documents, and snag
+// list automatically — nothing extra to wire up here. Purely a plot
+// count target, unrelated to Actual Progress (which is the average of
+// however many plots actually exist, not this target).
+export async function generateMissingPlots(projectId, totalPlots) {
+  const { data: existing } = await supabase.from("plots").select("plot_number").eq("project_id", projectId);
+  const existingNames = new Set((existing || []).map((p) => p.plot_number.trim().toLowerCase()));
+
+  const { data: { user } } = await supabase.auth.getUser();
+  const toCreate = [];
+  for (let i = 1; i <= totalPlots; i++) {
+    const name = `Plot ${i}`;
+    if (!existingNames.has(name.toLowerCase())) {
+      toCreate.push({ project_id: projectId, plot_number: name, created_by: user.id });
+    }
+  }
+  if (!toCreate.length) return 0;
+
+  const { error } = await supabase.from("plots").insert(toCreate);
+  if (error) throw error;
+  return toCreate.length;
+}
+
 // ─── Weather auto-fill (postcodes.io + Open-Meteo) ───────────────
 // Deliberately just the conditions that actually affect site works —
 // dry/overcast days aren't worth a dropdown entry, so leaving a day
