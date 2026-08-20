@@ -724,3 +724,12 @@ alter table public.monthly_reports add column if not exists total_lost_hours num
 alter table public.projects add column if not exists postcode text;
 alter table public.projects add column if not exists latitude numeric;
 alter table public.projects add column if not exists longitude numeric;
+
+-- ─── v12 ADDITIONS ────────────────────────────────────────────────
+-- Automatic progress: "Actual Progress %" is now computed from logged
+-- milestone progress rather than typed in by hand. total_plots is the
+-- denominator — set once per site — so the same milestone completion
+-- moves the needle more on a 4-plot site than a 40-plot one.
+alter table public.projects add column if not exists total_plots integer;
+alter table public.projects drop constraint if exists projects_total_plots_check;
+alter table public.projects add constraint projects_total_plots_check check (total_plots is null or total_plots > 0);

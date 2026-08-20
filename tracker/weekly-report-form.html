@@ -76,7 +76,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions, recalculateActualProgress } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -491,6 +491,12 @@
 
       const syncedItems = await syncCommercialItems(commercialEditor.getItems(), finalReportId, user.id);
       await supabase.from("weekly_reports").update({ commercial_items: syncedItems }).eq("id", finalReportId);
+
+      // Auto-updates the site's Actual Progress % from milestone data
+      // across all its weekly reports. A no-op if total_plots isn't set,
+      // and never blocks navigation if it fails — the report itself has
+      // already saved successfully at this point.
+      try { await recalculateActualProgress(projectId); } catch { /* non-fatal */ }
 
       window.location.href = `weekly-report-view.html?id=${finalReportId}`;
     } catch (err) {

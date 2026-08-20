@@ -218,6 +218,54 @@ export async function getOrgLogoUrl() {
   return data?.logo_url || null;
 }
 
+// ─── Automatic progress ───────────────────────────────────────────
+// Recomputes a project's "Actual Progress %" from its logged milestone
+// progress and total_plots, and writes it back onto the project row.
+// No-ops (returns null, touches nothing) if total_plots isn't set —
+// there's no denominator to work with yet.
+//
+// Dedupes by (plot token, milestone) across the project's ENTIRE weekly
+// report history, not just the report just saved, taking the highest
+// percent ever recorded for each pair — so a milestone finished months
+// ago still counts even once it's dropped off every current week's
+// list. A progress item's plot field can list several plots at once
+// ("5,6,7"), so each token is credited separately; an item with no plot
+// tag is treated as a site-wide milestone and credited as if it applied
+// to every plot at once (finishing it once is worth as much as
+// finishing it on each individual plot). Items with no milestone, or a
+// custom "Other" milestone outside BUILD_MILESTONES, aren't weighted at
+// all — there's no fixed slot for them in the scale.
+export async function recalculateActualProgress(projectId) {
+  const { data: project } = await supabase.from("projects").select("total_plots").eq("id", projectId).single();
+  if (!project?.total_plots || project.total_plots <= 0) return null;
+
+  const { data: reports } = await supabase.from("weekly_reports").select("progress_items").eq("project_id", projectId);
+
+  const best = new Map(); // key: `${plotToken}::${milestone}` -> { percent, isSiteWide }
+  (reports || []).forEach((r) => {
+    (Array.isArray(r.progress_items) ? r.progress_items : []).forEach((item) => {
+      if (typeof item === "string" || !item.milestone || !BUILD_MILESTONES.includes(item.milestone)) return;
+      const percent = typeof item.percent === "number" ? item.percent : 0;
+      const plotTokens = item.plot ? item.plot.split(",").map((p) => p.trim()).filter(Boolean) : ["__sitewide__"];
+      plotTokens.forEach((token) => {
+        const key = `${token}::${item.milestone}`;
+        const prev = best.get(key);
+        if (!prev || percent > prev.percent) best.set(key, { percent, isSiteWide: token === "__sitewide__" });
+      });
+    });
+  });
+
+  const totalPoints = BUILD_MILESTONES.length * project.total_plots;
+  let achieved = 0;
+  best.forEach(({ percent, isSiteWide }) => {
+    achieved += (percent / 100) * (isSiteWide ? project.total_plots : 1);
+  });
+  const pct = Math.round(Math.min(100, Math.max(0, (achieved / totalPoints) * 100)) * 10) / 10;
+
+  await supabase.from("projects").update({ actual_progress_pct: pct }).eq("id", projectId);
+  return pct;
+}
+
 // ─── Weather auto-fill (postcodes.io + Open-Meteo) ───────────────
 // Deliberately just the conditions that actually affect site works —
 // dry/overcast days aren't worth a dropdown entry, so leaving a day

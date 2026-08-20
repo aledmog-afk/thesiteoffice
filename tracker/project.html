@@ -33,6 +33,7 @@
       <span class="hint" style="color:var(--ink-soft); font-size:0.8rem;">Overall status &amp; programme progress — edit below</span>
     </div>
     <div id="progressDisplay"></div>
+    <p class="hint" id="noPlotsHint" style="display:none; margin-top:0.5rem;">Set <strong>Total Plots</strong> below to start tracking Actual Progress automatically from weekly report milestones.</p>
   </div>
 
   <div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(220px,1fr)); margin-bottom:2rem;">
@@ -107,8 +108,12 @@
       </div>
       <div class="form-grid">
         <div class="field"><label for="baselinePct">Planned / baseline progress (%)</label><input type="number" id="baselinePct" min="0" max="100" step="1"></div>
-        <div class="field"><label for="actualPct">Actual progress (%)</label><input type="number" id="actualPct" min="0" max="100" step="1"></div>
+        <div class="field">
+          <label for="totalPlots">Total plots on site</label>
+          <input type="number" id="totalPlots" min="1" step="1" placeholder="e.g. 24">
+        </div>
       </div>
+      <p class="hint">Actual Progress is calculated automatically from milestones logged on weekly reports, weighted against the total plot count above — it's no longer typed in by hand.</p>
       <div class="btn-row">
         <button type="submit" class="btn btn-amber">Save Changes</button>
         <button type="button" class="btn btn-outline" id="cancelEditBtn">Cancel</button>
@@ -120,7 +125,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, geocodePostcode } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, geocodePostcode, recalculateActualProgress } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("id");
@@ -147,6 +152,7 @@
       <div><dt>Main Contractor</dt><dd>${escapeHtml(project.main_contractor_name) || "—"}</dd></div>
       <div><dt>Contractor Email</dt><dd>${escapeHtml(project.main_contractor_email) || "—"}</dd></div>
       <div><dt>Start Date</dt><dd>${project.start_date ? formatDate(project.start_date) : "—"}</dd></div>
+      <div><dt>Total Plots</dt><dd>${project.total_plots || "—"}</dd></div>
     `;
   }
 
@@ -160,7 +166,7 @@
     document.getElementById("startDate").value = project.start_date || "";
     document.getElementById("ragStatusInput").value = project.rag_status;
     document.getElementById("baselinePct").value = project.baseline_progress_pct;
-    document.getElementById("actualPct").value = project.actual_progress_pct;
+    document.getElementById("totalPlots").value = project.total_plots || "";
   }
 
   document.getElementById("editBtn").addEventListener("click", () => {
@@ -179,6 +185,7 @@
     e.preventDefault();
     clearError(errorBox);
     const postcode = document.getElementById("postcode").value.trim() || null;
+    const totalPlotsVal = document.getElementById("totalPlots").value;
     const payload = {
       name: document.getElementById("name").value.trim(),
       contract_ref: document.getElementById("contractRef").value.trim() || null,
@@ -189,7 +196,7 @@
       start_date: document.getElementById("startDate").value || null,
       rag_status: document.getElementById("ragStatusInput").value,
       baseline_progress_pct: Number(document.getElementById("baselinePct").value) || 0,
-      actual_progress_pct: Number(document.getElementById("actualPct").value) || 0,
+      total_plots: totalPlotsVal === "" ? null : Number(totalPlotsVal),
     };
 
     // Only re-geocode when the postcode actually changed — avoids an
@@ -214,6 +221,17 @@
     const { data, error } = await supabase.from("projects").update(payload).eq("id", projectId).select().single();
     if (error) { showError(errorBox, error); return; }
     project = data;
+
+    // Recalculating can change actual_progress_pct on the row we just
+    // fetched (e.g. total_plots was just set for the first time), so
+    // pull the fresh value back in rather than trusting the pre-recalc
+    // `data`. A failure here is non-fatal — the site details themselves
+    // already saved fine.
+    try {
+      const pct = await recalculateActualProgress(projectId);
+      if (pct !== null) project.actual_progress_pct = pct;
+    } catch { /* non-fatal — details are already saved */ }
+
     renderHeaderAndFacts();
     if (!errorBox.textContent) document.getElementById("cancelEditBtn").click();
   });
@@ -241,6 +259,7 @@
     ragBadge.className = `badge badge-${project.rag_status} rag-badge`;
     ragBadge.innerHTML = `<span class="rag-dot rag-${project.rag_status}"></span>${RAG_LABEL[project.rag_status]}`;
     document.getElementById("progressDisplay").innerHTML = renderProgressBlock(project.baseline_progress_pct, project.actual_progress_pct, project.rag_status);
+    document.getElementById("noPlotsHint").style.display = project.total_plots ? "none" : "block";
   }
 
   async function load() {
