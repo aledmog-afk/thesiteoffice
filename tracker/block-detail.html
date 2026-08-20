@@ -276,7 +276,8 @@
       .insert({ project_id: block.project_id, block_id: blockId, plot_number: flatName.trim(), created_by: user.id })
       .select()
       .single();
-    if (!error) window.location.href = `plot-detail.html?id=${data.id}`;
+    if (error) { showError(errorBox, error); return; }
+    window.location.href = `plot-detail.html?id=${data.id}`;
   }
   document.getElementById("newFlatBtn").addEventListener("click", createFlat);
   document.getElementById("emptyNewFlatBtn")?.addEventListener("click", createFlat);

@@ -74,7 +74,8 @@
       .insert({ project_id: projectId, plot_number: plotNumber.trim(), created_by: user.id })
       .select()
       .single();
-    if (!error) window.location.href = `plot-detail.html?id=${data.id}`;
+    if (error) { alert(`Could not create plot: ${error.message}`); return; }
+    window.location.href = `plot-detail.html?id=${data.id}`;
   }
   document.getElementById("newPlotBtn").addEventListener("click", createPlot);
   document.getElementById("emptyNewPlotBtn")?.addEventListener("click", createPlot);
@@ -88,7 +89,8 @@
       .insert({ project_id: projectId, block_name: blockName.trim(), created_by: user.id })
       .select()
       .single();
-    if (!error) window.location.href = `block-detail.html?id=${data.id}`;
+    if (error) { alert(`Could not create block: ${error.message}`); return; }
+    window.location.href = `block-detail.html?id=${data.id}`;
   }
   document.getElementById("newBlockBtn").addEventListener("click", createBlock);
   document.getElementById("emptyNewBlockBtn")?.addEventListener("click", createBlock);
