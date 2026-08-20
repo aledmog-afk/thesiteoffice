@@ -96,8 +96,21 @@ def extract_product_id(response):
     return None
 
 
+CATEGORY_TAGS = {
+    "CDM & Construction Phase": "cdm",
+    "Commercial & Estimating": "commercial",
+    "Quality & Environmental": "quality",
+}
+
+
 def slug(category):
-    return category.strip().lower().replace(" & ", "-").replace(" ", "-") if category else ""
+    # Gumroad rejects tags over 20 characters
+    if not category:
+        return ""
+    if category in CATEGORY_TAGS:
+        return CATEGORY_TAGS[category]
+    s = category.strip().lower().replace(" & ", "-").replace(" ", "-")
+    return s[:20].rstrip("-")
 
 
 def process_row(row, log, live):
@@ -135,7 +148,7 @@ def process_row(row, log, live):
     run_cli(["products", "update", str(product_id), "--file", file_path], live)
 
     tag_args = ["--tag", slug(category)] if category else []
-    run_cli(["products", "update", str(product_id), "--price", price, "--currency", "gbp", *tag_args], live)
+    run_cli(["products", "update", str(product_id), "--name", name, "--price", price, "--currency", "gbp", *tag_args], live)
 
     run_cli(["products", "publish", str(product_id)], live)
 
