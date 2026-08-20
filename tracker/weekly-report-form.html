@@ -87,7 +87,7 @@
   let nextWeekEditor = mountItemListEditor(document.getElementById("nextWeekItems"), [], () => {}, { withMilestone: true });
 
   // ─── Weather tracker ─────────────────────────────────────────────
-  // A fixed 7-day grid (Mon–Sun of the report's week, derived from
+  // A fixed 5-day grid (Mon–Fri of the report's week, derived from
   // weekStarting) capturing condition + lost hours + notes per day, with
   // a live total. Rebuilds whenever weekStarting changes, carrying over
   // any already-entered day (matched by date) that still falls in range.
@@ -100,7 +100,7 @@
       if (!weekStartingStr) return [];
       const start = new Date(weekStartingStr + "T00:00:00");
       const byDate = new Map((existingDays || []).map((d) => [d.date, d]));
-      return Array.from({ length: 7 }, (_, i) => {
+      return Array.from({ length: 5 }, (_, i) => {
         const d = new Date(start);
         d.setDate(d.getDate() + i);
         const dateStr = d.toISOString().slice(0, 10);
