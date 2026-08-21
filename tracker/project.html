@@ -27,6 +27,8 @@
     </div>
   </div>
 
+  <div id="pageErrorBox" class="error-box"></div>
+
   <div class="card" id="progressCard" style="margin-bottom:2rem;">
     <div style="display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap; margin-bottom:0.5rem;">
       <span class="badge rag-badge" id="ragBadge"></span>
@@ -186,6 +188,12 @@
   const detailsCard = document.getElementById("detailsCard");
   const editForm = document.getElementById("editForm");
   const errorBox = document.getElementById("errorBox");
+  // Site Details' own errorBox lives inside its edit form, which is
+  // display:none until "Edit details" is clicked — fine for errors that
+  // happen while the form is already open, useless for anything that can
+  // happen with the form closed (Collaborators, Generate Missing Plots).
+  // Those use this one instead, which is always visible.
+  const pageErrorBox = document.getElementById("pageErrorBox");
 
   // ─── Collaborators ──────────────────────────────────────────────
   function inviteLinkFor(code) {
@@ -243,8 +251,9 @@
   }
 
   async function loadMembers() {
+    clearError(pageErrorBox);
     const { data: members, error } = await supabase.rpc("get_project_members", { p_project_id: projectId });
-    if (error) { showError(errorBox, error); return; }
+    if (error) { showError(pageErrorBox, error); return; }
     const isOwner = (members || []).some((m) => m.user_id === currentUserId && m.role === "owner");
     renderMembers(members || [], isOwner);
     renderInviteSection("collaborator", isOwner);
@@ -259,8 +268,9 @@
       ? `Leave this site? You'll need a new invite link to get back in.`
       : `Remove "${email}" from this site? They'll lose access immediately.`;
     if (!confirm(msg)) return;
+    clearError(pageErrorBox);
     const { error } = await supabase.from("project_members").delete().eq("id", memberId);
-    if (error) { showError(errorBox, error); return; }
+    if (error) { showError(pageErrorBox, error); return; }
     if (isYou) { window.location.href = "dashboard.html"; return; }
     loadMembers();
   }
@@ -270,13 +280,14 @@
     const k = INVITE_KINDS[kind];
     const btn = e.currentTarget;
     btn.disabled = true;
+    clearError(pageErrorBox);
     try {
       const { data, error } = await supabase.rpc(k.regenerateRpc, { p_project_id: projectId });
       if (error) throw error;
       project[k.codeField] = data;
       renderInviteSection(kind, true);
     } catch (err) {
-      showError(errorBox, err);
+      showError(pageErrorBox, err);
     } finally {
       btn.disabled = false;
     }
@@ -289,8 +300,9 @@
   async function revokeInvite(kind, confirmMsg) {
     const k = INVITE_KINDS[kind];
     if (!confirm(confirmMsg)) return;
+    clearError(pageErrorBox);
     const { error } = await supabase.rpc(k.revokeRpc, { p_project_id: projectId });
-    if (error) { showError(errorBox, error); return; }
+    if (error) { showError(pageErrorBox, error); return; }
     project[k.codeField] = null;
     renderInviteSection(kind, true);
   }
@@ -410,10 +422,16 @@
     const btn = e.currentTarget;
     btn.disabled = true;
     btn.textContent = "Checking weekly reports…";
-    const suggested = await suggestPlotProgress(projectId, EXTERNAL_WORKS_TAG);
-    document.getElementById("externalWorksPct").value = suggested;
-    btn.disabled = false;
-    btn.textContent = "Suggest from Milestones";
+    clearError(pageErrorBox);
+    try {
+      const suggested = await suggestPlotProgress(projectId, EXTERNAL_WORKS_TAG);
+      document.getElementById("externalWorksPct").value = suggested;
+    } catch (err) {
+      showError(pageErrorBox, err);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Suggest from Milestones";
+    }
   });
 
   function updateGeneratePlotsButton() {
@@ -431,13 +449,14 @@
     const btn = document.getElementById("generatePlotsBtn");
     btn.disabled = true;
     btn.textContent = "Creating plots…";
+    clearError(pageErrorBox);
     try {
       const created = await generateMissingPlots(projectId, project.total_plots);
       plotsCount += created;
       document.getElementById("plotsCount").textContent = plotsCount;
       updateGeneratePlotsButton();
     } catch (err) {
-      showError(errorBox, err);
+      showError(pageErrorBox, err);
     } finally {
       btn.disabled = false;
     }
