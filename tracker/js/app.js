@@ -358,10 +358,10 @@ export async function generateMissingFlats(projectId, blockId, totalFlats) {
 }
 
 // ─── Weather auto-fill (postcodes.io + Open-Meteo) ───────────────
-// Deliberately just the conditions that actually affect site works —
-// dry/overcast days aren't worth a dropdown entry, so leaving a day
-// blank means "nothing to report".
-export const WEATHER_CONDITIONS = ["Light Rain", "Heavy Rain", "Snow / Ice"];
+// Leaving a day blank still means "nothing to report" — "Dry" is here
+// for when you want that explicitly on record (e.g. confirming a day
+// was checked and clear), not because every day needs a condition set.
+export const WEATHER_CONDITIONS = ["Dry", "Light Rain", "Heavy Rain", "Snow / Ice"];
 
 // Geocodes a UK postcode via postcodes.io (free, no API key). Returns
 // { latitude, longitude } or null if the postcode isn't found or the
