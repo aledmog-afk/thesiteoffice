@@ -233,27 +233,53 @@ export async function getOrgLogoUrl() {
 }
 
 // ─── Automatic progress ───────────────────────────────────────────
-// Actual Progress % is the average of every plot's own progress_pct,
-// every block's own progress_pct (shared structure/civils tracked once
-// for the whole apartment block, not duplicated per flat), plus the
-// site's external_works_pct (civils/drainage/landscaping that isn't any
-// one plot or block) — all equally weighted. Every input is set
-// directly (by hand, or via suggestPlotProgress() below) rather than
-// being locked to an automatic calculation — the point is that they're
-// always correctable when a milestone gets missed in a weekly report.
+// Actual Progress % is a weighted average of every plot's own
+// progress_pct, every block's own progress_pct, plus the site's
+// external_works_pct (civils/drainage/landscaping that isn't any one
+// plot or block). Every input is set directly (by hand, or via
+// suggestPlotProgress() below) rather than being locked to an
+// automatic calculation — the point is that they're always correctable
+// when a milestone gets missed in a weekly report.
+//
+// A block's own progress_pct is the shared structure/civils tracked
+// once for the whole apartment block, not duplicated per flat — but it
+// underpins every flat inside it, so it's weighted as though it were
+// that many house-equivalent units, not just one. A fully-built frame
+// sitting under 30 still-empty flats is genuine, substantial progress
+// on the site as a whole, not "barely started" — counting the block's
+// shared progress only once would badly understate that. Each flat's
+// own fit-out progress still also counts individually and separately,
+// same as a house. A brand new block with no flats yet counts as a
+// single unit, same as before, so it isn't invisible in the average
+// until flats are added.
 export async function recalculateActualProgress(projectId) {
   const [{ data: project }, { data: plots }, { data: blocks }] = await Promise.all([
     supabase.from("projects").select("external_works_pct").eq("id", projectId).single(),
-    supabase.from("plots").select("progress_pct").eq("project_id", projectId),
-    supabase.from("blocks").select("progress_pct").eq("project_id", projectId),
+    supabase.from("plots").select("progress_pct, block_id").eq("project_id", projectId),
+    supabase.from("blocks").select("id, progress_pct").eq("project_id", projectId),
   ]);
 
-  const values = [
-    ...(plots || []).map((p) => Number(p.progress_pct) || 0),
-    ...(blocks || []).map((b) => Number(b.progress_pct) || 0),
-    Number(project?.external_works_pct) || 0,
-  ];
-  const pct = Math.round((values.reduce((sum, v) => sum + v, 0) / values.length) * 10) / 10;
+  const flatCountByBlock = new Map();
+  (plots || []).forEach((p) => {
+    if (!p.block_id) return;
+    flatCountByBlock.set(p.block_id, (flatCountByBlock.get(p.block_id) || 0) + 1);
+  });
+
+  let sum = 0;
+  let weight = 0;
+  (plots || []).forEach((p) => {
+    sum += Number(p.progress_pct) || 0;
+    weight += 1;
+  });
+  (blocks || []).forEach((b) => {
+    const blockWeight = flatCountByBlock.get(b.id) || 1;
+    sum += (Number(b.progress_pct) || 0) * blockWeight;
+    weight += blockWeight;
+  });
+  sum += Number(project?.external_works_pct) || 0;
+  weight += 1;
+
+  const pct = Math.round((sum / weight) * 10) / 10;
 
   await supabase.from("projects").update({ actual_progress_pct: pct }).eq("id", projectId);
   return pct;

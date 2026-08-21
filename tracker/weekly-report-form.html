@@ -83,12 +83,21 @@
   const reportId = getParam("id");
   if (!projectId) window.location.href = "dashboard.html";
 
-  // Every plot on the site (houses and flats alike), plus a permanent
+  // Every plot on the site (houses and flats alike), every apartment
+  // block (for shared structural work that isn't any one flat, e.g.
+  // "Frame Erect" against the whole block at once), plus a permanent
   // site-wide entry for civils/drainage/landscaping work that isn't any
-  // one plot — offered as the multi-select plot tag on progress/next-week
-  // items.
-  const { data: plotsForTagging } = await supabase.from("plots").select("plot_number").eq("project_id", projectId);
-  const plotOptions = [...(plotsForTagging || []).map((p) => p.plot_number).sort(comparePlotNumbers), EXTERNAL_WORKS_TAG];
+  // one plot or block — offered as the multi-select plot tag on
+  // progress/next-week items.
+  const [{ data: plotsForTagging }, { data: blocksForTagging }] = await Promise.all([
+    supabase.from("plots").select("plot_number").eq("project_id", projectId),
+    supabase.from("blocks").select("block_name").eq("project_id", projectId),
+  ]);
+  const plotOptions = [
+    ...(plotsForTagging || []).map((p) => p.plot_number).sort(comparePlotNumbers),
+    ...(blocksForTagging || []).map((b) => b.block_name).sort(comparePlotNumbers),
+    EXTERNAL_WORKS_TAG,
+  ];
 
   let progressEditor = mountItemListEditor(document.getElementById("progressItems"), [], () => {}, { withPercent: true, withMilestone: true, plotOptions });
   let nextWeekEditor = mountItemListEditor(document.getElementById("nextWeekItems"), [], () => {}, { withMilestone: true, plotOptions });
