@@ -59,7 +59,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, comparePlotNumbers, generateMissingFlats } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, comparePlotNumbers, generateFlatsFromSpec } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -83,8 +83,7 @@
   async function createBlock() {
     const blockName = prompt("Block name:", "Building ");
     if (!blockName || !blockName.trim()) return;
-    const flatsInput = prompt("Number of flats in this block? (leave blank to add them one at a time later)", "");
-    const totalFlats = flatsInput && flatsInput.trim() ? Math.max(0, parseInt(flatsInput, 10) || 0) : 0;
+    const flatSpec = prompt("Flat plot numbers (optional) — a range like 23-30, a comma list like 23,25,28, or leave blank to add them one at a time later:", "");
 
     const { data: { user } } = await supabase.auth.getUser();
     const { data, error } = await supabase
@@ -94,9 +93,9 @@
       .single();
     if (error) { alert(`Could not create block: ${error.message}`); return; }
 
-    if (totalFlats > 0) {
+    if (flatSpec && flatSpec.trim()) {
       try {
-        await generateMissingFlats(projectId, data.id, totalFlats);
+        await generateFlatsFromSpec(projectId, data.id, flatSpec);
       } catch (err) {
         alert(`Block created, but couldn't auto-create its flats: ${err.message}`);
       }

@@ -430,29 +430,61 @@ export async function generateMissingPlots(projectId, totalPlots) {
   return toCreate.length;
 }
 
-// Same idea as generateMissingPlots() above, but scoped to one apartment
-// block: tops it up to `totalFlats` flats named "Flat 1", "Flat 2", …,
-// skipping any that already exist by name. Each new row still gets the
-// project_id (flats are plots under the hood) plus this block's id, so
-// seed_plot_defaults() seeds it with the reduced flat gate/document set
-// instead of the full house set.
-export async function generateMissingFlats(projectId, blockId, totalFlats) {
+// Parses a flexible flat/plot number spec into an ordered list of
+// individual names, each kept exactly as typed — a bare "23" becomes
+// plot_number "23", not forced into "Flat 23" or "Plot 23", since a
+// block of flats is often numbered to continue the whole site's own
+// plot numbering rather than restart at 1. Supports comma-separated
+// lists ("23,25,28A") and numeric ranges ("23-30", inclusive, either
+// direction); anything that isn't a pure numeric range is kept as its
+// own literal entry.
+export function parseFlatNumberSpec(spec) {
+  const names = [];
+  (spec || "").split(",").map((s) => s.trim()).filter(Boolean).forEach((segment) => {
+    const rangeMatch = segment.match(/^(\d+)\s*-\s*(\d+)$/);
+    if (rangeMatch) {
+      const start = Number(rangeMatch[1]);
+      const end = Number(rangeMatch[2]);
+      const step = start <= end ? 1 : -1;
+      for (let i = start; step > 0 ? i <= end : i >= end; i += step) names.push(String(i));
+    } else {
+      names.push(segment);
+    }
+  });
+  return names;
+}
+
+// Creates flats in a block from a number spec (see parseFlatNumberSpec
+// above) rather than a plain count, so a block's flats can carry
+// whatever plot numbers the site actually uses for them — skips any
+// name that already exists on this block (case-insensitively), so
+// re-running this after some flats already exist only fills the gaps.
+// Each new row gets the project_id (flats are plots under the hood)
+// plus this block's id, so seed_plot_defaults() seeds it with the
+// reduced flat gate/document set instead of the full house set.
+// Returns the created plot rows (not just a count), so a caller adding
+// exactly one flat can jump straight to its detail page.
+export async function generateFlatsFromSpec(projectId, blockId, spec) {
+  const names = parseFlatNumberSpec(spec);
+  if (!names.length) return [];
+
   const { data: existing } = await supabase.from("plots").select("plot_number").eq("block_id", blockId);
   const existingNames = new Set((existing || []).map((p) => p.plot_number.trim().toLowerCase()));
 
   const { data: { user } } = await supabase.auth.getUser();
+  const seen = new Set();
   const toCreate = [];
-  for (let i = 1; i <= totalFlats; i++) {
-    const name = `Flat ${i}`;
-    if (!existingNames.has(name.toLowerCase())) {
-      toCreate.push({ project_id: projectId, block_id: blockId, plot_number: name, created_by: user.id });
-    }
-  }
-  if (!toCreate.length) return 0;
+  names.forEach((name) => {
+    const key = name.toLowerCase();
+    if (existingNames.has(key) || seen.has(key)) return;
+    seen.add(key);
+    toCreate.push({ project_id: projectId, block_id: blockId, plot_number: name, created_by: user.id });
+  });
+  if (!toCreate.length) return [];
 
-  const { error } = await supabase.from("plots").insert(toCreate);
+  const { data, error } = await supabase.from("plots").insert(toCreate).select();
   if (error) throw error;
-  return toCreate.length;
+  return data || [];
 }
 
 // ─── Weather auto-fill (postcodes.io + Open-Meteo) ───────────────

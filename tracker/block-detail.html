@@ -75,7 +75,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, uploadImage, suggestPlotProgress, recalculateActualProgress, comparePlotNumbers } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, uploadImage, suggestPlotProgress, recalculateActualProgress, comparePlotNumbers, generateFlatsFromSpec } from "./js/app.js";
 
   await requireAuth();
   const blockId = getParam("id");
@@ -268,16 +268,19 @@
 
   // ─── Flats within this block ──────────────────────────────────────
   async function createFlat() {
-    const flatName = prompt("Flat number / name:", "Flat ");
-    if (!flatName || !flatName.trim()) return;
-    const { data: { user } } = await supabase.auth.getUser();
-    const { data, error } = await supabase
-      .from("plots")
-      .insert({ project_id: block.project_id, block_id: blockId, plot_number: flatName.trim(), created_by: user.id })
-      .select()
-      .single();
-    if (error) { showError(errorBox, error); return; }
-    window.location.href = `plot-detail.html?id=${data.id}`;
+    const spec = prompt("Flat plot number(s) — a single number, a comma list (23,25,28), or a range (23-30):", "");
+    if (!spec || !spec.trim()) return;
+    try {
+      const created = await generateFlatsFromSpec(block.project_id, blockId, spec);
+      if (!created.length) { alert("No new flats created — those plot numbers may already exist on this block."); return; }
+      if (created.length === 1) {
+        window.location.href = `plot-detail.html?id=${created[0].id}`;
+      } else {
+        loadFlats();
+      }
+    } catch (err) {
+      showError(errorBox, err);
+    }
   }
   document.getElementById("newFlatBtn").addEventListener("click", createFlat);
   document.getElementById("emptyNewFlatBtn")?.addEventListener("click", createFlat);
