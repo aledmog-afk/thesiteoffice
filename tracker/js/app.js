@@ -304,6 +304,93 @@ export async function suggestPlotProgress(projectId, plotNumber) {
   return Math.round((sum / BUILD_MILESTONES.length) * 10) / 10;
 }
 
+// Which BUILD_MILESTONES entries make up each standalone-house quality
+// gate. Used only to auto-ADVANCE a gate once every milestone in its
+// group is logged at 100% against that plot — never to downgrade one,
+// and never to set Approved, which always stays a human decision on the
+// plot's own page. Flats and block-level gates use different milestone
+// sets not covered here.
+const GATE_MILESTONES = {
+  substructure_drainage: ["Groundworks", "Foundations (Foots)", "Drainage (Below Ground)", "Slab Pour / Oversite"],
+  frame_watertight: ["Timber Frame Erect", "Brick & Block Superstructure", "Scaffold Erect", "Roofing", "Windows & External Doors", "Scaffold Drop", "Render", "Cladding / External Finishes"],
+  pre_plaster_first_fix: ["1st Fix – Carpentry", "1st Fix – Electrical", "1st Fix – Plumbing & Heating", "1st Fix – Gas", "Plastering / Drylining"],
+  pre_handover_pc: ["2nd Fix – Carpentry", "2nd Fix – Electrical", "2nd Fix – Plumbing & Heating", "Kitchen Fit", "Bathroom Fit", "Painting & Decorating", "Flooring", "Testing & Commissioning", "Snagging", "Handover / Practical Completion"],
+};
+
+// Call after saving a weekly report, passing the report's own
+// progress_items. Advances a house plot's quality gate to "Under
+// Review" once every milestone that makes it up has been logged at
+// 100% against that plot (deduped across the project's whole weekly
+// report history, same rule as suggestPlotProgress() above) — a gate
+// already Under Review, Approved, or marked N/A is left untouched.
+// Only checks plots actually tagged in `progressItems`, since that's
+// the only data this particular save could have changed. Returns the
+// number of gates advanced.
+export async function syncGateStatusFromMilestones(projectId, progressItems) {
+  const taggedTokens = new Set();
+  (progressItems || []).forEach((item) => {
+    if (!item.plot || !item.milestone) return;
+    item.plot.split(",").forEach((p) => {
+      const token = normalisePlotToken(p.trim());
+      if (token) taggedTokens.add(token);
+    });
+  });
+  if (!taggedTokens.size) return 0;
+
+  const [{ data: plots }, { data: reports }] = await Promise.all([
+    supabase.from("plots").select("id, plot_number").eq("project_id", projectId).is("block_id", null),
+    supabase.from("weekly_reports").select("progress_items").eq("project_id", projectId),
+  ]);
+
+  const relevantPlots = (plots || []).filter((p) => taggedTokens.has(normalisePlotToken(p.plot_number)));
+  if (!relevantPlots.length) return 0;
+
+  const tokenToPlotIds = new Map();
+  const completionByPlotId = new Map();
+  relevantPlots.forEach((p) => {
+    completionByPlotId.set(p.id, new Map());
+    const token = normalisePlotToken(p.plot_number);
+    if (!tokenToPlotIds.has(token)) tokenToPlotIds.set(token, []);
+    tokenToPlotIds.get(token).push(p.id);
+  });
+
+  (reports || []).forEach((r) => {
+    (Array.isArray(r.progress_items) ? r.progress_items : []).forEach((item) => {
+      if (typeof item === "string" || !item.milestone || !BUILD_MILESTONES.includes(item.milestone) || !item.plot) return;
+      const percent = typeof item.percent === "number" ? item.percent : 0;
+      item.plot.split(",").forEach((p) => {
+        const plotIds = tokenToPlotIds.get(normalisePlotToken(p.trim()));
+        if (!plotIds) return;
+        plotIds.forEach((plotId) => {
+          const m = completionByPlotId.get(plotId);
+          if (!m.has(item.milestone) || percent > m.get(item.milestone)) m.set(item.milestone, percent);
+        });
+      });
+    });
+  });
+
+  const { data: gates } = await supabase
+    .from("quality_gates")
+    .select("id, plot_id, gate_key, status")
+    .in("plot_id", relevantPlots.map((p) => p.id));
+
+  const toAdvance = (gates || [])
+    .filter((gate) => {
+      const milestones = GATE_MILESTONES[gate.gate_key];
+      if (!milestones) return false;
+      if (gate.status !== "not_started" && gate.status !== "in_progress") return false;
+      const completion = completionByPlotId.get(gate.plot_id);
+      if (!completion) return false;
+      return milestones.every((m) => (completion.get(m) || 0) >= 100);
+    })
+    .map((gate) => gate.id);
+
+  if (toAdvance.length) {
+    await supabase.from("quality_gates").update({ status: "under_review" }).in("id", toAdvance);
+  }
+  return toAdvance.length;
+}
+
 // Tops a project up to `totalPlots` plots, naming any it creates
 // "Plot 1", "Plot 2", … and skipping any of those exact names that
 // already exist (case-insensitively) — so re-running this after some
@@ -472,8 +559,14 @@ const MILESTONE_CUSTOM_VALUE = "__custom__";
 // item (used for progress items; next-week items don't have one).
 // Pass { withMilestone: true } to add a build-stage dropdown (from
 // BUILD_MILESTONES, plus a free-text "Other" option) to every item.
+// Pass { plotOptions: [...] } (a project's plot numbers) to turn the plot
+// field from freetext into a multi-select — still stored as the same
+// comma-joined string ("Plot 5, Plot 6") the rest of the app already
+// expects (suggestPlotProgress() etc. already split on commas), so this
+// is a pure UI change with no data-shape migration. Falls back to the
+// plain text input when omitted/empty.
 // Calls onChange(items) whenever the list changes. Returns { getItems }.
-export function mountItemListEditor(container, initialItems, onChange, { withPercent = false, withMilestone = false } = {}) {
+export function mountItemListEditor(container, initialItems, onChange, { withPercent = false, withMilestone = false, plotOptions = [] } = {}) {
   function normalise(item) {
     if (typeof item === "string") {
       return { id: crypto.randomUUID(), plot: "", text: item, ...(withPercent ? { percent: 0 } : {}), ...(withMilestone ? { milestone: "" } : {}) };
@@ -516,12 +609,35 @@ export function mountItemListEditor(container, initialItems, onChange, { withPer
     return selectEl.value === MILESTONE_CUSTOM_VALUE ? customEl.value.trim() : selectEl.value;
   }
 
+  // Multi-select plot picker, falling back to a plain text input when no
+  // plotOptions were supplied. Any plot name already on the item that
+  // isn't in plotOptions (e.g. typed freetext from before this existed,
+  // or a plot since renamed/deleted) is kept as a selected option too,
+  // so editing an old item never silently drops it.
+  function plotFieldHtml(attrs, currentValue) {
+    if (!plotOptions.length) {
+      return `<input type="text" ${attrs.plot} placeholder="Plot (optional)" value="${escapeHtml(currentValue)}">`;
+    }
+    const currentNames = currentValue.split(",").map((s) => s.trim()).filter(Boolean);
+    const allOptions = [...new Set([...plotOptions, ...currentNames])];
+    return `
+      <select ${attrs.plot} multiple size="4" style="flex:0 0 150px;">
+        ${allOptions.map((name) => `<option value="${escapeHtml(name)}" ${currentNames.includes(name) ? "selected" : ""}>${escapeHtml(name)}</option>`).join("")}
+      </select>
+    `;
+  }
+
+  function readPlot(el) {
+    if (!plotOptions.length) return el.value.trim();
+    return Array.from(el.selectedOptions).map((o) => o.value).join(", ");
+  }
+
   function render() {
     container.innerHTML = `
       <ul class="item-list">
         ${items.map((item, i) => editingIndex === i ? `
           <li class="item-row editing">
-            <input type="text" class="item-edit-plot" placeholder="Plot (optional)" value="${escapeHtml(item.plot)}">
+            ${plotFieldHtml({ plot: 'class="item-edit-plot"' }, item.plot)}
             ${milestoneFieldHtml({ select: 'class="item-edit-milestone"', custom: 'class="item-edit-milestone-custom"' }, item.milestone || "")}
             <input type="text" class="item-edit-input" placeholder="Item (optional if milestone set)" value="${escapeHtml(item.text)}">
             ${withPercent ? `<input type="number" class="item-edit-percent" min="0" max="100" step="5" placeholder="%" value="${item.percent}" style="flex:0 0 80px;">` : ""}
@@ -540,7 +656,7 @@ export function mountItemListEditor(container, initialItems, onChange, { withPer
         `).join("")}
       </ul>
       <div class="item-add-row">
-        <input type="text" id="itemListNewPlot" class="item-plot-input" placeholder="Plot (optional)">
+        ${plotFieldHtml({ plot: 'id="itemListNewPlot" class="item-plot-input"' }, "")}
         ${milestoneFieldHtml({ select: 'id="itemListNewMilestone"', custom: 'id="itemListNewMilestoneCustom"' }, "")}
         <input type="text" id="itemListNewInput" placeholder="Add an item… (optional if milestone set)">
         ${withPercent ? `<input type="number" id="itemListNewPercent" min="0" max="100" step="5" placeholder="%" style="flex:0 0 80px;">` : ""}
@@ -580,7 +696,7 @@ export function mountItemListEditor(container, initialItems, onChange, { withPer
     container.querySelectorAll("[data-save]").forEach((btn) =>
       btn.addEventListener("click", () => {
         const i = Number(btn.dataset.save);
-        const plotVal = container.querySelector(".item-edit-plot").value.trim();
+        const plotVal = readPlot(container.querySelector(".item-edit-plot"));
         const textVal = container.querySelector(".item-edit-input").value.trim();
         const milestoneVal = withMilestone ? readMilestone(container.querySelector(".item-edit-milestone"), container.querySelector(".item-edit-milestone-custom")) : "";
         if (textVal || milestoneVal) {
@@ -608,7 +724,7 @@ export function mountItemListEditor(container, initialItems, onChange, { withPer
       const textVal = addInput.value.trim();
       const milestoneVal = withMilestone ? readMilestone(container.querySelector("#itemListNewMilestone"), container.querySelector("#itemListNewMilestoneCustom")) : "";
       if (!textVal && !milestoneVal) return;
-      const newItem = { id: crypto.randomUUID(), plot: plotInput.value.trim(), text: textVal };
+      const newItem = { id: crypto.randomUUID(), plot: readPlot(plotInput), text: textVal };
       if (withMilestone) newItem.milestone = milestoneVal;
       if (withPercent) {
         const percentVal = percentInput.value;

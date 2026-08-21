@@ -76,15 +76,20 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions, comparePlotNumbers, syncGateStatusFromMilestones } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
   const reportId = getParam("id");
   if (!projectId) window.location.href = "dashboard.html";
 
-  let progressEditor = mountItemListEditor(document.getElementById("progressItems"), [], () => {}, { withPercent: true, withMilestone: true });
-  let nextWeekEditor = mountItemListEditor(document.getElementById("nextWeekItems"), [], () => {}, { withMilestone: true });
+  // Every plot on the site (houses and flats alike) — offered as the
+  // multi-select plot tag on progress/next-week items.
+  const { data: plotsForTagging } = await supabase.from("plots").select("plot_number").eq("project_id", projectId);
+  const plotOptions = (plotsForTagging || []).map((p) => p.plot_number).sort(comparePlotNumbers);
+
+  let progressEditor = mountItemListEditor(document.getElementById("progressItems"), [], () => {}, { withPercent: true, withMilestone: true, plotOptions });
+  let nextWeekEditor = mountItemListEditor(document.getElementById("nextWeekItems"), [], () => {}, { withMilestone: true, plotOptions });
 
   // ─── Weather tracker ─────────────────────────────────────────────
   // A fixed 5-day grid (Mon–Fri of the report's week, derived from
@@ -424,7 +429,7 @@
         .limit(1);
       const carried = prevReports?.[0]?.next_week_items;
       if (Array.isArray(carried) && carried.length) {
-        progressEditor = mountItemListEditor(document.getElementById("progressItems"), carried, () => {}, { withPercent: true, withMilestone: true });
+        progressEditor = mountItemListEditor(document.getElementById("progressItems"), carried, () => {}, { withPercent: true, withMilestone: true, plotOptions });
         document.getElementById("carriedOverHint").style.display = "block";
       }
       return;
@@ -448,8 +453,8 @@
     const nextWeekItems = (Array.isArray(r.next_week_items) && r.next_week_items.length)
       ? r.next_week_items
       : (r.next_week_plan ? [r.next_week_plan] : []);
-    progressEditor = mountItemListEditor(document.getElementById("progressItems"), progressItems, () => {}, { withPercent: true, withMilestone: true });
-    nextWeekEditor = mountItemListEditor(document.getElementById("nextWeekItems"), nextWeekItems, () => {}, { withMilestone: true });
+    progressEditor = mountItemListEditor(document.getElementById("progressItems"), progressItems, () => {}, { withPercent: true, withMilestone: true, plotOptions });
+    nextWeekEditor = mountItemListEditor(document.getElementById("nextWeekItems"), nextWeekItems, () => {}, { withMilestone: true, plotOptions });
     commercialEditor = mountCommercialEditor(document.getElementById("commercialItems"), r.commercial_items);
 
     photos = Array.isArray(r.photos) ? r.photos : [];
@@ -491,6 +496,13 @@
 
       const syncedItems = await syncCommercialItems(commercialEditor.getItems(), finalReportId, user.id);
       await supabase.from("weekly_reports").update({ commercial_items: syncedItems }).eq("id", finalReportId);
+
+      // Non-fatal — the report itself is already saved either way. Moves
+      // a tagged house plot's gate to Under Review once every milestone
+      // that makes it up hits 100%; never touches approval.
+      try {
+        await syncGateStatusFromMilestones(projectId, progressEditor.getItems());
+      } catch { /* best-effort */ }
 
       window.location.href = `weekly-report-view.html?id=${finalReportId}`;
     } catch (err) {
