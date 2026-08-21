@@ -144,13 +144,25 @@
     }
   });
 
-  async function toggleStatus(id, current) {
-    const newStatus = current === "open" ? "closed" : "open";
+  async function setStatus(id, newStatus) {
     const patch = { status: newStatus, closed_date: newStatus === "closed" ? todayISO() : null };
     await supabase.from("snag_items").update(patch).eq("id", id);
     loadSnags();
   }
-  window.toggleStatus = toggleStatus;
+  window.setStatus = setStatus;
+
+  async function toggleDelayFlag(id, currentlyFlagged) {
+    if (currentlyFlagged) {
+      if (!confirm("Clear the delay flag on this snag?")) return;
+      await supabase.from("snag_items").update({ delay_flag: false, delay_reason: null }).eq("id", id);
+    } else {
+      const reason = prompt('What\'s delaying this snag? (e.g. "waiting on parts", "access blocked")', "");
+      if (reason === null) return;
+      await supabase.from("snag_items").update({ delay_flag: true, delay_reason: reason.trim() || null }).eq("id", id);
+    }
+    loadSnags();
+  }
+  window.toggleDelayFlag = toggleDelayFlag;
 
   async function deleteSnag(id) {
     if (!confirm("Delete this snag item?")) return;
@@ -158,6 +170,8 @@
     loadSnags();
   }
   window.deleteSnag = deleteSnag;
+
+  const statusBadge = { open: "badge-red", closed: "badge-green", rejected: "badge-grey" };
 
   function render() {
     document.getElementById("emptyState").style.display = allSnags.length ? "none" : "block";
@@ -167,10 +181,17 @@
         <td>${escapeHtml(s.location)}</td>
         <td>${escapeHtml(s.description)}${s.photo_url ? ' <span title="Has photo">📷</span>' : ""}</td>
         <td>${escapeHtml(s.trade) || "—"}</td>
-        <td><span class="badge ${s.status === "open" ? "badge-red" : "badge-green"}">${escapeHtml(s.status)}</span></td>
+        <td>
+          <select class="status-select ${statusBadge[s.status]}" style="width:auto;" onchange="setStatus('${s.id}', this.value)">
+            <option value="open" ${s.status === "open" ? "selected" : ""}>Open</option>
+            <option value="closed" ${s.status === "closed" ? "selected" : ""}>Closed</option>
+            <option value="rejected" ${s.status === "rejected" ? "selected" : ""}>Rejected</option>
+          </select>
+          ${s.delay_flag ? `<div class="badge badge-amber" style="margin-top:0.3rem; white-space:normal;" title="Flagged as delaying completion">⚠️ Delayed${s.delay_reason ? `: ${escapeHtml(s.delay_reason)}` : ""}</div>` : ""}
+        </td>
         <td class="btn-row">
           <button class="btn btn-outline btn-sm" onclick="editSnag('${s.id}')">Edit</button>
-          <button class="btn btn-outline btn-sm" onclick="toggleStatus('${s.id}', '${s.status}')">${s.status === "open" ? "Close" : "Reopen"}</button>
+          <button class="btn btn-outline btn-sm" onclick="toggleDelayFlag('${s.id}', ${s.delay_flag})">${s.delay_flag ? "Clear Flag" : "Flag Delay"}</button>
           <button class="btn btn-danger btn-sm" onclick="deleteSnag('${s.id}')">Delete</button>
         </td>
       </tr>

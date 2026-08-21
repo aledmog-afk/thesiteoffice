@@ -1308,3 +1308,260 @@ create policy "members update blocks" on public.blocks for update using (public.
 drop policy if exists "authenticated delete blocks" on public.blocks;
 drop policy if exists "members delete blocks" on public.blocks;
 create policy "members delete blocks" on public.blocks for delete using (public.is_project_member(project_id));
+
+-- ─── v17 ADDITIONS ────────────────────────────────────────────────
+-- Snagging-only collaborators: a second membership tier for whoever
+-- closes out snags on site (e.g. the main contractor's site manager)
+-- but shouldn't see anything else — no weekly reports, quality gates,
+-- commercial ledger, drawings, monthly reports, blocks, site details,
+-- or the collaborators list itself. They get full CRUD on snag items
+-- (close out, reject, flag a delay) and read-only access to plots and
+-- drawings, just enough to navigate to and pin a snag.
+
+alter table public.project_members drop constraint if exists project_members_role_check;
+alter table public.project_members add constraint project_members_role_check
+  check (role in ('owner', 'collaborator', 'snagging'));
+
+-- A member who can edit site content generally (owner or full
+-- collaborator) — snagging-only members are members, but not editors.
+create or replace function public.is_project_editor(p_project_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1 from public.project_members
+    where project_id = p_project_id and user_id = auth.uid() and role in ('owner', 'collaborator')
+  );
+$$;
+grant execute on function public.is_project_editor(uuid) to authenticated;
+
+-- Lets a client find out its own role on a project even when it can't
+-- read project_members generally (snagging-only members can't) —
+-- reveals only the caller's own membership, never anyone else's.
+create or replace function public.get_my_role(p_project_id uuid)
+returns text
+language sql stable security definer set search_path = public
+as $$
+  select role from public.project_members where project_id = p_project_id and user_id = auth.uid();
+$$;
+grant execute on function public.get_my_role(uuid) to authenticated;
+
+-- A second, independent invite link for snagging-only access —
+-- separate from invite_code so an owner can hand out the right one to
+-- the right person without a second step to change anyone's role.
+alter table public.projects add column if not exists snagging_invite_code text unique;
+
+create or replace function public.regenerate_snagging_invite_code(p_project_id uuid)
+returns text
+language plpgsql security definer set search_path = public
+as $$
+declare
+  new_code text;
+begin
+  if not public.is_project_owner(p_project_id) then
+    raise exception 'Only the site owner can manage the invite link';
+  end if;
+  new_code := encode(gen_random_bytes(16), 'hex');
+  update public.projects set snagging_invite_code = new_code where id = p_project_id;
+  return new_code;
+end;
+$$;
+grant execute on function public.regenerate_snagging_invite_code(uuid) to authenticated;
+
+create or replace function public.revoke_snagging_invite_code(p_project_id uuid)
+returns void
+language plpgsql security definer set search_path = public
+as $$
+begin
+  if not public.is_project_owner(p_project_id) then
+    raise exception 'Only the site owner can manage the invite link';
+  end if;
+  update public.projects set snagging_invite_code = null where id = p_project_id;
+end;
+$$;
+grant execute on function public.revoke_snagging_invite_code(uuid) to authenticated;
+
+-- Now checks both invite_code (-> collaborator) and snagging_invite_code
+-- (-> snagging) — whichever one matches decides the role granted.
+-- Still "on conflict do nothing": re-opening either link when already a
+-- member (of any role) never changes an existing role, so an owner or
+-- collaborator who opens a snagging link by mistake is never downgraded.
+create or replace function public.join_project_by_invite(invite_code_param text)
+returns uuid
+language plpgsql security definer set search_path = public
+as $$
+declare
+  proj_id uuid;
+  member_role text;
+begin
+  select id, 'collaborator' into proj_id, member_role
+  from public.projects where invite_code = invite_code_param;
+
+  if proj_id is null then
+    select id, 'snagging' into proj_id, member_role
+    from public.projects where snagging_invite_code = invite_code_param;
+  end if;
+
+  if proj_id is null then
+    return null;
+  end if;
+
+  insert into public.project_members (project_id, user_id, role)
+  values (proj_id, auth.uid(), member_role)
+  on conflict (project_id, user_id) do nothing;
+  return proj_id;
+end;
+$$;
+grant execute on function public.join_project_by_invite(text) to authenticated;
+
+-- Member list is now editor-only (was any member) — a snagging-only
+-- member calling this gets back nothing, including their own row,
+-- which is exactly how project.html hides the whole Collaborators
+-- card from them.
+create or replace function public.get_project_members(p_project_id uuid)
+returns table (member_id uuid, user_id uuid, email text, role text, joined_at timestamptz)
+language sql stable security definer set search_path = public
+as $$
+  select pm.id, pm.user_id, u.email, pm.role, pm.created_at
+  from public.project_members pm
+  join auth.users u on u.id = pm.user_id
+  where pm.project_id = p_project_id
+    and public.is_project_editor(p_project_id)
+  order by (pm.role = 'owner') desc, u.email;
+$$;
+grant execute on function public.get_project_members(uuid) to authenticated;
+
+-- Rejected snags, and a delay flag that sits alongside Open rather than
+-- replacing it — a snag can be open-and-flagged (still outstanding,
+-- still counted as such) with a reason, until it's cleared or closed.
+alter table public.snag_items drop constraint if exists snag_items_status_check;
+alter table public.snag_items add constraint snag_items_status_check
+  check (status in ('open', 'closed', 'rejected'));
+alter table public.snag_items add column if not exists delay_flag boolean not null default false;
+alter table public.snag_items add column if not exists delay_reason text;
+
+-- ─── RLS: editor-only tables (snagging-only members see none of these) ───
+drop policy if exists "members update projects" on public.projects;
+drop policy if exists "editors update projects" on public.projects;
+create policy "editors update projects" on public.projects for update using (public.is_project_editor(id));
+
+drop policy if exists "members read project_members" on public.project_members;
+drop policy if exists "editors read project_members" on public.project_members;
+create policy "editors read project_members" on public.project_members for select using (public.is_project_editor(project_id));
+
+drop policy if exists "members read weekly_reports" on public.weekly_reports;
+drop policy if exists "editors read weekly_reports" on public.weekly_reports;
+create policy "editors read weekly_reports" on public.weekly_reports for select using (public.is_project_editor(project_id));
+drop policy if exists "members insert weekly_reports" on public.weekly_reports;
+drop policy if exists "editors insert weekly_reports" on public.weekly_reports;
+create policy "editors insert weekly_reports" on public.weekly_reports for insert with check (public.is_project_editor(project_id));
+drop policy if exists "members update weekly_reports" on public.weekly_reports;
+drop policy if exists "editors update weekly_reports" on public.weekly_reports;
+create policy "editors update weekly_reports" on public.weekly_reports for update using (public.is_project_editor(project_id));
+drop policy if exists "members delete weekly_reports" on public.weekly_reports;
+drop policy if exists "editors delete weekly_reports" on public.weekly_reports;
+create policy "editors delete weekly_reports" on public.weekly_reports for delete using (public.is_project_editor(project_id));
+
+drop policy if exists "members insert snag_lists" on public.snag_lists;
+drop policy if exists "editors insert snag_lists" on public.snag_lists;
+create policy "editors insert snag_lists" on public.snag_lists for insert with check (public.is_project_editor(project_id));
+drop policy if exists "members update snag_lists" on public.snag_lists;
+drop policy if exists "editors update snag_lists" on public.snag_lists;
+create policy "editors update snag_lists" on public.snag_lists for update using (public.is_project_editor(project_id));
+drop policy if exists "members delete snag_lists" on public.snag_lists;
+drop policy if exists "editors delete snag_lists" on public.snag_lists;
+create policy "editors delete snag_lists" on public.snag_lists for delete using (public.is_project_editor(project_id));
+-- snag_lists read stays member-level — a snagging-only member needs to
+-- find a plot's list to open it.
+
+drop policy if exists "members read quality_gates" on public.quality_gates;
+drop policy if exists "editors read quality_gates" on public.quality_gates;
+create policy "editors read quality_gates" on public.quality_gates for select using (public.is_project_editor(project_id));
+drop policy if exists "members insert quality_gates" on public.quality_gates;
+drop policy if exists "editors insert quality_gates" on public.quality_gates;
+create policy "editors insert quality_gates" on public.quality_gates for insert with check (public.is_project_editor(project_id));
+drop policy if exists "members update quality_gates" on public.quality_gates;
+drop policy if exists "editors update quality_gates" on public.quality_gates;
+create policy "editors update quality_gates" on public.quality_gates for update using (public.is_project_editor(project_id));
+drop policy if exists "members delete quality_gates" on public.quality_gates;
+drop policy if exists "editors delete quality_gates" on public.quality_gates;
+create policy "editors delete quality_gates" on public.quality_gates for delete using (public.is_project_editor(project_id));
+
+drop policy if exists "members read commercial_items" on public.commercial_items;
+drop policy if exists "editors read commercial_items" on public.commercial_items;
+create policy "editors read commercial_items" on public.commercial_items for select using (public.is_project_editor(project_id));
+drop policy if exists "members insert commercial_items" on public.commercial_items;
+drop policy if exists "editors insert commercial_items" on public.commercial_items;
+create policy "editors insert commercial_items" on public.commercial_items for insert with check (public.is_project_editor(project_id));
+drop policy if exists "members update commercial_items" on public.commercial_items;
+drop policy if exists "editors update commercial_items" on public.commercial_items;
+create policy "editors update commercial_items" on public.commercial_items for update using (public.is_project_editor(project_id));
+drop policy if exists "members delete commercial_items" on public.commercial_items;
+drop policy if exists "editors delete commercial_items" on public.commercial_items;
+create policy "editors delete commercial_items" on public.commercial_items for delete using (public.is_project_editor(project_id));
+
+drop policy if exists "members read handover_documents" on public.handover_documents;
+drop policy if exists "editors read handover_documents" on public.handover_documents;
+create policy "editors read handover_documents" on public.handover_documents for select using (public.is_project_editor(project_id));
+drop policy if exists "members insert handover_documents" on public.handover_documents;
+drop policy if exists "editors insert handover_documents" on public.handover_documents;
+create policy "editors insert handover_documents" on public.handover_documents for insert with check (public.is_project_editor(project_id));
+drop policy if exists "members update handover_documents" on public.handover_documents;
+drop policy if exists "editors update handover_documents" on public.handover_documents;
+create policy "editors update handover_documents" on public.handover_documents for update using (public.is_project_editor(project_id));
+drop policy if exists "members delete handover_documents" on public.handover_documents;
+drop policy if exists "editors delete handover_documents" on public.handover_documents;
+create policy "editors delete handover_documents" on public.handover_documents for delete using (public.is_project_editor(project_id));
+
+drop policy if exists "members insert drawings" on public.drawings;
+drop policy if exists "editors insert drawings" on public.drawings;
+create policy "editors insert drawings" on public.drawings for insert with check (public.is_project_editor(project_id));
+drop policy if exists "members update drawings" on public.drawings;
+drop policy if exists "editors update drawings" on public.drawings;
+create policy "editors update drawings" on public.drawings for update using (public.is_project_editor(project_id));
+drop policy if exists "members delete drawings" on public.drawings;
+drop policy if exists "editors delete drawings" on public.drawings;
+create policy "editors delete drawings" on public.drawings for delete using (public.is_project_editor(project_id));
+-- drawings read stays member-level — Pinpoint Snagging needs a
+-- snagging-only member to be able to view (not upload) floor plans to
+-- pin a snag to one.
+
+drop policy if exists "members insert plots" on public.plots;
+drop policy if exists "editors insert plots" on public.plots;
+create policy "editors insert plots" on public.plots for insert with check (public.is_project_editor(project_id));
+drop policy if exists "members update plots" on public.plots;
+drop policy if exists "editors update plots" on public.plots;
+create policy "editors update plots" on public.plots for update using (public.is_project_editor(project_id));
+drop policy if exists "members delete plots" on public.plots;
+drop policy if exists "editors delete plots" on public.plots;
+create policy "editors delete plots" on public.plots for delete using (public.is_project_editor(project_id));
+-- plots read stays member-level — a snagging-only member needs the
+-- plot list to navigate to each one's snag list.
+
+drop policy if exists "members read monthly_reports" on public.monthly_reports;
+drop policy if exists "editors read monthly_reports" on public.monthly_reports;
+create policy "editors read monthly_reports" on public.monthly_reports for select using (public.is_project_editor(project_id));
+drop policy if exists "members insert monthly_reports" on public.monthly_reports;
+drop policy if exists "editors insert monthly_reports" on public.monthly_reports;
+create policy "editors insert monthly_reports" on public.monthly_reports for insert with check (public.is_project_editor(project_id));
+drop policy if exists "members delete monthly_reports" on public.monthly_reports;
+drop policy if exists "editors delete monthly_reports" on public.monthly_reports;
+create policy "editors delete monthly_reports" on public.monthly_reports for delete using (public.is_project_editor(project_id));
+
+drop policy if exists "members read blocks" on public.blocks;
+drop policy if exists "editors read blocks" on public.blocks;
+create policy "editors read blocks" on public.blocks for select using (public.is_project_editor(project_id));
+drop policy if exists "members insert blocks" on public.blocks;
+drop policy if exists "editors insert blocks" on public.blocks;
+create policy "editors insert blocks" on public.blocks for insert with check (public.is_project_editor(project_id));
+drop policy if exists "members update blocks" on public.blocks;
+drop policy if exists "editors update blocks" on public.blocks;
+create policy "editors update blocks" on public.blocks for update using (public.is_project_editor(project_id));
+drop policy if exists "members delete blocks" on public.blocks;
+drop policy if exists "editors delete blocks" on public.blocks;
+create policy "editors delete blocks" on public.blocks for delete using (public.is_project_editor(project_id));
+
+-- snag_items and plots'/drawings'/snag_lists' read stay untouched —
+-- every member, snagging-only included, keeps full CRUD on snag_items
+-- (that's the whole point) and read access to plots/drawings/snag_lists
+-- to navigate to them.

@@ -94,7 +94,10 @@
                 <td>${escapeHtml(s.location)}</td>
                 <td>${escapeHtml(s.description)}</td>
                 <td>${escapeHtml(s.trade) || "—"}</td>
-                <td><span class="badge ${s.status === "open" ? "badge-red" : "badge-green"}">${escapeHtml(s.status)}</span></td>
+                <td>
+                  <span class="badge ${{ open: "badge-red", closed: "badge-green", rejected: "badge-grey" }[s.status]}">${escapeHtml(s.status)}</span>
+                  ${s.delay_flag ? `<br><span class="badge badge-amber" style="margin-top:0.2rem;">⚠️ Delayed${s.delay_reason ? `: ${escapeHtml(s.delay_reason)}` : ""}</span>` : ""}
+                </td>
                 <td>${formatDate(s.raised_date)}</td>
               </tr>
             `).join("") || `<tr><td colspan="7" style="text-align:center; color:var(--ink-soft);">No items.</td></tr>`}

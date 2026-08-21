@@ -27,7 +27,7 @@
     </div>
   </div>
 
-  <div class="card" style="margin-bottom:2rem;">
+  <div class="card" id="progressCard" style="margin-bottom:2rem;">
     <div style="display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap; margin-bottom:0.5rem;">
       <span class="badge rag-badge" id="ragBadge"></span>
       <span class="hint" style="color:var(--ink-soft); font-size:0.8rem;">Overall status &amp; programme progress — edit below</span>
@@ -141,7 +141,7 @@
       </table>
     </div>
     <div id="inviteSection" style="margin-top:1rem; display:none;">
-      <p class="hint" style="margin-bottom:0.5rem;">Share this link with anyone you want to collaborate on this site — they'll join the moment they open it while signed in.</p>
+      <p class="hint" style="margin-bottom:0.5rem;">Full collaborator access — share with anyone who needs to create/edit reports, plots, snags etc. on this site. They'll join the moment they open it while signed in.</p>
       <div class="btn-row" id="inviteLinkRow" style="display:none;">
         <input type="text" id="inviteLinkInput" readonly style="flex:1; min-width:220px;">
         <button type="button" class="btn btn-outline btn-sm" id="copyInviteBtn">Copy Link</button>
@@ -149,6 +149,16 @@
         <button type="button" class="btn btn-outline btn-sm" id="revokeInviteBtn">Revoke</button>
       </div>
       <button type="button" class="btn btn-outline btn-sm" id="getInviteLinkBtn">Get Invite Link</button>
+    </div>
+    <div id="snaggingInviteSection" style="margin-top:1.2rem; display:none;">
+      <p class="hint" style="margin-bottom:0.5rem;">Snagging-only access — for whoever closes out snags on site (e.g. the main contractor's site manager). They can see and edit this site's snag lists only — nothing else.</p>
+      <div class="btn-row" id="snaggingInviteLinkRow" style="display:none;">
+        <input type="text" id="snaggingInviteLinkInput" readonly style="flex:1; min-width:220px;">
+        <button type="button" class="btn btn-outline btn-sm" id="copySnaggingInviteBtn">Copy Link</button>
+        <button type="button" class="btn btn-outline btn-sm" id="regenerateSnaggingInviteBtn">Regenerate</button>
+        <button type="button" class="btn btn-outline btn-sm" id="revokeSnaggingInviteBtn">Revoke</button>
+      </div>
+      <button type="button" class="btn btn-outline btn-sm" id="getSnaggingInviteLinkBtn">Get Snagging Invite Link</button>
     </div>
   </div>
 </div>
@@ -171,6 +181,7 @@
   let project = null;
   let plotsCount = 0;
   let currentUserId = null;
+  let myRole = null;
   const factsView = document.getElementById("factsView");
   const detailsCard = document.getElementById("detailsCard");
   const editForm = document.getElementById("editForm");
@@ -189,22 +200,32 @@
     }
   }
 
-  function renderInviteSection(isOwner) {
-    const section = document.getElementById("inviteSection");
+  const INVITE_KINDS = {
+    collaborator: { codeField: "invite_code", sectionId: "inviteSection", linkRowId: "inviteLinkRow", inputId: "inviteLinkInput", getBtnId: "getInviteLinkBtn", regenerateRpc: "regenerate_invite_code", revokeRpc: "revoke_invite_code" },
+    snagging: { codeField: "snagging_invite_code", sectionId: "snaggingInviteSection", linkRowId: "snaggingInviteLinkRow", inputId: "snaggingInviteLinkInput", getBtnId: "getSnaggingInviteLinkBtn", regenerateRpc: "regenerate_snagging_invite_code", revokeRpc: "revoke_snagging_invite_code" },
+  };
+
+  function renderInviteSection(kind, isOwner) {
+    const k = INVITE_KINDS[kind];
+    const section = document.getElementById(k.sectionId);
     section.style.display = isOwner ? "block" : "none";
     if (!isOwner) return;
 
-    const linkRow = document.getElementById("inviteLinkRow");
-    const getBtn = document.getElementById("getInviteLinkBtn");
-    if (project.invite_code) {
+    const linkRow = document.getElementById(k.linkRowId);
+    const getBtn = document.getElementById(k.getBtnId);
+    const code = project[k.codeField];
+    if (code) {
       linkRow.style.display = "flex";
       getBtn.style.display = "none";
-      document.getElementById("inviteLinkInput").value = inviteLinkFor(project.invite_code);
+      document.getElementById(k.inputId).value = inviteLinkFor(code);
     } else {
       linkRow.style.display = "none";
       getBtn.style.display = "inline-flex";
     }
   }
+
+  const ROLE_LABEL = { owner: "Owner", collaborator: "Collaborator", snagging: "Snagging" };
+  const ROLE_BADGE = { owner: "badge-green", collaborator: "badge-grey", snagging: "badge-blue" };
 
   function renderMembers(members, isOwner) {
     document.getElementById("memberRows").innerHTML = members.map((m) => {
@@ -213,7 +234,7 @@
       return `
         <tr>
           <td>${escapeHtml(m.email)}${isYou ? ` <span class="hint">(you)</span>` : ""}</td>
-          <td><span class="badge ${m.role === "owner" ? "badge-green" : "badge-grey"}">${m.role === "owner" ? "Owner" : "Collaborator"}</span></td>
+          <td><span class="badge ${ROLE_BADGE[m.role]}">${ROLE_LABEL[m.role]}</span></td>
           <td>${formatDate(m.joined_at?.slice(0, 10))}</td>
           <td>${canRemove ? `<button class="btn btn-outline btn-sm" onclick="removeMember('${m.member_id}', '${escapeHtml(m.email).replace(/'/g, "\\'")}', ${isYou})">${isYou ? "Leave" : "Remove"}</button>` : ""}</td>
         </tr>
@@ -226,7 +247,8 @@
     if (error) { showError(errorBox, error); return; }
     const isOwner = (members || []).some((m) => m.user_id === currentUserId && m.role === "owner");
     renderMembers(members || [], isOwner);
-    renderInviteSection(isOwner);
+    renderInviteSection("collaborator", isOwner);
+    renderInviteSection("snagging", isOwner);
     // Deleting the whole site is owner-only at the database level too —
     // hide the button for collaborators rather than let them hit an error.
     document.getElementById("deleteBtn").style.display = isOwner ? "inline-flex" : "none";
@@ -244,33 +266,42 @@
   }
   window.removeMember = removeMember;
 
-  async function getOrRegenerateInvite(e) {
+  async function getOrRegenerateInvite(kind, e) {
+    const k = INVITE_KINDS[kind];
     const btn = e.currentTarget;
     btn.disabled = true;
     try {
-      const { data, error } = await supabase.rpc("regenerate_invite_code", { p_project_id: projectId });
+      const { data, error } = await supabase.rpc(k.regenerateRpc, { p_project_id: projectId });
       if (error) throw error;
-      project.invite_code = data;
-      renderInviteSection(true);
+      project[k.codeField] = data;
+      renderInviteSection(kind, true);
     } catch (err) {
       showError(errorBox, err);
     } finally {
       btn.disabled = false;
     }
   }
-  document.getElementById("getInviteLinkBtn").addEventListener("click", getOrRegenerateInvite);
-  document.getElementById("regenerateInviteBtn").addEventListener("click", getOrRegenerateInvite);
+  document.getElementById("getInviteLinkBtn").addEventListener("click", (e) => getOrRegenerateInvite("collaborator", e));
+  document.getElementById("regenerateInviteBtn").addEventListener("click", (e) => getOrRegenerateInvite("collaborator", e));
+  document.getElementById("getSnaggingInviteLinkBtn").addEventListener("click", (e) => getOrRegenerateInvite("snagging", e));
+  document.getElementById("regenerateSnaggingInviteBtn").addEventListener("click", (e) => getOrRegenerateInvite("snagging", e));
 
-  document.getElementById("revokeInviteBtn").addEventListener("click", async () => {
-    if (!confirm("Revoke this invite link? Anyone who hasn't already joined won't be able to use it any more.")) return;
-    const { error } = await supabase.rpc("revoke_invite_code", { p_project_id: projectId });
+  async function revokeInvite(kind, confirmMsg) {
+    const k = INVITE_KINDS[kind];
+    if (!confirm(confirmMsg)) return;
+    const { error } = await supabase.rpc(k.revokeRpc, { p_project_id: projectId });
     if (error) { showError(errorBox, error); return; }
-    project.invite_code = null;
-    renderInviteSection(true);
-  });
+    project[k.codeField] = null;
+    renderInviteSection(kind, true);
+  }
+  document.getElementById("revokeInviteBtn").addEventListener("click", () => revokeInvite("collaborator", "Revoke this invite link? Anyone who hasn't already joined won't be able to use it any more."));
+  document.getElementById("revokeSnaggingInviteBtn").addEventListener("click", () => revokeInvite("snagging", "Revoke this snagging invite link? Anyone who hasn't already joined won't be able to use it any more."));
 
   document.getElementById("copyInviteBtn").addEventListener("click", () => {
     copyToClipboard(document.getElementById("inviteLinkInput").value);
+  });
+  document.getElementById("copySnaggingInviteBtn").addEventListener("click", () => {
+    copyToClipboard(document.getElementById("snaggingInviteLinkInput").value);
   });
 
   function renderFacts() {
@@ -430,14 +461,43 @@
     document.getElementById("progressDisplay").innerHTML = renderProgressBlock(project.baseline_progress_pct, project.actual_progress_pct, project.rag_status);
   }
 
+  // Snagging-only members can't read anything but plots/drawings/snag
+  // lists/snag items at the database level — this just matches the UI
+  // to that, hiding the site-wide cards/tiles they'd get nothing back
+  // from anyway, and leaving only the Snagging tile they actually have
+  // access to.
+  function applySnaggingOnlyView() {
+    document.getElementById("statusSelect").style.display = "none";
+    document.getElementById("editBtn").style.display = "none";
+    document.getElementById("progressCard").style.display = "none";
+    document.getElementById("detailsCard").style.display = "none";
+    document.getElementById("collaboratorsCard").style.display = "none";
+    ["reportsTile", "monthlyReportsTile", "plotHandoversTile", "commercialsTile", "drawingsTile"].forEach((id) => {
+      document.getElementById(id).style.display = "none";
+    });
+  }
+
   async function load() {
     const { data: { user } } = await supabase.auth.getUser();
     currentUserId = user.id;
 
-    const { data, error } = await supabase.from("projects").select("*").eq("id", projectId).single();
+    const [{ data: role }, { data, error }] = await Promise.all([
+      supabase.rpc("get_my_role", { p_project_id: projectId }),
+      supabase.from("projects").select("*").eq("id", projectId).single(),
+    ]);
+    myRole = role;
     if (error) { document.getElementById("projectName").textContent = "Site not found"; return; }
     project = data;
     renderHeaderAndFacts();
+
+    if (myRole === "snagging") {
+      applySnaggingOnlyView();
+      const { data: snags } = await supabase.from("snag_items").select("status").eq("project_id", projectId);
+      document.getElementById("openSnagCount").textContent = (snags || []).filter(s => s.status === "open").length;
+      document.getElementById("closedSnagCount").textContent = (snags || []).filter(s => s.status === "closed").length;
+      return;
+    }
+
     loadMembers();
 
     const [{ count: reportCount }, { count: monthlyReportCount }, { data: snags }, { count: fetchedPlotsCount }, { data: gates }, { data: commercials }, { count: drawingsCount }] = await Promise.all([

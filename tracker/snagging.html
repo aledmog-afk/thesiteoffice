@@ -24,7 +24,7 @@
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>Plot</th><th>Open</th><th>Closed</th><th>Added</th></tr>
+          <tr><th>Plot</th><th>Open</th><th>Closed</th><th>Rejected</th><th>Added</th></tr>
         </thead>
         <tbody id="plotRows"></tbody>
       </table>
@@ -96,18 +96,19 @@
 
     const counts = {};
     (items || []).forEach((it) => {
-      counts[it.snag_list_id] = counts[it.snag_list_id] || { open: 0, closed: 0 };
+      counts[it.snag_list_id] = counts[it.snag_list_id] || { open: 0, closed: 0, rejected: 0 };
       counts[it.snag_list_id][it.status]++;
     });
 
     document.getElementById("plotRows").innerHTML = plots.map((p) => {
       const listId = listByPlot[p.id];
-      const c = counts[listId] || { open: 0, closed: 0 };
+      const c = counts[listId] || { open: 0, closed: 0, rejected: 0 };
       return `
         <tr class="row-link" onclick="goToPlotList('${p.id}')">
           <td><strong>${escapeHtml(p.plot_number)}</strong></td>
           <td><span class="badge badge-red">${c.open}</span></td>
           <td><span class="badge badge-green">${c.closed}</span></td>
+          <td><span class="badge badge-grey">${c.rejected}</span></td>
           <td>${formatDate(p.created_at?.slice(0, 10))}</td>
         </tr>
       `;
