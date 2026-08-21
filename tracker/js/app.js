@@ -269,7 +269,18 @@ function normalisePlotToken(s) {
   return digits || s.trim().toLowerCase();
 }
 
-// Suggests a starting point for one plot's progress_pct, computed from
+// A site-wide, non-numbered "plot" for civils/drainage/landscaping work
+// that isn't any one house or flat. Offered alongside the real plots in
+// the weekly report plot picker (see weekly-report-form.html) purely as
+// a tag — normalisePlotToken() falls back to a plain lowercase string
+// match for it since it has no digits, so it flows through the exact
+// same matching suggestPlotProgress() below already does for numbered
+// plots, with no extra logic needed. Matches the exact wording of the
+// "External / Engineering Works (%)" field on Site Details.
+export const EXTERNAL_WORKS_TAG = "External / Engineering Works";
+
+// Suggests a starting point for one plot's progress_pct (or, passing
+// EXTERNAL_WORKS_TAG, the site's external_works_pct), computed from
 // the build milestones logged against it in weekly reports — purely a
 // value for the caller to pre-fill an input with; it never writes
 // anything itself, so it can never silently overwrite a manually-typed

@@ -118,9 +118,12 @@
       </div>
       <div class="field">
         <label for="externalWorksPct">External / Engineering Works (%)</label>
-        <input type="number" id="externalWorksPct" min="0" max="100" step="1" style="max-width:120px;">
+        <div class="btn-row" style="align-items:center;">
+          <input type="number" id="externalWorksPct" min="0" max="100" step="1" style="max-width:120px;">
+          <button type="button" class="btn btn-outline btn-sm" id="suggestExternalWorksBtn">Suggest from Milestones</button>
+        </div>
       </div>
-      <p class="hint">Each plot's own progress is set on its Plot Handovers page. External / Engineering Works covers civils, drainage, and landscaping — work that isn't any one plot. Total Plots is just a target count — set it and use "Generate Missing Plots" above to create any that don't exist yet, each with its own quality gates, handover documents, and snag list.</p>
+      <p class="hint">Each plot's own progress is set on its Plot Handovers page. External / Engineering Works covers civils, drainage, and landscaping — work that isn't any one plot; tag weekly report items to "External / Engineering Works" in the plot picker to log progress against it, same as a plot. Total Plots is just a target count — set it and use "Generate Missing Plots" above to create any that don't exist yet, each with its own quality gates, handover documents, and snag list.</p>
       <div class="btn-row">
         <button type="submit" class="btn btn-amber">Save Changes</button>
         <button type="button" class="btn btn-outline" id="cancelEditBtn">Cancel</button>
@@ -152,7 +155,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, geocodePostcode, recalculateActualProgress, generateMissingPlots } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, geocodePostcode, recalculateActualProgress, generateMissingPlots, suggestPlotProgress, EXTERNAL_WORKS_TAG } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("id");
@@ -370,6 +373,16 @@
     const { error } = await supabase.from("projects").delete().eq("id", projectId);
     if (error) { showError(errorBox, error); return; }
     window.location.href = "dashboard.html";
+  });
+
+  document.getElementById("suggestExternalWorksBtn").addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    btn.textContent = "Checking weekly reports…";
+    const suggested = await suggestPlotProgress(projectId, EXTERNAL_WORKS_TAG);
+    document.getElementById("externalWorksPct").value = suggested;
+    btn.disabled = false;
+    btn.textContent = "Suggest from Milestones";
   });
 
   function updateGeneratePlotsButton() {

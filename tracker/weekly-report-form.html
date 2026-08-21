@@ -76,17 +76,19 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions, comparePlotNumbers, syncGateStatusFromMilestones } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions, comparePlotNumbers, syncGateStatusFromMilestones, EXTERNAL_WORKS_TAG } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
   const reportId = getParam("id");
   if (!projectId) window.location.href = "dashboard.html";
 
-  // Every plot on the site (houses and flats alike) — offered as the
-  // multi-select plot tag on progress/next-week items.
+  // Every plot on the site (houses and flats alike), plus a permanent
+  // site-wide entry for civils/drainage/landscaping work that isn't any
+  // one plot — offered as the multi-select plot tag on progress/next-week
+  // items.
   const { data: plotsForTagging } = await supabase.from("plots").select("plot_number").eq("project_id", projectId);
-  const plotOptions = (plotsForTagging || []).map((p) => p.plot_number).sort(comparePlotNumbers);
+  const plotOptions = [...(plotsForTagging || []).map((p) => p.plot_number).sort(comparePlotNumbers), EXTERNAL_WORKS_TAG];
 
   let progressEditor = mountItemListEditor(document.getElementById("progressItems"), [], () => {}, { withPercent: true, withMilestone: true, plotOptions });
   let nextWeekEditor = mountItemListEditor(document.getElementById("nextWeekItems"), [], () => {}, { withMilestone: true, plotOptions });
