@@ -1094,7 +1094,13 @@ begin
   if not public.is_project_owner(p_project_id) then
     raise exception 'Only the site owner can manage the invite link';
   end if;
-  new_code := encode(gen_random_bytes(16), 'hex');
+  -- gen_random_uuid() rather than pgcrypto's gen_random_bytes() — it's
+  -- built into Postgres core (13+), so it needs no extension lookup at
+  -- all, unlike gen_random_bytes() which Supabase installs into an
+  -- "extensions" schema this function's locked-down search_path can't
+  -- see. Stripping the dashes gives the same 32-hex-char shape as
+  -- before; nothing else assumes a particular code format.
+  new_code := replace(gen_random_uuid()::text, '-', '');
   update public.projects set invite_code = new_code where id = p_project_id;
   return new_code;
 end;
@@ -1361,7 +1367,9 @@ begin
   if not public.is_project_owner(p_project_id) then
     raise exception 'Only the site owner can manage the invite link';
   end if;
-  new_code := encode(gen_random_bytes(16), 'hex');
+  -- see regenerate_invite_code() above for why gen_random_uuid() rather
+  -- than pgcrypto's gen_random_bytes().
+  new_code := replace(gen_random_uuid()::text, '-', '');
   update public.projects set snagging_invite_code = new_code where id = p_project_id;
   return new_code;
 end;
