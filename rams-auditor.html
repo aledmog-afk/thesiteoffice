@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Free RAMS Auditor – Instant CDM/HSE Compliance Check | The Site Office</title>
+<meta name="description" content="Paste in your Risk Assessment & Method Statement and get an instant compliance score against CDM 2015 and HSE-based checks. Runs entirely in your browser — nothing is uploaded. Free tool from The Site Office.">
+<meta name="keywords" content="RAMS checker, RAMS auditor, CDM 2015 compliance, risk assessment method statement template, construction compliance checker">
+<meta property="og:title" content="Free RAMS Auditor – The Site Office">
+<meta property="og:description" content="Instant, private, in-browser compliance check for your Risk Assessment & Method Statement against CDM 2015 / HSE-based checks.">
+<meta property="og:url" content="https://thesiteoffice.uk/rams-auditor.html">
+<link rel="canonical" href="https://thesiteoffice.uk/rams-auditor.html">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;600;700;800&family=Barlow:wght@300;400;500;600&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink: #0f1117; --ink-mid: #2a2d35; --ink-soft: #4a4d58; --rule: #e2e4e9;
+    --off: #f7f8fa; --white: #ffffff;
+    --amber: #e8a020; --amber-light: #fef3dc;
+    --blue: #1a4fa0; --blue-light: #dce8ff;
+    --green: #1e6b3c; --green-light: #dff0e8;
+    --red: #c0392b; --red-light: #fce8e6;
+    --cat: #1a4fa0; --cat-mid: #4c7fc9;
+    --font-display: 'Barlow Condensed', sans-serif;
+    --font-body: 'Barlow', sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body { font-family: var(--font-body); color: var(--ink); background: var(--white); font-size: 16px; line-height: 1.6; -webkit-font-smoothing: antialiased; }
+
+  /* NAV (matches rest of site) */
+  nav { position: sticky; top: 0; z-index: 100; background: var(--ink); border-bottom: 3px solid var(--amber); padding: 0 5%; display: flex; align-items: center; justify-content: space-between; height: 64px; }
+  .nav-logo { font-family: var(--font-display); font-size: 1.5rem; font-weight: 800; color: var(--white); letter-spacing: 0.03em; text-decoration: none; }
+  .nav-logo span { color: var(--amber); }
+  .nav-links { display: flex; gap: 0; list-style: none; }
+  .nav-links > li { position: relative; }
+  .nav-links > li > a { color: #aab0bc; font-size: 0.85rem; font-weight: 500; text-decoration: none; letter-spacing: 0.05em; text-transform: uppercase; padding: 0 1rem; height: 64px; display: flex; align-items: center; transition: color 0.2s; }
+  .nav-links > li > a:hover, .nav-links > li > a.active { color: var(--white); }
+  .nav-links > li > a.has-dropdown::after { content: '▾'; margin-left: 0.3rem; font-size: 0.7rem; }
+  .dropdown { display: none; position: absolute; top: 64px; left: 0; background: #1a1d26; border: 1px solid #2a2d35; border-top: 3px solid var(--amber); min-width: 220px; z-index: 200; }
+  .nav-links > li:hover .dropdown { display: block; }
+  .dropdown a { display: block; padding: 0.7rem 1.2rem; color: #8892a4; font-size: 0.85rem; text-decoration: none; border-bottom: 1px solid #2a2d35; transition: all 0.15s; }
+  .dropdown a:hover { background: #222530; color: var(--white); padding-left: 1.5rem; }
+  .dropdown a:last-child { border-bottom: none; }
+  .dropdown .drop-label { padding: 0.5rem 1.2rem 0.2rem; font-size: 0.7rem; font-weight: 700; letter-spacing: 0.15em; text-transform: uppercase; color: var(--amber); }
+  .nav-cta { background: var(--amber); color: var(--ink) !important; padding: 0.5rem 1.2rem !important; border-radius: 3px; font-weight: 600 !important; margin-left: 1rem; height: auto !important; }
+  @media (max-width: 800px) { .nav-links { display: none; } }
+
+  /* HERO */
+  .page-hero { background: var(--ink); padding: 60px 5%; position: relative; overflow: hidden; border-bottom: 4px solid var(--cat); }
+  .page-hero::before { content: ''; position: absolute; top: 0; right: 0; width: 60%; height: 100%; background: repeating-linear-gradient(-45deg, transparent, transparent 20px, rgba(255,255,255,0.015) 20px, rgba(255,255,255,0.015) 21px); }
+  .hero-inner { max-width: 1100px; margin: 0 auto; position: relative; }
+  .breadcrumb { font-size: 0.82rem; color: #6b7485; margin-bottom: 1rem; }
+  .breadcrumb a { color: var(--cat-mid); text-decoration: none; }
+  .page-eyebrow { font-family: var(--font-display); font-size: 0.85rem; font-weight: 700; letter-spacing: 0.15em; text-transform: uppercase; margin-bottom: 0.8rem; color: var(--cat-mid); display: flex; align-items: center; gap: 0.6rem; }
+  .free-badge { background: var(--green); color: #fff; font-size: 0.68rem; padding: 0.15rem 0.55rem; border-radius: 3px; letter-spacing: 0.1em; }
+  .page-title { font-family: var(--font-display); font-size: clamp(2.2rem, 4vw, 3.4rem); font-weight: 800; color: var(--white); line-height: 1.05; margin-bottom: 1rem; }
+  .page-sub { color: #8892a4; font-size: 1rem; max-width: 640px; line-height: 1.7; margin-bottom: 1.5rem; }
+  .privacy-note { display: inline-flex; align-items: center; gap: 0.5rem; background: rgba(30,107,60,0.15); border: 1px solid rgba(30,107,60,0.4); color: #7fd9a4; font-size: 0.85rem; padding: 0.5rem 0.9rem; border-radius: 4px; }
+
+  /* CONTENT */
+  .page-content { max-width: 1100px; margin: 0 auto; padding: 50px 5% 80px; }
+  .tool-grid { display: grid; grid-template-columns: 1fr; gap: 2rem; }
+  @media (min-width: 900px) { .tool-grid { grid-template-columns: 1fr 1fr; align-items: start; } }
+
+  .panel { border: 1px solid var(--rule); border-radius: 8px; background: var(--white); }
+  .panel-head { padding: 1.2rem 1.4rem; border-bottom: 1px solid var(--rule); display: flex; align-items: center; justify-content: space-between; }
+  .panel-head h2 { font-family: var(--font-display); font-size: 1.2rem; font-weight: 800; }
+  .panel-body { padding: 1.4rem; }
+
+  textarea#ramsInput { width: 100%; min-height: 320px; border: 1px solid var(--rule); border-radius: 6px; padding: 0.9rem; font-family: var(--font-mono); font-size: 0.85rem; line-height: 1.5; resize: vertical; color: var(--ink); }
+  textarea#ramsInput:focus { outline: 2px solid var(--cat); outline-offset: 1px; }
+
+  .upload-row { display: flex; align-items: center; gap: 0.8rem; margin: 0.9rem 0; flex-wrap: wrap; }
+  .file-btn { border: 1px dashed var(--ink-soft); border-radius: 6px; padding: 0.55rem 1rem; font-size: 0.85rem; cursor: pointer; background: var(--off); color: var(--ink-mid); }
+  .file-btn:hover { background: var(--rule); }
+  #fileName { font-size: 0.82rem; color: var(--ink-soft); }
+  .sample-links { font-size: 0.8rem; color: var(--ink-soft); margin-top: 0.5rem; }
+  .sample-links button { background: none; border: none; color: var(--cat); text-decoration: underline; cursor: pointer; font-size: 0.8rem; padding: 0; }
+
+  .btn-primary { background: var(--amber); color: var(--ink); padding: 0.85rem 1.8rem; border-radius: 4px; font-family: var(--font-display); font-size: 1rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; border: none; cursor: pointer; transition: background 0.2s; }
+  .btn-primary:hover { background: #f5b840; }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+  .btn-ghost { background: none; border: 1px solid var(--rule); color: var(--ink-mid); padding: 0.6rem 1.2rem; border-radius: 4px; font-size: 0.85rem; cursor: pointer; }
+  .btn-ghost:hover { background: var(--off); }
+
+  .results-empty { padding: 3rem 1.4rem; text-align: center; color: var(--ink-soft); }
+  .score-wrap { display: flex; align-items: center; gap: 1.5rem; padding: 1.4rem; border-bottom: 1px solid var(--rule); flex-wrap: wrap; }
+  .score-ring { position: relative; width: 108px; height: 108px; flex-shrink: 0; }
+  .score-ring svg { transform: rotate(-90deg); width: 108px; height: 108px; }
+  .score-ring .bg { fill: none; stroke: var(--rule); stroke-width: 10; }
+  .score-ring .fg { fill: none; stroke-width: 10; stroke-linecap: round; transition: stroke-dashoffset 0.6s ease; }
+  .score-num { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-family: var(--font-display); font-size: 1.7rem; font-weight: 800; }
+  .grade-label { font-family: var(--font-display); font-size: 1.3rem; font-weight: 800; margin-bottom: 0.3rem; }
+  .score-meta { color: var(--ink-soft); font-size: 0.85rem; }
+
+  .section-label { font-family: var(--font-display); font-size: 0.78rem; font-weight: 700; letter-spacing: 0.15em; text-transform: uppercase; color: var(--ink-soft); padding: 1.1rem 1.4rem 0.4rem; }
+  .check-row { display: flex; gap: 0.7rem; padding: 0.6rem 1.4rem; border-bottom: 1px solid var(--off); align-items: flex-start; }
+  .check-icon { flex-shrink: 0; width: 20px; height: 20px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.7rem; font-weight: 800; margin-top: 0.1rem; }
+  .check-icon.pass { background: var(--green-light); color: var(--green); }
+  .check-icon.fail { background: var(--red-light); color: var(--red); }
+  .check-icon.warn { background: var(--amber-light); color: #8a5500; }
+  .check-name { font-weight: 600; font-size: 0.92rem; }
+  .check-guidance { color: var(--ink-soft); font-size: 0.83rem; margin-top: 0.2rem; line-height: 1.5; }
+  .check-ref { color: #9aa1af; font-size: 0.76rem; margin-top: 0.15rem; font-style: italic; }
+
+  .report-actions { padding: 1rem 1.4rem; display: flex; gap: 0.7rem; flex-wrap: wrap; border-top: 1px solid var(--rule); }
+
+  .api-callout { margin-top: 2.5rem; border: 1px solid var(--rule); border-radius: 8px; padding: 1.6rem; background: var(--off); }
+  .api-callout h3 { font-family: var(--font-display); font-size: 1.15rem; font-weight: 800; margin-bottom: 0.5rem; }
+  .api-callout p { color: var(--ink-soft); font-size: 0.9rem; max-width: 760px; margin-bottom: 0.9rem; }
+  .api-callout pre { background: var(--ink); color: #d8dde6; padding: 1rem 1.2rem; border-radius: 6px; font-family: var(--font-mono); font-size: 0.78rem; overflow-x: auto; line-height: 1.6; }
+  .api-callout a { color: var(--cat); }
+
+  .disclaimer { max-width: 1100px; margin: 0 auto; padding: 0 5% 40px; color: #9aa1af; font-size: 0.78rem; line-height: 1.6; }
+
+  footer { background: #0a0c11; border-top: 1px solid rgba(255,255,255,0.06); padding: 30px 5%; }
+  .footer-bottom { max-width: 1100px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; }
+  .footer-legal { color: #3a3f4a; font-size: 0.8rem; }
+  .footer-legal a { color: #4a5060; text-decoration: none; }
+  .footer-logo { font-family: var(--font-display); font-size: 1.2rem; font-weight: 800; color: var(--white); text-decoration: none; }
+  .footer-logo span { color: var(--amber); }
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="index.html" class="nav-logo">THE SITE <span>OFFICE</span></a>
+  <ul class="nav-links">
+    <li>
+      <a href="#" class="has-dropdown">Documents</a>
+      <div class="dropdown">
+        <div class="drop-label">Categories</div>
+        <a href="health-safety.html">🦺 Health &amp; Safety</a>
+        <a href="cdm.html">📋 CDM &amp; Construction Phase</a>
+        <a href="commercial.html">💷 Commercial &amp; Estimating</a>
+        <a href="contracts.html">📄 Contracts &amp; Legal</a>
+        <a href="quality.html">✅ Quality &amp; Environmental</a>
+        <a href="hr.html">👷 HR &amp; Workforce</a>
+        <a href="site-management.html">🏗️ Site Management</a>
+      </div>
+    </li>
+    <li><a href="rams-auditor.html" class="active">Free RAMS Auditor</a></li>
+    <li><a href="index.html#pricing">Pricing</a></li>
+    <li><a href="index.html#faq">FAQ</a></li>
+    <li><a href="index.html#shop" class="nav-cta">Shop Now</a></li>
+  </ul>
+</nav>
+
+<div class="page-hero">
+  <div class="hero-inner">
+    <div class="breadcrumb"><a href="index.html">Home</a> → Free RAMS Auditor</div>
+    <p class="page-eyebrow">Free Tool <span class="free-badge">NO SIGN-UP</span></p>
+    <h1 class="page-title">RAMS Auditor</h1>
+    <p class="page-sub">Paste in your Risk Assessment &amp; Method Statement and get an instant score against a checklist built from CDM 2015 and HSE-based guidance — missing sections, hazards without controls, and vague wording, all flagged with a fix and a citation.</p>
+    <div class="privacy-note">🔒 Runs entirely in your browser. Nothing is uploaded or stored anywhere — your document never leaves this tab.</div>
+  </div>
+</div>
+
+<div class="page-content">
+  <div class="tool-grid">
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Your RAMS</h2>
+        <span id="wordCount" style="font-size:0.78rem;color:var(--ink-soft);">0 words</span>
+      </div>
+      <div class="panel-body">
+        <textarea id="ramsInput" placeholder="Paste the text of your Risk Assessment & Method Statement here…"></textarea>
+        <div class="upload-row">
+          <label class="file-btn">
+            📄 Upload .txt / .docx / .pdf
+            <input type="file" id="fileInput" accept=".txt,.docx,.pdf" style="display:none;">
+          </label>
+          <span id="fileName"></span>
+        </div>
+        <div class="sample-links">
+          Try a sample: <button id="loadWeak" type="button">weak RAMS</button> · <button id="loadStrong" type="button">strong RAMS</button>
+        </div>
+        <div style="margin-top:1.2rem;">
+          <button class="btn-primary" id="analyzeBtn">Analyze RAMS</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" id="resultsPanel">
+      <div class="panel-head">
+        <h2>Compliance Report</h2>
+        <span id="ruleVersion" style="font-size:0.75rem;color:var(--ink-soft);"></span>
+      </div>
+      <div id="resultsBody">
+        <div class="results-empty">Paste or upload a RAMS and click <strong>Analyze RAMS</strong> to see your compliance report here.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="api-callout">
+    <h3>Built for humans and for AI agents</h3>
+    <p>The checklist behind this tool is not hidden inside a black box. It's published as an open, versioned JSON ruleset with plain-English guidance and a legal/HSE reference for every item — so a developer, an AI coding agent, or an LLM-based site-management assistant can run the same audit programmatically instead of guessing what "good" looks like.</p>
+    <pre>fetch('https://thesiteoffice.uk/compliance-rules.json')
+  .then(r => r.json())
+  .then(rules => {
+    // rules.structuralChecks / rules.hazardChecks / rules.vagueLanguageFlags
+    // each item has: id, weight, patterns, guidance, reference
+    console.log(rules.structuralChecks[0]);
+  });</pre>
+    <p style="margin-bottom:0;">Reference scoring implementation: <a href="tools/rams-auditor/engine.js">tools/rams-auditor/engine.js</a> (plain JS, no dependencies, MIT-style reuse). Ruleset license: CC-BY-4.0 — reuse it, just credit The Site Office.</p>
+  </div>
+</div>
+
+<p class="disclaimer">This tool is a screening aid that checks for the presence of required sections, hazard-specific controls and clear wording using pattern matching. It is not a substitute for sign-off by a competent person, a principal contractor's review, or professional/legal advice, and a high score does not guarantee legal compliance. Always have RAMS reviewed by a competent person before work starts on site.</p>
+
+<footer>
+  <div class="footer-bottom">
+    <a href="index.html" class="footer-logo">THE SITE <span>OFFICE</span></a>
+    <div class="footer-legal">© 2025 The Site Office · <a href="index.html">Home</a> · <a href="mailto:hello@thesiteoffice.uk">Contact</a></div>
+  </div>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/mammoth@1.6.0/mammoth.browser.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js" defer></script>
+<script src="tools/rams-auditor/engine.js"></script>
+<script>
+(function () {
+  var textarea = document.getElementById('ramsInput');
+  var wordCount = document.getElementById('wordCount');
+  var fileInput = document.getElementById('fileInput');
+  var fileName = document.getElementById('fileName');
+  var analyzeBtn = document.getElementById('analyzeBtn');
+  var resultsBody = document.getElementById('resultsBody');
+  var ruleVersionEl = document.getElementById('ruleVersion');
+  var RULES = null;
+
+  fetch('tools/rams-auditor/rules.json')
+    .then(function (r) { return r.json(); })
+    .then(function (rules) {
+      RULES = rules;
+      ruleVersionEl.textContent = 'Ruleset v' + rules.version;
+      analyzeBtn.disabled = false;
+    })
+    .catch(function (err) {
+      ruleVersionEl.textContent = 'Ruleset failed to load';
+      console.error('Could not load compliance rules', err);
+    });
+
+  analyzeBtn.disabled = true;
+
+  function updateWordCount() {
+    var words = textarea.value.trim().split(/\s+/).filter(Boolean);
+    wordCount.textContent = words.length + ' words';
+  }
+  textarea.addEventListener('input', updateWordCount);
+
+  fileInput.addEventListener('change', function (e) {
+    var file = e.target.files[0];
+    if (!file) return;
+    fileName.textContent = file.name;
+    var ext = file.name.split('.').pop().toLowerCase();
+
+    if (ext === 'txt') {
+      file.text().then(function (t) { textarea.value = t; updateWordCount(); });
+    } else if (ext === 'docx') {
+      if (typeof mammoth === 'undefined') { alert('Word file support is still loading — try again in a second, or paste the text instead.'); return; }
+      file.arrayBuffer().then(function (buf) {
+        return mammoth.extractRawText({ arrayBuffer: buf });
+      }).then(function (result) {
+        textarea.value = result.value;
+        updateWordCount();
+      }).catch(function (err) {
+        alert('Could not read that .docx file. Try pasting the text instead.');
+        console.error(err);
+      });
+    } else if (ext === 'pdf') {
+      if (typeof pdfjsLib === 'undefined') { alert('PDF support is still loading — try again in a second, or paste the text instead.'); return; }
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+      file.arrayBuffer().then(function (buf) {
+        return pdfjsLib.getDocument({ data: buf }).promise;
+      }).then(function (pdf) {
+        var pagePromises = [];
+        for (var i = 1; i <= pdf.numPages; i++) {
+          pagePromises.push(pdf.getPage(i).then(function (page) {
+            return page.getTextContent().then(function (content) {
+              return content.items.map(function (it) { return it.str; }).join(' ');
+            });
+          }));
+        }
+        return Promise.all(pagePromises);
+      }).then(function (pageTexts) {
+        textarea.value = pageTexts.join('\n\n');
+        updateWordCount();
+      }).catch(function (err) {
+        alert('Could not read that PDF (it may be a scanned image without a text layer). Try pasting the text instead.');
+        console.error(err);
+      });
+    } else {
+      alert('Please upload a .txt, .docx or .pdf file.');
+    }
+  });
+
+  var WEAK_SAMPLE = "Task: Fit some sockets.\nBe careful on site. All necessary precautions will be taken. Take care when using tools.";
+  var STRONG_SAMPLE = "RISK ASSESSMENT AND METHOD STATEMENT\nDocument number: TSO-RAMS-014, Revision 2, Prepared by: J. Carter, Site Manager\n\nScope of works: Replacement of roof edge trims and isolation of an existing lighting circuit at the plant room roof.\n\nSite address: Unit 4, Riverside Business Park, Leeds, LS10 1AB.\nSite manager: J. Carter. Person responsible for supervision: J. Carter.\nIssue date: 03/03/2026. Review date: 03/09/2026.\n\nSequence of work:\nStep 1: Erect edge protection with guardrails and toe boards around the working area before any operative accesses the roof.\nStep 2: Operatives don a full body harness and fall arrest lanyard, connected to an approved anchor point, before crossing the leading edge.\nStep 3: Electrician to carry out safe isolation of the lighting circuit, including lock out tag out and dead testing, before any cable work begins. Only a qualified electrician may carry out this task.\nStep 4: Remove and refit trims.\n\nHazards identified: fall from height, electric shock from live cables, manual handling of trims, noise from cutting tools.\n\nRisk rating: likelihood 3, severity 4 before controls; residual risk after controls reduced to likelihood 1, severity 2.\n\nControl measures: edge protection and fall arrest as above; permit to work required for the electrical isolation; mechanical aid (trolley) used for moving trim bundles rather than manual carrying.\n\nPPE required: hard hat, hi-vis vest, safety boots, gloves, eye protection, ear defenders during cutting operations.\n\nTraining/competence: all operatives must hold a valid CSCS card; roof workers must have in-date working at height training; electrician must hold relevant electrical qualification.\n\nEmergency procedures: in the event of a fall, raise the alarm immediately, do not move the casualty, call the appointed first aider and dial 999. Fire action: evacuate to the assembly point at the main gate. Nearest hospital: Leeds General Infirmary.\n\nWelfare arrangements: toilet facilities and drinking water available in the site cabin.\nEnvironmental controls: waste segregated into site skips.\nMonitoring: site manager to carry out daily spot checks and a documented weekly site inspection.\n\nBriefing record: all operatives must sign below to confirm they have read and understood this RAMS before starting work. Operative signature: ______________";
+
+  document.getElementById('loadWeak').addEventListener('click', function () { textarea.value = WEAK_SAMPLE; updateWordCount(); });
+  document.getElementById('loadStrong').addEventListener('click', function () { textarea.value = STRONG_SAMPLE; updateWordCount(); });
+
+  function ringColor(percent) {
+    if (percent >= 75) return getComputedStyle(document.documentElement).getPropertyValue('--green').trim();
+    if (percent >= 55) return getComputedStyle(document.documentElement).getPropertyValue('--amber').trim();
+    return getComputedStyle(document.documentElement).getPropertyValue('--red').trim();
+  }
+
+  function iconFor(status) {
+    if (status === 'pass') return { cls: 'pass', glyph: '✓' };
+    if (status === 'fail') return { cls: 'fail', glyph: '✕' };
+    return { cls: 'warn', glyph: '!' };
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function render(report) {
+    var circumference = 2 * Math.PI * 44;
+    var offset = circumference * (1 - report.percent / 100);
+    var color = ringColor(report.percent);
+
+    var html = '';
+    html += '<div class="score-wrap">';
+    html += '<div class="score-ring"><svg viewBox="0 0 108 108"><circle class="bg" cx="54" cy="54" r="44"/><circle class="fg" cx="54" cy="54" r="44" stroke="' + color + '" stroke-dasharray="' + circumference + '" stroke-dashoffset="' + offset + '"/></svg><div class="score-num">' + report.percent + '%</div></div>';
+    html += '<div><div class="grade-label" style="color:' + color + '">' + escapeHtml(report.grade) + '</div>';
+    html += '<div class="score-meta">' + report.summary.structuralPassed + '/' + report.summary.structuralTotal + ' required sections found · ' + report.summary.hazardsDetected + ' hazard type(s) detected, ' + report.summary.hazardsMissingControls + ' missing a control' + (report.vagueDeduction > 0 ? ' · -' + report.vagueDeduction + ' pts for vague wording' : '') + '</div></div>';
+    html += '</div>';
+
+    html += '<div class="section-label">Required Sections</div>';
+    report.structuralResults.forEach(function (r) {
+      var icon = iconFor(r.status);
+      html += '<div class="check-row"><div class="check-icon ' + icon.cls + '">' + icon.glyph + '</div><div><div class="check-name">' + escapeHtml(r.name) + '</div>';
+      if (r.status === 'fail') {
+        html += '<div class="check-guidance">' + escapeHtml(r.guidance) + '</div><div class="check-ref">' + escapeHtml(r.reference) + '</div>';
+      }
+      html += '</div></div>';
+    });
+
+    var triggeredHazards = report.hazardResults.filter(function (r) { return r.triggered; });
+    if (triggeredHazards.length) {
+      html += '<div class="section-label">Hazard-Specific Controls (based on what your RAMS mentions)</div>';
+      triggeredHazards.forEach(function (r) {
+        var icon = iconFor(r.status);
+        html += '<div class="check-row"><div class="check-icon ' + icon.cls + '">' + icon.glyph + '</div><div><div class="check-name">' + escapeHtml(r.name) + '</div>';
+        if (r.status === 'fail') {
+          html += '<div class="check-guidance">' + escapeHtml(r.guidance) + '</div><div class="check-ref">' + escapeHtml(r.reference) + '</div>';
+        }
+        html += '</div></div>';
+      });
+    }
+
+    if (report.vagueFlags.length) {
+      html += '<div class="section-label">Vague Wording</div>';
+      report.vagueFlags.forEach(function (f) {
+        html += '<div class="check-row"><div class="check-icon warn">!</div><div><div class="check-name">Found ' + f.count + '× (-' + f.deduction + ' pts)</div><div class="check-guidance">' + escapeHtml(f.message) + '</div></div></div>';
+      });
+    }
+
+    html += '<div class="report-actions"><button class="btn-ghost" id="downloadReport">Download report (.txt)</button></div>';
+
+    resultsBody.innerHTML = html;
+
+    document.getElementById('downloadReport').addEventListener('click', function () {
+      downloadReport(report);
+    });
+  }
+
+  function downloadReport(report) {
+    var lines = [];
+    lines.push('RAMS AUDITOR COMPLIANCE REPORT');
+    lines.push('Generated by The Site Office — thesiteoffice.uk/rams-auditor.html');
+    lines.push('Ruleset v' + report.version);
+    lines.push('');
+    lines.push('SCORE: ' + report.percent + '% — ' + report.grade);
+    lines.push(report.summary.structuralPassed + '/' + report.summary.structuralTotal + ' required sections found. ' + report.summary.hazardsDetected + ' hazard type(s) detected, ' + report.summary.hazardsMissingControls + ' missing a specific control.');
+    lines.push('');
+    lines.push('REQUIRED SECTIONS');
+    report.structuralResults.forEach(function (r) {
+      lines.push('[' + (r.status === 'pass' ? 'PASS' : 'FAIL') + '] ' + r.name);
+      if (r.status === 'fail') { lines.push('   Fix: ' + r.guidance); lines.push('   Ref: ' + r.reference); }
+    });
+    var triggered = report.hazardResults.filter(function (r) { return r.triggered; });
+    if (triggered.length) {
+      lines.push('');
+      lines.push('HAZARD-SPECIFIC CONTROLS');
+      triggered.forEach(function (r) {
+        lines.push('[' + (r.status === 'pass' ? 'PASS' : 'FAIL') + '] ' + r.name);
+        if (r.status === 'fail') { lines.push('   Fix: ' + r.guidance); lines.push('   Ref: ' + r.reference); }
+      });
+    }
+    if (report.vagueFlags.length) {
+      lines.push('');
+      lines.push('VAGUE WORDING');
+      report.vagueFlags.forEach(function (f) { lines.push('- ' + f.message + ' (found ' + f.count + '×)'); });
+    }
+    lines.push('');
+    lines.push('This is a screening aid, not a substitute for review by a competent person.');
+
+    var blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'rams-compliance-report.txt';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  analyzeBtn.addEventListener('click', function () {
+    if (!RULES) { alert('Rules are still loading, try again in a moment.'); return; }
+    var text = textarea.value.trim();
+    if (!text) { alert('Paste or upload a RAMS first.'); return; }
+    var report = window.RamsAuditor.analyze(text, RULES);
+    render(report);
+    document.getElementById('resultsPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+})();
+</script>
+</body>
+</html>

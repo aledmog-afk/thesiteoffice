@@ -1,0 +1,275 @@
+{
+  "$schema": "https://thesiteoffice.uk/compliance-rules.json",
+  "name": "UK RAMS / CDM Compliance Ruleset",
+  "version": "1.0.0",
+  "updated": "2026-08-22",
+  "documentType": "Risk Assessment & Method Statement (RAMS)",
+  "jurisdiction": "United Kingdom",
+  "publisher": "The Site Office (thesiteoffice.uk)",
+  "license": "CC-BY-4.0",
+  "description": "An open, machine-readable checklist for auditing a UK construction Risk Assessment / Method Statement (RAMS) against the structural elements and hazard-specific controls expected under the Management of Health and Safety at Work Regulations 1999, the Construction (Design and Management) Regulations 2015 (CDM 2015), and related HSE Approved Codes of Practice. Intended for use by humans (self-checking a document before it goes to a Principal Contractor) and by software/AI agents that need a citable, structured rubric rather than free-text advice. Matching is deliberately conservative (keyword/phrase based) and is a screening aid, not a legal or engineering sign-off.",
+  "howToUse": "Run each item's 'patterns' as case-insensitive substring/regex tests against the document text. For 'structural' checks, a match on any pattern (or all, if requireAll=true) means the element is present. For 'hazard' checks, first test 'triggerPatterns' — if none match, the hazard is not applicable and should be excluded from scoring. If a hazard IS triggered, test 'requiredPatterns'; if none match, flag it as a missing control. Sum matched weights / applicable weights for a percentage score. See engine.js in this same directory for a reference implementation.",
+  "grading": [
+    { "min": 90, "label": "Audit ready" },
+    { "min": 75, "label": "Good — minor gaps" },
+    { "min": 55, "label": "Needs work before use on site" },
+    { "min": 0,  "label": "High risk of rejection by a Principal Contractor" }
+  ],
+  "structuralChecks": [
+    {
+      "id": "scope_of_works",
+      "name": "Scope of works",
+      "weight": 5,
+      "patterns": ["scope of works", "description of works", "task description", "works to be carried out", "nature of work"],
+      "guidance": "Add a clear 'Scope of Works' statement describing exactly what task is being done, where, and by whom. A RAMS without a defined scope can't be checked against the actual job.",
+      "reference": "Management of Health and Safety at Work Regulations 1999, reg 3"
+    },
+    {
+      "id": "site_details",
+      "name": "Site / project details",
+      "weight": 5,
+      "patterns": ["site address", "site location", "project address", "site name", "\\b[A-Z]{1,2}\\d[A-Z\\d]?\\s*\\d[A-Z]{2}\\b"],
+      "guidance": "Name and address the specific site. A generic RAMS reused across sites without this is a common reason Principal Contractors reject documents.",
+      "reference": "CDM 2015, reg 4"
+    },
+    {
+      "id": "persons_responsible",
+      "name": "Person(s) responsible",
+      "weight": 5,
+      "patterns": ["site manager", "supervisor", "person responsible", "competent person", "principal contractor", "site foreman", "person in charge"],
+      "guidance": "Name the competent person accountable for supervising this work and enforcing the RAMS on site.",
+      "reference": "CDM 2015, reg 8 (competence)"
+    },
+    {
+      "id": "dates_review",
+      "name": "Issue date and review date",
+      "weight": 5,
+      "requireAll": true,
+      "patterns": ["\\b(\\d{1,2}[\\/\\-.]\\d{1,2}[\\/\\-.]\\d{2,4}|\\d{4})\\b", "review date|review period|valid until|expiry date"],
+      "guidance": "Add both an issue date and a stated review date/period. An undated RAMS can't be checked for currency and will usually be rejected.",
+      "reference": "HSE INDG163 (five steps to risk assessment)"
+    },
+    {
+      "id": "sequence_of_work",
+      "name": "Sequence / method of work",
+      "weight": 5,
+      "patterns": ["sequence of work", "sequence of operations", "method of work", "step 1", "stage 1", "order of work", "methodology"],
+      "guidance": "Break the task into a numbered sequence of steps. This is the 'method statement' half of RAMS — without it, the document is a risk assessment only.",
+      "reference": "HSG65 (Managing for Health and Safety)"
+    },
+    {
+      "id": "hazard_identification",
+      "name": "Hazards identified",
+      "weight": 5,
+      "patterns": ["hazard", "risks identified", "identified hazards", "potential hazard"],
+      "guidance": "List the specific hazards this task creates, not a generic statement that 'risks exist'.",
+      "reference": "Management of Health and Safety at Work Regulations 1999, reg 3"
+    },
+    {
+      "id": "risk_rating",
+      "name": "Risk rating (before/after controls)",
+      "weight": 5,
+      "patterns": ["likelihood", "severity", "risk rating", "risk score", "residual risk", "before controls", "after controls"],
+      "guidance": "Score each hazard's likelihood x severity before and after controls, so the effect of the controls is demonstrable.",
+      "reference": "HSE INDG163"
+    },
+    {
+      "id": "control_measures",
+      "name": "Control measures / safe system of work",
+      "weight": 5,
+      "patterns": ["control measures", "precautions", "mitigation measures", "safe system of work"],
+      "guidance": "State the specific control for each hazard, ideally following the hierarchy of control (eliminate, substitute, engineer, administer, PPE).",
+      "reference": "Management of Health and Safety at Work Regulations 1999, reg 4 & Sch 1"
+    },
+    {
+      "id": "ppe",
+      "name": "PPE requirements",
+      "weight": 5,
+      "patterns": ["\\bppe\\b", "personal protective equipment", "hard hat", "hi-vis", "safety boots", "gloves", "eye protection", "ear protection"],
+      "guidance": "List the specific PPE required for this task (not just 'standard PPE'), matched to the hazards identified.",
+      "reference": "Personal Protective Equipment at Work Regulations 1992"
+    },
+    {
+      "id": "training_competence",
+      "name": "Training / competence requirements",
+      "weight": 5,
+      "patterns": ["training", "competent", "competence", "cscs", "certificate of training", "toolbox talk", "induction"],
+      "guidance": "State what training, certification (e.g. CSCS, CPCS, IPAF) or competence operatives must hold before carrying out this task.",
+      "reference": "CDM 2015, reg 8"
+    },
+    {
+      "id": "emergency_procedures",
+      "name": "Emergency procedures",
+      "weight": 5,
+      "patterns": ["emergency procedure", "emergency arrangements", "fire action", "first aid", "nearest hospital", "assembly point", "accident reporting"],
+      "guidance": "Describe what to do in an emergency: fire action, first aid arrangements, nearest hospital, and how accidents/near-misses get reported.",
+      "reference": "Management of Health and Safety at Work Regulations 1999, reg 8-10"
+    },
+    {
+      "id": "plant_equipment",
+      "name": "Plant / equipment / tools used",
+      "weight": 3,
+      "patterns": ["plant", "equipment to be used", "machinery", "tools required"],
+      "guidance": "List the plant, tools and equipment involved so their specific risks (and inspection status) can be assessed.",
+      "reference": "Provision and Use of Work Equipment Regulations 1998 (PUWER)"
+    },
+    {
+      "id": "briefing_signoff",
+      "name": "Briefing / sign-off record",
+      "weight": 5,
+      "patterns": ["operative signature", "briefing record", "sign below", "i confirm i have read", "toolbox talk record", "read and understood"],
+      "guidance": "Include a signature record showing every operative has been briefed on and understood this RAMS before starting work.",
+      "reference": "HSE good practice — demonstrating that a risk assessment was communicated"
+    },
+    {
+      "id": "monitoring_review",
+      "name": "Monitoring / supervision arrangements",
+      "weight": 3,
+      "patterns": ["monitor", "supervision arrangements", "spot check", "site inspection"],
+      "guidance": "State how compliance with this RAMS will be checked on site (supervision, spot checks, inspections).",
+      "reference": "Management of Health and Safety at Work Regulations 1999, reg 5"
+    },
+    {
+      "id": "welfare_arrangements",
+      "name": "Welfare arrangements",
+      "weight": 3,
+      "patterns": ["welfare", "toilet facilities", "rest area", "drinking water"],
+      "guidance": "Confirm welfare facilities (toilets, rest area, drinking water) are available for the duration of the task.",
+      "reference": "Construction (Design and Management) Regulations 2015, Sch 2"
+    },
+    {
+      "id": "environmental_controls",
+      "name": "Environmental controls",
+      "weight": 3,
+      "patterns": ["environmental control", "dust suppression", "noise control", "waste management", "spill kit"],
+      "guidance": "Note any environmental controls needed — dust, noise, waste disposal, or spill response — even for jobs that are primarily H&S focused.",
+      "reference": "Environmental Protection Act 1990 / local site environmental plan"
+    },
+    {
+      "id": "document_control",
+      "name": "Document control",
+      "weight": 3,
+      "patterns": ["version", "revision", "prepared by", "author", "document number"],
+      "guidance": "Add basic document control: version/revision number and who prepared it, so superseded copies can be identified on site.",
+      "reference": "Good practice / ISO 9001 document control principles"
+    }
+  ],
+  "hazardChecks": [
+    {
+      "id": "working_at_height",
+      "name": "Working at height",
+      "weight": 8,
+      "triggerPatterns": ["roof", "scaffold", "ladder", "working at height", "leading edge", "mobile elevating work platform", "\\bmewp\\b"],
+      "requiredPatterns": ["guardrail", "harness", "fall arrest", "edge protection", "toe board", "scaffold inspection", "fall restraint"],
+      "guidance": "Working-at-height hazards were detected but no specific fall-prevention control (guardrails, harness/fall arrest, edge protection, scaffold inspection) was found.",
+      "reference": "Work at Height Regulations 2005"
+    },
+    {
+      "id": "excavation",
+      "name": "Excavation / groundworks",
+      "weight": 8,
+      "triggerPatterns": ["excavat", "trench", "groundwork", "digging"],
+      "requiredPatterns": ["shoring", "battering", "support", "services drawing", "cat scan", "permit", "buried services"],
+      "guidance": "Excavation work was detected but no control for collapse prevention (shoring/battering/support) or buried-services checks (CAT scan / services drawing) was found.",
+      "reference": "CDM 2015; HSG47 — Avoiding Danger from Underground Services"
+    },
+    {
+      "id": "manual_handling",
+      "name": "Manual handling",
+      "weight": 8,
+      "triggerPatterns": ["manual handling", "\\blift(ing)?\\b", "\\bcarry(ing)?\\b", "heavy load"],
+      "requiredPatterns": ["manual handling assessment", "mechanical aid", "team lift", "trolley", "sack truck", "lifting technique"],
+      "guidance": "Manual handling was detected but no specific control (mechanical aids, team lifting, assessment) was found.",
+      "reference": "Manual Handling Operations Regulations 1992"
+    },
+    {
+      "id": "electrical",
+      "name": "Electrical work",
+      "weight": 8,
+      "triggerPatterns": ["electric", "live wire", "cable", "isolat"],
+      "requiredPatterns": ["isolation", "lock ?out", "permit", "qualified electrician", "dead test", "safe isolation"],
+      "guidance": "Electrical hazards were detected but no isolation/permit/competence control was found.",
+      "reference": "Electricity at Work Regulations 1989"
+    },
+    {
+      "id": "hot_works",
+      "name": "Hot works",
+      "weight": 8,
+      "triggerPatterns": ["welding", "grinding", "hot works", "blow ?torch", "brazing"],
+      "requiredPatterns": ["fire extinguisher", "hot works permit", "fire watch", "fire blanket"],
+      "guidance": "Hot works were detected but no fire-control measure (permit, extinguisher, fire watch) was found.",
+      "reference": "Regulatory Reform (Fire Safety) Order 2005; HSE hot work guidance"
+    },
+    {
+      "id": "confined_space",
+      "name": "Confined space",
+      "weight": 8,
+      "triggerPatterns": ["confined space", "\\btank\\b", "chamber", "manhole", "\\bshaft\\b"],
+      "requiredPatterns": ["permit", "gas test", "atmosphere monitor", "rescue plan", "confined space training"],
+      "guidance": "Confined space work was detected but no permit, gas testing or rescue plan was found.",
+      "reference": "Confined Spaces Regulations 1997"
+    },
+    {
+      "id": "asbestos",
+      "name": "Asbestos",
+      "weight": 8,
+      "triggerPatterns": ["asbestos"],
+      "requiredPatterns": ["survey", "licensed contractor", "hse notification", "asbestos register", "acm"],
+      "guidance": "Asbestos was mentioned but no reference to a survey, the asbestos register, or licensed-contractor requirements was found.",
+      "reference": "Control of Asbestos Regulations 2012"
+    },
+    {
+      "id": "noise",
+      "name": "Noise",
+      "weight": 6,
+      "triggerPatterns": ["\\bnoise\\b", "decibel", "loud plant"],
+      "requiredPatterns": ["hearing protection", "noise assessment", "ear defenders", "ear plugs"],
+      "guidance": "Noise was mentioned but no hearing-protection control or noise assessment was found.",
+      "reference": "Control of Noise at Work Regulations 2005"
+    },
+    {
+      "id": "dust_silica",
+      "name": "Dust / silica (RCS)",
+      "weight": 8,
+      "triggerPatterns": ["dust", "silica", "cutting concrete", "chasing walls"],
+      "requiredPatterns": ["water suppression", "\\brpe\\b", "respirator", "extraction", "on-tool extraction"],
+      "guidance": "Dust/silica-generating work was detected but no suppression, extraction or RPE (respiratory protective equipment) control was found.",
+      "reference": "Control of Substances Hazardous to Health Regulations 2002 (COSHH)"
+    },
+    {
+      "id": "coshh_substances",
+      "name": "Hazardous substances (COSHH)",
+      "weight": 8,
+      "triggerPatterns": ["adhesive", "solvent", "\\bresin\\b", "hazardous substance", "chemical"],
+      "requiredPatterns": ["coshh", "safety data sheet", "\\bsds\\b", "coshh assessment"],
+      "guidance": "Hazardous substances were mentioned but no COSHH assessment or safety data sheet reference was found.",
+      "reference": "Control of Substances Hazardous to Health Regulations 2002 (COSHH)"
+    },
+    {
+      "id": "vehicles_traffic",
+      "name": "Vehicles / site traffic",
+      "weight": 6,
+      "triggerPatterns": ["vehicle", "traffic", "reversing", "delivery lorry"],
+      "requiredPatterns": ["banksman", "traffic management", "segregat", "exclusion zone", "one-way system"],
+      "guidance": "Vehicle/traffic movement was detected but no traffic management or banksman control was found.",
+      "reference": "CDM 2015, Sch 2; HSE traffic management guidance"
+    },
+    {
+      "id": "crane_lifting",
+      "name": "Crane / lifting operations",
+      "weight": 8,
+      "triggerPatterns": ["crane", "lifting operation", "\\bhoist\\b"],
+      "requiredPatterns": ["lift plan", "appointed person", "slinger", "\\blolers?\\b", "signaller"],
+      "guidance": "A lifting operation was detected but no lift plan, appointed person or LOLER-competent role was found.",
+      "reference": "Lifting Operations and Lifting Equipment Regulations 1998 (LOLER)"
+    }
+  ],
+  "vagueLanguageFlags": [
+    { "id": "vague_suitable_precautions", "pattern": "suitable precautions", "message": "\"Suitable precautions\" without naming them is a classic inspector red flag — say exactly what the precaution is.", "deduction": 3 },
+    { "id": "vague_adequate", "pattern": "adequate (ppe|training|supervision)", "message": "\"Adequate\" is undefined — state the specific PPE, training or supervision level required.", "deduction": 2 },
+    { "id": "vague_all_necessary", "pattern": "all necessary precautions", "message": "\"All necessary precautions\" names nothing specific — list the actual controls.", "deduction": 3 },
+    { "id": "vague_as_required", "pattern": "\\bas required\\b", "message": "\"As required\" is vague — specify what, when, and by whom.", "deduction": 1 },
+    { "id": "vague_if_necessary", "pattern": "\\bif necessary\\b", "message": "\"If necessary\" leaves the decision undefined — state the trigger condition.", "deduction": 1 },
+    { "id": "vague_take_care", "pattern": "take (extra )?care", "message": "\"Take care\" is not a control measure — replace with a specific, actionable instruction.", "deduction": 2 }
+  ]
+}
