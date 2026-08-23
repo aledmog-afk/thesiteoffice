@@ -1,0 +1,19 @@
+{
+  "name": "numlint",
+  "version": "0.1.0",
+  "description": "A linter for the arithmetic inside prose. Finds numbers in documents that contradict each other.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": { "numlint": "dist/bin/numlint.js" },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "eval": "npm run build && node dist/eval/score.js",
+    "eval:corpus": "npm run build && node dist/eval/run.js"
+  },
+  "keywords": ["linter", "fact-checking", "numbers", "arithmetic", "consistency", "grim", "statcheck", "llm", "verification", "mcp"],
+  "license": "MIT",
+  "devDependencies": { "typescript": "^5.6.3", "@types/node": "^22.7.5" }
+}

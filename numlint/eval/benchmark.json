@@ -1,0 +1,620 @@
+{
+  "description": "numlint benchmark. `expect` lists the rules that must fire; an empty list means the document must produce no findings at all. Negative cases are drawn from patterns that broke earlier versions, including verbatim newswire and general-prose sentences.",
+  "cases": [
+    {
+      "id": "conv-mile-km",
+      "expect": [
+        "unit-conversion"
+      ],
+      "text": "The new bypass runs 5 miles (8.5 km) around the town centre."
+    },
+    {
+      "id": "conv-km-mile",
+      "expect": [
+        "unit-conversion"
+      ],
+      "text": "The epicentre was 225 km (135 miles) east of Lima."
+    },
+    {
+      "id": "conv-kg-lb",
+      "expect": [
+        "unit-conversion"
+      ],
+      "text": "The device weighs 12 kg (30 lb) and folds flat."
+    },
+    {
+      "id": "conv-temp",
+      "expect": [
+        "unit-conversion"
+      ],
+      "text": "Overnight lows reached -10°C (25°F) in the valley."
+    },
+    {
+      "id": "conv-speed",
+      "expect": [
+        "unit-conversion"
+      ],
+      "text": "It has a top speed of 155 mph (280 km/h)."
+    },
+    {
+      "id": "conv-area",
+      "expect": [
+        "unit-conversion"
+      ],
+      "text": "The site covers 40 hectares (80 acres) of former farmland."
+    },
+    {
+      "id": "conv-data",
+      "expect": [
+        "unit-conversion"
+      ],
+      "text": "The archive is 2 TB (200,000 MB) once compressed."
+    },
+    {
+      "id": "conv-volume",
+      "expect": [
+        "unit-conversion"
+      ],
+      "text": "The tank holds 50 gallons (150 litres) when full."
+    },
+    {
+      "id": "conv-fuel",
+      "expect": [
+        "unit-conversion"
+      ],
+      "text": "The hybrid manages 50 mpg (6.5 L/100km) on the motorway."
+    },
+    {
+      "id": "conv-ok-rounded",
+      "expect": [],
+      "text": "The marathon is 26.2 miles (42.2 km) long and the tower is 300 feet (91 m) tall."
+    },
+    {
+      "id": "conv-ok-temp",
+      "expect": [],
+      "text": "Highs of 72F (22C) are forecast for the weekend."
+    },
+    {
+      "id": "conv-ok-coarse",
+      "expect": [],
+      "text": "The village lies 5 miles (8 km) north of the reservoir."
+    },
+    {
+      "id": "conv-ok-clause",
+      "expect": [],
+      "text": "His estimate was 39 to 42 feet (14 meters is slightly less than 46 feet) at most."
+    },
+    {
+      "id": "conv-ok-currency",
+      "expect": [],
+      "text": "The fine was €5m ($5.4m at the time) and was paid in full."
+    },
+    {
+      "id": "conv-ok-hedged",
+      "expect": [],
+      "text": "The crater is roughly 30 miles (about 50 km) across."
+    },
+    {
+      "id": "pob-basic",
+      "expect": [
+        "percent-of-base"
+      ],
+      "text": "Some 45 of the 200 respondents (25%) said they were satisfied with the service."
+    },
+    {
+      "id": "pob-outof",
+      "expect": [
+        "percent-of-base|ratio-percent"
+      ],
+      "text": "Just 3 out of 40 councils (10%) met the deadline."
+    },
+    {
+      "id": "pob-reverse",
+      "expect": [
+        "percent-of-base"
+      ],
+      "text": "About 30% of the 250 employees, or 60 people, took the offer."
+    },
+    {
+      "id": "pob-money",
+      "expect": [
+        "percent-of-base"
+      ],
+      "text": "The department spent £3m of the £20m budget, or 20%, on consultants."
+    },
+    {
+      "id": "pob-ok",
+      "expect": [],
+      "text": "Some 45 of the 200 respondents (23%) said they were satisfied with the service."
+    },
+    {
+      "id": "pob-ok-rounding",
+      "expect": [],
+      "text": "In all, 1 of the 3 sites (33%) failed the inspection."
+    },
+    {
+      "id": "pob-ok-year",
+      "expect": [],
+      "text": "Total farm output is forecast at 129% of the 1947-49 average this season."
+    },
+    {
+      "id": "pob-ok-index",
+      "expect": [],
+      "text": "The index of prices received by farmers reached 242% of the 1910-14 average."
+    },
+    {
+      "id": "pob-ok-rate",
+      "expect": [],
+      "text": "The bank will lower its prime lending rate to 18 pct from 18.25, effective April 6."
+    },
+    {
+      "id": "pob-ok-fractions",
+      "expect": [],
+      "text": "The overnight rate fell to 3-1/2 to three pct from 4-1/2 to four because of increased liquidity."
+    },
+    {
+      "id": "pchg-basic",
+      "expect": [
+        "percent-change"
+      ],
+      "text": "Revenue rose from $4.5m to $6.2m, a 33% increase on the year."
+    },
+    {
+      "id": "pchg-down",
+      "expect": [
+        "percent-change"
+      ],
+      "text": "Headcount fell from 1,200 to 900, a 20% reduction."
+    },
+    {
+      "id": "pchg-direction",
+      "expect": [
+        "percent-change"
+      ],
+      "text": "Emissions grew from 90 tonnes to 60 tonnes, a 33% increase."
+    },
+    {
+      "id": "pchg-updown",
+      "expect": [
+        "percent-change"
+      ],
+      "text": "Quarterly profit hit $18m, up 50% from $10m a year earlier."
+    },
+    {
+      "id": "pchg-ok",
+      "expect": [],
+      "text": "Revenue rose from $4.5m to $6.2m, a 38% increase on the year."
+    },
+    {
+      "id": "pchg-ok-rounded",
+      "expect": [],
+      "text": "Headcount fell from 1,200 to 900, a 25% reduction."
+    },
+    {
+      "id": "pchg-ok-updown",
+      "expect": [],
+      "text": "Quarterly profit hit $18m, up 80% from $10m a year earlier."
+    },
+    {
+      "id": "pchg-ok-range",
+      "expect": [],
+      "text": "Between 5 and 10 million households were affected by the outage."
+    },
+    {
+      "id": "pp-confusion",
+      "expect": [
+        "percentage-point-confusion"
+      ],
+      "text": "The margin fell from 12% to 9%, a 3% drop."
+    },
+    {
+      "id": "pp-confusion-2",
+      "expect": [
+        "percentage-point-confusion"
+      ],
+      "text": "Unemployment rose from 4.0% to 5.5%, a 1.5% rise."
+    },
+    {
+      "id": "pp-wrong-points",
+      "expect": [
+        "percent-change"
+      ],
+      "text": "The share moved from 20% to 26%, an increase of 8 percentage points."
+    },
+    {
+      "id": "pp-ok-points",
+      "expect": [],
+      "text": "The margin fell from 12% to 9%, a drop of 3 percentage points."
+    },
+    {
+      "id": "pp-ok-relative",
+      "expect": [],
+      "text": "The margin fell from 12% to 9%, a 25% drop."
+    },
+    {
+      "id": "mult-doubled",
+      "expect": [
+        "multiplier-mismatch"
+      ],
+      "text": "Capacity doubled from 400 units to 1,200 units over the decade."
+    },
+    {
+      "id": "mult-ok",
+      "expect": [],
+      "text": "Capacity doubled from 400 units to 820 units over the decade."
+    },
+    {
+      "id": "sum-basic",
+      "expect": [
+        "sum-of-parts"
+      ],
+      "text": "Sales were 120 in the north, 340 in the south and 90 in the west, a total of 650 units."
+    },
+    {
+      "id": "sum-money",
+      "expect": [
+        "sum-of-parts"
+      ],
+      "text": "The grant covers £1.2m for staff, £800,000 for equipment and £400,000 for premises, totalling £2.8m."
+    },
+    {
+      "id": "sum-ok",
+      "expect": [],
+      "text": "Sales were 120 in the north, 340 in the south and 90 in the west, a total of 550 units."
+    },
+    {
+      "id": "sum-ok-rounded",
+      "expect": [],
+      "text": "The regions contributed 1.2m, 3.4m and 0.9m, a combined total of 5.5m."
+    },
+    {
+      "id": "sum-ok-partial",
+      "expect": [],
+      "text": "The fund committed £5m of the £20m raised, plus £2m in reserve, for a total of £7m."
+    },
+    {
+      "id": "sum-ok-crosssentence",
+      "expect": [],
+      "text": "His Thursday and Friday rounds were 68 and 69. His three-round total of 210 led the field."
+    },
+    {
+      "id": "sum-ok-table-fragment",
+      "expect": [],
+      "text": "Sunflowerseed total 15.0 (7.9) Soybean May 20.0, total 20.0 (nil)."
+    },
+    {
+      "id": "psum-over",
+      "expect": [
+        "percent-sum"
+      ],
+      "text": "Support stood at 41% for Labour, 38% for the Conservatives and 26% for the Liberal Democrats."
+    },
+    {
+      "id": "psum-ok-rounding",
+      "expect": [],
+      "text": "Support stood at 41% for Labour, 33% for the Conservatives and 27% for the Liberal Democrats."
+    },
+    {
+      "id": "psum-ok-multiselect",
+      "expect": [],
+      "text": "Respondents could pick more than one option: 60% chose email, 55% chose phone and 40% chose post."
+    },
+    {
+      "id": "psum-ok-under",
+      "expect": [],
+      "text": "Of those asked, 30% said yes, 25% said no and 20% said they did not know."
+    },
+    {
+      "id": "grim-pct",
+      "expect": [
+        "impossible-percentage"
+      ],
+      "text": "In the trial, 40% of the 7 patients reported an improvement."
+    },
+    {
+      "id": "grim-pct-2",
+      "expect": [
+        "impossible-percentage"
+      ],
+      "text": "A striking 55% of the 9 councils surveyed had no plan in place."
+    },
+    {
+      "id": "grim-ok",
+      "expect": [],
+      "text": "In the trial, 27% of the 15 patients reported an improvement."
+    },
+    {
+      "id": "grim-ok-large",
+      "expect": [],
+      "text": "Of the 1,200 respondents, 37% said they had never used the service."
+    },
+    {
+      "id": "grim-mean",
+      "expect": [
+        "grim-mean"
+      ],
+      "text": "Items were scored on a Likert scale. The mean was 3.47 for the treatment group (n = 20)."
+    },
+    {
+      "id": "grim-mean-ok",
+      "expect": [],
+      "text": "Items were scored on a Likert scale. The mean was 3.45 for the treatment group (n = 20)."
+    },
+    {
+      "id": "weekday",
+      "expect": [
+        "weekday-date"
+      ],
+      "text": "The consultation closes on Tuesday, 5 March 2026."
+    },
+    {
+      "id": "weekday-us",
+      "expect": [
+        "weekday-date"
+      ],
+      "text": "The hearing is set for Monday, March 5, 2026."
+    },
+    {
+      "id": "weekday-impossible",
+      "expect": [
+        "weekday-date"
+      ],
+      "text": "Submissions are due Friday, 31 February 2027."
+    },
+    {
+      "id": "weekday-ok",
+      "expect": [],
+      "text": "The consultation closes on Thursday, 5 March 2026."
+    },
+    {
+      "id": "span-years",
+      "expect": [
+        "date-span"
+      ],
+      "text": "The cohort was followed from 1990 to 2015, a 30-year period."
+    },
+    {
+      "id": "span-ok",
+      "expect": [],
+      "text": "The cohort was followed from 1990 to 2015, a 25-year period."
+    },
+    {
+      "id": "span-ok-inclusive",
+      "expect": [],
+      "text": "The cohort was followed from 1990 to 2015, a 26-year period."
+    },
+    {
+      "id": "span-ok-unrelated",
+      "expect": [],
+      "text": "Funds were appropriated for the fiscal years 1962 to 1967, inclusive, and to finance for not more than two years beyond the end of that period."
+    },
+    {
+      "id": "span-ok-decade",
+      "expect": [],
+      "text": "The decade from 1910 to 1920 left him free of pressure for the first time in forty years."
+    },
+    {
+      "id": "age",
+      "expect": [
+        "age-arithmetic"
+      ],
+      "text": "Born in 1943 in Leeds, she died in 1999 at the age of 45."
+    },
+    {
+      "id": "age-ok",
+      "expect": [],
+      "text": "Born in 1943 in Leeds, she died in 1999 at the age of 56."
+    },
+    {
+      "id": "age-ok-early",
+      "expect": [],
+      "text": "Born in 1943 in Leeds, she died in 1999 at the age of 55, having never left the city."
+    },
+    {
+      "id": "perunit-avg",
+      "expect": [
+        "per-unit"
+      ],
+      "text": "The council spent £4.2m across 12 boroughs, an average of £420,000 each."
+    },
+    {
+      "id": "perunit-price",
+      "expect": [
+        "per-unit"
+      ],
+      "text": "It bought 1,200 units at $50 each, for a total of $54,000."
+    },
+    {
+      "id": "perunit-ok",
+      "expect": [],
+      "text": "The council spent £4.2m across 12 boroughs, an average of £350,000 each."
+    },
+    {
+      "id": "perunit-ok-rounded",
+      "expect": [],
+      "text": "The trust spent £1m across 3 hospitals, an average of about £333,000 each."
+    },
+    {
+      "id": "scale-slip",
+      "expect": [
+        "scale-slip"
+      ],
+      "text": "The Halton viaduct contract is worth $4.2 billion.\n\nWork on the Halton viaduct contract begins in spring, with the $4.2 million contract due to complete in 2031."
+    },
+    {
+      "id": "scale-ok-comparison",
+      "expect": [],
+      "text": "Group revenue was 6.5 mln dlrs.\n\nThat compares with revenue of 6.5 bln dlrs across the whole sector."
+    },
+    {
+      "id": "table-col",
+      "expect": [
+        "table-sum"
+      ],
+      "text": "| Region | Units |\n| --- | --- |\n| North | 120 |\n| South | 340 |\n| West | 90 |\n| Total | 650 |"
+    },
+    {
+      "id": "table-ok",
+      "expect": [],
+      "text": "| Region | Units |\n| --- | --- |\n| North | 120 |\n| South | 340 |\n| West | 90 |\n| Total | 550 |"
+    },
+    {
+      "id": "table-row",
+      "expect": [
+        "table-sum"
+      ],
+      "text": "| Team | Q1 | Q2 | Total |\n| --- | --- | --- | --- |\n| Alpha | 12 | 15 | 27 |\n| Beta | 20 | 25 | 50 |"
+    },
+    {
+      "id": "clean-newswire-1",
+      "expect": [],
+      "text": "Computer Terminal Systems Inc said it has completed the sale of 200,000 shares of its common stock, and warrants to acquire an additional one mln shares, to Sedio N.V. of Lugano, Switzerland for 50,000 dlrs. The company said the warrants are exercisable for five years at a purchase price of .125 dlrs per share."
+    },
+    {
+      "id": "clean-newswire-2",
+      "expect": [],
+      "text": "Japan's trade surplus rose to 7.38 billion dlrs in February from 3.89 billion a year ago and from 4.95 billion in January, the Finance Ministry said. Exports rose 8.4 pct to 19.68 billion dlrs while imports fell 5.6 pct to 12.30 billion dlrs."
+    },
+    {
+      "id": "clean-newswire-3",
+      "expect": [],
+      "text": "Imports of palm oil totaled 44.0 mln lbs compared with 51.3 mln lbs in December and 85.2 mln a year earlier, according to Commerce Department figures."
+    },
+    {
+      "id": "clean-newswire-4",
+      "expect": [],
+      "text": "Shr loss six cts vs profit 22 cts. Net loss 133,119 vs profit 496,391. Revs 136,918 vs 737,917. Nine mths shr loss 21 cts vs profit 15 cts. Net loss 478,991 vs profit 340,210."
+    },
+    {
+      "id": "clean-newswire-5",
+      "expect": [],
+      "text": "Dutch soymeal usage fell 12 pct to 1.9 mln tonnes from 2.1 mln the previous season, while sunmeal usage rose 25 pct to 408,000 tonnes from 326,000 tonnes."
+    },
+    {
+      "id": "clean-prose-1",
+      "expect": [],
+      "text": "The Fulton County Grand Jury said Friday an investigation of Atlanta's recent primary election produced no evidence that any irregularities took place. The jury said it believes the mayor's proposal to raise the sum by 2 per cent is sound."
+    },
+    {
+      "id": "clean-prose-2",
+      "expect": [],
+      "text": "Keegan, a 6-foot-3-inch 158-pounder, gave up the Orioles' last two safeties over the final three frames, and allowed no hits in his scoreless three-inning appearance."
+    },
+    {
+      "id": "clean-prose-3",
+      "expect": [],
+      "text": "The 1,065 rushing yards and 447 passing yards gave the Longhorns a 3-game total offense of 1,512 yards, a new conference high."
+    },
+    {
+      "id": "clean-prose-4",
+      "expect": [],
+      "text": "He shot a 2-over-par 74 on the final day for a 72-hole total of 280, three strokes clear of the field."
+    },
+    {
+      "id": "clean-prose-5",
+      "expect": [],
+      "text": "Private consumption will grow by three pct in 1987 and two pct in 1988 against 3.75 pct in 1986, the institute said."
+    },
+    {
+      "id": "clean-prose-6",
+      "expect": [],
+      "text": "Trade between Argentina and Brazil jumped 90 pct in 1986 versus 1985, the foreign minister said."
+    },
+    {
+      "id": "clean-prose-7",
+      "expect": [],
+      "text": "Gold output in Heilongjiang rose 22.7 pct in 1986 from 1985's level, the agency said. It gave no figures."
+    },
+    {
+      "id": "clean-prose-8",
+      "expect": [],
+      "text": "Net sales of soybeans totalling 274,200 tonnes equaled the preceding week, but were nearly a third below the four-week average for the 1987/88 season."
+    },
+    {
+      "id": "clean-prose-9",
+      "expect": [],
+      "text": "One in five households, or 20%, reported at least one missed payment last year."
+    },
+    {
+      "id": "clean-prose-10",
+      "expect": [],
+      "text": "Turnout was 66.4% in 2019 and 59.7% in 2024, and the winning margin was 4.2 points."
+    },
+    {
+      "id": "clean-prose-11",
+      "expect": [],
+      "text": "The fund returned 12% in its first year, 8% in its second and 15% in its third."
+    },
+    {
+      "id": "clean-prose-12",
+      "expect": [],
+      "text": "Sales reached 150% of the previous year's total, the best result since the company was founded in 1974."
+    },
+    {
+      "id": "clean-prose-13",
+      "expect": [],
+      "text": "About two-thirds of the 1,200 patients — some 780 people — recovered within 2 hours 30 minutes."
+    },
+    {
+      "id": "clean-prose-14",
+      "expect": [],
+      "text": "The building is 6 ft 2 in wide at the base and 300 m tall, and cost £3m to restore in 2019."
+    },
+    {
+      "id": "clean-prose-15",
+      "expect": [],
+      "text": "Version 2.1.3 shipped on 2026-03-05 after 1,024 commits from 37 contributors across 12 countries."
+    },
+    {
+      "id": "ratio-pct",
+      "expect": [
+        "ratio-percent"
+      ],
+      "text": "One in five households, or 25%, reported a missed payment last year."
+    },
+    {
+      "id": "ratio-pct-ok",
+      "expect": [],
+      "text": "One in five households, or 20%, reported a missed payment last year."
+    },
+    {
+      "id": "ratio-pct-ok-2",
+      "expect": [],
+      "text": "Roughly one in three adults (33%) said they had skipped a meal."
+    },
+    {
+      "id": "part-exceeds",
+      "expect": [
+        "part-exceeds-whole"
+      ],
+      "text": "The trust drew £25m of the £20m allocated to the programme."
+    },
+    {
+      "id": "part-exceeds-ok",
+      "expect": [],
+      "text": "The trust drew £2m of the £20m allocated to the programme."
+    },
+    {
+      "id": "part-exceeds-ok-rounding",
+      "expect": [],
+      "text": "The team used 20.4 tonnes of the 20 tonnes budgeted for the build."
+    },
+    {
+      "id": "currency-rate",
+      "expect": [
+        "currency-rate"
+      ],
+      "text": "The fine was €5m ($6.4m, at $1.08 to the euro) and was paid in March."
+    },
+    {
+      "id": "currency-rate-ok",
+      "expect": [],
+      "text": "The fine was €5m ($5.4m, at $1.08 to the euro) and was paid in March."
+    },
+    {
+      "id": "currency-rate-ok-norate",
+      "expect": [],
+      "text": "The fine was €5m ($5.9m) and was paid in March."
+    }
+  ]
+}
