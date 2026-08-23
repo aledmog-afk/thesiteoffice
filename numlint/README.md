@@ -174,9 +174,11 @@ findings come back as proofs, not opinions.
 
 ### As a web page
 
-`web/index.html` is a complete client-side demo — paste a document, see the findings
-highlighted inline. `web/standalone.html` is the same page with the engine inlined, a
-single file you can open from disk or host anywhere. Nothing is uploaded.
+`web/index.html` is a complete client-side demo — paste a document and every finding comes
+back as a correction slip with the excerpt, the claim and the arithmetic.
+`web/standalone.html` is the same page with the engine inlined: a single file you can open
+from disk or host anywhere. Nothing is uploaded. Both are generated from `web/page.html`
+by `npm run build:web`.
 
 ### As an HTTP API
 
