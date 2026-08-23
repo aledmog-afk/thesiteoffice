@@ -94,9 +94,20 @@ precision:  100.0%     recall: 100.0%     F1: 100.0%
 ```
 
 **False positives on real text** — the number that actually matters for a linter. Run over
-**5,897 documents / 22 MB / 90,579 quantities** of real prose (the Reuters-21578 newswire
-corpus, the Brown corpus of general American English, and Project Gutenberg literary
-prose), numlint raised **two** findings in total:
+**6,503 documents / 31 MB / 110,747 quantities** of real published prose, numlint raised
+**two** findings in total:
+
+| corpus | what it is | documents | quantities | findings |
+| --- | --- | ---: | ---: | ---: |
+| Reuters-21578 | 1987 financial newswire | 4,802 | 45,586 | **2** |
+| Gutenberg | literary prose | 659 | 31,125 | 0 |
+| Brown | 1961 general American English | 500 | 12,939 | 0 |
+| ABC news | 2000s broadcast news | 225 | 10,007 | 0 |
+| webtext | 2000s web writing | 99 | 6,601 | 0 |
+| State of the Union | political speech, 1945–2006 | 145 | 4,189 | 0 |
+| Inaugural addresses | political speech, 1789–2009 | 73 | 300 | 0 |
+
+The two findings:
 
 ```
 90 km (50 miles) east of Quito     — 90 km is 55.92 miles
@@ -106,8 +117,17 @@ prose), numlint raised **two** findings in total:
 Both are genuine errors in the source: Reuters correspondents converting kilometres to
 miles with a factor of 0.6 instead of 0.621. They have sat there uncorrected since 1987.
 
-That is a false-positive rate of zero across 90,000 quantities, and it is the property the
-whole design is bent towards — a linter that cries wolf gets switched off.
+That is a false-positive rate of zero across 110,000 quantities, and it is the property the
+whole design is bent towards — a linter that cries wolf gets switched off. Reproduce it
+with `bash eval/fetch-corpus.sh` (it downloads the corpora from the NLTK data mirror).
+
+Getting there took real work. Early versions were far noisier, and every rule below was
+narrowed by what the corpus run showed it actually did to real text — a cross-document
+restatement check produced 927 false positives on 5,302 documents and now fires only on
+the unambiguous scale-slip; a percentage-sum check had to learn that "50 percent richer,
+50 percent better off, 50 percent happier" is rhetoric rather than a breakdown; a
+conversion check had to learn that "4 minutes, 7 seconds" is one duration and not a
+restatement of another.
 
 **Speed** — about 5 MB of prose per second, single-threaded, no warm-up.
 
@@ -183,10 +203,7 @@ curl -s https://your-worker/lint -d '{"text":"The bypass runs 5 miles (8.5 km)."
 
 - **Zero runtime dependencies.** Runs in Node, the browser, Workers, Deno and Bun.
 - **Precision over recall, everywhere.** Every rule has an escape hatch for constructions
-  it cannot parse confidently, and takes it. Several rules that fired plausibly in
-  development were cut or narrowed after the corpus run showed what they actually did to
-  real text — the first cross-document restatement check produced 927 false positives on
-  5,302 documents and now only fires on the unambiguous scale-slip case.
+  it cannot parse confidently, and takes it.
 - **The tolerance model is the product.** Rounding slack derives from how the author wrote
   the number, not from a fudge factor. `--slack N` widens every tolerance if you want a
   quieter run.
@@ -207,7 +224,8 @@ mcp/           the MCP server
 worker/        the HTTP API
 web/           the browser demo
 eval/          the benchmark, the scorer, and the corpus runner
-test/          38 tests: extraction, units, every rule, the API, the CLI
+test/          42 tests: extraction, units, every rule, the API, the CLI, and a
+               fuzz suite that throws 5,500 random documents at the parser
 ```
 
 ```bash

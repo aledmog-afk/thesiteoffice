@@ -40,7 +40,8 @@ export const percentChange: Rule = {
       if (a.sentence !== b.sentence) continue;
       const link = ctx.text.slice(a.span.end, b.span.start);
       if (!/^[\s ]*(?:[a-z][\w'-]*[\s ]+){0,2}to[\s ]+(?:[a-z][\w'-]*[\s ]+){0,2}$/i.test(link)) continue;
-      const lead = ctx.text.slice(Math.max(0, a.span.start - 60), a.span.start);
+      const sentenceStart = ctx.sentences[a.sentence]?.start ?? 0;
+      const lead = ctx.text.slice(Math.max(sentenceStart, a.span.start - 60), a.span.start);
       if (!/\bfrom[\s ]*$/i.test(lead.replace(/[$€£¥₹\s]*$/, ' '))) continue;
       if (a.value === 0) continue;
       if (!compatible(a, b)) continue;

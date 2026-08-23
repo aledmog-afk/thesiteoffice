@@ -42,6 +42,9 @@ export const unitConversion: Rule = {
       // "(14 meters is slightly less than 46 feet)" is a sentence, not a conversion:
       // a real parenthetical conversion closes right after the value
       if (parenthetical && !/^[^)\]]{0,12}[)\]]/.test(ctx.text.slice(b.span.end))) continue;
+      // "4 minutes, 7 seconds" is a single duration, not a conversion
+      if (sameDimension(a.unit.def.dim, b.unit.def.dim) && b.unit.def.factor < a.unit.def.factor &&
+          /^[\s,]*$/.test(between)) continue;
       const same = sameDimension(a.unit.def.dim, b.unit.def.dim);
       const recip = reciprocalDimension(a.unit.def.dim, b.unit.def.dim);
       if (!same && !recip) continue;

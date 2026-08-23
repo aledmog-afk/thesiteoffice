@@ -19,6 +19,9 @@ function listSeparated(between: string): boolean {
   if (/\b(?:of|per|out of|from|to|than|times|versus|vs\.?|between|compared)\b/i.test(between)) return false;
   return true;
 }
+const BREAKDOWN =
+  /\b(?:of (?:those|them|respondents|voters|adults|people|households|firms|companies|customers|users|staff|students|patients)|respondents|surveyed|polled|share[sd]?\b|split|breakdown|support(?:ed)?|backed|chose|selected|preferred|responded|reported|answered|said|voted|market share|accounted for|made up|comprised|consisted)\b/i;
+
 const MULTISELECT =
   /\b(?:more than one|multiple (?:answers|responses|options)|select all|choose all|check all|not (?:add|sum) to 100|do not sum|respondents could)\b/i;
 
@@ -135,6 +138,12 @@ export const percentSum: Rule = {
       const paraText = ctx.sentences.filter((s) => s.para === para).map((s) => s.text).join(' ');
       if (MULTISELECT.test(paraText)) continue;
       if (run.some((q) => q.hedge === 'over' || q.hedge === 'range')) continue;
+      // rhetoric repeats a figure ("50 percent richer, 50 percent happier"); a
+      // breakdown does not
+      if (new Set(run.map((q) => q.value)).size < 2) continue;
+      // and a breakdown says what it is a breakdown of
+      const isList = ctx.sentences[start.sentence]?.listItem === true || /\|/.test(ctx.sentences[start.sentence]?.text ?? '');
+      if (!isList && !BREAKDOWN.test(paraText)) continue;
       const total = sumInterval(ctx, run);
       if (total.lo <= 100) continue;
       const point = run.reduce((a, p) => a + p.value, 0);

@@ -328,6 +328,30 @@ function acceptUnit(surface: string, text: string, numStart: number, unitStart: 
   }
 }
 
+/**
+ * Conventional compound measures. "4 minutes, 7 seconds" is one duration;
+ * "5 miles, 8 km" is a conversion. Only these pairs combine.
+ */
+const COMPOUND_PAIRS: Record<string, string[]> = {
+  hour: ['minute', 'second'],
+  minute: ['second'],
+  day: ['hour', 'minute'],
+  week: ['day'],
+  year: ['month', 'week', 'day'],
+  month: ['day'],
+  foot: ['inch', 'inch-abbr'],
+  yard: ['foot', 'inch', 'inch-abbr'],
+  mile: ['yard', 'foot'],
+  metre: ['centimetre', 'millimetre'],
+  kilometre: ['metre'],
+  pound: ['ounce'],
+  stone: ['pound'],
+  kilogram: ['gram'],
+  tonne: ['kilogram'],
+  litre: ['millilitre'],
+  'us-gallon': ['us-quart', 'us-pint', 'us-fluid-ounce'],
+};
+
 /** "6 ft 2 in", "2 hours 30 minutes" -> one quantity. */
 function mergeCompounds(text: string, qs: Quantity[]): Quantity[] {
   const out: Quantity[] = [];
@@ -338,7 +362,8 @@ function mergeCompounds(text: string, qs: Quantity[]): Quantity[] {
       b && a.unit && b.unit && a.kind === 'measure' && b.kind === 'measure' &&
       sameDimension(a.unit.def.dim, b.unit.def.dim) &&
       b.unit.def.factor < a.unit.def.factor &&
-      /^[\s\u00a0-]{0,3}(?:and[\s\u00a0]+)?$/.test(text.slice(a.span.end, b.span.start))
+      (COMPOUND_PAIRS[a.unit.def.id] ?? []).includes(b.unit.def.id) &&
+      /^[\s,  -]{0,3}(?:and[\s  ]+)?$/.test(text.slice(a.span.end, b.span.start))
     ) {
       const conv = convert(b.value, b.unit.def, a.unit.def) ?? 0;
       const convQ = (b.quantum * b.unit.def.factor) / a.unit.def.factor;

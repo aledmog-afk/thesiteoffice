@@ -86,9 +86,12 @@ export const dateSpan: Rule = {
 
       // an unrelated duration elsewhere in the sentence is not this span's length
       const NEAR = 28;
+      const tightlyJoined = /^[\s]*(?:to|and|[–—-]|until|through)[\s]*$/i.test(between);
       const dur =
         findDuration(ctx, qs, i + 2, Math.min(sentence.end, y2.span.end + NEAR), y2) ??
-        findDurationBefore(ctx, qs, i - 1, Math.max(sentence.start, y1.span.start - NEAR), y1);
+        (tightlyJoined
+          ? findDurationBefore(ctx, qs, i - 1, Math.max(sentence.start, y1.span.start - NEAR), y1)
+          : undefined);
       if (!dur) continue;
       const years = dur.years;
       // both the exclusive and inclusive readings are defensible
@@ -115,6 +118,7 @@ function findDuration(ctx: RuleContext, qs: Quantity[], from: number, limit: num
     if (q.span.start > limit) return undefined;
     if (q.sentence !== anchor.sentence) return undefined;
     if (q.unit && (q.unit.def.id === 'year' || q.unit.def.id === 'decade')) {
+      if (RELATIVE_TIME.test(ctx.text.slice(q.span.end, q.span.end + 12))) return undefined;
       const years = q.unit.def.id === 'decade' ? q.value * 10 : q.value;
       return { q, years, tolerance: q.quantum + (q.hedge === 'about' ? Math.abs(years) * 0.05 : 0) };
     }
@@ -122,12 +126,16 @@ function findDuration(ctx: RuleContext, qs: Quantity[], from: number, limit: num
   return undefined;
 }
 
+/** "six years ago" measures a distance from now, not the length of a span. */
+const RELATIVE_TIME = /^[\s]*(?:ago|earlier|later|before|after|since|old|hence|previously)\b/i;
+
 function findDurationBefore(ctx: RuleContext, qs: Quantity[], from: number, limit: number, anchor: Quantity) {
   for (let j = from; j >= 0; j--) {
     const q = qs[j]!;
     if (q.span.end < limit) return undefined;
     if (q.sentence !== anchor.sentence) return undefined;
     if (q.unit && (q.unit.def.id === 'year' || q.unit.def.id === 'decade')) {
+      if (RELATIVE_TIME.test(ctx.text.slice(q.span.end, q.span.end + 12))) return undefined;
       const years = q.unit.def.id === 'decade' ? q.value * 10 : q.value;
       return { q, years, tolerance: q.quantum + (q.hedge === 'about' ? Math.abs(years) * 0.05 : 0) };
     }
