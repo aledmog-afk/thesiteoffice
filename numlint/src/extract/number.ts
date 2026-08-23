@@ -105,6 +105,7 @@ export function parseSpelled(words: string[], i: number): { value: number; used:
   let total = 0;
   let current = 0;
   let used = 0;
+  let lastNumeric = -1;
   let any = false;
   let sawScale = false;
   let k = i;
@@ -134,6 +135,7 @@ export function parseSpelled(words: string[], i: number): { value: number; used:
       total = 0;
       current = numerator * localFraction;
       used = k - i + 1;
+      lastNumeric = used;
       any = true;
       k++;
       break;
@@ -150,9 +152,11 @@ export function parseSpelled(words: string[], i: number): { value: number; used:
     }
     any = true;
     used = k - i + 1;
+    if (localAdd !== 0 || localScale !== undefined || /zero/i.test(w)) lastNumeric = used;
     k++;
   }
   if (!any) return undefined;
+  if (lastNumeric > 0) used = lastNumeric;
   const value = total + current;
   if (value === 0 && !/zero/i.test(words[i] ?? '')) return undefined;
   void sawScale;
@@ -238,7 +242,7 @@ export function scanNumbers(text: string, opts: ScanOptions): NumLiteral[] {
   }
 
   // --- spelled numbers ---
-  const wordRe = /[A-Za-z][A-Za-z-]*/g;
+  const wordRe = /[A-Za-z]+/g;
   const tokens: Array<{ w: string; start: number; end: number }> = [];
   while ((m = wordRe.exec(text))) tokens.push({ w: m[0], start: m.index, end: m.index + m[0].length });
   for (let i = 0; i < tokens.length; i++) {

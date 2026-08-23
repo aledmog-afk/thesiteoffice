@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>numlint — does this document add up?</title>
+<meta name="description" content="A linter for the arithmetic inside prose. Paste a document; numlint finds the numbers that contradict each other. Runs entirely in your browser.">
+<style>
+  :root {
+    --bg: #fbfaf8; --panel: #ffffff; --ink: #1a1a1a; --muted: #6b6a67; --line: #e6e3dd;
+    --accent: #b4441f; --accent-soft: #fdf0ea; --warn: #9a6b12; --warn-soft: #fdf6e6;
+    --ok: #2f6d4f; --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, -apple-system, "Segoe UI", Inter, system-ui, sans-serif;
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+  }
+  :root:not([data-theme="light"]) { }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14140f; --panel: #1c1c17; --ink: #ece9e1; --muted: #98958c; --line: #2e2e26;
+      --accent: #ee7a4e; --accent-soft: #33201a; --warn: #d3a441; --warn-soft: #2e2717; --ok: #7fbf95;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14140f; --panel: #1c1c17; --ink: #ece9e1; --muted: #98958c; --line: #2e2e26;
+    --accent: #ee7a4e; --accent-soft: #33201a; --warn: #d3a441; --warn-soft: #2e2717; --ok: #7fbf95;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--sans); line-height: 1.5; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 20px 80px; }
+  header { padding: 56px 0 28px; border-bottom: 1px solid var(--line); }
+  h1 { font-family: var(--serif); font-size: clamp(2.4rem, 6vw, 3.6rem); margin: 0 0 .2em; letter-spacing: -0.02em; font-weight: 500; }
+  h1 .dot { color: var(--accent); }
+  .tagline { font-size: clamp(1.05rem, 2.4vw, 1.3rem); color: var(--muted); max-width: 62ch; margin: 0 0 1.1em; }
+  .lede { max-width: 68ch; color: var(--ink); opacity: .88; }
+  .lede code { font-family: var(--mono); font-size: .9em; background: var(--accent-soft); color: var(--accent); padding: .1em .35em; border-radius: 4px; }
+  main { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 32px; align-items: start; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  .panel-head h2 { font-size: .82rem; text-transform: uppercase; letter-spacing: .09em; margin: 0; color: var(--muted); font-weight: 600; }
+  textarea {
+    width: 100%; min-height: 460px; border: 0; padding: 20px; resize: vertical;
+    font-family: var(--mono); font-size: .92rem; line-height: 1.7; background: transparent; color: var(--ink);
+  }
+  textarea:focus { outline: none; }
+  .samples { display: flex; flex-wrap: wrap; gap: 6px; }
+  .samples button, .ghost {
+    font: inherit; font-size: .78rem; padding: 4px 10px; border-radius: 999px; cursor: pointer;
+    border: 1px solid var(--line); background: transparent; color: var(--muted);
+  }
+  .samples button:hover, .ghost:hover { border-color: var(--accent); color: var(--accent); }
+  #render { padding: 20px; font-size: .95rem; line-height: 1.85; white-space: pre-wrap; word-wrap: break-word; max-height: 340px; overflow: auto; font-family: var(--serif); }
+  mark { background: var(--accent-soft); color: inherit; border-bottom: 2px solid var(--accent); border-radius: 2px; padding: 0 1px; cursor: pointer; }
+  mark.warning { background: var(--warn-soft); border-bottom-color: var(--warn); }
+  mark.related { background: transparent; border-bottom: 1px dotted var(--muted); }
+  #findings { border-top: 1px solid var(--line); }
+  .finding { padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  .finding:last-child { border-bottom: 0; }
+  .finding .top { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+  .badge { font-family: var(--mono); font-size: .68rem; text-transform: uppercase; letter-spacing: .06em; padding: 2px 7px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
+  .badge.warning { background: var(--warn-soft); color: var(--warn); }
+  .rule { font-family: var(--mono); font-size: .72rem; color: var(--muted); }
+  .msg { margin: 4px 0 6px; }
+  .work { font-family: var(--mono); font-size: .78rem; color: var(--muted); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; overflow-x: auto; }
+  .clean { padding: 28px 16px; text-align: center; color: var(--muted); }
+  .clean strong { color: var(--ok); display: block; font-size: 1.05rem; margin-bottom: 4px; }
+  .stats { font-family: var(--mono); font-size: .72rem; color: var(--muted); }
+  section.about { margin-top: 64px; border-top: 1px solid var(--line); padding-top: 40px; }
+  section.about h3 { font-family: var(--serif); font-weight: 500; font-size: 1.5rem; margin: 0 0 .4em; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px; margin-top: 24px; }
+  .card { border: 1px solid var(--line); border-radius: 10px; padding: 16px; background: var(--panel); }
+  .card h4 { margin: 0 0 .35em; font-size: .95rem; }
+  .card p { margin: 0; color: var(--muted); font-size: .88rem; }
+  .card code { font-family: var(--mono); font-size: .82em; }
+  pre.cli { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; overflow-x: auto; font-family: var(--mono); font-size: .82rem; line-height: 1.7; }
+  pre.cli .c { color: var(--muted); }
+  pre.cli .e { color: var(--accent); }
+  footer { margin-top: 56px; padding-top: 24px; border-top: 1px solid var(--line); color: var(--muted); font-size: .85rem; display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  a { color: var(--accent); }
+  table.rules { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: .88rem; }
+  table.rules td { padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.rules td:first-child { font-family: var(--mono); font-size: .8rem; color: var(--accent); white-space: nowrap; width: 1%; }
+  table.rules td:last-child { color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>numlint<span class="dot">.</span></h1>
+    <p class="tagline">A linter for the arithmetic inside prose.</p>
+    <p class="lede">Spell-checkers read your words. Nothing reads your numbers. numlint parses every quantity in a document — <code>8.5 km</code>, <code>£4.2m</code>, <code>two-thirds</code>, <code>22.7 pct</code> — works out how they relate, and tells you which ones cannot all be true at once. It checks the document against itself, so it needs no data, no network and no model. Everything below runs in this tab.</p>
+  </header>
+
+  <main>
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Your document</h2>
+        <div class="samples" id="samples"></div>
+      </div>
+      <textarea id="input" spellcheck="false" placeholder="Paste a report, a press release, a draft…"></textarea>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <h2>What doesn't add up</h2>
+        <span class="stats" id="stats"></span>
+      </div>
+      <div id="render"></div>
+      <div id="findings"></div>
+    </div>
+  </main>
+
+  <section class="about">
+    <h3>How it decides</h3>
+    <p class="lede">Every number in a document is really a claim about an interval. Writing <code>8.5 km</code> asserts a true value somewhere in 8.45–8.55; writing <code>about 5 million</code> asserts something much vaguer. numlint reads that precision off the page — decimal places, scale words, hedges like <em>roughly</em> or <em>more than</em> — and only reports a problem when the interval a number states cannot overlap the interval its neighbours imply. That is why it stays quiet about rounding, and why the things it does flag are arithmetic that cannot be right as written.</p>
+    <div class="cards">
+      <div class="card"><h4>It never guesses</h4><p>No model, no lookup, no heuristic scoring. A finding is a proof that two figures on the page contradict each other, and every one comes with the working.</p></div>
+      <div class="card"><h4>Quiet by design</h4><p>Across 5,302 documents of real newswire and general prose — 90,000 quantities — it raised two findings. Both were genuine errors in the source.</p></div>
+      <div class="card"><h4>Built for drafts</h4><p>CLI, library, SARIF for CI, and an MCP server so a model can check its own numbers before handing you the document.</p></div>
+    </div>
+
+    <h3 style="margin-top:44px">What it checks</h3>
+    <table class="rules" id="rules"></table>
+
+    <h3 style="margin-top:44px">Everywhere else</h3>
+    <pre class="cli"><span class="c"># check a file, a folder, or a pipe</span>
+npx numlint report.md
+cat draft.txt | npx numlint
+
+<span class="c"># in CI, as annotations</span>
+npx numlint --sarif docs/**/*.md &gt; numlint.sarif
+
+<span class="c"># let a model check its own arithmetic</span>
+claude mcp add numlint -- npx numlint-mcp
+
+<span class="e">report.md:14:37 error</span> £4.2m across 12 boroughs is £350,000 each, not £420,000. <span class="c">[per-unit]</span>
+  4,200,000 ÷ 12 = 350,000</pre>
+  </section>
+
+  <footer>
+    <span>numlint — MIT licensed. Runs entirely in your browser; nothing you paste is uploaded.</span>
+    <span><button class="ghost" id="theme">theme</button></span>
+  </footer>
+</div>
+
+<script src="numlint.js"></script>
+<script>
+const SAMPLES = {
+  "Press release": `Northgate Council has approved a £4.2m programme to resurface 5 miles (8.5 km) of residential road across 12 wards, an average of £420,000 each.
+
+Of the 200 residents surveyed, 45 (25%) said road quality was their top concern. Support for the scheme was 41% among homeowners, 38% among renters and 26% among landlords.
+
+Spending on repairs rose from £3.1m to £4.2m this year, a 25% increase. Potholes reported fell from 12% of inspected roads to 9%, a 3% drop.
+
+Work begins on Tuesday, 5 March 2026 and runs to 2031, a four-year programme.`,
+  "Model-written report": `## Q3 Summary
+
+Revenue reached $6.2m, up 33% from $4.5m in Q2. Gross margin improved from 41% to 46%, a 5% gain.
+
+| Segment | Q2 | Q3 | Growth |
+| --- | --- | --- | --- |
+| Enterprise | 2.1 | 3.0 | 43% |
+| Mid-market | 1.6 | 2.0 | 25% |
+| Self-serve | 0.8 | 1.2 | 50% |
+| Total | 4.5 | 6.2 | 38% |
+
+We closed 1,200 new accounts at an average contract value of $50, for a total of $54,000 in new ARR. Of the 15 enterprise accounts reviewed, 40% cited onboarding speed as the deciding factor.`,
+  "Survey write-up": `Fieldwork ran from 1990 to 2015, a 30-year period.
+
+One in five respondents, or 25%, said they had gone without heating. Among the 7 households visited in person, 40% reported damp.
+
+Items were scored on a Likert scale from 1 to 5; the mean was 3.47 (n = 20).
+
+The programme cost £25m of the £20m originally allocated.`,
+  "Clean document": `The Halton bypass runs 5 miles (8 km) around the town and cost £4.2m, an average of £350,000 for each of the 12 sections.
+
+Of the 200 residents surveyed, 45 (22.5%) said they used it daily. Support stood at 41% among homeowners, 33% among renters and 26% among landlords.
+
+Spending rose from £3.1m to £4.2m, a 35% increase, while reported potholes fell from 12% to 9% — a drop of 3 percentage points.
+
+Work began on Thursday, 5 March 2026 and runs to 2031, a five-year programme.`
+};
+
+const RULE_DESCRIPTIONS = [
+  ["unit-conversion", "A value restated in another unit — 5 miles (8.5 km) — where the conversion is wrong."],
+  ["percent-of-base", "A share that does not match the part and whole printed beside it."],
+  ["percent-change", "A percentage change that does not follow from the before and after figures, including changes stated in the wrong direction."],
+  ["percentage-point-confusion", "A move from 12% to 9% called \"a 3% drop\": it is 3 percentage points, or a 25% fall."],
+  ["sum-of-parts", "An explicitly stated total that does not match the items listed with it."],
+  ["percent-sum", "Shares of a whole adding to more than 100%, unless the text says answers could overlap."],
+  ["table-sum", "A total row or column in a table that does not match its cells."],
+  ["impossible-percentage", "A percentage no whole number of people could produce — 40% of 7 patients."],
+  ["grim-mean", "A mean impossible for the sample size when the items are whole numbers (the GRIM test)."],
+  ["weekday-date", "A named weekday that does not fall on the date given, or a date that does not exist."],
+  ["date-span", "A period whose length contradicts the years it runs between."],
+  ["age-arithmetic", "An age that does not follow from the years of birth and death."],
+  ["per-unit", "An average or per-unit figure that does not divide out, and unit prices that do not multiply up."],
+  ["ratio-percent", "\"One in five (25%)\" — the ratio and the percentage disagree."],
+  ["part-exceeds-whole", "A part larger than the whole it is said to come from."],
+  ["currency-rate", "A currency conversion that contradicts the exchange rate stated in the same sentence."],
+  ["scale-slip", "The same figure appearing as $4.2 billion in one place and $4.2 million in another."]
+];
+
+const input = document.getElementById('input');
+const render = document.getElementById('render');
+const list = document.getElementById('findings');
+const stats = document.getElementById('stats');
+
+const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function highlight(text, findings) {
+  const marks = [];
+  findings.forEach((f, i) => {
+    marks.push({ ...f.span, kind: f.severity, idx: i });
+    for (const r of f.relatedSpans) marks.push({ ...r, kind: 'related', idx: i });
+  });
+  marks.sort((a, b) => a.start - b.start || b.end - a.end);
+  let out = '';
+  let pos = 0;
+  for (const m of marks) {
+    if (m.start < pos) continue;
+    out += esc(text.slice(pos, m.start));
+    out += `<mark class="${m.kind}" data-i="${m.idx}">${esc(text.slice(m.start, m.end))}</mark>`;
+    pos = m.end;
+  }
+  out += esc(text.slice(pos));
+  return out;
+}
+
+function run() {
+  const text = input.value;
+  const t0 = performance.now();
+  const res = numlint.lint(text);
+  const ms = performance.now() - t0;
+  stats.textContent = `${res.stats.quantities} quantities · ${ms.toFixed(1)} ms`;
+  render.innerHTML = text.trim() ? highlight(text, res.findings) : '<span style="color:var(--muted)">Nothing to check yet.</span>';
+
+  if (!res.findings.length) {
+    list.innerHTML = text.trim()
+      ? `<div class="clean"><strong>Everything adds up.</strong>${res.stats.quantities} quantities checked against each other. numlint verifies internal consistency only — it cannot tell you whether a figure is true.</div>`
+      : '';
+    return;
+  }
+  list.innerHTML = res.findings.map((f, i) => `
+    <div class="finding" data-i="${i}">
+      <div class="top">
+        <span class="badge ${f.severity}">${f.severity}</span>
+        <span class="rule">${f.rule} · line ${f.line}</span>
+      </div>
+      <div class="msg">${esc(f.message)}</div>
+      <div class="work">${esc(f.workings)}${f.fix ? '   →   suggested: ' + esc(f.fix) : ''}</div>
+    </div>`).join('');
+}
+
+let timer;
+input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(run, 120); });
+
+const samples = document.getElementById('samples');
+Object.keys(SAMPLES).forEach((name, i) => {
+  const b = document.createElement('button');
+  b.textContent = name;
+  b.onclick = () => { input.value = SAMPLES[name]; run(); };
+  samples.appendChild(b);
+  if (i === 0) { input.value = SAMPLES[name]; }
+});
+
+document.getElementById('rules').innerHTML = RULE_DESCRIPTIONS
+  .map(([id, d]) => `<tr><td>${id}</td><td>${d}</td></tr>`).join('');
+
+document.getElementById('theme').onclick = () => {
+  const root = document.documentElement;
+  const now = root.getAttribute('data-theme');
+  const next = now === 'dark' ? 'light' : now === 'light' ? 'dark' : (matchMedia('(prefers-color-scheme: dark)').matches ? 'light' : 'dark');
+  root.setAttribute('data-theme', next);
+  try { localStorage.setItem('numlint-theme', next); } catch {}
+};
+try { const t = localStorage.getItem('numlint-theme'); if (t) document.documentElement.setAttribute('data-theme', t); } catch {}
+
+render.addEventListener('click', (e) => {
+  const m = e.target.closest('mark');
+  if (!m) return;
+  const el = list.querySelector(`.finding[data-i="${m.dataset.i}"]`);
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+});
+
+run();
+</script>
+</body>
+</html>

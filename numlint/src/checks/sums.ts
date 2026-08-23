@@ -219,6 +219,9 @@ export const tableSum: Rule = {
           }
           if (parts.length < 2) continue;
           if (!parts.every((p) => comparable(p, totalQ))) continue;
+          // growth rates, margins and other per-row percentages do not add up to
+          // anything; only a column of shares of one whole does
+          if (totalQ.kind === 'percent' && (totalQ.value < 95 || totalQ.value > 105)) continue;
           const expected = sumInterval(ctx, parts);
           const stated = toInterval(totalQ, ctx.options.slack);
           if (overlaps(stated, expected)) continue;
@@ -253,6 +256,7 @@ export const tableSum: Rule = {
             if (q) parts.push(q);
           }
           if (parts.length < 2 || !parts.every((p) => comparable(p, totalQ))) continue;
+          if (totalQ.kind === 'percent' && (totalQ.value < 95 || totalQ.value > 105)) continue;
           const expected = sumInterval(ctx, parts);
           const stated = toInterval(totalQ, ctx.options.slack);
           if (overlaps(stated, expected)) continue;

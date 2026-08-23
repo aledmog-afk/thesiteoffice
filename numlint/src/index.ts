@@ -33,7 +33,7 @@ export const RULES: Rule[] = [
 /** rule ids a rule can emit beyond its own id */
 const EMITS: Record<string, string[]> = {
   'percent-change': ['percent-change', 'percentage-point-confusion', 'multiplier-mismatch'],
-  restatement: ['restatement', 'scale-slip'],
+  restatement: ['scale-slip'],
 };
 
 export function ruleIds(): string[] {

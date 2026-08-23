@@ -18,6 +18,7 @@ export function looksLikeYear(q: Quantity): boolean {
 
 function comparable(part: Quantity, whole: Quantity): boolean {
   if (part.kind === 'percent' || whole.kind === 'percent') return false;
+  if (part.hedge === 'range' || whole.hedge === 'range') return false;
   if (part.currency || whole.currency) return part.currency === whole.currency;
   if (part.unit || whole.unit) return part.unit?.def.id === whole.unit?.def.id;
   return true;
@@ -58,6 +59,44 @@ export const percentOfBase: Rule = {
         rule: 'percent-of-base',
         severity: severityFor(stated, expected),
         confidence: confidenceFor(0.9, stated, expected),
+        message: `${part.span.text} of ${whole.span.text} is ${fmt(point)}%, not ${pct.span.text}.`,
+        stated: pct.span.text,
+        expected: `${fmt(point)}%`,
+        workings: `${fmt(part.value)} ÷ ${fmt(whole.value)} = ${fmt(point / 100, { sig: 4 })} → ${fmt(point)}%`,
+        span: pct.span,
+        relatedSpans: [part.span, whole.span],
+        fix: `${fmt(round1(point))}%`,
+      });
+    }
+
+    // whole first: "Of the 200 residents, 45 (25%) said yes"
+    for (let i = 0; i < qs.length - 2; i++) {
+      const whole = qs[i]!;
+      const part = qs[i + 1]!;
+      const pct = qs[i + 2]!;
+      if (whole.sentence !== part.sentence || part.sentence !== pct.sentence) continue;
+      if (pct.kind !== 'percent' || part.kind === 'percent' || whole.kind === 'percent') continue;
+      if (whole.value <= 0 || looksLikeYear(whole) || looksLikeYear(part)) continue;
+      if (whole.attributive || part.attributive) continue;
+      if (!comparable(part, whole)) continue;
+      const lead = ctx.text.slice(Math.max(0, whole.span.start - 20), whole.span.start);
+      if (!/\b(?:of|out of|among|amongst)\s+(?:the\s+)?$/i.test(lead)) continue;
+      const between = ctx.text.slice(whole.span.end, part.span.start);
+      if (between.length > 44 || /[;:.]|\bbut\b|\bwhile\b/.test(between)) continue;
+      const gap = ctx.text.slice(part.span.end, pct.span.start);
+      if (gap.length > 30 || !SOFT_CONNECTOR.test(stripNoun(gap))) continue;
+
+      const ratio = div(toInterval(part, ctx.options.slack), toInterval(whole, ctx.options.slack));
+      if (!ratio) continue;
+      const expected = scale(ratio, 100);
+      const stated = toInterval(pct, ctx.options.slack);
+      if (overlaps(stated, expected)) continue;
+      const point = (part.value / whole.value) * 100;
+      if (point > 100.5 && pct.value <= 100) continue;
+      ctx.report({
+        rule: 'percent-of-base',
+        severity: severityFor(stated, expected),
+        confidence: confidenceFor(0.89, stated, expected),
         message: `${part.span.text} of ${whole.span.text} is ${fmt(point)}%, not ${pct.span.text}.`,
         stated: pct.span.text,
         expected: `${fmt(point)}%`,

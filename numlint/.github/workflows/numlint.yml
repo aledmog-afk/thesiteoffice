@@ -1,0 +1,22 @@
+# Drop this into any repository to have numlint check the numbers in your
+# documentation on every pull request. Findings appear as inline annotations.
+name: numlint
+on:
+  pull_request:
+    paths: ['**/*.md', '**/*.txt']
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - name: Check the arithmetic in changed documents
+        run: npx numlint --sarif $(git diff --name-only --diff-filter=d origin/${{ github.base_ref }}...HEAD -- '*.md' '*.txt' | tr '\n' ' ') > numlint.sarif || true
+      - uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: numlint.sarif
+          category: numlint

@@ -76,7 +76,7 @@ export const dateSpan: Rule = {
       if (y1.kind !== 'year' || y2.kind !== 'year') continue;
       if (y1.sentence !== y2.sentence) continue;
       const between = ctx.text.slice(y1.span.end, y2.span.start);
-      if (!/^[\s ]*(?:to|and|[–—-]|until|through)[\s ]*$/i.test(between)) continue;
+      if (!/^[\s  ]*(?:[a-z][\w'-]*[\s  ]+){0,3}(?:to|and|[–—-]|until|through)[\s  ]*$/i.test(between)) continue;
       const diff = y2.value - y1.value;
       if (diff <= 0 || diff > 400) continue;
       const sentence = ctx.sentences[y1.sentence];
@@ -97,7 +97,7 @@ export const dateSpan: Rule = {
         rule: 'date-span',
         severity: 'error',
         confidence: 0.87,
-        message: `${y1.span.text} to ${y2.span.text} is ${fmt(diff)} years, not ${dur.q.span.text}.`,
+        message: `${y1.span.text} to ${y2.span.text} is ${fmt(diff)} years, not ${fmt(dur.years)}.`,
         stated: dur.q.span.text,
         expected: `${fmt(diff)} years`,
         workings: `${fmt(y2.value)} − ${fmt(y1.value)} = ${fmt(diff)}`,
