@@ -31,6 +31,16 @@
 
   document.getElementById("printBtn").addEventListener("click", () => window.print());
 
+  // Browsers use document.title as the suggested filename when saving
+  // this page as a PDF, so this doubles as the download's file name —
+  // "Weekly Report - Red Dragon - 21.8.26" (day.month.2-digit-year, no
+  // leading zeros). Appending T00:00:00 avoids the date parsing through
+  // UTC and landing on the wrong day for anyone in a UTC-ahead timezone.
+  function fileDate(dateStr) {
+    const d = new Date(dateStr + "T00:00:00");
+    return `${d.getDate()}.${d.getMonth() + 1}.${String(d.getFullYear()).slice(-2)}`;
+  }
+
   const programmeLabel = { "ahead": "Ahead of programme", "on-track": "On track", "behind": "Behind programme" };
 
   function section(title, value) {
@@ -89,6 +99,7 @@
     const { data: r, error } = await supabase.from("weekly_reports").select("*, projects(*)").eq("id", reportId).single();
     if (error) { document.getElementById("doc").textContent = "Report not found."; return; }
     const project = r.projects;
+    document.title = `Weekly Report - ${project.name} - ${fileDate(r.week_ending)}`;
 
     renderHeader([
       { label: "Dashboard", href: "dashboard.html" },

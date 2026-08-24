@@ -427,7 +427,7 @@
     if (!reportId) {
       const start = mondayOf(new Date());
       const end = new Date(start);
-      end.setDate(end.getDate() + 6);
+      end.setDate(end.getDate() + 4); // Friday, matching the Mon-Fri working week the weather tracker already uses
       document.getElementById("weekStarting").value = start;
       document.getElementById("weekEnding").value = toLocalISODate(end);
       weatherTracker.setWeek(start, []);
