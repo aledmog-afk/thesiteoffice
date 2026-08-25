@@ -1,0 +1,1960 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1f3a5f">
+<title>Contents Inventory</title>
+<meta name="description" content="Catalogue household items to keep from a property, with photos, rooms and values. Exports to PDF and Excel.">
+<style>
+/* ---------- tokens (light is the base; dark overrides only) ---------- */
+:root{
+  --bg:#f4f5f7; --surface:#ffffff; --surface-2:#eef0f4;
+  --ink:#14171d; --ink-soft:#5b6070; --ink-faint:#8a90a0;
+  --rule:#dfe2e9; --rule-soft:#eaecf1;
+  --brand:#1f3a5f; --brand-ink:#ffffff; --brand-soft:#e6edf6;
+  --accent:#15703f; --accent-ink:#ffffff; --danger:#b3261e; --danger-soft:#fdecea;
+  --focus:#3b7ddd; --badge-bg:rgba(255,255,255,.18);
+  --shadow:0 1px 2px rgba(16,20,30,.06),0 4px 14px rgba(16,20,30,.07);
+  --radius:14px;
+  --tap:52px;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#12141a; --surface:#1b1e26; --surface-2:#232733;
+    --ink:#eef0f5; --ink-soft:#a8aebd; --ink-faint:#7b8296;
+    --rule:#313747; --rule-soft:#272c38;
+    --brand:#4d84c4; --brand-ink:#0d1119; --brand-soft:#1d2836;
+    --accent:#4cc38a; --accent-ink:#06180c; --danger:#f2857c; --danger-soft:#331e1c;
+    --focus:#6fa8f5; --badge-bg:rgba(0,0,0,.20);
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 14px rgba(0,0,0,.3);
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#12141a; --surface:#1b1e26; --surface-2:#232733;
+  --ink:#eef0f5; --ink-soft:#a8aebd; --ink-faint:#7b8296;
+  --rule:#313747; --rule-soft:#272c38;
+  --brand:#4d84c4; --brand-ink:#0d1119; --brand-soft:#1d2836;
+  --accent:#4cc38a; --accent-ink:#06180c; --danger:#f2857c; --danger-soft:#331e1c;
+  --focus:#6fa8f5; --badge-bg:rgba(0,0,0,.20);
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 4px 14px rgba(0,0,0,.3);
+}
+
+*,*::before,*::after{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{
+  background:var(--bg); color:var(--ink);
+  font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  -webkit-font-smoothing:antialiased; -webkit-text-size-adjust:100%;
+  overscroll-behavior-y:none;
+}
+.hidden{display:none !important;}
+.sr-only{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;}
+
+/* ---------- shell ---------- */
+.app{
+  max-width:760px; margin:0 auto; min-height:100vh; overflow-x:hidden;
+  display:flex; flex-direction:column;
+  padding-bottom:calc(78px + env(safe-area-inset-bottom));
+}
+.topbar{
+  position:sticky; top:0; z-index:40;
+  background:var(--brand); color:var(--brand-ink);
+  display:flex; align-items:center; gap:10px;
+  padding:calc(10px + env(safe-area-inset-top)) 14px 10px;
+  min-height:56px;
+}
+.topbar h1{font-size:18px;font-weight:650;margin:0;flex:1;letter-spacing:-.01em;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.badge{
+  background:var(--badge-bg); color:var(--brand-ink);
+  border-radius:999px; padding:5px 12px; font-size:13px; font-weight:600; white-space:nowrap;
+}
+.icon-btn{
+  background:rgba(255,255,255,.16); color:inherit; border:0; border-radius:10px;
+  min-width:40px; height:40px; font-size:22px; line-height:1; cursor:pointer;
+  display:flex; align-items:center; justify-content:center; padding:0 10px;
+}
+.icon-btn:active{transform:scale(.96);}
+
+main{flex:1; padding:14px; display:flex; flex-direction:column;}
+.view{display:flex; flex-direction:column; gap:14px;}
+
+/* ---------- banner / toast ---------- */
+.banner{
+  background:var(--danger-soft); color:var(--ink);
+  border:1px solid var(--danger); border-radius:10px;
+  padding:10px 12px; margin:14px 14px 0; font-size:14px;
+}
+#toast{
+  position:fixed; left:50%; bottom:calc(94px + env(safe-area-inset-bottom));
+  transform:translateX(-50%) translateY(12px);
+  background:var(--ink); color:var(--bg);
+  padding:12px 18px; border-radius:999px; font-size:14px; font-weight:550;
+  max-width:88vw; text-align:center; z-index:120;
+  opacity:0; pointer-events:none; transition:opacity .2s,transform .2s;
+}
+#toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
+
+/* ---------- cards & forms ---------- */
+.card{
+  background:var(--surface); border:1px solid var(--rule);
+  border-radius:var(--radius); padding:14px; box-shadow:var(--shadow);
+}
+.card + .card{margin-top:0;}
+.card h2{font-size:15px;font-weight:650;margin:0 0 10px;letter-spacing:.01em;}
+label{display:block; font-size:14px; font-weight:600; color:var(--ink-soft); margin:14px 0 6px;}
+.card > label:first-of-type{margin-top:0;}
+input[type=text],input[type=search],select,textarea{
+  width:100%; font:inherit; font-size:16px; color:var(--ink);
+  background:var(--surface-2); border:1px solid var(--rule);
+  border-radius:10px; padding:13px 12px; min-height:var(--tap);
+  -webkit-appearance:none; appearance:none;
+}
+textarea{min-height:88px; resize:vertical; line-height:1.45;}
+select{background-image:none;}
+input:focus,select:focus,textarea:focus{
+  outline:2px solid var(--focus); outline-offset:1px; border-color:var(--focus);
+}
+.prefix-input{display:flex; align-items:stretch; gap:0;}
+.prefix-input span{
+  display:flex; align-items:center; padding:0 14px; font-size:17px; font-weight:600;
+  background:var(--surface-2); border:1px solid var(--rule); border-right:0;
+  border-radius:10px 0 0 10px; color:var(--ink-soft);
+}
+.prefix-input input{border-radius:0 10px 10px 0;}
+.hint{font-size:13px; color:var(--ink-faint); font-weight:400;}
+.label-row{display:flex; align-items:baseline; justify-content:space-between; gap:10px; margin-bottom:8px;}
+.label-row label{margin:0;}
+
+/* ---------- buttons ---------- */
+.btn{
+  font:inherit; font-size:16px; font-weight:600; cursor:pointer;
+  border-radius:12px; border:1px solid var(--rule);
+  background:var(--surface-2); color:var(--ink);
+  min-height:var(--tap); padding:13px 16px;
+  display:inline-flex; align-items:center; justify-content:center; gap:8px;
+}
+.btn:active{transform:scale(.985);}
+.btn.big{flex:1; min-height:56px; font-size:17px;}
+.btn.primary{background:var(--brand); color:var(--brand-ink); border-color:transparent;}
+.btn.accent{background:var(--accent); color:var(--accent-ink); border-color:transparent;}
+.btn.danger{background:var(--danger-soft); color:var(--danger); border-color:var(--danger);}
+.btn[disabled]{opacity:.5; cursor:not-allowed;}
+.btn-row{display:flex; gap:10px; flex-wrap:wrap;}
+.btn-row.stack{flex-direction:column;}
+.btn-row.stack .btn{width:100%;}
+
+/* ---------- bottom nav ---------- */
+.tabbar{
+  position:fixed; left:0; right:0; bottom:0; z-index:50;
+  background:var(--surface); border-top:1px solid var(--rule);
+  display:flex; align-items:stretch; gap:8px;
+  padding:8px 14px calc(8px + env(safe-area-inset-bottom));
+  max-width:760px; margin:0 auto;
+}
+.tabbar button{
+  flex:1; font:inherit; font-size:13px; font-weight:600; cursor:pointer;
+  background:transparent; color:var(--ink-soft); border:0; border-radius:10px;
+  min-height:58px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px;
+}
+.tabbar button .ico{font-size:20px; line-height:1;}
+.tabbar button.active{color:var(--brand);}
+.tabbar button.primary-nav{
+  flex:1.5; background:var(--brand); color:var(--brand-ink);
+  font-size:16px; font-weight:650; flex-direction:row; gap:7px;
+}
+
+/* ---------- list view ---------- */
+.filters{display:flex; gap:10px; flex-wrap:wrap;}
+.filters input{flex:3 1 160px;}
+.filters select{flex:1 1 122px; min-width:0;}
+.grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(148px,1fr)); gap:12px; align-items:start;}
+.item-card{
+  background:var(--surface); border:1px solid var(--rule); border-radius:var(--radius);
+  overflow:hidden; cursor:pointer; text-align:left; padding:0; font:inherit; color:inherit;
+  display:flex; flex-direction:column; box-shadow:var(--shadow); width:100%;
+}
+.item-card:active{transform:scale(.985);}
+.thumb{
+  width:100%; aspect-ratio:4/3; object-fit:cover; display:block;
+  background:var(--surface-2);
+}
+.thumb-empty{
+  width:100%; aspect-ratio:4/3; background:var(--surface-2);
+  display:flex; align-items:center; justify-content:center;
+  color:var(--ink-faint); font-size:26px;
+}
+.item-body{padding:10px 11px 12px; display:flex; flex-direction:column; gap:3px; min-width:0;}
+.item-ref{font-size:11px; font-weight:700; letter-spacing:.06em; color:var(--brand); text-transform:uppercase;}
+.item-name{font-size:15px; font-weight:600; line-height:1.3; overflow-wrap:anywhere;}
+.item-room{font-size:13px; color:var(--ink-soft); overflow-wrap:anywhere;}
+.item-meta{font-size:12px; color:var(--ink-faint); margin-top:2px;}
+.empty{
+  text-align:center; color:var(--ink-soft); padding:44px 20px;
+  background:var(--surface); border:1px dashed var(--rule); border-radius:var(--radius);
+}
+.empty strong{display:block; font-size:17px; color:var(--ink); margin-bottom:6px;}
+
+/* ---------- photos ---------- */
+.photo-strip{display:flex; gap:10px; overflow-x:auto; padding:2px 0 8px; -webkit-overflow-scrolling:touch;}
+.photo-strip:empty{display:none;}
+.photo-chip{position:relative; flex:0 0 auto;}
+.photo-chip img{
+  width:96px; height:96px; object-fit:cover; border-radius:10px;
+  border:1px solid var(--rule); display:block; background:var(--surface-2);
+}
+.photo-chip .rm{
+  position:absolute; top:-7px; right:-7px; width:28px; height:28px; border-radius:50%;
+  background:var(--danger); color:#fff; border:2px solid var(--surface);
+  font-size:15px; line-height:1; cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0;
+}
+.no-photos{
+  border:1px dashed var(--rule); border-radius:10px; padding:18px;
+  text-align:center; color:var(--ink-faint); font-size:14px; margin-bottom:10px;
+}
+.detail-photos{display:grid; grid-template-columns:repeat(auto-fill,minmax(130px,1fr)); gap:10px;}
+.detail-photos img{
+  width:100%; aspect-ratio:1; object-fit:cover; border-radius:10px;
+  border:1px solid var(--rule); cursor:zoom-in; background:var(--surface-2);
+}
+.chips{display:flex; gap:8px; flex-wrap:wrap; margin-top:9px; min-width:0;}
+.chip{
+  font:inherit; font-size:14px; cursor:pointer; border-radius:999px;
+  border:1px solid var(--rule); background:var(--surface-2); color:var(--ink-soft);
+  padding:9px 14px; min-height:40px;
+  max-width:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.chip.on{background:var(--brand-soft); border-color:var(--brand); color:var(--brand); font-weight:600;}
+
+/* ---------- detail view ---------- */
+.detail-ref{
+  display:inline-block; font-size:12px; font-weight:700; letter-spacing:.07em;
+  background:var(--brand-soft); color:var(--brand); padding:5px 10px; border-radius:6px;
+}
+.card h2.detail-name{font-size:23px; font-weight:650; margin:10px 0 0; line-height:1.25; overflow-wrap:anywhere;}
+.kv{display:flex; gap:12px; padding:11px 0; border-top:1px solid var(--rule-soft); font-size:15px;}
+.kv:first-of-type{border-top:0;}
+.kv dt{flex:0 0 108px; color:var(--ink-soft); font-weight:600; font-size:14px; margin:0;}
+.kv dd{flex:1; margin:0; overflow-wrap:anywhere; white-space:pre-wrap;}
+dl{margin:0;}
+
+/* ---------- form actions ---------- */
+.form-actions{padding-bottom:6px;}
+
+/* ---------- modal / lightbox ---------- */
+.modal{
+  position:fixed; inset:0; z-index:200; background:rgba(8,10,15,.6);
+  display:flex; align-items:center; justify-content:center; padding:20px;
+  -webkit-backdrop-filter:blur(2px); backdrop-filter:blur(2px);
+}
+.modal-box{
+  background:var(--surface); border-radius:var(--radius); padding:20px;
+  max-width:400px; width:100%; box-shadow:0 20px 50px rgba(0,0,0,.35);
+}
+.modal-box h3{margin:0 0 8px; font-size:19px;}
+.modal-box p{margin:0 0 16px; color:var(--ink-soft); font-size:15px;}
+.lightbox{
+  position:fixed; inset:0; z-index:210; background:rgba(0,0,0,.92);
+  display:flex; align-items:center; justify-content:center; padding:16px; cursor:zoom-out;
+}
+.lightbox img{max-width:100%; max-height:100%; object-fit:contain; border-radius:6px;}
+
+/* ---------- progress ---------- */
+.progress{height:6px; background:var(--surface-2); border-radius:999px; overflow:hidden; margin-top:10px;}
+.progress > div{height:100%; background:var(--brand); width:0; transition:width .15s;}
+.stat-row{display:flex; gap:12px; flex-wrap:wrap; margin-bottom:4px;}
+.stat{flex:1 1 120px; background:var(--surface-2); border-radius:10px; padding:11px 12px;}
+.stat b{display:block; font-size:21px; font-weight:650; letter-spacing:-.01em;}
+.stat span{font-size:12.5px; color:var(--ink-soft);}
+.note{font-size:13.5px; color:var(--ink-soft); line-height:1.5; margin:10px 0 0;}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <header class="topbar">
+    <button id="backBtn" class="icon-btn hidden" aria-label="Back">&#8249;</button>
+    <h1 id="topTitle">Contents Inventory</h1>
+    <span id="countBadge" class="badge">0 items</span>
+  </header>
+
+  <div id="banner" class="banner hidden"></div>
+
+  <main>
+    <!-- ============ LIST ============ -->
+    <section id="view-list" class="view">
+      <div class="filters">
+        <input id="search" type="search" placeholder="Search items" autocomplete="off" aria-label="Search items">
+        <select id="roomFilter" aria-label="Filter by room"><option value="">All rooms</option></select>
+      </div>
+      <div id="grid" class="grid"></div>
+      <div id="empty" class="empty">
+        <strong>No items yet</strong>
+        Tap <b>Add Item</b> below to photograph and label the first thing you want to keep.
+      </div>
+    </section>
+
+    <!-- ============ ADD / EDIT ============ -->
+    <section id="view-form" class="view hidden">
+      <div class="card">
+        <div class="label-row">
+          <label id="photoLabel">Photos</label>
+          <span class="hint" id="photoHint">Front view, plus any marks or damage</span>
+        </div>
+        <div id="photoStrip" class="photo-strip"></div>
+        <div id="noPhotos" class="no-photos">No photos yet</div>
+        <div class="btn-row stack">
+          <button type="button" id="cameraBtn" class="btn big primary">&#128247; Take photo</button>
+          <button type="button" id="galleryBtn" class="btn big">&#128194; Choose from gallery</button>
+        </div>
+        <input id="cameraInput" type="file" accept="image/*" capture="environment" class="sr-only" tabindex="-1">
+        <input id="galleryInput" type="file" accept="image/*" multiple class="sr-only" tabindex="-1">
+      </div>
+
+      <div class="card">
+        <label for="fName">Item name</label>
+        <input id="fName" type="text" maxlength="140" placeholder="e.g. Oak dining table" autocomplete="off" enterkeyhint="next">
+        <label for="fRoom">Room / location</label>
+        <input id="fRoom" type="text" maxlength="60" list="roomList" placeholder="e.g. Kitchen" autocomplete="off" enterkeyhint="next">
+        <datalist id="roomList"></datalist>
+        <div id="roomChips" class="chips"></div>
+        <label for="fNotes">Description / notes</label>
+        <textarea id="fNotes" rows="3" placeholder="Condition, maker, any marks or damage worth recording"></textarea>
+        <label for="fValue">Estimated value <span class="hint">(optional)</span></label>
+        <div class="prefix-input"><span>&#163;</span><input id="fValue" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off"></div>
+      </div>
+
+      <div class="btn-row form-actions">
+        <button id="saveBtn" class="btn big accent">Save item</button>
+        <button id="cancelBtn" class="btn big">Cancel</button>
+      </div>
+    </section>
+
+    <!-- ============ DETAIL ============ -->
+    <section id="view-detail" class="view hidden">
+      <div class="card">
+        <span class="detail-ref" id="dRef">ITEM-000</span>
+        <h2 class="detail-name" id="dName"></h2>
+      </div>
+      <div class="card" id="dPhotoCard">
+        <h2>Photos</h2>
+        <div class="detail-photos" id="dPhotos"></div>
+      </div>
+      <div class="card">
+        <dl>
+          <div class="kv"><dt>Room</dt><dd id="dRoom"></dd></div>
+          <div class="kv"><dt>Value</dt><dd id="dValue"></dd></div>
+          <div class="kv"><dt>Description</dt><dd id="dNotes"></dd></div>
+          <div class="kv"><dt>Added</dt><dd id="dAdded"></dd></div>
+        </dl>
+      </div>
+      <div class="btn-row">
+        <button id="editBtn" class="btn big primary">Edit item</button>
+        <button id="deleteBtn" class="btn big danger">Delete</button>
+      </div>
+    </section>
+
+    <!-- ============ EXPORT / SETTINGS ============ -->
+    <section id="view-export" class="view hidden">
+      <div class="card">
+        <h2>Summary</h2>
+        <div class="stat-row">
+          <div class="stat"><b id="sCount">0</b><span>Items catalogued</span></div>
+          <div class="stat"><b id="sPhotos">0</b><span>Photos taken</span></div>
+          <div class="stat"><b id="sRooms">0</b><span>Rooms covered</span></div>
+          <div class="stat"><b id="sValue">&#163;0</b><span>Estimated total</span></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Export</h2>
+        <div class="btn-row stack">
+          <button id="pdfBtn" class="btn big primary">&#128196; Export PDF report</button>
+          <button id="xlsxBtn" class="btn big">&#128202; Export Excel spreadsheet</button>
+        </div>
+        <div id="exportProgress" class="progress hidden"><div></div></div>
+        <p class="note" id="exportNote">The PDF has a title page and one section per item with its photos &mdash; presentable enough to send to a solicitor. The spreadsheet has one row per item with a thumbnail embedded.</p>
+      </div>
+
+      <div class="card">
+        <h2>Data</h2>
+        <p class="note" id="storageNote" style="margin-top:0">Everything is saved on this device only. Nothing is uploaded anywhere.</p>
+        <div class="btn-row stack" style="margin-top:12px">
+          <button id="clearBtn" class="btn big danger">Clear all data</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <nav class="tabbar">
+    <button data-nav="list" class="active"><span class="ico">&#9636;</span>Items</button>
+    <button id="addBtn" class="primary-nav"><span class="ico">&#43;</span>Add Item</button>
+    <button data-nav="export"><span class="ico">&#8681;</span>Export</button>
+  </nav>
+</div>
+
+<div id="toast" role="status" aria-live="polite"></div>
+<div id="modalRoot"></div>
+
+<script>
+"use strict";
+/* =====================================================================
+   Contents Inventory — single-file app.
+   Sections: storage, helpers, state, views, photos, PDF, XLSX, export.
+   ===================================================================== */
+
+var $ = function(id){ return document.getElementById(id); };
+
+/* When this page is embedded by a host that supplies its own <head>, make
+   sure the mobile viewport is still set — without it the layout renders at
+   desktop width on a phone. No-op when the meta tag is already present. */
+(function(){
+  if(document.querySelector('meta[name="viewport"]')) return;
+  var m = document.createElement("meta");
+  m.name = "viewport";
+  m.content = "width=device-width, initial-scale=1, viewport-fit=cover";
+  (document.head || document.documentElement).appendChild(m);
+})();
+
+/* ---------------------------------------------------------------
+   1. Storage
+   Photos are large, so they live in their own object store keyed by
+   photo id; each item carries only a small cover thumbnail so the
+   list view can render without touching full-size images.
+   IndexedDB is per-origin and private to this browser. If it is
+   unavailable (private mode, blocked site data) we fall back to
+   memory and warn the user loudly rather than pretending to save.
+   --------------------------------------------------------------- */
+var DB_NAME = "contents-inventory", DB_VER = 1;
+var STORES = ["items", "photos", "meta"];
+
+var store = (function(){
+  var db = null, memory = false;
+  var mem = { items:{}, photos:{}, meta:{} };
+
+  function openDB(){
+    return new Promise(function(resolve, reject){
+      var req;
+      try { req = indexedDB.open(DB_NAME, DB_VER); }
+      catch(e){ return reject(e); }
+      var settled = false;
+      var timer = setTimeout(function(){
+        if(!settled){ settled = true; reject(new Error("timeout")); }
+      }, 6000);
+      req.onupgradeneeded = function(){
+        var d = req.result;
+        STORES.forEach(function(name){
+          if(!d.objectStoreNames.contains(name)){
+            d.createObjectStore(name, { keyPath: name === "meta" ? "k" : "id" });
+          }
+        });
+      };
+      req.onsuccess = function(){
+        if(settled) return;
+        settled = true; clearTimeout(timer); resolve(req.result);
+      };
+      req.onerror = function(){
+        if(settled) return;
+        settled = true; clearTimeout(timer); reject(req.error || new Error("idb error"));
+      };
+      req.onblocked = function(){
+        if(settled) return;
+        settled = true; clearTimeout(timer); reject(new Error("blocked"));
+      };
+    });
+  }
+
+  function tx(names, mode, fn){
+    if(memory) return Promise.resolve(fn(null));
+    return new Promise(function(resolve, reject){
+      var t, result;
+      try { t = db.transaction(names, mode); }
+      catch(e){ return reject(e); }
+      t.oncomplete = function(){ resolve(result); };
+      t.onerror = function(){ reject(t.error); };
+      t.onabort = function(){ reject(t.error || new Error("aborted")); };
+      try { result = fn(t); } catch(e){ try{ t.abort(); }catch(_){} reject(e); }
+    });
+  }
+
+  function req2promise(r){
+    return new Promise(function(res, rej){
+      r.onsuccess = function(){ res(r.result); };
+      r.onerror = function(){ rej(r.error); };
+    });
+  }
+
+  return {
+    get isMemory(){ return memory; },
+
+    init: function(){
+      return openDB().then(function(d){ db = d; })
+        .catch(function(){ memory = true; });
+    },
+
+    all: function(name){
+      if(memory) return Promise.resolve(Object.keys(mem[name]).map(function(k){ return mem[name][k]; }));
+      var out;
+      return tx([name], "readonly", function(t){
+        out = req2promise(t.objectStore(name).getAll());
+      }).then(function(){ return out; });
+    },
+
+    get: function(name, key){
+      if(memory) return Promise.resolve(mem[name][key]);
+      var out;
+      return tx([name], "readonly", function(t){
+        out = req2promise(t.objectStore(name).get(key));
+      }).then(function(){ return out; });
+    },
+
+    put: function(name, values){
+      var list = Array.isArray(values) ? values : [values];
+      if(memory){
+        list.forEach(function(v){ mem[name][name === "meta" ? v.k : v.id] = v; });
+        return Promise.resolve();
+      }
+      return tx([name], "readwrite", function(t){
+        var s = t.objectStore(name);
+        list.forEach(function(v){ s.put(v); });
+      });
+    },
+
+    del: function(name, keys){
+      var list = Array.isArray(keys) ? keys : [keys];
+      if(memory){
+        list.forEach(function(k){ delete mem[name][k]; });
+        return Promise.resolve();
+      }
+      return tx([name], "readwrite", function(t){
+        var s = t.objectStore(name);
+        list.forEach(function(k){ s.delete(k); });
+      });
+    },
+
+    wipe: function(){
+      if(memory){ mem = { items:{}, photos:{}, meta:{} }; return Promise.resolve(); }
+      return tx(STORES, "readwrite", function(t){
+        STORES.forEach(function(n){ t.objectStore(n).clear(); });
+      });
+    }
+  };
+})();
+
+/* ---------------------------------------------------------------
+   2. Small helpers
+   --------------------------------------------------------------- */
+var gbp = new Intl.NumberFormat("en-GB", { style:"currency", currency:"GBP" });
+var gbp0 = new Intl.NumberFormat("en-GB", { style:"currency", currency:"GBP", maximumFractionDigits:0 });
+
+function money(n){ return (typeof n === "number" && isFinite(n)) ? gbp.format(n) : ""; }
+function uid(){
+  return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+}
+function esc(s){
+  return String(s == null ? "" : s)
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+}
+function parseValue(raw){
+  if(raw == null) return null;
+  var cleaned = String(raw).replace(/[^0-9.\-]/g, "");
+  if(!cleaned) return null;
+  var n = parseFloat(cleaned);
+  return isFinite(n) ? n : null;
+}
+function longDate(d){
+  return d.toLocaleDateString("en-GB", { day:"numeric", month:"long", year:"numeric" });
+}
+function fileStamp(d){
+  var p = function(n){ return n < 10 ? "0" + n : "" + n; };
+  return d.getFullYear() + "-" + p(d.getMonth()+1) + "-" + p(d.getDate());
+}
+function dataUrlToBytes(dataUrl){
+  var comma = dataUrl.indexOf(",");
+  var bin = atob(dataUrl.slice(comma + 1));
+  var out = new Uint8Array(bin.length);
+  for(var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+function utf8(str){
+  if(window.TextEncoder) return new TextEncoder().encode(str);
+  var esc2 = unescape(encodeURIComponent(str));
+  var out = new Uint8Array(esc2.length);
+  for(var i = 0; i < esc2.length; i++) out[i] = esc2.charCodeAt(i);
+  return out;
+}
+function concatBytes(chunks){
+  var total = 0, i;
+  for(i = 0; i < chunks.length; i++) total += chunks[i].length;
+  var out = new Uint8Array(total), off = 0;
+  for(i = 0; i < chunks.length; i++){ out.set(chunks[i], off); off += chunks[i].length; }
+  return out;
+}
+
+var toastTimer = null;
+function toast(msg, ms){
+  var el = $("toast");
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function(){ el.classList.remove("show"); }, ms || 2600);
+}
+
+/* Simple promise-based confirm dialog — no native confirm(), which some
+   embedded viewers suppress. */
+function confirmDialog(opts){
+  return new Promise(function(resolve){
+    var root = $("modalRoot");
+    root.innerHTML =
+      '<div class="modal"><div class="modal-box" role="dialog" aria-modal="true">' +
+      '<h3>' + esc(opts.title) + '</h3>' +
+      '<p>' + opts.body + '</p>' +
+      '<div class="btn-row stack">' +
+      '<button class="btn big ' + (opts.danger ? "danger" : "primary") + '" data-yes>' + esc(opts.confirm || "Confirm") + '</button>' +
+      '<button class="btn big" data-no>' + esc(opts.cancel || "Cancel") + '</button>' +
+      '</div></div></div>';
+    var close = function(val){ root.innerHTML = ""; resolve(val); };
+    root.querySelector("[data-yes]").onclick = function(){ close(true); };
+    root.querySelector("[data-no]").onclick = function(){ close(false); };
+    root.querySelector(".modal").onclick = function(e){ if(e.target === this) close(false); };
+  });
+}
+
+function lightbox(src){
+  var root = $("modalRoot");
+  root.innerHTML = '<div class="lightbox"><img alt="Item photo"></div>';
+  root.querySelector("img").src = src;
+  root.querySelector(".lightbox").onclick = function(){ root.innerHTML = ""; };
+}
+
+/* ---------------------------------------------------------------
+   3. State
+   --------------------------------------------------------------- */
+var state = {
+  items: [],          // item records, newest ref last
+  nextRef: 1,
+  lastRoom: "",
+  view: "list",
+  editingId: null,    // null while adding
+  draftPhotos: [],    // photo records staged in the add/edit form
+  removedPhotos: [],  // ids to delete on save
+  search: "",
+  room: ""
+};
+
+function refFor(n){
+  return "ITEM-" + String(n).padStart(3, "0");
+}
+function itemById(id){
+  for(var i = 0; i < state.items.length; i++) if(state.items[i].id === id) return state.items[i];
+  return null;
+}
+function sortedItems(){
+  return state.items.slice().sort(function(a, b){ return a.refNum - b.refNum; });
+}
+function allRooms(){
+  var seen = {}, out = [];
+  state.items.forEach(function(it){
+    var r = (it.room || "").trim();
+    if(r && !seen[r.toLowerCase()]){ seen[r.toLowerCase()] = 1; out.push(r); }
+  });
+  return out.sort(function(a, b){ return a.localeCompare(b); });
+}
+function totalPhotos(){
+  return state.items.reduce(function(n, it){ return n + (it.photoCount || 0); }, 0);
+}
+function totalValue(){
+  return state.items.reduce(function(n, it){
+    return n + (typeof it.value === "number" && isFinite(it.value) ? it.value : 0);
+  }, 0);
+}
+
+function saveMeta(){
+  return store.put("meta", [
+    { k:"nextRef", v: state.nextRef },
+    { k:"lastRoom", v: state.lastRoom }
+  ]);
+}
+
+function loadAll(){
+  return Promise.all([ store.all("items"), store.all("meta") ]).then(function(res){
+    state.items = res[0] || [];
+    var meta = {};
+    (res[1] || []).forEach(function(m){ meta[m.k] = m.v; });
+    var maxRef = state.items.reduce(function(m, it){ return Math.max(m, it.refNum || 0); }, 0);
+    state.nextRef = Math.max(meta.nextRef || 1, maxRef + 1);
+    state.lastRoom = meta.lastRoom || "";
+  });
+}
+
+/* ---------------------------------------------------------------
+   4. Navigation & rendering
+   --------------------------------------------------------------- */
+var VIEWS = ["list", "form", "detail", "export"];
+
+function show(view, opts){
+  state.view = view;
+  VIEWS.forEach(function(v){ $("view-" + v).classList.toggle("hidden", v !== view); });
+  $("backBtn").classList.toggle("hidden", view === "list" || view === "export");
+  $("topTitle").textContent =
+    view === "form"   ? (state.editingId ? "Edit item" : "Add item") :
+    view === "detail" ? "Item details" :
+    view === "export" ? "Export & data" : "Contents Inventory";
+  document.querySelectorAll(".tabbar button[data-nav]").forEach(function(b){
+    b.classList.toggle("active", b.dataset.nav === view);
+  });
+  if(!(opts && opts.keepScroll)) window.scrollTo(0, 0);
+}
+
+function renderCount(){
+  var n = state.items.length;
+  $("countBadge").textContent = n + (n === 1 ? " item" : " items");
+}
+
+function renderRoomFilter(){
+  var sel = $("roomFilter"), rooms = allRooms(), current = state.room;
+  sel.innerHTML = '<option value="">All rooms</option>' + rooms.map(function(r){
+    return '<option value="' + esc(r) + '">' + esc(r) + "</option>";
+  }).join("");
+  sel.value = rooms.indexOf(current) >= 0 ? current : "";
+  state.room = sel.value;
+
+  $("roomList").innerHTML = rooms.map(function(r){
+    return '<option value="' + esc(r) + '"></option>';
+  }).join("");
+}
+
+function matches(it){
+  if(state.room && (it.room || "") !== state.room) return false;
+  var q = state.search.trim().toLowerCase();
+  if(!q) return true;
+  return [it.ref, it.name, it.room, it.notes].some(function(f){
+    return String(f || "").toLowerCase().indexOf(q) >= 0;
+  });
+}
+
+function renderList(){
+  renderCount();
+  var items = sortedItems().filter(matches);
+  var grid = $("grid"), empty = $("empty");
+
+  if(!state.items.length){
+    grid.innerHTML = "";
+    empty.classList.remove("hidden");
+    empty.innerHTML = "<strong>No items yet</strong>Tap <b>Add Item</b> below to photograph and label the first thing you want to keep.";
+    return;
+  }
+  if(!items.length){
+    grid.innerHTML = "";
+    empty.classList.remove("hidden");
+    empty.innerHTML = "<strong>Nothing matches</strong>Try a different search, or choose <b>All rooms</b>.";
+    return;
+  }
+  empty.classList.add("hidden");
+  grid.innerHTML = items.map(function(it){
+    var thumb = it.cover
+      ? '<img class="thumb" src="' + it.cover + '" alt="" loading="lazy">'
+      : '<div class="thumb-empty">&#128247;</div>';
+    var extra = [];
+    if(it.photoCount) extra.push(it.photoCount + (it.photoCount === 1 ? " photo" : " photos"));
+    if(typeof it.value === "number") extra.push(money(it.value));
+    return '<button class="item-card" data-id="' + esc(it.id) + '">' + thumb +
+      '<div class="item-body">' +
+        '<span class="item-ref">' + esc(it.ref) + "</span>" +
+        '<span class="item-name">' + esc(it.name || "Untitled item") + "</span>" +
+        '<span class="item-room">' + esc(it.room || "No room set") + "</span>" +
+        (extra.length ? '<span class="item-meta">' + esc(extra.join(" &middot; ").replace(/&middot;/g, "·")) + "</span>" : "") +
+      "</div></button>";
+  }).join("");
+}
+
+function renderStats(){
+  $("sCount").textContent = state.items.length;
+  $("sPhotos").textContent = totalPhotos();
+  $("sRooms").textContent = allRooms().length;
+  $("sValue").textContent = gbp0.format(totalValue());
+}
+
+/* ---------------------------------------------------------------
+   5. Photos
+   Captured images are re-encoded to a sensible size before storage:
+   phone originals are 3-6 MB each and would make both the database
+   and the exports unusable.
+   --------------------------------------------------------------- */
+var FULL_MAX = 1400, FULL_Q = 0.82;
+var THUMB_MAX = 320, THUMB_Q = 0.72;
+
+function loadBitmap(file){
+  if(window.createImageBitmap){
+    return createImageBitmap(file, { imageOrientation: "from-image" })
+      .catch(function(){ return loadViaImg(file); });
+  }
+  return loadViaImg(file);
+}
+function loadViaImg(file){
+  return new Promise(function(resolve, reject){
+    var url = URL.createObjectURL(file);
+    var img = new Image();
+    img.onload = function(){ URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = function(){ URL.revokeObjectURL(url); reject(new Error("decode failed")); };
+    img.src = url;
+  });
+}
+
+function renderScaled(src, maxEdge, quality){
+  var w = src.width || src.naturalWidth, h = src.height || src.naturalHeight;
+  var scale = Math.min(1, maxEdge / Math.max(w, h));
+  var cw = Math.max(1, Math.round(w * scale)), ch = Math.max(1, Math.round(h * scale));
+  var c = document.createElement("canvas");
+  c.width = cw; c.height = ch;
+  var ctx = c.getContext("2d");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, cw, ch);
+  ctx.drawImage(src, 0, 0, cw, ch);
+  return { dataUrl: c.toDataURL("image/jpeg", quality), w: cw, h: ch };
+}
+
+function processFile(file){
+  return loadBitmap(file).then(function(src){
+    var full = renderScaled(src, FULL_MAX, FULL_Q);
+    var thumb = renderScaled(src, THUMB_MAX, THUMB_Q);
+    if(src.close) src.close();
+    return {
+      id: uid(), itemId: null, order: 0,
+      data: full.dataUrl, w: full.w, h: full.h,
+      thumb: thumb.dataUrl, tw: thumb.w, th: thumb.h
+    };
+  });
+}
+
+function addFiles(fileList){
+  var files = Array.prototype.slice.call(fileList || []).filter(function(f){
+    return f && /^image\//.test(f.type || "");
+  });
+  if(!files.length) return;
+  toast(files.length === 1 ? "Processing photo…" : "Processing " + files.length + " photos…", 4000);
+  var chain = Promise.resolve(), added = 0, failed = 0;
+  files.forEach(function(f){
+    chain = chain.then(function(){
+      return processFile(f).then(function(p){
+        state.draftPhotos.push(p); added++;
+        renderPhotoStrip();
+      }).catch(function(){ failed++; });
+    });
+  });
+  return chain.then(function(){
+    if(failed) toast(failed + " photo" + (failed === 1 ? "" : "s") + " could not be read");
+    else if(added) toast(added === 1 ? "Photo added" : added + " photos added", 1400);
+  });
+}
+
+function renderPhotoStrip(){
+  var strip = $("photoStrip");
+  strip.innerHTML = state.draftPhotos.map(function(p, i){
+    return '<div class="photo-chip"><img src="' + p.thumb + '" alt="Photo ' + (i+1) + '">' +
+      '<button type="button" class="rm" data-rm="' + esc(p.id) + '" aria-label="Remove photo ' + (i+1) + '">&times;</button></div>';
+  }).join("");
+  $("noPhotos").classList.toggle("hidden", state.draftPhotos.length > 0);
+  var n = state.draftPhotos.length;
+  $("photoHint").textContent = n
+    ? n + (n === 1 ? " photo" : " photos") + " on this item"
+    : "Front view, plus any marks or damage";
+}
+
+/* ---------------------------------------------------------------
+   6. Add / edit form
+   --------------------------------------------------------------- */
+function openAdd(){
+  state.editingId = null;
+  state.draftPhotos = [];
+  state.removedPhotos = [];
+  $("fName").value = "";
+  $("fRoom").value = state.lastRoom;
+  $("fNotes").value = "";
+  $("fValue").value = "";
+  $("photoLabel").textContent = "Photos for " + refFor(state.nextRef);
+  $("saveBtn").textContent = "Save item";
+  renderPhotoStrip();
+  renderRoomChips();
+  show("form");
+}
+
+function openEdit(id){
+  var it = itemById(id);
+  if(!it) return;
+  state.editingId = id;
+  state.removedPhotos = [];
+  state.draftPhotos = [];
+  $("fName").value = it.name || "";
+  $("fRoom").value = it.room || "";
+  $("fNotes").value = it.notes || "";
+  $("fValue").value = (typeof it.value === "number") ? String(it.value) : "";
+  $("photoLabel").textContent = "Photos for " + it.ref;
+  $("saveBtn").textContent = "Save changes";
+  renderPhotoStrip();
+  renderRoomChips();
+  show("form");
+
+  photosFor(id).then(function(list){
+    state.draftPhotos = list;
+    renderPhotoStrip();
+  });
+}
+
+function renderRoomChips(){
+  var rooms = allRooms().slice(0, 8);
+  var current = $("fRoom").value.trim().toLowerCase();
+  $("roomChips").innerHTML = rooms.map(function(r){
+    return '<button type="button" class="chip' + (r.toLowerCase() === current ? " on" : "") +
+      '" data-room="' + esc(r) + '">' + esc(r) + "</button>";
+  }).join("");
+}
+
+function photosFor(itemId){
+  return store.all("photos").then(function(all){
+    return all.filter(function(p){ return p.itemId === itemId; })
+      .sort(function(a, b){ return (a.order || 0) - (b.order || 0); });
+  });
+}
+
+function saveItem(){
+  var name = $("fName").value.trim();
+  var room = $("fRoom").value.trim();
+  var notes = $("fNotes").value.trim();
+  var value = parseValue($("fValue").value);
+
+  if(!name && !state.draftPhotos.length){
+    toast("Add a photo or a name first");
+    return;
+  }
+
+  var editing = state.editingId ? itemById(state.editingId) : null;
+  var item;
+  if(editing){
+    item = editing;
+  } else {
+    var n = state.nextRef;
+    item = { id: uid(), refNum: n, ref: refFor(n), createdAt: Date.now() };
+    state.nextRef = n + 1;
+    state.items.push(item);
+  }
+  item.name = name || "Untitled item";
+  item.room = room;
+  item.notes = notes;
+  item.value = value;
+  item.updatedAt = Date.now();
+
+  state.draftPhotos.forEach(function(p, i){ p.itemId = item.id; p.order = i; });
+  item.photoCount = state.draftPhotos.length;
+  item.cover = state.draftPhotos.length ? state.draftPhotos[0].thumb : null;
+  if(room) state.lastRoom = room;
+
+  var saveBtn = $("saveBtn");
+  saveBtn.disabled = true;
+
+  Promise.resolve()
+    .then(function(){ return state.removedPhotos.length ? store.del("photos", state.removedPhotos) : null; })
+    .then(function(){ return state.draftPhotos.length ? store.put("photos", state.draftPhotos) : null; })
+    .then(function(){ return store.put("items", item); })
+    .then(saveMeta)
+    .then(function(){
+      state.removedPhotos = [];
+      renderList(); renderRoomFilter(); renderStats();
+      toast(editing ? item.ref + " updated" : item.ref + " saved", 1600);
+      if(editing){ openDetail(item.id); }
+      else { openAdd(); }   // straight into the next item — room is remembered
+    })
+    .catch(function(e){
+      toast("Could not save: " + (e && e.message ? e.message : "unknown error"), 4000);
+    })
+    .then(function(){ saveBtn.disabled = false; });
+}
+
+/* ---------------------------------------------------------------
+   7. Detail view
+   --------------------------------------------------------------- */
+function openDetail(id){
+  var it = itemById(id);
+  if(!it) return;
+  state.editingId = id;
+  $("dRef").textContent = it.ref;
+  $("dName").textContent = it.name || "Untitled item";
+  $("dRoom").textContent = it.room || "—";
+  $("dValue").textContent = (typeof it.value === "number") ? money(it.value) : "Not recorded";
+  $("dNotes").textContent = it.notes || "—";
+  $("dAdded").textContent = it.createdAt ? longDate(new Date(it.createdAt)) : "—";
+  $("dPhotos").innerHTML = "";
+  $("dPhotoCard").classList.toggle("hidden", !it.photoCount);
+  show("detail");
+
+  if(it.photoCount){
+    photosFor(id).then(function(list){
+      $("dPhotos").innerHTML = list.map(function(p, i){
+        return '<img src="' + p.data + '" alt="Photo ' + (i+1) + ' of ' + esc(it.name || "item") + '" data-full="' + esc(p.id) + '">';
+      }).join("");
+    });
+  }
+}
+
+function deleteCurrent(){
+  var it = itemById(state.editingId);
+  if(!it) return;
+  confirmDialog({
+    title: "Delete " + it.ref + "?",
+    body: "This removes <b>" + esc(it.name || "this item") + "</b> and its " +
+          (it.photoCount || 0) + " photo" + ((it.photoCount === 1) ? "" : "s") + ". It cannot be undone.",
+    confirm: "Delete item", danger: true
+  }).then(function(ok){
+    if(!ok) return;
+    photosFor(it.id).then(function(list){
+      return store.del("photos", list.map(function(p){ return p.id; }));
+    }).then(function(){
+      return store.del("items", it.id);
+    }).then(function(){
+      state.items = state.items.filter(function(x){ return x.id !== it.id; });
+      state.editingId = null;
+      renderList(); renderRoomFilter(); renderStats();
+      toast(it.ref + " deleted", 1800);
+      show("list");
+    }).catch(function(){ toast("Could not delete that item"); });
+  });
+}
+
+function clearAll(){
+  var n = state.items.length;
+  confirmDialog({
+    title: "Clear all data?",
+    body: "This permanently deletes all <b>" + n + "</b> item" + (n === 1 ? "" : "s") +
+          " and <b>" + totalPhotos() + "</b> photo" + (totalPhotos() === 1 ? "" : "s") +
+          " from this device. Export first if you want a copy. This cannot be undone.",
+    confirm: "Yes, delete everything", danger: true
+  }).then(function(ok){
+    if(!ok) return;
+    return confirmDialog({
+      title: "Really sure?",
+      body: "Last chance &mdash; there is no way to get this back.",
+      confirm: "Delete everything now", cancel: "Keep my data", danger: true
+    }).then(function(really){
+      if(!really) return;
+      return store.wipe().then(function(){
+        state.items = []; state.nextRef = 1; state.lastRoom = "";
+        state.search = ""; state.room = "";
+        $("search").value = "";
+        renderList(); renderRoomFilter(); renderStats();
+        toast("All data cleared", 2400);
+        show("list");
+      });
+    });
+  }).catch(function(){ toast("Could not clear data"); });
+}
+
+/* ---------------------------------------------------------------
+   8. PDF writer
+   No external library is available (artifact CSP blocks CDNs), so the
+   PDF is assembled by hand. Photos are embedded as JPEG streams via
+   /DCTDecode, which takes the encoder's bytes verbatim.
+   --------------------------------------------------------------- */
+
+/* Helvetica / Helvetica-Bold advance widths, codes 32-126, per 1000 em. */
+var W_REG = [278,278,355,556,556,889,667,191,333,333,389,584,278,333,278,278,
+  556,556,556,556,556,556,556,556,556,556,278,278,584,584,584,556,
+  1015,667,667,722,722,667,611,778,722,278,500,667,556,833,722,778,
+  667,778,722,667,611,722,667,944,667,667,611,278,278,278,469,556,
+  333,556,556,500,556,556,278,556,556,222,222,500,222,833,556,556,
+  556,556,333,500,278,556,500,722,500,500,500,334,260,334,584];
+var W_BOLD = [278,333,474,556,556,889,722,238,333,333,389,584,278,333,278,278,
+  556,556,556,556,556,556,556,556,556,556,333,333,584,584,584,611,
+  975,722,722,722,722,667,611,778,722,278,556,722,611,833,722,778,
+  667,778,722,667,611,722,667,944,667,667,611,333,278,333,584,556,
+  333,556,611,556,611,556,333,611,611,278,278,556,278,889,611,611,
+  611,611,389,556,333,611,556,778,556,556,500,389,280,389,584];
+
+/* Unicode -> WinAnsi for the punctuation a phone keyboard actually produces. */
+var WINMAP = {
+  0x2018:0x91, 0x2019:0x92, 0x201A:0x82, 0x201C:0x93, 0x201D:0x94, 0x201E:0x84,
+  0x2013:0x96, 0x2014:0x97, 0x2022:0x95, 0x2026:0x85, 0x2020:0x86, 0x2021:0x87,
+  0x20AC:0x80, 0x2122:0x99, 0x0192:0x83, 0x02C6:0x88, 0x2030:0x89, 0x0160:0x8A,
+  0x2039:0x8B, 0x0152:0x8C, 0x017D:0x8E, 0x0161:0x9A, 0x203A:0x9B, 0x0153:0x9C,
+  0x017E:0x9E, 0x0178:0x9F, 0x00A0:0x20
+};
+
+function winAnsi(str){
+  var out = "";
+  for(var i = 0; i < str.length; i++){
+    var c = str.charCodeAt(i);
+    if(WINMAP[c] !== undefined) c = WINMAP[c];
+    else if(c === 9) c = 32;
+    else if(c < 32) continue;
+    else if(c > 255) c = 63;                 /* '?' for anything unmappable */
+    out += String.fromCharCode(c);
+  }
+  return out;
+}
+
+function charWidth(code, bold){
+  var t = bold ? W_BOLD : W_REG;
+  if(code >= 32 && code <= 126) return t[code - 32];
+  if(code === 163) return 556;               /* sterling */
+  if(code === 176) return 400;               /* degree */
+  if(code >= 192) return bold ? 667 : 611;   /* accented letters, close enough */
+  return 556;
+}
+function textWidth(str, size, bold){
+  var s = winAnsi(str), total = 0;
+  for(var i = 0; i < s.length; i++) total += charWidth(s.charCodeAt(i), bold);
+  return total * size / 1000;
+}
+function pdfEscape(str){
+  var s = winAnsi(str), out = "";
+  for(var i = 0; i < s.length; i++){
+    var c = s.charCodeAt(i), ch = s.charAt(i);
+    if(ch === "(" || ch === ")" || ch === "\\") out += "\\" + ch;
+    else if(c < 32 || c > 126) out += "\\" + ("00" + c.toString(8)).slice(-3);
+    else out += ch;
+  }
+  return out;
+}
+function wrapText(text, size, bold, maxW){
+  var lines = [];
+  String(text == null ? "" : text).split(/\r?\n/).forEach(function(para){
+    var words = para.split(/\s+/).filter(Boolean);
+    if(!words.length){ lines.push(""); return; }
+    var line = "";
+    words.forEach(function(word){
+      var test = line ? line + " " + word : word;
+      if(textWidth(test, size, bold) <= maxW){ line = test; return; }
+      if(line){ lines.push(line); line = ""; }
+      while(textWidth(word, size, bold) > maxW && word.length > 1){
+        var cut = word.length;
+        while(cut > 1 && textWidth(word.slice(0, cut), size, bold) > maxW) cut--;
+        lines.push(word.slice(0, cut));
+        word = word.slice(cut);
+      }
+      line = word;
+    });
+    if(line) lines.push(line);
+  });
+  return lines;
+}
+
+function bin(str){
+  var u = new Uint8Array(str.length);
+  for(var i = 0; i < str.length; i++) u[i] = str.charCodeAt(i) & 0xFF;
+  return u;
+}
+function pdfDate(d){
+  var p = function(n){ return (n < 10 ? "0" : "") + n; };
+  return "D:" + d.getFullYear() + p(d.getMonth()+1) + p(d.getDate()) +
+         p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
+}
+
+/* Page geometry (A4, points) */
+var PW = 595.28, PH = 841.89, MARGIN = 48;
+var CW = PW - MARGIN * 2;
+var TOP = PH - MARGIN, FLOOR = MARGIN + 22;
+
+function buildPDF(items, photosByItem, generatedAt){
+  var pages = [], page = null, y = 0;
+  var usedImages = {};
+
+  function newPage(withHeader){
+    page = { ops: [], header: !!withHeader };
+    pages.push(page);
+    y = withHeader ? TOP - 32 : TOP;
+    return page;
+  }
+  function op(s){ page.ops.push(s); }
+  function fill(r, g, b){ op(r + " " + g + " " + b + " rg"); }
+  function text(x, yy, size, bold, str){
+    op("BT /" + (bold ? "F2" : "F1") + " " + size + " Tf 1 0 0 1 " +
+       x.toFixed(2) + " " + yy.toFixed(2) + " Tm (" + pdfEscape(str) + ") Tj ET");
+  }
+  function rule(yy, shade, width){
+    var g = shade || "0.87";
+    op(g + " " + g + " " + g + " RG " + (width || 0.6) + " w " +
+       MARGIN + " " + yy.toFixed(2) + " m " +
+       (PW - MARGIN) + " " + yy.toFixed(2) + " l S");
+  }
+  /* Hard break: this much space is required, so start a page if short. */
+  function need(h){
+    if(y - h < FLOOR) newPage(true);
+  }
+  /* Soft break: move to a new page only if that would actually help —
+     an item taller than a whole page has to flow across pages anyway. */
+  function keepTogether(h){
+    if(y - h < FLOOR && (TOP - 32 - h) >= FLOOR) newPage(true);
+  }
+
+  /* ---- title page ---- */
+  newPage(false);
+  fill("0.12", "0.23", "0.37");
+  op("0.12 0.23 0.37 rg " + MARGIN + " " + (PH - 150) + " " + CW + " 4 re f");
+  fill("0.08", "0.09", "0.11");
+  text(MARGIN, PH - 210, 30, true, "Contents Inventory");
+  fill("0.36", "0.38", "0.44");
+  text(MARGIN, PH - 234, 12.5, false, "Schedule of contents to be retained");
+  rule(PH - 262);
+
+  var totalVal = items.reduce(function(n, it){
+    return n + (typeof it.value === "number" && isFinite(it.value) ? it.value : 0);
+  }, 0);
+  var photoTotal = items.reduce(function(n, it){ return n + (it.photoCount || 0); }, 0);
+  var roomNames = [], seenRoom = {};
+  items.forEach(function(it){
+    var r = (it.room || "").trim();
+    if(r && !seenRoom[r.toLowerCase()]){ seenRoom[r.toLowerCase()] = 1; roomNames.push(r); }
+  });
+
+  var rows = [
+    ["Date generated", longDate(generatedAt)],
+    ["Total items", String(items.length)],
+    ["Photographs included", String(photoTotal)],
+    ["Rooms covered", roomNames.length ? String(roomNames.length) : "—"]
+  ];
+  if(totalVal > 0) rows.push(["Total estimated value", gbp.format(totalVal)]);
+
+  var ry = PH - 296;
+  rows.forEach(function(r){
+    fill("0.42", "0.44", "0.5");
+    text(MARGIN, ry, 10.5, false, r[0]);
+    fill("0.08", "0.09", "0.11");
+    text(MARGIN + 175, ry, 12, true, r[1]);
+    ry -= 26;
+  });
+
+  if(roomNames.length){
+    ry -= 6;
+    rule(ry + 12);
+    fill("0.42", "0.44", "0.5");
+    text(MARGIN, ry - 6, 10.5, false, "Rooms");
+    fill("0.2", "0.22", "0.28");
+    wrapText(roomNames.join(", "), 10.5, false, CW - 175).forEach(function(line, i){
+      text(MARGIN + 175, ry - 6 - i * 14, 10.5, false, line);
+    });
+  }
+
+  fill("0.5", "0.52", "0.58");
+  text(MARGIN, MARGIN + 34, 9,  false, "Each item below is listed with its reference number, room, description and photographs.");
+  text(MARGIN, MARGIN + 21, 9,  false, "Prepared using Contents Inventory. Values shown are the owner's own estimates.");
+
+  /* ---- item sections ---- */
+  var GAP = 12;
+  var COLS = 3;
+  var boxW = (CW - GAP * (COLS - 1)) / COLS;
+  var boxH = 116;
+
+  newPage(true);
+  items.forEach(function(it, index){
+    var photos = photosByItem[it.id] || [];
+
+    /* Measure the heading block so an item never starts orphaned, and so
+       its first row of photos stays on the same page as its name. */
+    var nameLines = wrapText(it.name || "Untitled item", 14, true, CW);
+    var noteLines = it.notes ? wrapText(it.notes, 10, false, CW - 96) : [];
+    var metaRows = 2 + (typeof it.value === "number" ? 1 : 0);
+    var textH = 15 + nameLines.length * 17 + 2 + metaRows * 15 +
+                (noteLines.length ? 2 + noteLines.length * 13 : 0);
+    keepTogether(textH + (photos.length ? boxH + 28 : 20));
+
+    if(index > 0 && y < TOP - 40) { rule(y + 14, "0.9", 0.5); }
+
+    fill("0.12", "0.23", "0.37");
+    text(MARGIN, y, 8.5, true, it.ref);
+    y -= 15;
+    fill("0.08", "0.09", "0.11");
+    nameLines.forEach(function(line){
+      text(MARGIN, y, 14, true, line);
+      y -= 17;
+    });
+    y -= 2;
+
+    var meta = [["Room", it.room || "Not recorded"]];
+    if(typeof it.value === "number") meta.push(["Estimated value", gbp.format(it.value)]);
+    meta.push(["Photographs", photos.length ? String(photos.length) : "None"]);
+    meta.forEach(function(m){
+      fill("0.45", "0.47", "0.53");
+      text(MARGIN, y, 10, false, m[0]);
+      fill("0.13", "0.15", "0.2");
+      text(MARGIN + 96, y, 10, false, m[1]);
+      y -= 15;
+    });
+
+    if(noteLines.length){
+      y -= 2;
+      fill("0.45", "0.47", "0.53");
+      text(MARGIN, y, 10, false, "Description");
+      fill("0.13", "0.15", "0.2");
+      noteLines.forEach(function(line, i){
+        if(i > 0) need(14);
+        text(MARGIN + 96, y, 10, false, line);
+        y -= 13;
+      });
+    }
+
+    /* photo rows */
+    if(photos.length){
+      y -= 8;
+      for(var i = 0; i < photos.length; i += COLS){
+        need(boxH + 10);
+        var row = photos.slice(i, i + COLS);
+        for(var c = 0; c < row.length; c++){
+          var ph = row[c];
+          var bx = MARGIN + c * (boxW + GAP);
+          var by = y - boxH;
+          var scale = Math.min((boxW - 8) / ph.w, (boxH - 8) / ph.h);
+          var dw = ph.w * scale, dh = ph.h * scale;
+          var dx = bx + (boxW - dw) / 2, dy = by + (boxH - dh) / 2;
+          op("0.98 0.98 0.99 rg " + bx.toFixed(2) + " " + by.toFixed(2) + " " +
+             boxW.toFixed(2) + " " + boxH.toFixed(2) + " re f");
+          op("q " + dw.toFixed(2) + " 0 0 " + dh.toFixed(2) + " " +
+             dx.toFixed(2) + " " + dy.toFixed(2) + " cm /Im" + ph.idx + " Do Q");
+          usedImages[ph.idx] = 1;
+          op("0.85 0.86 0.9 RG 0.6 w " + bx.toFixed(2) + " " + by.toFixed(2) + " " +
+             boxW.toFixed(2) + " " + boxH.toFixed(2) + " re S");
+        }
+        y -= boxH + GAP;
+      }
+    }
+    y -= 20;
+  });
+
+  /* ---- serialise ---- */
+  var objs = [];
+  function alloc(){ objs.push(null); return objs.length; }
+  function set(n, bytes){ objs[n - 1] = bytes; }
+
+  var catalogNum = alloc(), pagesNum = alloc(), infoNum = alloc();
+  var f1 = alloc(), f2 = alloc();
+  set(f1, bin("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>"));
+  set(f2, bin("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>"));
+
+  var xobjEntries = [];
+  Object.keys(photosByItem).forEach(function(k){
+    photosByItem[k].forEach(function(ph){
+      if(ph.objNum) return;
+      ph.objNum = alloc();
+      set(ph.objNum, concatBytes([
+        bin("<< /Type /XObject /Subtype /Image /Width " + ph.w + " /Height " + ph.h +
+            " /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length " +
+            ph.bytes.length + " >>\nstream\n"),
+        ph.bytes,
+        bin("\nendstream")
+      ]));
+      xobjEntries.push("/Im" + ph.idx + " " + ph.objNum + " 0 R");
+    });
+  });
+
+  var resources = "<< /Font << /F1 " + f1 + " 0 R /F2 " + f2 + " 0 R >>" +
+    (xobjEntries.length ? " /XObject << " + xobjEntries.join(" ") + " >>" : "") +
+    " /ProcSet [/PDF /Text /ImageC] >>";
+
+  var pageNums = [];
+  pages.forEach(function(p, i){
+    if(p.header){
+      p.ops.unshift(
+        "0.86 0.86 0.9 RG 0.6 w " + MARGIN + " " + (TOP - 14).toFixed(2) + " m " +
+          (PW - MARGIN) + " " + (TOP - 14).toFixed(2) + " l S",
+        "BT /F1 8.5 Tf 1 0 0 1 " + MARGIN + " " + (TOP - 8).toFixed(2) +
+          " Tm (" + pdfEscape("Contents Inventory") + ") Tj ET",
+        "0.5 0.52 0.58 rg"
+      );
+      var label = "Page " + (i + 1) + " of " + pages.length;
+      p.ops.push(
+        "0.5 0.52 0.58 rg",
+        "BT /F1 8.5 Tf 1 0 0 1 " +
+          (PW - MARGIN - textWidth(label, 8.5, false)).toFixed(2) + " " +
+          (TOP - 8).toFixed(2) + " Tm (" + pdfEscape(label) + ") Tj ET"
+      );
+    }
+    var streamBytes = bin(p.ops.join("\n"));
+    var contentNum = alloc();
+    set(contentNum, concatBytes([
+      bin("<< /Length " + streamBytes.length + " >>\nstream\n"), streamBytes, bin("\nendstream")
+    ]));
+    var pageNum = alloc();
+    set(pageNum, bin("<< /Type /Page /Parent " + pagesNum + " 0 R /MediaBox [0 0 " +
+      PW + " " + PH + "] /Resources " + resources + " /Contents " + contentNum + " 0 R >>"));
+    pageNums.push(pageNum);
+  });
+
+  set(pagesNum, bin("<< /Type /Pages /Count " + pageNums.length + " /Kids [" +
+    pageNums.map(function(n){ return n + " 0 R"; }).join(" ") + "] >>"));
+  set(catalogNum, bin("<< /Type /Catalog /Pages " + pagesNum + " 0 R >>"));
+  set(infoNum, bin("<< /Title (" + pdfEscape("Contents Inventory") +
+    ") /Producer (" + pdfEscape("Contents Inventory") +
+    ") /CreationDate (" + pdfDate(generatedAt) + ") >>"));
+
+  var chunks = [], len = 0, offsets = [];
+  function push(b){ chunks.push(b); len += b.length; }
+  push(bin("%PDF-1.4\n"));
+  push(new Uint8Array([0x25, 0xE2, 0xE3, 0xCF, 0xD3, 0x0A]));
+  for(var i = 0; i < objs.length; i++){
+    offsets[i] = len;
+    push(bin((i + 1) + " 0 obj\n"));
+    push(objs[i]);
+    push(bin("\nendobj\n"));
+  }
+  var xrefStart = len;
+  var xref = "xref\n0 " + (objs.length + 1) + "\n0000000000 65535 f \n";
+  for(i = 0; i < objs.length; i++){
+    xref += ("0000000000" + offsets[i]).slice(-10) + " 00000 n \n";
+  }
+  xref += "trailer\n<< /Size " + (objs.length + 1) + " /Root " + catalogNum +
+          " 0 R /Info " + infoNum + " 0 R >>\nstartxref\n" + xrefStart + "\n%%EOF\n";
+  push(bin(xref));
+  return concatBytes(chunks);
+}
+
+/* ---------------------------------------------------------------
+   9. XLSX writer
+   An .xlsx is a ZIP of XML parts. Entries are stored uncompressed
+   (method 0) — JPEG thumbnails would not compress anyway, and it
+   keeps the writer short and predictable.
+   --------------------------------------------------------------- */
+var CRC_TABLE = (function(){
+  var t = new Uint32Array(256);
+  for(var n = 0; n < 256; n++){
+    var c = n;
+    for(var k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(buf){
+  var c = 0xFFFFFFFF;
+  for(var i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+function zipStore(files){
+  var chunks = [], central = [], offset = 0;
+  files.forEach(function(f){
+    var name = utf8(f.name);
+    var data = f.data;
+    var crc = crc32(data);
+    var lh = new Uint8Array(30 + name.length);
+    var dv = new DataView(lh.buffer);
+    dv.setUint32(0, 0x04034B50, true);
+    dv.setUint16(4, 20, true);
+    dv.setUint16(6, 0x0800, true);   /* UTF-8 names */
+    dv.setUint16(8, 0, true);        /* stored */
+    dv.setUint32(14, crc, true);
+    dv.setUint32(18, data.length, true);
+    dv.setUint32(22, data.length, true);
+    dv.setUint16(26, name.length, true);
+    lh.set(name, 30);
+    chunks.push(lh, data);
+    central.push({ name: name, crc: crc, size: data.length, offset: offset });
+    offset += lh.length + data.length;
+  });
+  var cdStart = offset;
+  central.forEach(function(c){
+    var cd = new Uint8Array(46 + c.name.length);
+    var dv = new DataView(cd.buffer);
+    dv.setUint32(0, 0x02014B50, true);
+    dv.setUint16(4, 20, true);
+    dv.setUint16(6, 20, true);
+    dv.setUint16(8, 0x0800, true);
+    dv.setUint16(10, 0, true);
+    dv.setUint32(16, c.crc, true);
+    dv.setUint32(20, c.size, true);
+    dv.setUint32(24, c.size, true);
+    dv.setUint16(28, c.name.length, true);
+    dv.setUint32(42, c.offset, true);
+    cd.set(c.name, 46);
+    chunks.push(cd);
+    offset += cd.length;
+  });
+  var eocd = new Uint8Array(22);
+  var edv = new DataView(eocd.buffer);
+  edv.setUint32(0, 0x06054B50, true);
+  edv.setUint16(8, central.length, true);
+  edv.setUint16(10, central.length, true);
+  edv.setUint32(12, offset - cdStart, true);
+  edv.setUint32(16, cdStart, true);
+  chunks.push(eocd);
+  return concatBytes(chunks);
+}
+
+function xmlEsc(s){
+  return String(s == null ? "" : s)
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "")
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&apos;");
+}
+var XML_HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
+var EMU = 9525;   /* EMU per pixel at 96 dpi */
+
+function colLetter(n){                     /* 1 -> A */
+  var s = "";
+  while(n > 0){ var m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = (n - 1 - m) / 26; }
+  return s;
+}
+
+function buildXLSX(items, photosByItem, generatedAt){
+  var STYLE_HDR = 1, STYLE_TXT = 2, STYLE_CUR = 3, STYLE_MID = 4;
+  var headers = ["Photo", "Ref", "Item", "Room / location", "Description / notes", "Estimated value", "Photos"];
+  var widths  = [14, 12, 30, 20, 48, 16, 9];
+
+  var media = [], anchors = [];
+  var rowsXml = [];
+
+  rowsXml.push('<row r="1" ht="24" customHeight="1">' + headers.map(function(h, i){
+    return '<c r="' + colLetter(i + 1) + '1" s="' + STYLE_HDR + '" t="inlineStr"><is><t>' +
+      xmlEsc(h) + "</t></is></c>";
+  }).join("") + "</row>");
+
+  items.forEach(function(it, i){
+    var r = i + 2;
+    var photos = photosByItem[it.id] || [];
+    var hasPhoto = photos.length > 0;
+    var cells = [];
+
+    cells.push('<c r="A' + r + '" s="' + STYLE_TXT + '"/>');      /* image floats over A */
+    cells.push('<c r="B' + r + '" s="' + STYLE_TXT + '" t="inlineStr"><is><t>' + xmlEsc(it.ref) + "</t></is></c>");
+    cells.push('<c r="C' + r + '" s="' + STYLE_TXT + '" t="inlineStr"><is><t xml:space="preserve">' + xmlEsc(it.name || "Untitled item") + "</t></is></c>");
+    cells.push('<c r="D' + r + '" s="' + STYLE_TXT + '" t="inlineStr"><is><t xml:space="preserve">' + xmlEsc(it.room || "") + "</t></is></c>");
+    cells.push('<c r="E' + r + '" s="' + STYLE_TXT + '" t="inlineStr"><is><t xml:space="preserve">' + xmlEsc(it.notes || "") + "</t></is></c>");
+    cells.push(typeof it.value === "number" && isFinite(it.value)
+      ? '<c r="F' + r + '" s="' + STYLE_CUR + '"><v>' + it.value + "</v></c>"
+      : '<c r="F' + r + '" s="' + STYLE_CUR + '"/>');
+    cells.push('<c r="G' + r + '" s="' + STYLE_MID + '"><v>' + photos.length + "</v></c>");
+
+    rowsXml.push('<row r="' + r + '"' + (hasPhoto ? ' ht="74" customHeight="1"' : "") + ">" +
+      cells.join("") + "</row>");
+
+    if(hasPhoto){
+      var p = photos[0];
+      var tw = p.tw || 96, th = p.th || 96;
+      var scale = Math.min(90 / tw, 90 / th, 1);
+      var pw = Math.max(1, Math.round(tw * scale)), phh = Math.max(1, Math.round(th * scale));
+      var id = media.length + 1;
+      media.push(dataUrlToBytes(p.thumb));
+      anchors.push(
+        "<xdr:oneCellAnchor>" +
+          "<xdr:from><xdr:col>0</xdr:col><xdr:colOff>" + (4 * EMU) + "</xdr:colOff>" +
+          "<xdr:row>" + (r - 1) + "</xdr:row><xdr:rowOff>" + (4 * EMU) + "</xdr:rowOff></xdr:from>" +
+          '<xdr:ext cx="' + (pw * EMU) + '" cy="' + (phh * EMU) + '"/>' +
+          "<xdr:pic>" +
+            '<xdr:nvPicPr><xdr:cNvPr id="' + (id + 1) + '" name="' + xmlEsc(it.ref) + '"/><xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr></xdr:nvPicPr>' +
+            '<xdr:blipFill><a:blip r:embed="rId' + id + '"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill>' +
+            '<xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="' + (pw * EMU) + '" cy="' + (phh * EMU) + '"/></a:xfrm>' +
+            '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr>' +
+          "</xdr:pic><xdr:clientData/>" +
+        "</xdr:oneCellAnchor>"
+      );
+    }
+  });
+
+  var hasImages = media.length > 0;
+  var lastCol = colLetter(headers.length);
+  var lastRow = Math.max(1, items.length + 1);
+
+  var sheet = XML_HEAD +
+    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ' +
+    'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+    '<dimension ref="A1:' + lastCol + lastRow + '"/>' +
+    '<sheetViews><sheetView workbookViewId="0" showGridLines="0">' +
+    '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>' +
+    '</sheetView></sheetViews>' +
+    '<sheetFormatPr defaultRowHeight="15"/>' +
+    "<cols>" + widths.map(function(w, i){
+      return '<col min="' + (i + 1) + '" max="' + (i + 1) + '" width="' + w + '" customWidth="1"/>';
+    }).join("") + "</cols>" +
+    "<sheetData>" + rowsXml.join("") + "</sheetData>" +
+    '<autoFilter ref="A1:' + lastCol + lastRow + '"/>' +
+    '<pageMargins left="0.4" right="0.4" top="0.6" bottom="0.6" header="0.3" footer="0.3"/>' +
+    (hasImages ? '<drawing r:id="rId1"/>' : "") +
+    "</worksheet>";
+
+  var styles = XML_HEAD +
+    '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+    '<numFmts count="1"><numFmt numFmtId="164" formatCode="&quot;£&quot;#,##0.00"/></numFmts>' +
+    '<fonts count="2">' +
+      '<font><sz val="11"/><color theme="1"/><name val="Calibri"/></font>' +
+      '<font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font>' +
+    "</fonts>" +
+    '<fills count="3">' +
+      '<fill><patternFill patternType="none"/></fill>' +
+      '<fill><patternFill patternType="gray125"/></fill>' +
+      '<fill><patternFill patternType="solid"><fgColor rgb="FF1F3A5F"/><bgColor indexed="64"/></patternFill></fill>' +
+    "</fills>" +
+    '<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border>' +
+      '<border><left style="thin"><color rgb="FFD9DEE7"/></left><right style="thin"><color rgb="FFD9DEE7"/></right>' +
+      '<top style="thin"><color rgb="FFD9DEE7"/></top><bottom style="thin"><color rgb="FFD9DEE7"/></bottom><diagonal/></border></borders>' +
+    '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
+    '<cellXfs count="5">' +
+      '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>' +
+      '<xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>' +
+      '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>' +
+      '<xf numFmtId="164" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment vertical="top"/></xf>' +
+      '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="top"/></xf>' +
+    "</cellXfs>" +
+    '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>' +
+    "</styleSheet>";
+
+  var files = [
+    { name: "[Content_Types].xml", data: utf8(XML_HEAD +
+      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+      '<Default Extension="xml" ContentType="application/xml"/>' +
+      (hasImages ? '<Default Extension="jpeg" ContentType="image/jpeg"/>' : "") +
+      '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+      '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
+      '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' +
+      (hasImages ? '<Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>' : "") +
+      '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>' +
+      "</Types>") },
+    { name: "_rels/.rels", data: utf8(XML_HEAD +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>' +
+      '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>' +
+      "</Relationships>") },
+    { name: "docProps/core.xml", data: utf8(XML_HEAD +
+      '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" ' +
+      'xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" ' +
+      'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">' +
+      "<dc:title>Contents Inventory</dc:title>" +
+      '<dcterms:created xsi:type="dcterms:W3CDTF">' + generatedAt.toISOString().replace(/\.\d+Z$/, "Z") + "</dcterms:created>" +
+      "</cp:coreProperties>") },
+    { name: "xl/workbook.xml", data: utf8(XML_HEAD +
+      '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ' +
+      'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+      '<sheets><sheet name="Inventory" sheetId="1" r:id="rId1"/></sheets></workbook>') },
+    { name: "xl/_rels/workbook.xml.rels", data: utf8(XML_HEAD +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>' +
+      '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>' +
+      "</Relationships>") },
+    { name: "xl/styles.xml", data: utf8(styles) },
+    { name: "xl/worksheets/sheet1.xml", data: utf8(sheet) }
+  ];
+
+  if(hasImages){
+    files.push({ name: "xl/worksheets/_rels/sheet1.xml.rels", data: utf8(XML_HEAD +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/>' +
+      "</Relationships>") });
+    files.push({ name: "xl/drawings/drawing1.xml", data: utf8(XML_HEAD +
+      '<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" ' +
+      'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" ' +
+      'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+      anchors.join("") + "</xdr:wsDr>") });
+    files.push({ name: "xl/drawings/_rels/drawing1.xml.rels", data: utf8(XML_HEAD +
+      '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      media.map(function(_, i){
+        return '<Relationship Id="rId' + (i + 1) + '" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image' + (i + 1) + '.jpeg"/>';
+      }).join("") + "</Relationships>") });
+    media.forEach(function(bytes, i){
+      files.push({ name: "xl/media/image" + (i + 1) + ".jpeg", data: bytes });
+    });
+  }
+
+  return zipStore(files);
+}
+
+/* ---------------------------------------------------------------
+   10. Export orchestration & file delivery
+   --------------------------------------------------------------- */
+var downloadsCap;                       /* undefined = not probed yet */
+var inClaudeViewer = !!(window.claude && typeof window.claude.use === "function");
+
+function getDownloads(){
+  if(downloadsCap !== undefined) return Promise.resolve(downloadsCap);
+  if(!inClaudeViewer){ downloadsCap = null; return Promise.resolve(null); }
+  return window.claude.use("downloads").then(function(d){
+    downloadsCap = d || null; return downloadsCap;
+  }).catch(function(){ downloadsCap = null; return null; });
+}
+
+function browserDownload(filename, blob){
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function(){ document.body.removeChild(a); URL.revokeObjectURL(url); }, 4000);
+}
+
+function note(msg){
+  $("exportNote").textContent = msg;
+}
+
+function deliver(filename, bytes, mime){
+  var blob = new Blob([bytes], { type: mime });
+  var mb = (bytes.length / 1048576).toFixed(1);
+  return getDownloads().then(function(dl){
+    if(!dl){
+      if(inClaudeViewer){
+        note("This viewer will not let the page save files. Open the app in a normal browser tab to download the " +
+             filename.split(".").pop().toUpperCase() + ".");
+        toast("Downloads are blocked in this viewer", 4000);
+        return;
+      }
+      browserDownload(filename, blob);
+      note("Downloaded " + filename + " (" + mb + " MB).");
+      return;
+    }
+    return dl.save({ filename: filename, data: blob }).then(function(){
+      note("Saved " + filename + " (" + mb + " MB).");
+      toast("Saved " + filename, 3000);
+    }).catch(function(err){
+      var code = err && err.code;
+      if(code === "declined"){ note("Save cancelled."); return; }
+      if(code === "too_large"){
+        note("That file came to " + mb + " MB, which is over the 16 MB save limit. Try exporting fewer items, or export the spreadsheet instead.");
+        toast("File too large to save", 4000);
+        return;
+      }
+      if(code === "rejected_extension" || code === "extension_not_enabled"){
+        /* This viewer will not hand over that file type. The bytes are
+           still correct — save under a permitted extension and tell the
+           user the one rename they need to do. */
+        return dl.save({ filename: filename + ".txt", data: new Blob([bytes], { type: "text/plain" }) })
+          .then(function(){
+            note("This viewer would not save a ." + filename.split(".").pop() +
+                 " file, so it saved as " + filename + ".txt — rename it to " + filename + " and it will open normally.");
+            toast("Saved as " + filename + ".txt", 5000);
+          })
+          .catch(function(e2){
+            if(e2 && e2.code === "declined"){ note("Save cancelled."); return; }
+            note("This viewer would not save the file. Open the app in a normal browser tab to download it.");
+          });
+      }
+      note("Could not save the file here. Open the app in a normal browser tab to download it.");
+      toast("Save failed", 4000);
+    });
+  });
+}
+
+function reencode(dataUrl, maxEdge, quality){
+  return new Promise(function(resolve, reject){
+    var img = new Image();
+    img.onload = function(){ resolve(renderScaled(img, maxEdge, quality)); };
+    img.onerror = function(){ reject(new Error("decode failed")); };
+    img.src = dataUrl;
+  });
+}
+
+function photosByItemMap(){
+  return store.all("photos").then(function(all){
+    var by = {};
+    all.forEach(function(p){ (by[p.itemId] = by[p.itemId] || []).push(p); });
+    Object.keys(by).forEach(function(k){
+      by[k].sort(function(a, b){ return (a.order || 0) - (b.order || 0); });
+    });
+    return by;
+  });
+}
+
+function setProgress(frac){
+  var bar = $("exportProgress");
+  bar.classList.remove("hidden");
+  bar.firstElementChild.style.width = Math.round(Math.max(0, Math.min(1, frac)) * 100) + "%";
+}
+function clearProgress(){
+  var bar = $("exportProgress");
+  bar.classList.add("hidden");
+  bar.firstElementChild.style.width = "0";
+}
+
+/* Re-encode every photo at the size the PDF actually draws it, so a
+   50-item inventory does not produce a 90 MB file. */
+function preparePdfImages(items, byItem, maxEdge, quality){
+  var flat = [];
+  items.forEach(function(it){
+    (byItem[it.id] || []).forEach(function(p){ flat.push({ itemId: it.id, photo: p }); });
+  });
+  var out = {}, idx = 0, done = 0;
+  items.forEach(function(it){ out[it.id] = []; });
+  var chain = Promise.resolve();
+  flat.forEach(function(entry){
+    chain = chain.then(function(){
+      return reencode(entry.photo.data, maxEdge, quality).then(function(r){
+        out[entry.itemId].push({
+          idx: idx++, bytes: dataUrlToBytes(r.dataUrl), w: r.w, h: r.h
+        });
+      }).catch(function(){ /* skip an unreadable photo rather than fail the export */ });
+    }).then(function(){
+      done++;
+      setProgress(flat.length ? done / flat.length * 0.85 : 0.85);
+    });
+  });
+  return chain.then(function(){ return out; });
+}
+
+var busy = false;
+function withBusy(button, label, fn){
+  if(busy) return;
+  busy = true;
+  var original = button.innerHTML;
+  button.innerHTML = label;
+  button.disabled = true;
+  $("pdfBtn").disabled = true; $("xlsxBtn").disabled = true;
+  return Promise.resolve().then(fn).catch(function(e){
+    note("Export failed: " + (e && e.message ? e.message : "unknown error"));
+    toast("Export failed", 4000);
+  }).then(function(){
+    busy = false;
+    button.innerHTML = original;
+    $("pdfBtn").disabled = false; $("xlsxBtn").disabled = false;
+    clearProgress();
+  });
+}
+
+function exportPDF(){
+  if(!state.items.length){ toast("Add an item first"); return; }
+  return withBusy($("pdfBtn"), "Building PDF…", function(){
+    var when = new Date();
+    var items = sortedItems();
+    note("Preparing photos…");
+    setProgress(0.02);
+    return photosByItemMap().then(function(byItem){
+      var count = items.reduce(function(n, it){ return n + (byItem[it.id] || []).length; }, 0);
+      /* Bigger inventories get smaller embedded photos so the file stays sendable. */
+      var maxEdge = count <= 40 ? 1100 : count <= 100 ? 850 : 650;
+      var quality = count <= 40 ? 0.78 : count <= 100 ? 0.72 : 0.66;
+      return preparePdfImages(items, byItem, maxEdge, quality).then(function(images){
+        note("Building document…");
+        setProgress(0.92);
+        var bytes = buildPDF(items, images, when);
+        if(bytes.length > 15 * 1048576 && maxEdge > 650){
+          note("Large inventory — reducing photo size…");
+          return preparePdfImages(items, byItem, 620, 0.62).then(function(smaller){
+            return buildPDF(items, smaller, when);
+          });
+        }
+        return bytes;
+      });
+    }).then(function(bytes){
+      setProgress(1);
+      return deliver("Contents-Inventory-" + fileStamp(when) + ".pdf", bytes, "application/pdf");
+    });
+  });
+}
+
+function exportXLSX(){
+  if(!state.items.length){ toast("Add an item first"); return; }
+  return withBusy($("xlsxBtn"), "Building spreadsheet…", function(){
+    var when = new Date();
+    var items = sortedItems();
+    note("Building spreadsheet…");
+    setProgress(0.3);
+    return photosByItemMap().then(function(byItem){
+      setProgress(0.7);
+      var bytes = buildXLSX(items, byItem, when);
+      setProgress(1);
+      return deliver("Contents-Inventory-" + fileStamp(when) + ".xlsx", bytes,
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    });
+  });
+}
+
+/* ---------------------------------------------------------------
+   11. Wiring
+   --------------------------------------------------------------- */
+function goBack(){
+  if(state.view === "form"){
+    if(state.editingId && itemById(state.editingId)) openDetail(state.editingId);
+    else { state.draftPhotos = []; show("list"); }
+  } else {
+    show("list");
+  }
+}
+
+function wire(){
+  document.querySelectorAll(".tabbar button[data-nav]").forEach(function(b){
+    b.addEventListener("click", function(){
+      if(b.dataset.nav === "export") renderStats();
+      show(b.dataset.nav);
+    });
+  });
+  $("addBtn").addEventListener("click", openAdd);
+  $("backBtn").addEventListener("click", goBack);
+
+  $("search").addEventListener("input", function(){ state.search = this.value; renderList(); });
+  $("roomFilter").addEventListener("change", function(){ state.room = this.value; renderList(); });
+
+  $("grid").addEventListener("click", function(e){
+    var card = e.target.closest("[data-id]");
+    if(card) openDetail(card.dataset.id);
+  });
+
+  $("cameraBtn").addEventListener("click", function(){ $("cameraInput").click(); });
+  $("galleryBtn").addEventListener("click", function(){ $("galleryInput").click(); });
+  $("cameraInput").addEventListener("change", function(){ addFiles(this.files); this.value = ""; });
+  $("galleryInput").addEventListener("change", function(){ addFiles(this.files); this.value = ""; });
+
+  $("photoStrip").addEventListener("click", function(e){
+    var btn = e.target.closest("[data-rm]");
+    if(!btn) return;
+    var id = btn.dataset.rm;
+    state.draftPhotos = state.draftPhotos.filter(function(p){
+      if(p.id !== id) return true;
+      if(state.editingId) state.removedPhotos.push(p.id);
+      return false;
+    });
+    renderPhotoStrip();
+  });
+
+  $("roomChips").addEventListener("click", function(e){
+    var chip = e.target.closest("[data-room]");
+    if(!chip) return;
+    $("fRoom").value = chip.dataset.room;
+    renderRoomChips();
+  });
+  $("fRoom").addEventListener("input", renderRoomChips);
+
+  $("saveBtn").addEventListener("click", saveItem);
+  $("cancelBtn").addEventListener("click", goBack);
+  $("editBtn").addEventListener("click", function(){ openEdit(state.editingId); });
+  $("deleteBtn").addEventListener("click", deleteCurrent);
+
+  $("dPhotos").addEventListener("click", function(e){
+    if(e.target.tagName === "IMG") lightbox(e.target.src);
+  });
+
+  $("pdfBtn").addEventListener("click", exportPDF);
+  $("xlsxBtn").addEventListener("click", exportXLSX);
+  $("clearBtn").addEventListener("click", clearAll);
+
+  document.addEventListener("keydown", function(e){
+    if(e.key === "Escape"){
+      var root = $("modalRoot");
+      if(root.innerHTML){ root.innerHTML = ""; return; }
+      if(state.view !== "list") goBack();
+    }
+  });
+}
+
+function init(){
+  wire();
+  getDownloads();
+  store.init().then(loadAll).then(function(){
+    if(store.isMemory){
+      var b = $("banner");
+      b.classList.remove("hidden");
+      b.innerHTML = "<b>Nothing will be saved.</b> This browser is blocking local storage " +
+        "(often private browsing). You can still add items and export them, but they will be " +
+        "lost if you close this page.";
+      $("storageNote").textContent =
+        "Local storage is unavailable in this browser, so items are held in memory only and will be lost when the page closes. Export before you leave.";
+    }
+    renderList();
+    renderRoomFilter();
+    renderStats();
+  }).catch(function(e){
+    var b = $("banner");
+    b.classList.remove("hidden");
+    b.textContent = "Could not load saved data: " + (e && e.message ? e.message : "unknown error");
+    renderList();
+  });
+}
+
+if(document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
+else init();
+</script>
+</body>
+</html>
