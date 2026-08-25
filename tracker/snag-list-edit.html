@@ -27,6 +27,12 @@
     <div id="errorBox" class="error-box"></div>
     <form id="snagForm">
       <input type="hidden" id="editingId">
+      <div class="field" id="plotFieldWrap" style="display:none;">
+        <label for="itemPlot">Plot</label>
+        <select id="itemPlot">
+          <option value="">External / Site-wide</option>
+        </select>
+      </div>
       <div class="form-grid">
         <div class="field"><label for="location">Location *</label><input type="text" id="location" required placeholder="e.g. First floor bathroom, Kitchen"></div>
         <div class="field"><label for="trade">Trade responsible</label><input type="text" id="trade" placeholder="e.g. Plumbing"></div>
@@ -47,7 +53,7 @@
   <div class="card">
     <div class="table-wrap">
       <table>
-        <thead>
+        <thead id="tableHead">
           <tr><th>#</th><th>Location</th><th>Description</th><th>Trade</th><th>Status</th><th></th></tr>
         </thead>
         <tbody id="snagRows"></tbody>
@@ -59,7 +65,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, uploadImage, todayISO } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, uploadImage, todayISO, comparePlotNumbers } from "./js/app.js";
 
   await requireAuth();
   const listId = getParam("id");
@@ -70,6 +76,8 @@
   let snagList = null;
   let allSnags = [];
   let photoUrl = null;
+  let isGeneralList = false;
+  let plotsById = {};
 
   const errorBox = document.getElementById("errorBox");
   const snagCard = document.getElementById("snagCard");
@@ -80,6 +88,7 @@
   function openForAdd() {
     snagForm.reset();
     document.getElementById("editingId").value = "";
+    if (isGeneralList) document.getElementById("itemPlot").value = "";
     photoUrl = null;
     photoGrid.innerHTML = "";
     document.getElementById("saveBtn").textContent = "Add Item";
@@ -87,6 +96,7 @@
   }
   function openForEdit(s) {
     document.getElementById("editingId").value = s.id;
+    if (isGeneralList) document.getElementById("itemPlot").value = s.plot_id || "";
     document.getElementById("location").value = s.location || "";
     document.getElementById("trade").value = s.trade || "";
     document.getElementById("description").value = s.description || "";
@@ -124,6 +134,7 @@
       description: document.getElementById("description").value.trim(),
       photo_url: photoUrl,
     };
+    if (isGeneralList) payload.plot_id = document.getElementById("itemPlot").value || null;
     try {
       if (editingId) {
         const { error } = await supabase.from("snag_items").update(payload).eq("id", editingId);
@@ -174,10 +185,14 @@
   const statusBadge = { open: "badge-red", closed: "badge-green", rejected: "badge-grey" };
 
   function render() {
+    if (isGeneralList) {
+      document.getElementById("tableHead").innerHTML = `<tr><th>#</th><th>Plot</th><th>Location</th><th>Description</th><th>Trade</th><th>Status</th><th></th></tr>`;
+    }
     document.getElementById("emptyState").style.display = allSnags.length ? "none" : "block";
     document.getElementById("snagRows").innerHTML = allSnags.map((s) => `
       <tr>
         <td>${s.item_no}</td>
+        ${isGeneralList ? `<td>${s.plot_id ? escapeHtml(plotsById[s.plot_id] || "—") : "External / Site-wide"}</td>` : ""}
         <td>${escapeHtml(s.location)}</td>
         <td>${escapeHtml(s.description)}${s.photo_url ? ' <span title="Has photo">📷</span>' : ""}</td>
         <td>${escapeHtml(s.trade) || "—"}</td>
@@ -212,6 +227,7 @@
     const { data: list, error } = await supabase.from("snag_lists").select("*, projects(*), plots(*)").eq("id", listId).single();
     if (error) { document.getElementById("listTitle").textContent = "Snag list not found"; return; }
     snagList = list;
+    isGeneralList = !snagList.plot_id;
     const project = list.projects;
     const plotLabel = list.plots ? `${list.plots.plot_number} – Snag List` : list.title;
 
@@ -223,6 +239,23 @@
       { label: "Snagging", href: `snagging.html?project=${project.id}` },
       { label: plotLabel },
     ]);
+
+    if (isGeneralList) {
+      const { data: plots } = await supabase
+        .from("plots")
+        .select("id, plot_number")
+        .eq("project_id", snagList.project_id);
+      const sorted = (plots || []).slice().sort((a, b) => comparePlotNumbers(a.plot_number, b.plot_number));
+      sorted.forEach((p) => { plotsById[p.id] = p.plot_number; });
+      const itemPlot = document.getElementById("itemPlot");
+      sorted.forEach((p) => {
+        const opt = document.createElement("option");
+        opt.value = p.id;
+        opt.textContent = p.plot_number;
+        itemPlot.appendChild(opt);
+      });
+      document.getElementById("plotFieldWrap").style.display = "block";
+    }
 
     loadSnags();
   }

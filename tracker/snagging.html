@@ -17,9 +17,28 @@
       <div class="page-title">Snagging</div>
       <div class="page-sub" id="projectSub">One snag list per plot — click a plot to add items to it, then export that plot's list as a PDF.</div>
     </div>
-    <button class="btn btn-amber" id="newPlotBtn">+ Plot</button>
+    <div class="btn-row">
+      <button class="btn btn-outline" id="newGeneralListBtn">+ General List</button>
+      <button class="btn btn-amber" id="newPlotBtn">+ Plot</button>
+    </div>
   </div>
 
+  <div id="generalListsSection" style="display:none;">
+    <h3 style="font-family:var(--font-display); font-size:1.1rem; margin-bottom:1rem;">General / Site Visit Lists</h3>
+    <div class="card" style="margin-bottom:2rem;">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>List</th><th>Open</th><th>Closed</th><th>Rejected</th><th>Added</th></tr>
+          </thead>
+          <tbody id="generalListRows"></tbody>
+        </table>
+      </div>
+      <p class="hint">For a general site walk touching several plots (or issues that aren't any one plot) in one sheet — each item is tagged with its own plot, or "External / Site-wide".</p>
+    </div>
+  </div>
+
+  <h3 id="plotsHeading" style="font-family:var(--font-display); font-size:1.1rem; margin-bottom:1rem; display:none;">Plots</h3>
   <div class="card">
     <div class="table-wrap">
       <table>
@@ -30,7 +49,7 @@
       </table>
     </div>
     <div id="emptyState" class="empty" style="display:none;">
-      <p>No plots yet. Add your first plot to start a snag list for it.</p>
+      <p>No plots yet. Add your first plot to start a snag list for it, or use <strong>+ General List</strong> above for a site walk that isn't tied to one plot.</p>
       <button class="btn btn-amber" id="emptyNewPlotBtn">+ Plot</button>
     </div>
     <p class="hint">Plots are shared with Plot Handovers — to rename or delete a plot, use the Plot Handovers page.</p>
@@ -67,6 +86,21 @@
   document.getElementById("newPlotBtn").addEventListener("click", createPlot);
   document.getElementById("emptyNewPlotBtn")?.addEventListener("click", createPlot);
 
+  async function createGeneralList() {
+    const today = new Date().toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+    const title = prompt("List name:", `Site Walk - ${today}`);
+    if (!title || !title.trim()) return;
+    const { data: { user } } = await supabase.auth.getUser();
+    const { data: list, error } = await supabase
+      .from("snag_lists")
+      .insert({ project_id: projectId, plot_id: null, title: title.trim(), created_by: user.id })
+      .select()
+      .single();
+    if (error) { alert(`Could not create list: ${error.message}`); return; }
+    window.location.href = `snag-list-edit.html?id=${list.id}`;
+  }
+  document.getElementById("newGeneralListBtn").addEventListener("click", createGeneralList);
+
   async function load() {
     const { data: project } = await supabase.from("projects").select("name").eq("id", projectId).single();
     renderHeader([
@@ -75,30 +109,47 @@
       { label: "Snagging" },
     ]);
 
-    const { data: plots, error } = await supabase
-      .from("plots")
-      .select("*")
-      .eq("project_id", projectId);
-
-    if (error || !plots || !plots.length) {
-      document.getElementById("emptyState").style.display = "block";
-      return;
-    }
-    plots.sort((a, b) => comparePlotNumbers(a.plot_number, b.plot_number));
-
-    const [{ data: lists }, { data: items }] = await Promise.all([
-      supabase.from("snag_lists").select("id, plot_id").eq("project_id", projectId),
+    const [{ data: plots }, { data: lists }, { data: items }] = await Promise.all([
+      supabase.from("plots").select("*").eq("project_id", projectId),
+      supabase.from("snag_lists").select("id, plot_id, title, created_at").eq("project_id", projectId),
       supabase.from("snag_items").select("snag_list_id, status").eq("project_id", projectId),
     ]);
-
-    const listByPlot = {};
-    (lists || []).forEach((l) => { listByPlot[l.plot_id] = l.id; });
 
     const counts = {};
     (items || []).forEach((it) => {
       counts[it.snag_list_id] = counts[it.snag_list_id] || { open: 0, closed: 0, rejected: 0 };
       counts[it.snag_list_id][it.status]++;
     });
+
+    // ─── General (not-plot-specific) lists ───────────────────────
+    const generalLists = (lists || []).filter((l) => !l.plot_id).sort((a, b) => b.created_at.localeCompare(a.created_at));
+    if (generalLists.length) {
+      document.getElementById("generalListsSection").style.display = "block";
+      document.getElementById("generalListRows").innerHTML = generalLists.map((l) => {
+        const c = counts[l.id] || { open: 0, closed: 0, rejected: 0 };
+        return `
+          <tr class="row-link" onclick="window.location.href='snag-list-edit.html?id=${l.id}'">
+            <td><strong>${escapeHtml(l.title)}</strong></td>
+            <td><span class="badge badge-red">${c.open}</span></td>
+            <td><span class="badge badge-green">${c.closed}</span></td>
+            <td><span class="badge badge-grey">${c.rejected}</span></td>
+            <td>${formatDate(l.created_at?.slice(0, 10))}</td>
+          </tr>
+        `;
+      }).join("");
+    }
+
+    // ─── Per-plot lists ───────────────────────────────────────────
+    if (!plots || !plots.length) {
+      document.getElementById("emptyState").style.display = "block";
+      document.getElementById("plotsHeading").style.display = "none";
+      return;
+    }
+    plots.sort((a, b) => comparePlotNumbers(a.plot_number, b.plot_number));
+    document.getElementById("plotsHeading").style.display = "block";
+
+    const listByPlot = {};
+    (lists || []).forEach((l) => { if (l.plot_id) listByPlot[l.plot_id] = l.id; });
 
     document.getElementById("plotRows").innerHTML = plots.map((p) => {
       const listId = listByPlot[p.id];

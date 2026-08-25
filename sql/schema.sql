@@ -1573,3 +1573,17 @@ create policy "editors delete blocks" on public.blocks for delete using (public.
 -- every member, snagging-only included, keeps full CRUD on snag_items
 -- (that's the whole point) and read access to plots/drawings/snag_lists
 -- to navigate to them.
+
+-- ─── v18 ADDITIONS ────────────────────────────────────────────────
+-- General (not-plot-specific) snag lists — for a site walk touching
+-- several plots and/or external/site-wide issues in one sheet, rather
+-- than one plot's own list. snag_lists.plot_id was already nullable
+-- (multiple null rows already coexist fine under its unique index,
+-- from v8's own use of a null plot_id for pre-migration legacy lists)
+-- — a client can now create additional null-plot_id lists on purpose,
+-- titled by hand instead of taking a plot's name. Each item in one of
+-- these records its own plot here, since one such list can span many;
+-- left null for a genuinely external/site-wide issue that isn't any
+-- one plot. Items in an ordinary plot-specific list leave this unset —
+-- their plot is already implied by the list itself.
+alter table public.snag_items add column if not exists plot_id uuid references public.plots(id) on delete set null;
