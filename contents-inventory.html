@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#1f3a5f">
 <title>Contents Inventory</title>
-<meta name="description" content="Catalogue household items to keep from a property, with photos, rooms and values. Exports to PDF and Excel.">
+<meta name="description" content="Catalogue household items to keep from a property, with photos and rooms. Exports to PDF and Excel.">
 <style>
 /* ---------- tokens (light is the base; dark overrides only) ---------- */
 :root{
@@ -116,13 +116,6 @@ select{background-image:none;}
 input:focus,select:focus,textarea:focus{
   outline:2px solid var(--focus); outline-offset:1px; border-color:var(--focus);
 }
-.prefix-input{display:flex; align-items:stretch; gap:0;}
-.prefix-input span{
-  display:flex; align-items:center; padding:0 14px; font-size:17px; font-weight:600;
-  background:var(--surface-2); border:1px solid var(--rule); border-right:0;
-  border-radius:10px 0 0 10px; color:var(--ink-soft);
-}
-.prefix-input input{border-radius:0 10px 10px 0;}
 .hint{font-size:13px; color:var(--ink-faint); font-weight:400;}
 .label-row{display:flex; align-items:baseline; justify-content:space-between; gap:10px; margin-bottom:8px;}
 .label-row label{margin:0;}
@@ -264,7 +257,7 @@ dl{margin:0;}
 .progress{height:6px; background:var(--surface-2); border-radius:999px; overflow:hidden; margin-top:10px;}
 .progress > div{height:100%; background:var(--brand); width:0; transition:width .15s;}
 .stat-row{display:flex; gap:12px; flex-wrap:wrap; margin-bottom:4px;}
-.stat{flex:1 1 120px; background:var(--surface-2); border-radius:10px; padding:11px 12px;}
+.stat{flex:1 1 100px; background:var(--surface-2); border-radius:10px; padding:11px 12px;}
 .stat b{display:block; font-size:21px; font-weight:650; letter-spacing:-.01em;}
 .stat span{font-size:12.5px; color:var(--ink-soft);}
 .note{font-size:13.5px; color:var(--ink-soft); line-height:1.5; margin:10px 0 0;}
@@ -321,8 +314,6 @@ dl{margin:0;}
         <div id="roomChips" class="chips"></div>
         <label for="fNotes">Description / notes</label>
         <textarea id="fNotes" rows="3" placeholder="Condition, maker, any marks or damage worth recording"></textarea>
-        <label for="fValue">Estimated value <span class="hint">(optional)</span></label>
-        <div class="prefix-input"><span>&#163;</span><input id="fValue" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off"></div>
       </div>
 
       <div class="btn-row form-actions">
@@ -344,7 +335,6 @@ dl{margin:0;}
       <div class="card">
         <dl>
           <div class="kv"><dt>Room</dt><dd id="dRoom"></dd></div>
-          <div class="kv"><dt>Value</dt><dd id="dValue"></dd></div>
           <div class="kv"><dt>Description</dt><dd id="dNotes"></dd></div>
           <div class="kv"><dt>Added</dt><dd id="dAdded"></dd></div>
         </dl>
@@ -363,7 +353,6 @@ dl{margin:0;}
           <div class="stat"><b id="sCount">0</b><span>Items catalogued</span></div>
           <div class="stat"><b id="sPhotos">0</b><span>Photos taken</span></div>
           <div class="stat"><b id="sRooms">0</b><span>Rooms covered</span></div>
-          <div class="stat"><b id="sValue">&#163;0</b><span>Estimated total</span></div>
         </div>
       </div>
 
@@ -545,10 +534,6 @@ var store = (function(){
 /* ---------------------------------------------------------------
    2. Small helpers
    --------------------------------------------------------------- */
-var gbp = new Intl.NumberFormat("en-GB", { style:"currency", currency:"GBP" });
-var gbp0 = new Intl.NumberFormat("en-GB", { style:"currency", currency:"GBP", maximumFractionDigits:0 });
-
-function money(n){ return (typeof n === "number" && isFinite(n)) ? gbp.format(n) : ""; }
 function uid(){
   return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
 }
@@ -556,13 +541,6 @@ function esc(s){
   return String(s == null ? "" : s)
     .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
     .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
-}
-function parseValue(raw){
-  if(raw == null) return null;
-  var cleaned = String(raw).replace(/[^0-9.\-]/g, "");
-  if(!cleaned) return null;
-  var n = parseFloat(cleaned);
-  return isFinite(n) ? n : null;
 }
 function longDate(d){
   return d.toLocaleDateString("en-GB", { day:"numeric", month:"long", year:"numeric" });
@@ -665,11 +643,6 @@ function allRooms(){
 function totalPhotos(){
   return state.items.reduce(function(n, it){ return n + (it.photoCount || 0); }, 0);
 }
-function totalValue(){
-  return state.items.reduce(function(n, it){
-    return n + (typeof it.value === "number" && isFinite(it.value) ? it.value : 0);
-  }, 0);
-}
 
 function saveMeta(){
   return store.put("meta", [
@@ -759,7 +732,6 @@ function renderList(){
       : '<div class="thumb-empty">&#128247;</div>';
     var extra = [];
     if(it.photoCount) extra.push(it.photoCount + (it.photoCount === 1 ? " photo" : " photos"));
-    if(typeof it.value === "number") extra.push(money(it.value));
     return '<button class="item-card" data-id="' + esc(it.id) + '">' + thumb +
       '<div class="item-body">' +
         '<span class="item-ref">' + esc(it.ref) + "</span>" +
@@ -774,7 +746,6 @@ function renderStats(){
   $("sCount").textContent = state.items.length;
   $("sPhotos").textContent = totalPhotos();
   $("sRooms").textContent = allRooms().length;
-  $("sValue").textContent = gbp0.format(totalValue());
 }
 
 /* ---------------------------------------------------------------
@@ -873,7 +844,6 @@ function openAdd(){
   $("fName").value = "";
   $("fRoom").value = state.lastRoom;
   $("fNotes").value = "";
-  $("fValue").value = "";
   $("photoLabel").textContent = "Photos for " + refFor(state.nextRef);
   $("saveBtn").textContent = "Save item";
   renderPhotoStrip();
@@ -890,7 +860,6 @@ function openEdit(id){
   $("fName").value = it.name || "";
   $("fRoom").value = it.room || "";
   $("fNotes").value = it.notes || "";
-  $("fValue").value = (typeof it.value === "number") ? String(it.value) : "";
   $("photoLabel").textContent = "Photos for " + it.ref;
   $("saveBtn").textContent = "Save changes";
   renderPhotoStrip();
@@ -923,7 +892,6 @@ function saveItem(){
   var name = $("fName").value.trim();
   var room = $("fRoom").value.trim();
   var notes = $("fNotes").value.trim();
-  var value = parseValue($("fValue").value);
 
   if(!name && !state.draftPhotos.length){
     toast("Add a photo or a name first");
@@ -943,7 +911,6 @@ function saveItem(){
   item.name = name || "Untitled item";
   item.room = room;
   item.notes = notes;
-  item.value = value;
   item.updatedAt = Date.now();
 
   state.draftPhotos.forEach(function(p, i){ p.itemId = item.id; p.order = i; });
@@ -982,7 +949,6 @@ function openDetail(id){
   $("dRef").textContent = it.ref;
   $("dName").textContent = it.name || "Untitled item";
   $("dRoom").textContent = it.room || "—";
-  $("dValue").textContent = (typeof it.value === "number") ? money(it.value) : "Not recorded";
   $("dNotes").textContent = it.notes || "—";
   $("dAdded").textContent = it.createdAt ? longDate(new Date(it.createdAt)) : "—";
   $("dPhotos").innerHTML = "";
@@ -1197,9 +1163,6 @@ function buildPDF(items, photosByItem, generatedAt){
   text(MARGIN, PH - 234, 12.5, false, "Schedule of contents to be retained");
   rule(PH - 262);
 
-  var totalVal = items.reduce(function(n, it){
-    return n + (typeof it.value === "number" && isFinite(it.value) ? it.value : 0);
-  }, 0);
   var photoTotal = items.reduce(function(n, it){ return n + (it.photoCount || 0); }, 0);
   var roomNames = [], seenRoom = {};
   items.forEach(function(it){
@@ -1213,7 +1176,6 @@ function buildPDF(items, photosByItem, generatedAt){
     ["Photographs included", String(photoTotal)],
     ["Rooms covered", roomNames.length ? String(roomNames.length) : "—"]
   ];
-  if(totalVal > 0) rows.push(["Total estimated value", gbp.format(totalVal)]);
 
   var ry = PH - 296;
   rows.forEach(function(r){
@@ -1236,8 +1198,7 @@ function buildPDF(items, photosByItem, generatedAt){
   }
 
   fill("0.5", "0.52", "0.58");
-  text(MARGIN, MARGIN + 34, 9,  false, "Each item below is listed with its reference number, room, description and photographs.");
-  text(MARGIN, MARGIN + 21, 9,  false, "Prepared using Contents Inventory. Values shown are the owner's own estimates.");
+  text(MARGIN, MARGIN + 21, 9,  false, "Each item below is listed with its reference number, room, description and photographs.");
 
   /* ---- item sections ---- */
   var GAP = 12;
@@ -1253,7 +1214,7 @@ function buildPDF(items, photosByItem, generatedAt){
        its first row of photos stays on the same page as its name. */
     var nameLines = wrapText(it.name || "Untitled item", 14, true, CW);
     var noteLines = it.notes ? wrapText(it.notes, 10, false, CW - 96) : [];
-    var metaRows = 2 + (typeof it.value === "number" ? 1 : 0);
+    var metaRows = 2;
     var textH = 15 + nameLines.length * 17 + 2 + metaRows * 15 +
                 (noteLines.length ? 2 + noteLines.length * 13 : 0);
     keepTogether(textH + (photos.length ? boxH + 28 : 20));
@@ -1270,9 +1231,10 @@ function buildPDF(items, photosByItem, generatedAt){
     });
     y -= 2;
 
-    var meta = [["Room", it.room || "Not recorded"]];
-    if(typeof it.value === "number") meta.push(["Estimated value", gbp.format(it.value)]);
-    meta.push(["Photographs", photos.length ? String(photos.length) : "None"]);
+    var meta = [
+      ["Room", it.room || "Not recorded"],
+      ["Photographs", photos.length ? String(photos.length) : "None"]
+    ];
     meta.forEach(function(m){
       fill("0.45", "0.47", "0.53");
       text(MARGIN, y, 10, false, m[0]);
@@ -1494,9 +1456,9 @@ function colLetter(n){                     /* 1 -> A */
 }
 
 function buildXLSX(items, photosByItem, generatedAt){
-  var STYLE_HDR = 1, STYLE_TXT = 2, STYLE_CUR = 3, STYLE_MID = 4;
-  var headers = ["Photo", "Ref", "Item", "Room / location", "Description / notes", "Estimated value", "Photos"];
-  var widths  = [14, 12, 30, 20, 48, 16, 9];
+  var STYLE_HDR = 1, STYLE_TXT = 2, STYLE_MID = 3;
+  var headers = ["Photo", "Ref", "Item", "Room / location", "Description / notes", "Photos"];
+  var widths  = [14, 12, 32, 22, 54, 9];
 
   var media = [], anchors = [];
   var rowsXml = [];
@@ -1517,10 +1479,7 @@ function buildXLSX(items, photosByItem, generatedAt){
     cells.push('<c r="C' + r + '" s="' + STYLE_TXT + '" t="inlineStr"><is><t xml:space="preserve">' + xmlEsc(it.name || "Untitled item") + "</t></is></c>");
     cells.push('<c r="D' + r + '" s="' + STYLE_TXT + '" t="inlineStr"><is><t xml:space="preserve">' + xmlEsc(it.room || "") + "</t></is></c>");
     cells.push('<c r="E' + r + '" s="' + STYLE_TXT + '" t="inlineStr"><is><t xml:space="preserve">' + xmlEsc(it.notes || "") + "</t></is></c>");
-    cells.push(typeof it.value === "number" && isFinite(it.value)
-      ? '<c r="F' + r + '" s="' + STYLE_CUR + '"><v>' + it.value + "</v></c>"
-      : '<c r="F' + r + '" s="' + STYLE_CUR + '"/>');
-    cells.push('<c r="G' + r + '" s="' + STYLE_MID + '"><v>' + photos.length + "</v></c>");
+    cells.push('<c r="F' + r + '" s="' + STYLE_MID + '"><v>' + photos.length + "</v></c>");
 
     rowsXml.push('<row r="' + r + '"' + (hasPhoto ? ' ht="74" customHeight="1"' : "") + ">" +
       cells.join("") + "</row>");
@@ -1571,7 +1530,6 @@ function buildXLSX(items, photosByItem, generatedAt){
 
   var styles = XML_HEAD +
     '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
-    '<numFmts count="1"><numFmt numFmtId="164" formatCode="&quot;£&quot;#,##0.00"/></numFmts>' +
     '<fonts count="2">' +
       '<font><sz val="11"/><color theme="1"/><name val="Calibri"/></font>' +
       '<font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font>' +
@@ -1585,11 +1543,10 @@ function buildXLSX(items, photosByItem, generatedAt){
       '<border><left style="thin"><color rgb="FFD9DEE7"/></left><right style="thin"><color rgb="FFD9DEE7"/></right>' +
       '<top style="thin"><color rgb="FFD9DEE7"/></top><bottom style="thin"><color rgb="FFD9DEE7"/></bottom><diagonal/></border></borders>' +
     '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
-    '<cellXfs count="5">' +
+    '<cellXfs count="4">' +
       '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>' +
       '<xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>' +
       '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>' +
-      '<xf numFmtId="164" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment vertical="top"/></xf>' +
       '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="top"/></xf>' +
     "</cellXfs>" +
     '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>' +
