@@ -187,7 +187,9 @@ def enrich_row(row, log, live):
     if description:
         args += ["--description", description]
     if image_path:
-        args += ["--cover-image", str(image_path), "--thumbnail", str(image_path)]
+        # --thumbnail requires a square image; our source images are 1280x720
+        # widescreen (cover-image sized), so only --cover-image applies here.
+        args += ["--cover-image", str(image_path)]
     run_cli(args, live)
     print()
 
