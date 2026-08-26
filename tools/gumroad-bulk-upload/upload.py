@@ -38,6 +38,7 @@ from pathlib import Path
 HERE = Path(__file__).parent
 CSV_PATH = HERE / "products.csv"
 LOG_PATH = HERE / "upload_log.json"
+THUMBNAILS_DIR = Path.home() / "thumbnails"
 
 # One-off recovery: these 10 products were successfully created by an
 # earlier buggy run (which failed to read the new product's id back out of
@@ -158,9 +159,43 @@ def process_row(row, log, live):
     print()
 
 
+def enrich_row(row, log, live):
+    """Apply description + cover image / thumbnail to an already-published
+    product, without touching its file or re-publishing. Only acts on rows
+    that already have a known Gumroad id (in upload_log.json) and have a
+    description/thumbnail filled in in the CSV."""
+    sku = row["sku"].strip()
+    name = row["name"].strip()
+    description = row.get("description", "").strip()
+    thumbnail = row.get("thumbnail", "").strip()
+
+    if sku not in log:
+        print(f"[skip] {sku} — {name}: not uploaded yet, run without --enrich first")
+        return
+    if not description and not thumbnail:
+        print(f"[skip] {sku} — {name}: no description/thumbnail in products.csv")
+        return
+
+    product_id = log[sku]["id"]
+    image_path = THUMBNAILS_DIR / thumbnail if thumbnail else None
+    if image_path and not image_path.exists():
+        print(f"[error] {sku} — image not found: {image_path}")
+        return
+
+    print(f"[enrich] {sku} — {name}")
+    args = ["products", "update", str(product_id)]
+    if description:
+        args += ["--description", description]
+    if image_path:
+        args += ["--cover-image", str(image_path), "--thumbnail", str(image_path)]
+    run_cli(args, live)
+    print()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--live", action="store_true", help="Actually call the Gumroad CLI (default is dry-run print-only)")
+    parser.add_argument("--enrich", action="store_true", help="Apply description/cover image to already-published products instead of uploading new ones")
     args = parser.parse_args()
 
     if not CSV_PATH.exists():
@@ -170,17 +205,24 @@ def main():
     with CSV_PATH.open(newline="") as f:
         rows = list(csv.DictReader(f))
 
-    print(f"{len(rows)} rows in products.csv — {'LIVE run' if args.live else 'DRY RUN (pass --live to actually upload)'}\n")
+    mode = "ENRICH" if args.enrich else ("LIVE" if args.live else "DRY RUN")
+    print(f"{len(rows)} rows in products.csv — {mode} run\n")
 
     for row in rows:
         try:
-            process_row(row, log, args.live)
+            if args.enrich:
+                enrich_row(row, log, args.live)
+            else:
+                process_row(row, log, args.live)
         except Exception as e:
             print(f"[error] {row.get('sku')}: {e}\n")
 
-    uploaded = sum(1 for r in rows if r["sku"] in log)
-    pending = sum(1 for r in rows if r["sku"] not in log)
-    print(f"Done. {uploaded} uploaded so far, {pending} rows still need attention.")
+    if args.enrich:
+        print("Done.")
+    else:
+        uploaded = sum(1 for r in rows if r["sku"] in log)
+        pending = sum(1 for r in rows if r["sku"] not in log)
+        print(f"Done. {uploaded} uploaded so far, {pending} rows still need attention.")
 
 
 if __name__ == "__main__":
