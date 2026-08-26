@@ -106,6 +106,28 @@
     </div>`;
   }
 
+  function hsAuditSection(audits) {
+    const list = Array.isArray(audits) ? audits : [];
+    if (!list.length) {
+      return `<div class="doc-section">
+        <h3>H&amp;S Audit</h3>
+        <p><span class="badge badge-amber">⚠️ No H&amp;S audit was logged this month</span></p>
+      </div>`;
+    }
+    return `<div class="doc-section">
+      <h3>H&amp;S Audit</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Type</th><th>Conducted By</th><th>Date</th><th>Score</th><th>Flagged</th></tr></thead>
+        <tbody>${list.map((a) => {
+          const typeBadge = a.audit_type === "internal" ? `<span class="badge badge-blue">Internal</span>` : `<span class="badge badge-grey">External</span>`;
+          const score = a.audit_type === "internal" ? (a.score_pct === null ? "—" : `${a.score_pct}%`) : (a.file_url ? `<a href="${a.file_url}" target="_blank">📄 ${escapeHtml(a.file_name || "View file")}</a>` : "—");
+          const flagged = a.audit_type === "internal" ? (a.flagged_count > 0 ? `<span class="badge badge-red">${a.flagged_count}</span>` : "0") : "—";
+          return `<tr><td>${typeBadge}</td><td>${escapeHtml(a.conducted_by) || "—"}</td><td>${formatDate(a.conducted_date)}</td><td>${score}</td><td>${flagged}</td></tr>`;
+        }).join("")}</tbody>
+      </table></div>
+    </div>`;
+  }
+
   function plotHandoversSection(plots) {
     if (!plots || !plots.length) return "";
     return `<div class="doc-section">
@@ -186,6 +208,7 @@
       ${progressSection(r.progress_items)}
       ${outstandingSection(r.outstanding_items)}
       ${weeklyNotesSection("Health & Safety Notes", r.health_safety_notes, "health_safety_notes")}
+      ${hsAuditSection(r.hs_audits)}
       ${weeklyNotesSection("Issues / Risks / Delays", r.issues_risks, "issues_risks")}
       ${commercialSection(r.commercial_items)}
       ${plotHandoversSection(r.plot_handovers)}

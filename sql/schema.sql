@@ -1587,3 +1587,77 @@ create policy "editors delete blocks" on public.blocks for delete using (public.
 -- one plot. Items in an ordinary plot-specific list leave this unset —
 -- their plot is already implied by the list itself.
 alter table public.snag_items add column if not exists plot_id uuid references public.plots(id) on delete set null;
+
+-- ─── v19 ADDITIONS ────────────────────────────────────────────────
+-- H&S (Health & Safety) audits — a separate section per site, expected
+-- monthly. "internal" audits are filled in on a fixed condensed
+-- checklist (HS_CHECKLIST in tracker/js/app.js) with a
+-- Compliant/Non-Compliant/N/A/Good Practice status per item, plus a
+-- Low/Medium/High traffic-light severity on any Non-Compliant one.
+-- "external" audits are just an uploaded document (e.g. a third-party
+-- SHE inspection) with no checklist breakdown — file_url/file_name
+-- only. `month` is the first day of the calendar month this audit
+-- counts toward (independent of conducted_date, so a late upload can
+-- still be logged against the month it actually covers), matching
+-- monthly_reports.month's own format so both can be looked up with a
+-- single equality match rather than a date-range query.
+create table if not exists public.hs_audits (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  audit_type text not null check (audit_type in ('internal', 'external')),
+  month date not null,
+  conducted_by text,
+  conducted_date date not null default current_date,
+  notes text,
+  file_url text,
+  file_name text,
+  created_by uuid references auth.users(id),
+  created_at timestamptz not null default now()
+);
+create index if not exists hs_audits_project_month_idx on public.hs_audits (project_id, month);
+
+alter table public.hs_audits enable row level security;
+drop policy if exists "editors read hs_audits" on public.hs_audits;
+create policy "editors read hs_audits" on public.hs_audits for select using (public.is_project_editor(project_id));
+drop policy if exists "editors insert hs_audits" on public.hs_audits;
+create policy "editors insert hs_audits" on public.hs_audits for insert with check (public.is_project_editor(project_id));
+drop policy if exists "editors update hs_audits" on public.hs_audits;
+create policy "editors update hs_audits" on public.hs_audits for update using (public.is_project_editor(project_id));
+drop policy if exists "editors delete hs_audits" on public.hs_audits;
+create policy "editors delete hs_audits" on public.hs_audits for delete using (public.is_project_editor(project_id));
+
+-- One row per HS_CHECKLIST entry on an internal audit (external audits
+-- have none). section/item_name are plain-text copies taken at
+-- creation time, not a foreign key into that constant, so editing the
+-- checklist later never rewrites an already-completed audit's wording.
+create table if not exists public.hs_audit_items (
+  id uuid primary key default gen_random_uuid(),
+  audit_id uuid not null references public.hs_audits(id) on delete cascade,
+  project_id uuid not null references public.projects(id) on delete cascade,
+  section text not null,
+  item_name text not null,
+  status text not null default 'compliant' check (status in ('compliant', 'non_compliant', 'na', 'good_practice')),
+  severity text check (severity in ('low', 'medium', 'high')),
+  notes text,
+  photo_url text,
+  sort_order integer not null default 0
+);
+create index if not exists hs_audit_items_audit_idx on public.hs_audit_items (audit_id);
+
+alter table public.hs_audit_items enable row level security;
+drop policy if exists "editors read hs_audit_items" on public.hs_audit_items;
+create policy "editors read hs_audit_items" on public.hs_audit_items for select using (public.is_project_editor(project_id));
+drop policy if exists "editors insert hs_audit_items" on public.hs_audit_items;
+create policy "editors insert hs_audit_items" on public.hs_audit_items for insert with check (public.is_project_editor(project_id));
+drop policy if exists "editors update hs_audit_items" on public.hs_audit_items;
+create policy "editors update hs_audit_items" on public.hs_audit_items for update using (public.is_project_editor(project_id));
+drop policy if exists "editors delete hs_audit_items" on public.hs_audit_items;
+create policy "editors delete hs_audit_items" on public.hs_audit_items for delete using (public.is_project_editor(project_id));
+
+-- Frozen snapshot of that month's H&S audits at generation time, same
+-- convention as monthly_reports' other jsonb columns: [{ audit_type,
+-- conducted_by, conducted_date, score_pct, flagged_count, file_url,
+-- file_name }]. Deliberately not a foreign key list — a monthly
+-- report's own record of what happened shouldn't change if an audit is
+-- edited or deleted afterwards.
+alter table public.monthly_reports add column if not exists hs_audits jsonb not null default '[]'::jsonb;

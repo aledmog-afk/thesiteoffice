@@ -68,6 +68,12 @@
         <div><strong id="gatesApprovedCount">–</strong>gates approved</div>
       </div>
     </a>
+    <a class="tile" href="hs-audits.html?project=" id="hsAuditsTile">
+      <div class="tile-icon">🦺</div>
+      <div class="tile-name">H&amp;S Audits</div>
+      <div class="tile-stats"><div><strong id="hsAuditCount">–</strong>logged</div></div>
+      <div id="hsAuditFlag" class="badge badge-amber" style="display:none; margin-top:0.5rem;">⚠️ None this month</div>
+    </a>
     <a class="tile" href="commercials.html?project=" id="commercialsTile">
       <div class="tile-icon">💷</div>
       <div class="tile-name">Commercials</div>
@@ -167,7 +173,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, geocodePostcode, recalculateActualProgress, generateMissingPlots, suggestPlotProgress, EXTERNAL_WORKS_TAG } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, geocodePostcode, recalculateActualProgress, generateMissingPlots, suggestPlotProgress, EXTERNAL_WORKS_TAG, monthStartISO } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("id");
@@ -177,6 +183,7 @@
   document.getElementById("monthlyReportsTile").href = `monthly-reports.html?project=${projectId}`;
   document.getElementById("snaggingTile").href = `snagging.html?project=${projectId}`;
   document.getElementById("plotHandoversTile").href = `plot-handovers.html?project=${projectId}`;
+  document.getElementById("hsAuditsTile").href = `hs-audits.html?project=${projectId}`;
   document.getElementById("commercialsTile").href = `commercials.html?project=${projectId}`;
   document.getElementById("drawingsTile").href = `drawings.html?project=${projectId}`;
 
@@ -491,7 +498,7 @@
     document.getElementById("progressCard").style.display = "none";
     document.getElementById("detailsCard").style.display = "none";
     document.getElementById("collaboratorsCard").style.display = "none";
-    ["reportsTile", "monthlyReportsTile", "plotHandoversTile", "commercialsTile", "drawingsTile"].forEach((id) => {
+    ["reportsTile", "monthlyReportsTile", "plotHandoversTile", "hsAuditsTile", "commercialsTile", "drawingsTile"].forEach((id) => {
       document.getElementById(id).style.display = "none";
     });
   }
@@ -519,7 +526,7 @@
 
     loadMembers();
 
-    const [{ count: reportCount }, { count: monthlyReportCount }, { data: snags }, { count: fetchedPlotsCount }, { data: gates }, { data: commercials }, { count: drawingsCount }] = await Promise.all([
+    const [{ count: reportCount }, { count: monthlyReportCount }, { data: snags }, { count: fetchedPlotsCount }, { data: gates }, { data: commercials }, { count: drawingsCount }, { data: hsAudits }] = await Promise.all([
       supabase.from("weekly_reports").select("id", { count: "exact", head: true }).eq("project_id", projectId),
       supabase.from("monthly_reports").select("id", { count: "exact", head: true }).eq("project_id", projectId),
       supabase.from("snag_items").select("status").eq("project_id", projectId),
@@ -527,6 +534,7 @@
       supabase.from("quality_gates").select("status").eq("project_id", projectId),
       supabase.from("commercial_items").select("status").eq("project_id", projectId),
       supabase.from("drawings").select("id", { count: "exact", head: true }).eq("project_id", projectId),
+      supabase.from("hs_audits").select("month").eq("project_id", projectId),
     ]);
     document.getElementById("reportCount").textContent = reportCount ?? 0;
     document.getElementById("monthlyReportCount").textContent = monthlyReportCount ?? 0;
@@ -538,6 +546,8 @@
     document.getElementById("gatesApprovedCount").textContent = `${applicableGates.filter(g => g.status === "approved").length} / ${applicableGates.length}`;
     document.getElementById("commercialsPendingCount").textContent = (commercials || []).filter(c => c.status === "pending_client_review").length;
     document.getElementById("drawingsCount").textContent = drawingsCount ?? 0;
+    document.getElementById("hsAuditCount").textContent = (hsAudits || []).length;
+    document.getElementById("hsAuditFlag").style.display = (hsAudits || []).some(a => a.month === monthStartISO()) ? "none" : "inline-flex";
     updateGeneratePlotsButton();
   }
 

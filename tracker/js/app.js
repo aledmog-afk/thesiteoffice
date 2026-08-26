@@ -68,6 +68,14 @@ export function todayISO() {
   return toLocalISODate(new Date());
 }
 
+// First-of-month ISO date for a given Date (defaults to today) — the
+// bucket key hs_audits.month and monthly_reports.month both use, so
+// "does this calendar month have one yet" is one equality match
+// instead of a date-range query.
+export function monthStartISO(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-01`;
+}
+
 // Given a Date, return the Monday of that week as an ISO date string.
 export function mondayOf(date) {
   const d = new Date(date);
@@ -615,6 +623,78 @@ export const BUILD_MILESTONES = [
   "Handover / Practical Completion",
 ];
 const MILESTONE_CUSTOM_VALUE = "__custom__";
+
+// ─── H&S Audits ─────────────────────────────────────────────────
+// A condensed checklist covering the areas a UK residential site H&S
+// audit typically checks — trimmed from a fuller ~80-item third-party
+// SHE inspection template down to the items most sites actually need
+// to see on a monthly walk-round. Each internal audit gets one
+// hs_audit_items row per entry here (section + item_name copied in as
+// plain text at creation time, not a foreign key back to this list,
+// so editing this constant later never rewrites the wording of an
+// already-completed audit).
+export const HS_CHECKLIST = [
+  { section: "Statutory Documentation", item: "Health & Safety Policy" },
+  { section: "Statutory Documentation", item: "Construction Phase Plan" },
+  { section: "Statutory Documentation", item: "Site Induction Records" },
+  { section: "Statutory Documentation", item: "Risk Assessments" },
+  { section: "Statutory Documentation", item: "Method Statements" },
+  { section: "Statutory Documentation", item: "F10 Notification" },
+  { section: "Statutory Documentation", item: "Insurances" },
+  { section: "Statutory Documentation", item: "Plant Inspection Records" },
+  { section: "Statutory Documentation", item: "Scaffold Inspection Records" },
+  { section: "Statutory Documentation", item: "LOLER / Lifting Equipment Inspections" },
+  { section: "General Requirements", item: "Welfare Facilities" },
+  { section: "General Requirements", item: "PPE" },
+  { section: "General Requirements", item: "Operative Competencies / CSCS" },
+  { section: "General Requirements", item: "First Aid Provisions" },
+  { section: "General Requirements", item: "Fire Fighting Provisions" },
+  { section: "General Requirements", item: "Emergency Procedures" },
+  { section: "General Requirements", item: "Site Security" },
+  { section: "General Requirements", item: "Walkways / Access Routes" },
+  { section: "General Requirements", item: "Traffic Management" },
+  { section: "General Requirements", item: "Site Signage" },
+  { section: "Site Based Hazards", item: "Working at Height" },
+  { section: "Site Based Hazards", item: "Scaffolding" },
+  { section: "Site Based Hazards", item: "Ladders" },
+  { section: "Site Based Hazards", item: "Excavations" },
+  { section: "Site Based Hazards", item: "Plant Operation" },
+  { section: "Site Based Hazards", item: "Use of Hand Tools" },
+  { section: "Site Based Hazards", item: "Materials Handling" },
+  { section: "Site Based Hazards", item: "Storage of Materials" },
+  { section: "Site Based Hazards", item: "Housekeeping" },
+  { section: "Site Based Hazards", item: "Noise" },
+  { section: "Site Based Hazards", item: "Hazardous Substances (COSHH)" },
+  { section: "Site Based Hazards", item: "Structural Safety" },
+  { section: "Environmental", item: "Emissions to Air" },
+  { section: "Environmental", item: "Spill Kits" },
+  { section: "Environmental", item: "Waste Storage" },
+  { section: "Environmental", item: "Hazardous Waste" },
+  { section: "Environmental", item: "Water Courses" },
+  { section: "Environmental", item: "Protected Species / Ecology" },
+];
+
+export const HS_STATUS_LABEL = { compliant: "Compliant", non_compliant: "Non-Compliant", na: "N/A", good_practice: "Good Practice" };
+export const HS_STATUS_BADGE = { compliant: "badge-green", non_compliant: "badge-red", na: "badge-grey", good_practice: "badge-blue" };
+
+// The traffic-light rating for a Non-Compliant item — how serious that
+// particular issue is, separate from (and only meaningful alongside)
+// its Compliant/Non-Compliant/N/A/Good Practice status above.
+export const HS_SEVERITY_LABEL = { low: "Low", medium: "Medium", high: "High" };
+export const HS_SEVERITY_BADGE = { low: "badge-green", medium: "badge-amber", high: "badge-red" };
+
+// Score % excludes N/A items from both sides of the fraction, same rule
+// as the quality-gates approved ratio — marking something N/A can only
+// help a site's score, never hold it back. flaggedCount is just the
+// Non-Compliant count, shown alongside the score rather than folded
+// into it.
+export function hsAuditScore(items) {
+  const applicable = (items || []).filter((i) => i.status !== "na");
+  const passing = applicable.filter((i) => i.status === "compliant" || i.status === "good_practice").length;
+  const flaggedCount = applicable.filter((i) => i.status === "non_compliant").length;
+  const scorePct = applicable.length ? Math.round((passing / applicable.length) * 1000) / 10 : null;
+  return { scorePct, flaggedCount, applicableCount: applicable.length };
+}
 
 // ─── Itemised list editor ────────────────────────────────────────
 // Mounts an add/edit/delete list UI into `container`. Each item is

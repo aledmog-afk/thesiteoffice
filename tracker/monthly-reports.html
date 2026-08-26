@@ -42,7 +42,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, formatDate, RAG_LABEL, BUILD_MILESTONES, toLocalISODate, comparePlotNumbers } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, formatDate, RAG_LABEL, BUILD_MILESTONES, toLocalISODate, comparePlotNumbers, hsAuditScore } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -157,6 +157,28 @@
 
     const photos = reports.flatMap((r) => (Array.isArray(r.photos) ? r.photos : []));
 
+    // H&S audits logged for this exact month (hs_audits.month uses the
+    // same first-of-month format as monthly_reports.month), frozen into
+    // a snapshot here — a monthly report's own record of what happened
+    // shouldn't change if an audit is edited or deleted afterwards.
+    const { data: monthAudits } = await supabase
+      .from("hs_audits")
+      .select("*, hs_audit_items(status)")
+      .eq("project_id", projectId)
+      .eq("month", monthStart);
+    const hsAudits = (monthAudits || []).map((a) => {
+      const { scorePct, flaggedCount } = a.audit_type === "internal" ? hsAuditScore(a.hs_audit_items) : { scorePct: null, flaggedCount: null };
+      return {
+        audit_type: a.audit_type,
+        conducted_by: a.conducted_by,
+        conducted_date: a.conducted_date,
+        score_pct: scorePct,
+        flagged_count: flaggedCount,
+        file_url: a.file_url,
+        file_name: a.file_name,
+      };
+    });
+
     const [{ count: snagsRaised }, { count: snagsClosed }] = await Promise.all([
       supabase.from("snag_items").select("id", { count: "exact", head: true }).eq("project_id", projectId).gte("raised_date", monthStart).lte("raised_date", monthEnd),
       supabase.from("snag_items").select("id", { count: "exact", head: true }).eq("project_id", projectId).gte("closed_date", monthStart).lte("closed_date", monthEnd),
@@ -208,6 +230,7 @@
       weather_summary: weatherSummary,
       weather_lost_days: weatherLostDays,
       total_lost_hours: totalLostHours,
+      hs_audits: hsAudits,
       photos,
       created_by: user.id,
     };
