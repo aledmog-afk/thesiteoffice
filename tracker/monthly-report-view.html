@@ -23,7 +23,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, getOrgLogoUrl, formatGBP, RAG_LABEL, renderProgressBlock } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, getOrgLogoUrl, formatGBP, RAG_LABEL, renderProgressBlock, RISK_IMPACT_BADGE } from "./js/app.js";
 
   await requireAuth();
   const reportId = getParam("id");
@@ -59,6 +59,27 @@
     return `<div class="doc-section"><h3>${escapeHtml(title)}</h3><ul class="body-list">${entries.map((e) =>
       `<li><strong>${formatDate(e.week_starting)} – ${formatDate(e.week_ending)}:</strong> ${escapeHtml(e[field])}</li>`
     ).join("")}</ul></div>`;
+  }
+
+  function riskItemsSection(items) {
+    const list = Array.isArray(items) ? items : [];
+    if (!list.length) return "";
+    return `<div class="doc-section">
+      <h3>Risk &amp; Delays Tracker</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Risk / Issue</th><th>Action Required</th><th>Owner</th><th>Target Date</th><th>Impact</th><th>Week</th></tr></thead>
+        <tbody>${list.map((i) => `
+          <tr>
+            <td>${escapeHtml(i.description) || "—"}</td>
+            <td>${escapeHtml(i.action_required) || "—"}</td>
+            <td>${escapeHtml(i.owner) || "—"}</td>
+            <td>${i.target_date ? formatDate(i.target_date) : "—"}</td>
+            <td>${i.impact ? `<span class="badge ${RISK_IMPACT_BADGE[i.impact] || "badge-grey"}">${escapeHtml(i.impact)}</span>` : "—"}</td>
+            <td>${formatDate(i.week_starting)}</td>
+          </tr>
+        `).join("")}</tbody>
+      </table></div>
+    </div>`;
   }
 
   function commercialSection(items) {
@@ -209,6 +230,7 @@
       ${outstandingSection(r.outstanding_items)}
       ${weeklyNotesSection("Health & Safety Notes", r.health_safety_notes, "health_safety_notes")}
       ${hsAuditSection(r.hs_audits)}
+      ${riskItemsSection(r.risk_items)}
       ${weeklyNotesSection("Issues / Risks / Delays", r.issues_risks, "issues_risks")}
       ${commercialSection(r.commercial_items)}
       ${plotHandoversSection(r.plot_handovers)}

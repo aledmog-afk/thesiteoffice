@@ -153,6 +153,17 @@ tr:hover td { background: var(--off); }
 .photo-thumb img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 5px; border: 1px solid var(--rule); }
 .photo-thumb .remove { position: absolute; top: -6px; right: -6px; background: var(--red); color: #fff; border: none; border-radius: 50%; width: 20px; height: 20px; font-size: 0.75rem; cursor: pointer; line-height: 1; }
 
+/* ─── TAGGED PHOTO GALLERY (weekly report CoW cards) ─ */
+.photo-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 1rem; margin-top: 0.6rem; }
+.photo-card { position: relative; border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; background: var(--white); }
+.photo-card img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; display: block; }
+.photo-card .remove { position: absolute; top: 6px; right: 6px; background: var(--red); color: #fff; border: none; border-radius: 50%; width: 22px; height: 22px; font-size: 0.8rem; cursor: pointer; line-height: 1; }
+.photo-card-fields, .photo-card-body { padding: 0.6rem; display: flex; flex-direction: column; gap: 0.35rem; }
+.photo-card-fields input, .photo-card-fields select { font-size: 0.8rem; margin: 0; }
+.photo-card-tag { font-weight: 700; font-size: 0.82rem; }
+.photo-card-category { font-size: 0.78rem; color: var(--ink-soft); }
+.photo-card-caption { font-size: 0.82rem; white-space: pre-wrap; }
+
 /* ─── AUTH PAGES ─────────────────────────────────── */
 .auth-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 2rem; }
 .auth-card { width: 100%; max-width: 380px; background: var(--white); border: 1px solid var(--rule); border-radius: 8px; padding: 2.2rem; }
@@ -308,4 +319,11 @@ tr:hover td { background: var(--off); }
   .doc { border: none; padding: 0; max-width: 100%; }
   .page { padding: 0; max-width: 100%; }
   a { color: inherit; text-decoration: none; }
+
+  /* Keep a photo card or table row from splitting across a page break —
+     each is small enough to always fit, so "avoid" never forces an
+     unreasonably large gap the way it could on a whole table/section. */
+  .photo-card, .doc-section table tr { break-inside: avoid; page-break-inside: avoid; }
+  .doc-section table thead { display: table-header-row-group; }
+  .photo-gallery { grid-template-columns: repeat(2, 1fr); }
 }

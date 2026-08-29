@@ -111,10 +111,12 @@
             milestone: item.milestone || "",
             text: item.text || "",
             percent,
+            verification_notes: item.verification_notes || prev?.verification_notes || "",
             completed_this_month: percent >= 100 || !!prev?.completed_this_month,
           });
         } else if (prev) {
           prev.completed_this_month = prev.completed_this_month || percent >= 100;
+          prev.verification_notes = item.verification_notes || prev.verification_notes;
         }
       }
     }
@@ -132,6 +134,15 @@
     const issuesRisks = reports
       .filter((r) => r.issues_risks)
       .map((r) => ({ week_starting: r.week_starting, week_ending: r.week_ending, issues_risks: r.issues_risks }));
+
+    // Structured risk/delay entries, flattened across the month's
+    // reports and tagged with the week each came from — same convention
+    // as commercial_items below. This is what future reports actually
+    // populate; issuesRisks above stays purely for backward
+    // compatibility with reports saved before this existed.
+    const riskItems = reports.flatMap((r) =>
+      (Array.isArray(r.risk_items) ? r.risk_items : []).map((i) => ({ ...i, week_starting: r.week_starting }))
+    );
 
     const commercialItems = reports.flatMap((r) =>
       (Array.isArray(r.commercial_items) ? r.commercial_items : []).map((c) => ({ ...c, week_starting: r.week_starting }))
@@ -222,6 +233,7 @@
       progress_items: progressItems,
       health_safety_notes: healthSafetyNotes,
       issues_risks: issuesRisks,
+      risk_items: riskItems,
       commercial_items: commercialItems,
       outstanding_items: outstandingItems,
       snags_raised_count: snagsRaised || 0,

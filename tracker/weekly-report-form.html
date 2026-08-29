@@ -48,7 +48,25 @@
         <p class="hint" id="carriedOverHint" style="display:none;">Pre-filled from last week's plan — set % complete on each. Anything under 100% carries into this week's own "Plan for next week" automatically; reaching 100% drops it for good.</p>
       </div>
       <div class="field"><label for="healthSafety">Health &amp; safety notes</label><textarea id="healthSafety" rows="3" placeholder="Inspections, incidents, near misses, toolbox talks held"></textarea></div>
-      <div class="field"><label for="issuesRisks">Issues / risks / delays</label><textarea id="issuesRisks" rows="3"></textarea></div>
+
+      <div class="field">
+        <label>Labour &amp; Site Resource Tracker</label>
+        <div id="labourItems"></div>
+        <p class="hint">Attendance by trade this week — headcount, what they're doing and where, and whether that's enough to hold programme.</p>
+      </div>
+
+      <div class="field">
+        <label>Risk &amp; Delays Tracker</label>
+        <div id="riskItems"></div>
+        <p class="hint">Each risk/issue with what needs to happen, who owns it, and by when — e.g. a utility diversion tracked through to the party actually responsible for resolving it.</p>
+      </div>
+
+      <div class="field">
+        <label>Statutory &amp; Testing Milestones</label>
+        <div id="statutoryItems"></div>
+        <p class="hint">Statutory witnessing (air permeability, sound, drainage pressure tests) and Building Control / warranty inspector (NHBC/Premier) visits and sign-offs.</p>
+      </div>
+
       <div class="field"><label for="otherComments">Other comments</label><textarea id="otherComments" rows="3"></textarea></div>
       <div class="field">
         <label>Commercial items this week</label>
@@ -61,10 +79,15 @@
       </div>
 
       <div class="field">
-        <label>Site photos</label>
+        <label>Site Photos</label>
         <input type="file" id="photoInput" accept="image/*" multiple>
-        <div class="photo-grid" id="photoGrid"></div>
+        <div class="photo-gallery" id="photoGallery"></div>
+        <p class="hint">Tag each photo with the plot/area, what it's evidencing, and its compliance status — these tags print with the photo on the PDF.</p>
       </div>
+
+      <datalist id="plotAreaSuggestions"></datalist>
+      <datalist id="tradeSuggestions"></datalist>
+      <datalist id="riskOwnerSuggestions"></datalist>
 
       <div class="btn-row">
         <button type="submit" class="btn btn-amber" id="saveBtn">Save Report</button>
@@ -76,7 +99,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions, comparePlotNumbers, syncGateStatusFromMilestones, EXTERNAL_WORKS_TAG } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, mountTableEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions, comparePlotNumbers, syncGateStatusFromMilestones, EXTERNAL_WORKS_TAG, PHOTO_COMPLIANCE_STATUS, RESOURCE_ADEQUACY, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_LEVELS, RISK_IMPACT_BADGE, RISK_OWNER_SUGGESTIONS, STATUTORY_MILESTONE_TYPES, STATUTORY_OUTCOMES, STATUTORY_OUTCOME_BADGE } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -98,9 +121,38 @@
     ...(blocksForTagging || []).map((b) => b.block_name).sort(comparePlotNumbers),
     EXTERNAL_WORKS_TAG,
   ];
+  document.getElementById("plotAreaSuggestions").innerHTML = plotOptions.map((p) => `<option value="${escapeHtml(p)}">`).join("");
+  document.getElementById("tradeSuggestions").innerHTML = ["Bricklayers", "Carpenters", "Plumbers", "Electricians", "Groundworkers", "Roofers", "Scaffolders", "Painters & Decorators", "Plasterers"].map((t) => `<option value="${escapeHtml(t)}">`).join("");
+  document.getElementById("riskOwnerSuggestions").innerHTML = RISK_OWNER_SUGGESTIONS.map((o) => `<option value="${escapeHtml(o)}">`).join("");
 
-  let progressEditor = mountItemListEditor(document.getElementById("progressItems"), [], () => {}, { withPercent: true, withMilestone: true, plotOptions });
+  let progressEditor = mountItemListEditor(document.getElementById("progressItems"), [], () => {}, { withPercent: true, withMilestone: true, withVerification: true, plotOptions });
   let nextWeekEditor = mountItemListEditor(document.getElementById("nextWeekItems"), [], () => {}, { withMilestone: true, plotOptions });
+
+  const labourColumns = [
+    { key: "trade", label: "Trade", type: "text", placeholder: "Subcontractor / trade", datalist: "tradeSuggestions", flex: "1 1 160px" },
+    { key: "headcount", label: "Headcount", type: "number", placeholder: "No. on site", flex: "0 0 110px" },
+    { key: "activity_location", label: "Activity / Location", type: "text", placeholder: "Trade activity / location", flex: "1 1 200px" },
+    { key: "adequacy", label: "Resource Adequacy", type: "select", options: RESOURCE_ADEQUACY, badgeMap: RESOURCE_ADEQUACY_BADGE, placeholder: "Resource adequacy…" },
+  ];
+  let labourEditor = mountTableEditor(document.getElementById("labourItems"), [], () => {}, { columns: labourColumns });
+
+  const riskColumns = [
+    { key: "description", label: "Risk / Issue", type: "text", placeholder: "Risk / issue description", flex: "1 1 220px" },
+    { key: "action_required", label: "Action Required", type: "text", placeholder: "Action required", flex: "1 1 220px" },
+    { key: "owner", label: "Owner", type: "text", placeholder: "Action owner", datalist: "riskOwnerSuggestions", flex: "0 0 170px" },
+    { key: "target_date", label: "Target Date", type: "date" },
+    { key: "impact", label: "Impact", type: "select", options: RISK_IMPACT_LEVELS, badgeMap: RISK_IMPACT_BADGE, placeholder: "Impact…" },
+  ];
+  let riskEditor = mountTableEditor(document.getElementById("riskItems"), [], () => {}, { columns: riskColumns });
+
+  const statutoryColumns = [
+    { key: "type", label: "Type", type: "select", options: STATUTORY_MILESTONE_TYPES, flex: "0 0 210px", placeholder: "Type…" },
+    { key: "plot_area", label: "Plot / Area", type: "text", placeholder: "Plot / area", datalist: "plotAreaSuggestions", flex: "0 0 150px" },
+    { key: "date", label: "Date", type: "date" },
+    { key: "outcome", label: "Outcome", type: "select", options: STATUTORY_OUTCOMES, badgeMap: STATUTORY_OUTCOME_BADGE, placeholder: "Outcome…" },
+    { key: "notes", label: "Notes", type: "text", placeholder: "Notes", flex: "1 1 200px" },
+  ];
+  let statutoryEditor = mountTableEditor(document.getElementById("statutoryItems"), [], () => {}, { columns: statutoryColumns });
 
   // ─── Weather tracker ─────────────────────────────────────────────
   // A fixed 5-day grid (Mon–Fri of the report's week, derived from
@@ -373,23 +425,40 @@
   });
 
   let photos = [];
-  const photoGrid = document.getElementById("photoGrid");
+  const photoGallery = document.getElementById("photoGallery");
   const photoInput = document.getElementById("photoInput");
   const errorBox = document.getElementById("errorBox");
 
+  // Each photo is { url, plot_area, category, compliance_status, caption }
+  // — all four fields directly editable in place on its card, rather
+  // than a separate edit/view toggle, since there's already room for a
+  // few small inputs alongside a photo this size.
   function renderPhotos() {
-    photoGrid.innerHTML = photos.map((p, i) => `
-      <div class="photo-thumb">
-        <img src="${p.url}" alt="${p.caption || ""}">
+    photoGallery.innerHTML = photos.map((p, i) => `
+      <div class="photo-card">
+        <img src="${p.url}" alt="${escapeHtml(p.caption) || ""}">
         <button type="button" class="remove" data-i="${i}">✕</button>
+        <div class="photo-card-fields">
+          <input type="text" class="pc-plot" data-i="${i}" list="plotAreaSuggestions" placeholder="Plot / Area (e.g. Plots 20–22)" value="${escapeHtml(p.plot_area)}">
+          <input type="text" class="pc-category" data-i="${i}" placeholder="Inspection Category / Element" value="${escapeHtml(p.category)}">
+          <select class="pc-status" data-i="${i}">
+            <option value="">Compliance status…</option>
+            ${PHOTO_COMPLIANCE_STATUS.map((s) => `<option value="${s}" ${p.compliance_status === s ? "selected" : ""}>${s}</option>`).join("")}
+          </select>
+          <input type="text" class="pc-caption" data-i="${i}" placeholder="Caption / observation notes" value="${escapeHtml(p.caption)}">
+        </div>
       </div>
     `).join("");
-    photoGrid.querySelectorAll(".remove").forEach((btn) => {
+    photoGallery.querySelectorAll(".remove").forEach((btn) => {
       btn.addEventListener("click", () => {
         photos.splice(Number(btn.dataset.i), 1);
         renderPhotos();
       });
     });
+    photoGallery.querySelectorAll(".pc-plot").forEach((el) => el.addEventListener("change", () => { photos[Number(el.dataset.i)].plot_area = el.value.trim(); }));
+    photoGallery.querySelectorAll(".pc-category").forEach((el) => el.addEventListener("change", () => { photos[Number(el.dataset.i)].category = el.value.trim(); }));
+    photoGallery.querySelectorAll(".pc-status").forEach((el) => el.addEventListener("change", () => { photos[Number(el.dataset.i)].compliance_status = el.value; }));
+    photoGallery.querySelectorAll(".pc-caption").forEach((el) => el.addEventListener("change", () => { photos[Number(el.dataset.i)].caption = el.value.trim(); }));
   }
 
   photoInput.addEventListener("change", async () => {
@@ -398,7 +467,7 @@
     try {
       for (const file of files) {
         const url = await uploadImage(file, `${projectId}/reports`);
-        photos.push({ url, caption: "" });
+        photos.push({ url, plot_area: "", category: "", compliance_status: "", caption: "" });
       }
       renderPhotos();
     } catch (err) {
@@ -440,7 +509,7 @@
         .limit(1);
       const carried = prevReports?.[0]?.next_week_items;
       if (Array.isArray(carried) && carried.length) {
-        progressEditor = mountItemListEditor(document.getElementById("progressItems"), carried, () => {}, { withPercent: true, withMilestone: true, plotOptions });
+        progressEditor = mountItemListEditor(document.getElementById("progressItems"), carried, () => {}, { withPercent: true, withMilestone: true, withVerification: true, plotOptions });
         document.getElementById("carriedOverHint").style.display = "block";
       }
       return;
@@ -455,7 +524,6 @@
     document.getElementById("weather").value = r.weather || "";
     weatherTracker.setWeek(r.week_starting, r.weather_days);
     document.getElementById("healthSafety").value = r.health_safety_notes || "";
-    document.getElementById("issuesRisks").value = r.issues_risks || "";
     document.getElementById("otherComments").value = r.other_comments || r.deliveries_materials || "";
 
     const progressItems = (Array.isArray(r.progress_items) && r.progress_items.length)
@@ -464,11 +532,20 @@
     const nextWeekItems = (Array.isArray(r.next_week_items) && r.next_week_items.length)
       ? r.next_week_items
       : (r.next_week_plan ? [r.next_week_plan] : []);
-    progressEditor = mountItemListEditor(document.getElementById("progressItems"), progressItems, () => {}, { withPercent: true, withMilestone: true, plotOptions });
+    progressEditor = mountItemListEditor(document.getElementById("progressItems"), progressItems, () => {}, { withPercent: true, withMilestone: true, withVerification: true, plotOptions });
     nextWeekEditor = mountItemListEditor(document.getElementById("nextWeekItems"), nextWeekItems, () => {}, { withMilestone: true, plotOptions });
     commercialEditor = mountCommercialEditor(document.getElementById("commercialItems"), r.commercial_items);
+    labourEditor = mountTableEditor(document.getElementById("labourItems"), r.labour_records, () => {}, { columns: labourColumns });
+    riskEditor = mountTableEditor(document.getElementById("riskItems"), r.risk_items, () => {}, { columns: riskColumns });
+    statutoryEditor = mountTableEditor(document.getElementById("statutoryItems"), r.statutory_milestones, () => {}, { columns: statutoryColumns });
 
-    photos = Array.isArray(r.photos) ? r.photos : [];
+    photos = (Array.isArray(r.photos) ? r.photos : []).map((p) => ({
+      url: p.url,
+      plot_area: p.plot_area || "",
+      category: p.category || "",
+      compliance_status: p.compliance_status || "",
+      caption: p.caption || "",
+    }));
     renderPhotos();
   }
 
@@ -486,10 +563,12 @@
       weather_days: weatherTracker.getDays(),
       progress_items: progressEditor.getItems(),
       health_safety_notes: document.getElementById("healthSafety").value.trim() || null,
-      issues_risks: document.getElementById("issuesRisks").value.trim() || null,
       other_comments: document.getElementById("otherComments").value.trim() || null,
       next_week_items: syncNextWeekFromProgress(progressEditor.getItems(), nextWeekEditor.getItems()),
       commercial_items: commercialEditor.getItems(),
+      labour_records: labourEditor.getRows(),
+      risk_items: riskEditor.getRows(),
+      statutory_milestones: statutoryEditor.getRows(),
       photos,
     };
     document.getElementById("saveBtn").disabled = true;

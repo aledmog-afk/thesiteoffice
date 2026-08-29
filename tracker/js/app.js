@@ -714,11 +714,15 @@ export function hsAuditScore(items) {
 // expects (suggestPlotProgress() etc. already split on commas), so this
 // is a pure UI change with no data-shape migration. Falls back to the
 // plain text input when omitted/empty.
+// Pass { withVerification: true } to add a Clerk of Works "Quality
+// Verification & Notes" field to every item (e.g. "Pre-plaster check
+// signed off") — used for progress items only, so a report reads as a
+// verified works audit rather than just a contractor-reported %.
 // Calls onChange(items) whenever the list changes. Returns { getItems }.
-export function mountItemListEditor(container, initialItems, onChange, { withPercent = false, withMilestone = false, plotOptions = [] } = {}) {
+export function mountItemListEditor(container, initialItems, onChange, { withPercent = false, withMilestone = false, withVerification = false, plotOptions = [] } = {}) {
   function normalise(item) {
     if (typeof item === "string") {
-      return { id: crypto.randomUUID(), plot: "", text: item, ...(withPercent ? { percent: 0 } : {}), ...(withMilestone ? { milestone: "" } : {}) };
+      return { id: crypto.randomUUID(), plot: "", text: item, ...(withPercent ? { percent: 0 } : {}), ...(withMilestone ? { milestone: "" } : {}), ...(withVerification ? { verification_notes: "" } : {}) };
     }
     return {
       id: item.id || crypto.randomUUID(),
@@ -726,6 +730,7 @@ export function mountItemListEditor(container, initialItems, onChange, { withPer
       text: item.text || "",
       ...(withPercent ? { percent: typeof item.percent === "number" ? item.percent : 0 } : {}),
       ...(withMilestone ? { milestone: item.milestone || "" } : {}),
+      ...(withVerification ? { verification_notes: item.verification_notes || "" } : {}),
     };
   }
   let items = (initialItems || []).map(normalise);
@@ -790,25 +795,28 @@ export function mountItemListEditor(container, initialItems, onChange, { withPer
             ${milestoneFieldHtml({ select: 'class="item-edit-milestone"', custom: 'class="item-edit-milestone-custom"' }, item.milestone || "")}
             <input type="text" class="item-edit-input" placeholder="Item (optional if milestone set)" value="${escapeHtml(item.text)}">
             ${withPercent ? `<input type="number" class="item-edit-percent" min="0" max="100" step="5" placeholder="%" value="${item.percent}" style="flex:0 0 80px;">` : ""}
+            ${withVerification ? `<input type="text" class="item-edit-verification" placeholder="CoW quality verification &amp; notes" value="${escapeHtml(item.verification_notes)}" style="flex:1 1 100%;">` : ""}
             <button type="button" class="btn btn-sm btn-amber" data-save="${i}">Save</button>
             <button type="button" class="btn btn-sm btn-outline" data-cancel="${i}">Cancel</button>
           </li>
         ` : `
-          <li class="item-row">
+          <li class="item-row" style="${withVerification ? "flex-wrap:wrap;" : ""}">
             ${item.plot ? `<span class="plot-tag">${escapeHtml(item.plot)}</span>` : ""}
             ${item.milestone ? `<span class="milestone-tag">${escapeHtml(item.milestone)}</span>` : ""}
             <span>${escapeHtml(item.text)}</span>
             ${percentBadge(item.percent)}
             <button type="button" class="btn btn-sm btn-outline" data-edit="${i}">Edit</button>
             <button type="button" class="btn btn-sm btn-danger" data-delete="${i}">Delete</button>
+            ${withVerification && item.verification_notes ? `<span class="hint" style="flex:1 1 100%;">CoW: ${escapeHtml(item.verification_notes)}</span>` : ""}
           </li>
         `).join("")}
       </ul>
-      <div class="item-add-row">
+      <div class="item-add-row" style="${withVerification ? "flex-wrap:wrap;" : ""}">
         ${plotFieldHtml({ plot: 'id="itemListNewPlot" class="item-plot-input"' }, "")}
         ${milestoneFieldHtml({ select: 'id="itemListNewMilestone"', custom: 'id="itemListNewMilestoneCustom"' }, "")}
         <input type="text" id="itemListNewInput" placeholder="Add an item… (optional if milestone set)">
         ${withPercent ? `<input type="number" id="itemListNewPercent" min="0" max="100" step="5" placeholder="%" style="flex:0 0 80px;">` : ""}
+        ${withVerification ? `<input type="text" id="itemListNewVerification" placeholder="CoW quality verification &amp; notes (optional)" style="flex:1 1 100%;">` : ""}
         <button type="button" class="btn btn-outline btn-sm" id="itemListAddBtn">+ Add</button>
       </div>
     `;
@@ -855,6 +863,9 @@ export function mountItemListEditor(container, initialItems, onChange, { withPer
             const percentVal = container.querySelector(".item-edit-percent").value;
             items[i].percent = percentVal === "" ? 0 : Math.max(0, Math.min(100, Number(percentVal)));
           }
+          if (withVerification) {
+            items[i].verification_notes = container.querySelector(".item-edit-verification").value.trim();
+          }
         }
         editingIndex = null;
         onChange(items);
@@ -869,6 +880,7 @@ export function mountItemListEditor(container, initialItems, onChange, { withPer
     const plotInput = container.querySelector("#itemListNewPlot");
     const addInput = container.querySelector("#itemListNewInput");
     const percentInput = container.querySelector("#itemListNewPercent");
+    const verificationInput = container.querySelector("#itemListNewVerification");
     function addItem() {
       const textVal = addInput.value.trim();
       const milestoneVal = withMilestone ? readMilestone(container.querySelector("#itemListNewMilestone"), container.querySelector("#itemListNewMilestoneCustom")) : "";
@@ -879,13 +891,14 @@ export function mountItemListEditor(container, initialItems, onChange, { withPer
         const percentVal = percentInput.value;
         newItem.percent = percentVal === "" ? 0 : Math.max(0, Math.min(100, Number(percentVal)));
       }
+      if (withVerification) newItem.verification_notes = verificationInput.value.trim();
       items.push(newItem);
       onChange(items);
       render();
       container.querySelector("#itemListNewInput").focus();
     }
     addBtn.addEventListener("click", addItem);
-    const enterTriggers = [plotInput, addInput, percentInput, container.querySelector("#itemListNewMilestoneCustom")].filter(Boolean);
+    const enterTriggers = [plotInput, addInput, percentInput, verificationInput, container.querySelector("#itemListNewMilestoneCustom")].filter(Boolean);
     enterTriggers.forEach((el) => el.addEventListener("keydown", (e) => {
       if (e.key === "Enter") { e.preventDefault(); addItem(); }
     }));
@@ -893,4 +906,164 @@ export function mountItemListEditor(container, initialItems, onChange, { withPer
 
   render();
   return { getItems: () => items };
+}
+
+// ─── Weekly report: Clerk of Works compliance record fields ──────
+// Compliance status tagged onto each site photo, alongside a Plot/Area
+// and Inspection Category/Element caption — see PHOTO_COMPLIANCE_BADGE
+// and the photo gallery in weekly-report-form.html/weekly-report-view.html.
+export const PHOTO_COMPLIANCE_STATUS = ["Approved / Compliant", "Action Required", "Info Only"];
+export const PHOTO_COMPLIANCE_BADGE = { "Approved / Compliant": "badge-green", "Action Required": "badge-red", "Info Only": "badge-blue" };
+
+// Resource adequacy rating on the Labour & Site Resource Tracker.
+export const RESOURCE_ADEQUACY = ["Adequate", "Low / Risk to Programme"];
+export const RESOURCE_ADEQUACY_BADGE = { "Adequate": "badge-green", "Low / Risk to Programme": "badge-red" };
+
+// Impact level on the Risk & Delays Tracker — a traffic light like
+// HS_SEVERITY above, but kept as its own constant since it's a
+// separate feature (weekly report risks, not H&S audit findings) that
+// shouldn't have to change if one or the other's wording ever diverges.
+export const RISK_IMPACT_LEVELS = ["Low", "Medium", "High"];
+export const RISK_IMPACT_BADGE = { Low: "badge-green", Medium: "badge-amber", High: "badge-red" };
+
+// Suggested (not exhaustive — the owner field stays freetext) action
+// owners on the Risk & Delays Tracker.
+export const RISK_OWNER_SUGGESTIONS = ["Main Contractor", "Employer's Agent", "Utility Provider", "Client", "Design Team"];
+
+// Statutory Witnessing / Building Control / Warranty inspection types
+// and outcomes for the Statutory & Testing Milestones log.
+export const STATUTORY_MILESTONE_TYPES = ["Air Permeability Test", "Sound Test", "Drainage Pressure Test", "Building Control Inspection", "NHBC / Premier Warranty Inspection", "Other"];
+export const STATUTORY_OUTCOMES = ["Pass", "Fail", "Pending", "Signed Off"];
+export const STATUTORY_OUTCOME_BADGE = { Pass: "badge-green", Fail: "badge-red", Pending: "badge-amber", "Signed Off": "badge-blue" };
+
+// Generic add/edit/delete table-shaped editor, sharing the same
+// interaction pattern as mountCommercialEditor but driven by a
+// `columns` definition so it can serve several differently-shaped
+// tables without re-writing the same render/edit/delete plumbing each
+// time — currently the weekly report's Labour & Site Resource Tracker,
+// Risk & Delays Tracker, and Statutory & Testing Milestones log.
+//
+// Each column: { key, label, type: 'text'|'number'|'select'|'date',
+// options (for select), placeholder, datalist (id of a <datalist> the
+// page itself renders, for freetext suggestions), badgeMap (for
+// select columns — value -> badge CSS class, used in the compact
+// row view), flex (CSS flex-basis for the input, default varies by
+// type) }.
+// Calls onChange(rows) whenever the table changes. Returns { getRows }.
+export function mountTableEditor(container, initialRows, onChange, { columns }) {
+  function normalise(row) {
+    const out = { id: row.id || crypto.randomUUID() };
+    columns.forEach((col) => { out[col.key] = row[col.key] ?? (col.type === "number" ? null : ""); });
+    return out;
+  }
+  let rows = (initialRows || []).map(normalise);
+  let editingId = null;
+
+  function fieldHtml(col, value, cls) {
+    const val = value ?? "";
+    const flex = col.flex || (col.type === "select" ? "0 0 170px" : col.type === "date" ? "0 0 150px" : col.type === "number" ? "0 0 100px" : "1 1 160px");
+    const listAttr = col.datalist ? ` list="${col.datalist}"` : "";
+    if (col.type === "select") {
+      // A leading blank option so "nothing chosen" is representable —
+      // without it a <select> defaults to its first real option, which
+      // would make an empty add-row silently pick up e.g. "Adequate" or
+      // "Low" and defeat the "ignore an all-blank add" guard below.
+      return `<select class="${cls}" data-key="${col.key}" style="flex:${flex};">
+        <option value="" ${val === "" ? "selected" : ""}>${escapeHtml(col.placeholder || "—")}</option>
+        ${col.options.map((o) => `<option value="${escapeHtml(o)}" ${val === o ? "selected" : ""}>${escapeHtml(o)}</option>`).join("")}
+      </select>`;
+    }
+    if (col.type === "date") {
+      return `<input type="date" class="${cls}" data-key="${col.key}" value="${escapeHtml(val)}" style="flex:${flex};">`;
+    }
+    if (col.type === "number") {
+      return `<input type="number" class="${cls}" data-key="${col.key}" value="${val === "" ? "" : val}" placeholder="${escapeHtml(col.placeholder || "")}" style="flex:${flex};">`;
+    }
+    return `<input type="text" class="${cls}" data-key="${col.key}"${listAttr} value="${escapeHtml(val)}" placeholder="${escapeHtml(col.placeholder || "")}" style="flex:${flex};">`;
+  }
+
+  function readFields(scopeEl) {
+    const out = {};
+    columns.forEach((col) => {
+      const el = scopeEl.querySelector(`[data-key="${col.key}"]`);
+      const raw = el.value;
+      out[col.key] = col.type === "number" ? (raw === "" ? null : Number(raw)) : raw.trim();
+    });
+    return out;
+  }
+
+  function hasAnyValue(fields) {
+    return columns.some((col) => fields[col.key] || fields[col.key] === 0);
+  }
+
+  function summaryHtml(row) {
+    return columns.map((col) => {
+      const v = row[col.key];
+      if (!v && v !== 0) return "";
+      if (col.type === "select" && col.badgeMap) {
+        return `<span class="badge ${col.badgeMap[v] || "badge-grey"}" style="flex:0 0 auto;">${escapeHtml(v)}</span>`;
+      }
+      return `<span>${escapeHtml(col.type === "date" ? formatDate(v) : String(v))}</span>`;
+    }).join("");
+  }
+
+  function render() {
+    container.innerHTML = `
+      <ul class="item-list">
+        ${rows.map((row) => editingId === row.id ? `
+          <li class="item-row editing te-row" style="flex-wrap:wrap;" data-id="${row.id}">
+            ${columns.map((col) => fieldHtml(col, row[col.key], "te-field")).join("")}
+            <button type="button" class="btn btn-sm btn-amber" data-save="${row.id}">Save</button>
+            <button type="button" class="btn btn-sm btn-outline" data-cancel="${row.id}">Cancel</button>
+          </li>
+        ` : `
+          <li class="item-row" style="flex-wrap:wrap;">
+            ${summaryHtml(row)}
+            <button type="button" class="btn btn-sm btn-outline" data-edit="${row.id}">Edit</button>
+            <button type="button" class="btn btn-sm btn-danger" data-delete="${row.id}">Delete</button>
+          </li>
+        `).join("")}
+      </ul>
+      <div class="item-add-row te-add-row" style="flex-wrap:wrap;">
+        ${columns.map((col) => fieldHtml(col, "", "te-field")).join("")}
+        <button type="button" class="btn btn-outline btn-sm" id="teAddBtn">+ Add</button>
+      </div>
+    `;
+
+    container.querySelectorAll("[data-edit]").forEach((btn) =>
+      btn.addEventListener("click", () => { editingId = btn.dataset.edit; render(); })
+    );
+    container.querySelectorAll("[data-delete]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        rows = rows.filter((r) => r.id !== btn.dataset.delete);
+        onChange(rows);
+        render();
+      })
+    );
+    container.querySelectorAll("[data-cancel]").forEach((btn) =>
+      btn.addEventListener("click", () => { editingId = null; render(); })
+    );
+    container.querySelectorAll("[data-save]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        const li = btn.closest(".te-row");
+        const fields = readFields(li);
+        rows = rows.map((r) => r.id === btn.dataset.save ? { id: r.id, ...fields } : r);
+        editingId = null;
+        onChange(rows);
+        render();
+      })
+    );
+
+    const addRow = container.querySelector(".te-add-row");
+    container.querySelector("#teAddBtn").addEventListener("click", () => {
+      const fields = readFields(addRow);
+      if (!hasAnyValue(fields)) return;
+      rows.push({ id: crypto.randomUUID(), ...fields });
+      onChange(rows);
+      render();
+    });
+  }
+
+  render();
+  return { getRows: () => rows };
 }

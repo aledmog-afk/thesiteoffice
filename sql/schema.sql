@@ -1661,3 +1661,40 @@ create policy "editors delete hs_audit_items" on public.hs_audit_items for delet
 -- report's own record of what happened shouldn't change if an audit is
 -- edited or deleted afterwards.
 alter table public.monthly_reports add column if not exists hs_audits jsonb not null default '[]'::jsonb;
+
+-- ─── v20 ADDITIONS ────────────────────────────────────────────────
+-- Weekly report upgrades for use as a client-side Clerk of Works
+-- compliance record: structured photo tagging (plot/area, inspection
+-- category, compliance status, caption — added to each entry already
+-- in weekly_reports.photos, no column of its own needed since a photo
+-- missing these fields just renders with blank tags), a Labour & Site
+-- Resource Tracker, Clerk of Works verification notes on progress
+-- items (added to each entry already in progress_items, likewise no
+-- new column), a structured Risk & Delays register, and a Statutory &
+-- Testing Milestones log.
+
+-- Labour & Site Resource Tracker: [{ id, trade, headcount,
+-- activity_location, adequacy }]
+alter table public.weekly_reports add column if not exists labour_records jsonb not null default '[]'::jsonb;
+
+-- Structured risk/delay register, replacing the free-text issues_risks
+-- field as the form's primary input going forward. issues_risks itself
+-- is left in place, unused by the form, so historical free-text
+-- entries are never lost — same "old column stays, unused" pattern as
+-- progress_summary/next_week_plan/labour_on_site above: [{ id,
+-- description, action_required, owner, target_date, impact }]
+alter table public.weekly_reports add column if not exists risk_items jsonb not null default '[]'::jsonb;
+
+-- Statutory testing / inspection milestone log: [{ id, type,
+-- plot_area, date, outcome, notes }]
+alter table public.weekly_reports add column if not exists statutory_milestones jsonb not null default '[]'::jsonb;
+
+-- Monthly reports roll up that month's structured risk items (flattened
+-- across weeks, same convention as commercial_items) — without this,
+-- a monthly report's "Issues / Risks / Delays" section would silently
+-- go blank for any month made up of reports created after this change,
+-- since it previously only ever read the (now-unused-by-the-form)
+-- issues_risks text field. The old text-based column/section stays for
+-- already-generated reports and any report where issues_risks was
+-- still set by hand.
+alter table public.monthly_reports add column if not exists risk_items jsonb not null default '[]'::jsonb;

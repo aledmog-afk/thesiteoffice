@@ -23,7 +23,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, getOrgLogoUrl, formatGBP } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, getOrgLogoUrl, formatGBP, PHOTO_COMPLIANCE_BADGE, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_BADGE, STATUTORY_OUTCOME_BADGE } from "./js/app.js";
 
   await requireAuth();
   const reportId = getParam("id");
@@ -58,6 +58,111 @@
       const milestoneTag = i.milestone ? `<span class="milestone-tag">${escapeHtml(i.milestone)}</span> ` : "";
       return `<li>${plotPrefix}${milestoneTag}${escapeHtml(i.text)}${percentSuffix}</li>`;
     }).join("")}</ul></div>`;
+  }
+
+  // Verified Quality & Works Audit — a structured table rather than a
+  // bullet list, so a Clerk of Works quality verification note sits
+  // directly against the plot/trade/% it verifies. Falls back to the
+  // legacy summary text for pre-migration reports with no progress_items.
+  function verifiedProgressSection(items, fallbackText) {
+    const list = Array.isArray(items) ? items : [];
+    if (!list.length) return fallbackText ? section("Progress This Week", fallbackText) : "";
+    return `<div class="doc-section">
+      <h3>Verified Quality &amp; Works Audit</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Plot / Unit</th><th>Trade / Work Package</th><th>Contractor %</th><th>CoW Quality Verification &amp; Notes</th></tr></thead>
+        <tbody>${list.map((i) => {
+          if (typeof i === "string") return `<tr><td colspan="3">${escapeHtml(i)}</td><td>—</td></tr>`;
+          const pct = typeof i.percent === "number" ? `${i.percent}%` : "—";
+          return `<tr>
+            <td>${i.plot ? escapeHtml(i.plot) : "—"}</td>
+            <td>${i.milestone ? escapeHtml(i.milestone) : escapeHtml(i.text) || "—"}</td>
+            <td>${pct}</td>
+            <td>${escapeHtml(i.verification_notes) || "—"}</td>
+          </tr>`;
+        }).join("")}</tbody>
+      </table></div>
+    </div>`;
+  }
+
+  function labourSection(rows) {
+    const list = Array.isArray(rows) ? rows : [];
+    if (!list.length) return "";
+    return `<div class="doc-section">
+      <h3>Labour &amp; Site Resource Tracker</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Trade</th><th>Headcount</th><th>Activity / Location</th><th>Resource Adequacy</th></tr></thead>
+        <tbody>${list.map((r) => `
+          <tr>
+            <td>${escapeHtml(r.trade) || "—"}</td>
+            <td>${r.headcount ?? "—"}</td>
+            <td>${escapeHtml(r.activity_location) || "—"}</td>
+            <td>${r.adequacy ? `<span class="badge ${RESOURCE_ADEQUACY_BADGE[r.adequacy] || "badge-grey"}">${escapeHtml(r.adequacy)}</span>` : "—"}</td>
+          </tr>
+        `).join("")}</tbody>
+      </table></div>
+    </div>`;
+  }
+
+  function riskSection(rows) {
+    const list = Array.isArray(rows) ? rows : [];
+    if (!list.length) return "";
+    return `<div class="doc-section">
+      <h3>Risk &amp; Delays Tracker</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Risk / Issue</th><th>Action Required</th><th>Owner</th><th>Target Date</th><th>Impact</th></tr></thead>
+        <tbody>${list.map((r) => `
+          <tr>
+            <td>${escapeHtml(r.description) || "—"}</td>
+            <td>${escapeHtml(r.action_required) || "—"}</td>
+            <td>${escapeHtml(r.owner) || "—"}</td>
+            <td>${r.target_date ? formatDate(r.target_date) : "—"}</td>
+            <td>${r.impact ? `<span class="badge ${RISK_IMPACT_BADGE[r.impact] || "badge-grey"}">${escapeHtml(r.impact)}</span>` : "—"}</td>
+          </tr>
+        `).join("")}</tbody>
+      </table></div>
+    </div>`;
+  }
+
+  function statutorySection(rows) {
+    const list = Array.isArray(rows) ? rows : [];
+    if (!list.length) return "";
+    return `<div class="doc-section">
+      <h3>Statutory &amp; Testing Milestones</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Type</th><th>Plot / Area</th><th>Date</th><th>Outcome</th><th>Notes</th></tr></thead>
+        <tbody>${list.map((r) => `
+          <tr>
+            <td>${escapeHtml(r.type) || "—"}</td>
+            <td>${escapeHtml(r.plot_area) || "—"}</td>
+            <td>${r.date ? formatDate(r.date) : "—"}</td>
+            <td>${r.outcome ? `<span class="badge ${STATUTORY_OUTCOME_BADGE[r.outcome] || "badge-grey"}">${escapeHtml(r.outcome)}</span>` : "—"}</td>
+            <td>${escapeHtml(r.notes) || "—"}</td>
+          </tr>
+        `).join("")}</tbody>
+      </table></div>
+    </div>`;
+  }
+
+  function photoGallerySection(photos) {
+    const list = Array.isArray(photos) ? photos : [];
+    if (!list.length) return "";
+    return `<div class="doc-section">
+      <h3>Site Photos</h3>
+      <div class="photo-gallery">
+        ${list.map((p) => `
+          <div class="photo-card">
+            <img src="${p.url}" alt="">
+            <div class="photo-card-body">
+              ${p.plot_area ? `<div class="photo-card-tag">${escapeHtml(p.plot_area)}</div>` : ""}
+              ${p.category ? `<div class="photo-card-category">${escapeHtml(p.category)}</div>` : ""}
+              ${p.compliance_status ? `<span class="badge ${PHOTO_COMPLIANCE_BADGE[p.compliance_status] || "badge-grey"}" style="align-self:flex-start;">${escapeHtml(p.compliance_status)}</span>` : ""}
+              ${p.caption ? `<p class="photo-card-caption">${escapeHtml(p.caption)}</p>` : ""}
+            </div>
+          </div>
+        `).join("")}
+      </div>
+    </div>`;
   }
 
   function weatherSection(days) {
@@ -125,6 +230,11 @@
       ? commercialItems.map(i => `- [${commercialTypeLabel[i.type] || i.type}] ${i.title}`).join("\n")
       : "";
 
+    const riskItems = Array.isArray(r.risk_items) ? r.risk_items : [];
+    const riskText = riskItems.length
+      ? riskItems.map(i => `- [${i.impact || "?"}] ${i.description}${i.owner ? ` (owner: ${i.owner})` : ""}`).join("\n")
+      : "";
+
     const totalLostHours = (Array.isArray(r.weather_days) ? r.weather_days : []).reduce((sum, d) => sum + (Number(d.lost_hours) || 0), 0);
 
     const subject = encodeURIComponent(`Weekly Site Report – ${project.name} – w/c ${formatDate(r.week_starting)}`);
@@ -133,6 +243,7 @@
       `Week: ${formatDate(r.week_starting)} – ${formatDate(r.week_ending)}\nProgramme status: ${programmeLabel[r.programme_status]}\n` +
       (totalLostHours > 0 ? `Weather lost time this week: ${totalLostHours} hours\n` : "") +
       `\nProgress this week:\n${progressText}\n\n` +
+      (riskText ? `Risks / delays:\n${riskText}\n\n` : "") +
       (r.issues_risks ? `Issues / risks:\n${r.issues_risks}\n\n` : "") +
       (commercialText ? `Commercial items:\n${commercialText}\n\n` : "") +
       `(Full report with photos: use "Print / Save as PDF" on this page and attach it here.)\n\nRegards,`
@@ -164,20 +275,17 @@
 
       ${weatherSection(r.weather_days)}
       ${section("Weather Notes", r.weather)}
-      ${itemSection("Progress This Week", r.progress_items, r.progress_summary)}
+      ${verifiedProgressSection(r.progress_items, r.progress_summary)}
+      ${labourSection(r.labour_records)}
       ${section("Health & Safety Notes", r.health_safety_notes)}
+      ${riskSection(r.risk_items)}
       ${section("Issues / Risks / Delays", r.issues_risks)}
+      ${statutorySection(r.statutory_milestones)}
       ${commercialSection(r.commercial_items)}
       ${itemSection("Plan for Next Week", r.next_week_items, r.next_week_plan)}
       ${section("Other Comments", r.other_comments || r.deliveries_materials)}
 
-      ${photos.length ? `
-        <div class="doc-section">
-          <h3>Site Photos</h3>
-          <div class="photo-grid">
-            ${photos.map(p => `<div class="photo-thumb"><img src="${p.url}" alt=""></div>`).join("")}
-          </div>
-        </div>` : ""}
+      ${photoGallerySection(photos)}
     `;
   }
 
