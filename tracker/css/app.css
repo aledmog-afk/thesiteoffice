@@ -323,7 +323,7 @@ tr:hover td { background: var(--off); }
   /* Keep a photo card or table row from splitting across a page break —
      each is small enough to always fit, so "avoid" never forces an
      unreasonably large gap the way it could on a whole table/section. */
-  .photo-card, .doc-section table tr { break-inside: avoid; page-break-inside: avoid; }
-  .doc-section table thead { display: table-header-row-group; }
+  .photo-card, .doc table tr { break-inside: avoid; page-break-inside: avoid; }
+  .doc table thead { display: table-header-row-group; }
   .photo-gallery { grid-template-columns: repeat(2, 1fr); }
 }

@@ -18,6 +18,7 @@
       <div class="page-sub" id="projectSub">One snag list per plot — click a plot to add items to it, then export that plot's list as a PDF.</div>
     </div>
     <div class="btn-row">
+      <a class="btn btn-outline" id="siteSnagReportLink" href="#">📄 Site Snag Sheet</a>
       <button class="btn btn-outline" id="newGeneralListBtn">+ General List</button>
       <button class="btn btn-amber" id="newPlotBtn">+ Plot</button>
     </div>
@@ -63,6 +64,8 @@
   await requireAuth();
   const projectId = getParam("project");
   if (!projectId) window.location.href = "dashboard.html";
+
+  document.getElementById("siteSnagReportLink").href = `snagging-report.html?project=${projectId}`;
 
   async function goToPlotList(plotId) {
     const { data: list } = await supabase.from("snag_lists").select("id").eq("plot_id", plotId).single();
