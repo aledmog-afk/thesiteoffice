@@ -99,7 +99,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, mountTableEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions, comparePlotNumbers, syncGateStatusFromMilestones, EXTERNAL_WORKS_TAG, PHOTO_COMPLIANCE_STATUS, RESOURCE_ADEQUACY, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_LEVELS, RISK_IMPACT_BADGE, RISK_OWNER_SUGGESTIONS, STATUTORY_MILESTONE_TYPES, STATUTORY_OUTCOMES, STATUTORY_OUTCOME_BADGE } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, mountTableEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions, comparePlotNumbers, normalisePlotToken, syncGateStatusFromMilestones, EXTERNAL_WORKS_TAG, PHOTO_COMPLIANCE_STATUS, RESOURCE_ADEQUACY, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_LEVELS, RISK_IMPACT_BADGE, RISK_OWNER_SUGGESTIONS, STATUTORY_MILESTONE_TYPES, STATUTORY_OUTCOMES, STATUTORY_OUTCOME_BADGE } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -124,8 +124,12 @@
   // Only real plots/flats have their own snag list (a block's own name,
   // or a typed-in area, doesn't) — used to resolve a photo's Plot/Area
   // tag to one when raising it as a snag on save, see
-  // syncActionRequiredSnags() below.
-  const plotIdByName = new Map((plotsForTagging || []).map((p) => [p.plot_number.trim().toLowerCase(), p.id]));
+  // syncActionRequiredSnags() below. Keyed by normalisePlotToken() (the
+  // same digit-based matching progress items already use throughout
+  // this page, and this app generally) rather than an exact string
+  // match, so "Plot 1" and "1" resolve to the same plot regardless of
+  // exactly how it was typed.
+  const plotIdByName = new Map((plotsForTagging || []).map((p) => [normalisePlotToken(p.plot_number), p.id]));
   document.getElementById("plotAreaSuggestions").innerHTML = plotOptions.map((p) => `<option value="${escapeHtml(p)}">`).join("");
   document.getElementById("tradeSuggestions").innerHTML = ["Bricklayers", "Carpenters", "Plumbers", "Electricians", "Groundworkers", "Roofers", "Scaffolders", "Painters & Decorators", "Plasterers"].map((t) => `<option value="${escapeHtml(t)}">`).join("");
   document.getElementById("riskOwnerSuggestions").innerHTML = RISK_OWNER_SUGGESTIONS.map((o) => `<option value="${escapeHtml(o)}">`).join("");
@@ -417,7 +421,7 @@
   // get-or-created once by a fixed title and reused on every later
   // report rather than spawning a new one each time.
   async function resolveSnagListId(plotArea) {
-    const plotId = plotArea ? plotIdByName.get(plotArea.trim().toLowerCase()) : null;
+    const plotId = plotArea ? plotIdByName.get(normalisePlotToken(plotArea)) : null;
     if (plotId) {
       const { data: list } = await supabase.from("snag_lists").select("id").eq("plot_id", plotId).maybeSingle();
       if (list) return { snagListId: list.id, matchedPlot: true };
@@ -450,17 +454,33 @@
   // either way, so one failed lookup/insert shouldn't block the rest.
   async function syncActionRequiredSnags(photoList, userId) {
     for (const p of photoList) {
-      if (p.compliance_status !== "Action Required" || p.snag_item_id) continue;
+      if (p.compliance_status !== "Action Required") continue;
       try {
         const { snagListId, matchedPlot } = await resolveSnagListId(p.plot_area);
         const location = matchedPlot ? (p.category || null) : ([p.plot_area, p.category].filter(Boolean).join(" — ") || null);
+        const description = p.caption || p.category || "Action required (from weekly report photo)";
+
+        if (p.snag_item_id) {
+          // Already raised — keep it in sync rather than freezing it in
+          // place, so fixing a mistyped Plot/Area (or a category/caption
+          // edit) after the fact actually corrects the snag instead of
+          // leaving it stuck wherever it first landed. Moves it to the
+          // newly-resolved list only when that's actually changed.
+          const patch = { location, description };
+          if (p.snag_list_id !== snagListId) patch.snag_list_id = snagListId;
+          const { error } = await supabase.from("snag_items").update(patch).eq("id", p.snag_item_id);
+          if (error) throw error;
+          p.snag_list_id = snagListId;
+          continue;
+        }
+
         const { data: snag, error } = await supabase
           .from("snag_items")
           .insert({
             project_id: projectId,
             snag_list_id: snagListId,
             location,
-            description: p.caption || p.category || "Action required (from weekly report photo)",
+            description,
             photo_url: p.url,
             raised_date: todayISO(),
             created_by: userId,

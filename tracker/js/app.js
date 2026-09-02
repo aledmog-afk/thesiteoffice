@@ -298,7 +298,7 @@ export async function recalculateActualProgress(projectId) {
 // their digits where possible so "Plot 5" and "5" are recognised as the
 // same plot, falling back to a case-insensitive exact match for
 // non-numeric plot names.
-function normalisePlotToken(s) {
+export function normalisePlotToken(s) {
   const digits = (s.match(/\d+/) || [])[0];
   return digits || s.trim().toLowerCase();
 }
