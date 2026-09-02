@@ -158,6 +158,7 @@
               ${p.category ? `<div class="photo-card-category">${escapeHtml(p.category)}</div>` : ""}
               ${p.compliance_status ? `<span class="badge ${PHOTO_COMPLIANCE_BADGE[p.compliance_status] || "badge-grey"}" style="align-self:flex-start;">${escapeHtml(p.compliance_status)}</span>` : ""}
               ${p.caption ? `<p class="photo-card-caption">${escapeHtml(p.caption)}</p>` : ""}
+              ${p.snag_item_id ? `<a class="badge badge-green" style="align-self:flex-start;" href="snag-list-edit.html?id=${p.snag_list_id}">✓ Snag Raised</a>` : ""}
             </div>
           </div>
         `).join("")}

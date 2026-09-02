@@ -113,7 +113,7 @@
   // one plot or block — offered as the multi-select plot tag on
   // progress/next-week items.
   const [{ data: plotsForTagging }, { data: blocksForTagging }] = await Promise.all([
-    supabase.from("plots").select("plot_number").eq("project_id", projectId),
+    supabase.from("plots").select("id, plot_number").eq("project_id", projectId),
     supabase.from("blocks").select("block_name").eq("project_id", projectId),
   ]);
   const plotOptions = [
@@ -121,6 +121,11 @@
     ...(blocksForTagging || []).map((b) => b.block_name).sort(comparePlotNumbers),
     EXTERNAL_WORKS_TAG,
   ];
+  // Only real plots/flats have their own snag list (a block's own name,
+  // or a typed-in area, doesn't) — used to resolve a photo's Plot/Area
+  // tag to one when raising it as a snag on save, see
+  // syncActionRequiredSnags() below.
+  const plotIdByName = new Map((plotsForTagging || []).map((p) => [p.plot_number.trim().toLowerCase(), p.id]));
   document.getElementById("plotAreaSuggestions").innerHTML = plotOptions.map((p) => `<option value="${escapeHtml(p)}">`).join("");
   document.getElementById("tradeSuggestions").innerHTML = ["Bricklayers", "Carpenters", "Plumbers", "Electricians", "Groundworkers", "Roofers", "Scaffolders", "Painters & Decorators", "Plasterers"].map((t) => `<option value="${escapeHtml(t)}">`).join("");
   document.getElementById("riskOwnerSuggestions").innerHTML = RISK_OWNER_SUGGESTIONS.map((o) => `<option value="${escapeHtml(o)}">`).join("");
@@ -404,6 +409,71 @@
     return synced;
   }
 
+  // Resolves a photo's freetext Plot/Area tag to a real plot's own snag
+  // list when it matches one exactly (case-insensitive) — an apartment
+  // block's own name and a typed-in area like "S278 Entrance" don't
+  // have a snag list of their own, so those (and a blank tag) fall back
+  // to a single reusable general list for the project instead,
+  // get-or-created once by a fixed title and reused on every later
+  // report rather than spawning a new one each time.
+  async function resolveSnagListId(plotArea) {
+    const plotId = plotArea ? plotIdByName.get(plotArea.trim().toLowerCase()) : null;
+    if (plotId) {
+      const { data: list } = await supabase.from("snag_lists").select("id").eq("plot_id", plotId).maybeSingle();
+      if (list) return { snagListId: list.id, matchedPlot: true };
+    }
+    const GENERAL_LIST_TITLE = "Weekly Report Issues";
+    const { data: existing } = await supabase
+      .from("snag_lists")
+      .select("id")
+      .eq("project_id", projectId)
+      .is("plot_id", null)
+      .ilike("title", GENERAL_LIST_TITLE)
+      .maybeSingle();
+    if (existing) return { snagListId: existing.id, matchedPlot: false };
+    const { data: { user } } = await supabase.auth.getUser();
+    const { data: created, error } = await supabase
+      .from("snag_lists")
+      .insert({ project_id: projectId, plot_id: null, title: GENERAL_LIST_TITLE, created_by: user.id })
+      .select()
+      .single();
+    if (error) throw error;
+    return { snagListId: created.id, matchedPlot: false };
+  }
+
+  // Raises a snag for any photo tagged Action Required that hasn't
+  // already had one raised (snag_item_id set, mirroring
+  // syncCommercialItems' ledger_id pattern — a photo already pushed is
+  // never re-created or duplicated on a later save). Mutates each
+  // photo in place with its new snag_item_id/snag_list_id. Best-effort
+  // per photo — the report and its other photos are already saved
+  // either way, so one failed lookup/insert shouldn't block the rest.
+  async function syncActionRequiredSnags(photoList, userId) {
+    for (const p of photoList) {
+      if (p.compliance_status !== "Action Required" || p.snag_item_id) continue;
+      try {
+        const { snagListId, matchedPlot } = await resolveSnagListId(p.plot_area);
+        const location = matchedPlot ? (p.category || null) : ([p.plot_area, p.category].filter(Boolean).join(" — ") || null);
+        const { data: snag, error } = await supabase
+          .from("snag_items")
+          .insert({
+            project_id: projectId,
+            snag_list_id: snagListId,
+            location,
+            description: p.caption || p.category || "Action required (from weekly report photo)",
+            photo_url: p.url,
+            raised_date: todayISO(),
+            created_by: userId,
+          })
+          .select()
+          .single();
+        if (error) throw error;
+        p.snag_item_id = snag.id;
+        p.snag_list_id = snagListId;
+      } catch { /* best-effort — see comment above */ }
+    }
+  }
+
   // Rolls unfinished progress items (percent < 100) into this report's own
   // "Plan for next week" list, matched by id — so they're picked up as
   // pre-filled progress on the next report. Items that reach 100% are
@@ -446,6 +516,7 @@
             ${PHOTO_COMPLIANCE_STATUS.map((s) => `<option value="${s}" ${p.compliance_status === s ? "selected" : ""}>${s}</option>`).join("")}
           </select>
           <input type="text" class="pc-caption" data-i="${i}" placeholder="Caption / observation notes" value="${escapeHtml(p.caption)}">
+          ${p.snag_item_id ? `<span class="badge badge-green" title="A snag was raised for this photo when the report was last saved">✓ Snag Raised</span>` : (p.compliance_status === "Action Required" ? `<span class="hint">A snag will be raised for this automatically when you save.</span>` : "")}
         </div>
       </div>
     `).join("");
@@ -467,7 +538,7 @@
     try {
       for (const file of files) {
         const url = await uploadImage(file, `${projectId}/reports`);
-        photos.push({ url, plot_area: "", category: "", compliance_status: "", caption: "" });
+        photos.push({ url, plot_area: "", category: "", compliance_status: "", caption: "", snag_item_id: null, snag_list_id: null });
       }
       renderPhotos();
     } catch (err) {
@@ -545,6 +616,8 @@
       category: p.category || "",
       compliance_status: p.compliance_status || "",
       caption: p.caption || "",
+      snag_item_id: p.snag_item_id || null,
+      snag_list_id: p.snag_list_id || null,
     }));
     renderPhotos();
   }
@@ -586,6 +659,9 @@
 
       const syncedItems = await syncCommercialItems(commercialEditor.getItems(), finalReportId, user.id);
       await supabase.from("weekly_reports").update({ commercial_items: syncedItems }).eq("id", finalReportId);
+
+      await syncActionRequiredSnags(photos, user.id);
+      await supabase.from("weekly_reports").update({ photos }).eq("id", finalReportId);
 
       // Non-fatal — the report itself is already saved either way. Moves
       // a tagged house plot's gate to Under Review once every milestone
