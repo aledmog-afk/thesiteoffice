@@ -506,7 +506,9 @@
   // resetting to 0 and losing that context.
   function syncNextWeekFromProgress(progressItems, nextWeekItems) {
     const percentById = new Map(progressItems.map((p) => [p.id, p.percent]));
-    const kept = nextWeekItems.filter((nw) => percentById.get(nw.id) !== 100);
+    const kept = nextWeekItems
+      .filter((nw) => percentById.get(nw.id) !== 100)
+      .map((nw) => (percentById.has(nw.id) ? { ...nw, percent: percentById.get(nw.id) } : nw));
     const keptIds = new Set(kept.map((nw) => nw.id));
     const toCarry = progressItems
       .filter((p) => p.percent < 100 && !keptIds.has(p.id))
