@@ -45,7 +45,7 @@
       <div class="field">
         <label>Progress this week</label>
         <div id="progressItems"></div>
-        <p class="hint" id="carriedOverHint" style="display:none;">Pre-filled from last week's plan — set % complete on each. Anything under 100% carries into this week's own "Plan for next week" automatically; reaching 100% drops it for good.</p>
+        <p class="hint" id="carriedOverHint" style="display:none;">Pre-filled from last week's plan, starting at last week's % complete on each — just update it if it's moved on. Anything under 100% carries into this week's own "Plan for next week" automatically; reaching 100% drops it for good.</p>
       </div>
       <div class="field"><label for="healthSafety">Health &amp; safety notes</label><textarea id="healthSafety" rows="3" placeholder="Inspections, incidents, near misses, toolbox talks held"></textarea></div>
 
@@ -135,7 +135,7 @@
   document.getElementById("riskOwnerSuggestions").innerHTML = RISK_OWNER_SUGGESTIONS.map((o) => `<option value="${escapeHtml(o)}">`).join("");
 
   let progressEditor = mountItemListEditor(document.getElementById("progressItems"), [], () => {}, { withPercent: true, withMilestone: true, withVerification: true, plotOptions });
-  let nextWeekEditor = mountItemListEditor(document.getElementById("nextWeekItems"), [], () => {}, { withMilestone: true, plotOptions });
+  let nextWeekEditor = mountItemListEditor(document.getElementById("nextWeekItems"), [], () => {}, { withPercent: true, withMilestone: true, plotOptions });
 
   const labourColumns = [
     { key: "trade", label: "Trade", type: "text", placeholder: "Subcontractor / trade", datalist: "tradeSuggestions", flex: "1 1 160px" },
@@ -499,14 +499,18 @@
   // pre-filled progress on the next report. Items that reach 100% are
   // removed from the plan so they stop being carried forward. Next-week
   // items with no matching progress item (typed directly into the plan)
-  // are left untouched either way.
+  // are left untouched either way. Carries the item's percent across too
+  // (not just plot/milestone/text), so next week's own progress editor —
+  // pre-filled straight from this report's next_week_items — starts each
+  // carried item at exactly where it left off this week, instead of
+  // resetting to 0 and losing that context.
   function syncNextWeekFromProgress(progressItems, nextWeekItems) {
     const percentById = new Map(progressItems.map((p) => [p.id, p.percent]));
     const kept = nextWeekItems.filter((nw) => percentById.get(nw.id) !== 100);
     const keptIds = new Set(kept.map((nw) => nw.id));
     const toCarry = progressItems
       .filter((p) => p.percent < 100 && !keptIds.has(p.id))
-      .map((p) => ({ id: p.id, plot: p.plot, text: p.text, milestone: p.milestone || "" }));
+      .map((p) => ({ id: p.id, plot: p.plot, text: p.text, milestone: p.milestone || "", percent: p.percent }));
     return [...kept, ...toCarry];
   }
 
@@ -624,7 +628,7 @@
       ? r.next_week_items
       : (r.next_week_plan ? [r.next_week_plan] : []);
     progressEditor = mountItemListEditor(document.getElementById("progressItems"), progressItems, () => {}, { withPercent: true, withMilestone: true, withVerification: true, plotOptions });
-    nextWeekEditor = mountItemListEditor(document.getElementById("nextWeekItems"), nextWeekItems, () => {}, { withMilestone: true, plotOptions });
+    nextWeekEditor = mountItemListEditor(document.getElementById("nextWeekItems"), nextWeekItems, () => {}, { withPercent: true, withMilestone: true, plotOptions });
     commercialEditor = mountCommercialEditor(document.getElementById("commercialItems"), r.commercial_items);
     labourEditor = mountTableEditor(document.getElementById("labourItems"), r.labour_records, () => {}, { columns: labourColumns });
     riskEditor = mountTableEditor(document.getElementById("riskItems"), r.risk_items, () => {}, { columns: riskColumns });
