@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>H&amp;S Audit – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title" id="auditTitle">Loading…</div>
+      <div class="page-sub" id="projectSub"></div>
+    </div>
+    <div class="btn-row">
+      <span class="badge" id="scoreBadge" style="display:none;"></span>
+      <button class="btn btn-danger btn-sm" id="deleteBtn">Delete Audit</button>
+    </div>
+  </div>
+
+  <div id="errorBox" class="error-box"></div>
+
+  <div class="card" id="detailsCard" style="margin-bottom:2rem;">
+    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Audit Details</h3>
+    <form id="detailsForm">
+      <div class="form-grid">
+        <div class="field"><label for="month">Month this audit counts for</label><input type="month" id="month" required></div>
+        <div class="field"><label for="conductedDate">Date conducted</label><input type="date" id="conductedDate"></div>
+      </div>
+      <div class="field"><label for="conductedBy">Conducted by</label><input type="text" id="conductedBy" placeholder="Name or company"></div>
+      <div class="field"><label for="notes">General notes</label><textarea id="notes" rows="2"></textarea></div>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-amber btn-sm">Save Details</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card" id="externalCard" style="display:none; margin-bottom:2rem;">
+    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Audit Document</h3>
+    <div id="externalFileRow" style="margin-bottom:0.8rem;"></div>
+    <input type="file" id="externalReplaceInput" accept="application/pdf,image/*">
+    <p class="hint">Uploading a new file replaces the one attached to this audit.</p>
+  </div>
+
+  <div id="checklistWrap" style="display:none;">
+    <div class="card">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Item</th><th>Status</th><th>Severity</th><th>Notes</th><th>Photo</th></tr>
+          </thead>
+          <tbody id="itemRows"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, uploadImage, HS_STATUS_LABEL, HS_STATUS_BADGE, HS_SEVERITY_LABEL, HS_SEVERITY_BADGE, hsAuditScore } from "./js/app.js";
+
+  await requireAuth();
+  const auditId = getParam("id");
+  if (!auditId) window.location.href = "dashboard.html";
+
+  const errorBox = document.getElementById("errorBox");
+  let audit = null;
+  let items = [];
+
+  function scoreBadgeHtml() {
+    if (audit.audit_type !== "internal") return;
+    const { scorePct, flaggedCount } = hsAuditScore(items);
+    const badge = document.getElementById("scoreBadge");
+    badge.style.display = "inline-flex";
+    const cls = flaggedCount > 0 ? "badge-red" : "badge-green";
+    badge.className = `badge ${cls}`;
+    badge.textContent = scorePct === null ? "No applicable items" : `${scorePct}% — ${flaggedCount} flagged`;
+  }
+
+  function statusOptionsHtml(current) {
+    return Object.keys(HS_STATUS_LABEL).map((s) => `<option value="${s}" ${s === current ? "selected" : ""}>${HS_STATUS_LABEL[s]}</option>`).join("");
+  }
+  function severityOptionsHtml(current) {
+    return `<option value="">—</option>` + Object.keys(HS_SEVERITY_LABEL).map((s) => `<option value="${s}" ${s === current ? "selected" : ""}>${HS_SEVERITY_LABEL[s]}</option>`).join("");
+  }
+
+  function itemRowHtml(item) {
+    const severityVisible = item.status === "non_compliant";
+    return `
+      <tr data-item-id="${item.id}">
+        <td><strong>${escapeHtml(item.item_name)}</strong></td>
+        <td>
+          <select class="status-select ${HS_STATUS_BADGE[item.status]}" data-item-id="${item.id}" data-field="status" style="width:auto;">
+            ${statusOptionsHtml(item.status)}
+          </select>
+        </td>
+        <td>
+          <select class="status-select ${item.severity ? HS_SEVERITY_BADGE[item.severity] : ""}" data-item-id="${item.id}" data-field="severity" style="width:auto; display:${severityVisible ? "inline-block" : "none"};">
+            ${severityOptionsHtml(item.severity || "")}
+          </select>
+        </td>
+        <td><input type="text" class="item-notes-input" data-item-id="${item.id}" placeholder="Notes" value="${escapeHtml(item.notes) || ""}" style="min-width:140px;"></td>
+        <td>
+          ${item.photo_url ? `<a href="${item.photo_url}" target="_blank">📷</a> ` : ""}
+          <input type="file" accept="image/*" data-item-id="${item.id}" class="item-photo-input" style="max-width:110px; font-size:0.7rem;">
+        </td>
+      </tr>
+    `;
+  }
+
+  function renderChecklist() {
+    document.getElementById("checklistWrap").style.display = "block";
+    const bySection = new Map();
+    items.forEach((item) => {
+      if (!bySection.has(item.section)) bySection.set(item.section, []);
+      bySection.get(item.section).push(item);
+    });
+    document.getElementById("itemRows").innerHTML = Array.from(bySection.entries()).map(([section, sectionItems]) => `
+      <tr><td colspan="5" style="background:var(--paper-soft); font-family:var(--font-display); font-size:0.85rem; letter-spacing:0.02em;">${escapeHtml(section)}</td></tr>
+      ${sectionItems.map(itemRowHtml).join("")}
+    `).join("");
+    wireItemRows();
+    scoreBadgeHtml();
+  }
+
+  function wireItemRows() {
+    document.querySelectorAll('select[data-field="status"]').forEach((sel) => {
+      sel.addEventListener("change", async () => {
+        const item = items.find((i) => i.id === sel.dataset.itemId);
+        const newStatus = sel.value;
+        const patch = { status: newStatus };
+        if (newStatus !== "non_compliant") patch.severity = null;
+        clearError(errorBox);
+        const { error } = await supabase.from("hs_audit_items").update(patch).eq("id", item.id);
+        if (error) { showError(errorBox, error); return; }
+        Object.assign(item, patch);
+        renderChecklist();
+      });
+    });
+    document.querySelectorAll('select[data-field="severity"]').forEach((sel) => {
+      sel.addEventListener("change", async () => {
+        const item = items.find((i) => i.id === sel.dataset.itemId);
+        const newSeverity = sel.value || null;
+        clearError(errorBox);
+        const { error } = await supabase.from("hs_audit_items").update({ severity: newSeverity }).eq("id", item.id);
+        if (error) { showError(errorBox, error); return; }
+        item.severity = newSeverity;
+        sel.className = `status-select ${newSeverity ? HS_SEVERITY_BADGE[newSeverity] : ""}`;
+      });
+    });
+    document.querySelectorAll(".item-notes-input").forEach((input) => {
+      input.addEventListener("change", async () => {
+        const item = items.find((i) => i.id === input.dataset.itemId);
+        clearError(errorBox);
+        const { error } = await supabase.from("hs_audit_items").update({ notes: input.value.trim() || null }).eq("id", item.id);
+        if (error) { showError(errorBox, error); return; }
+        item.notes = input.value.trim() || null;
+      });
+    });
+    document.querySelectorAll(".item-photo-input").forEach((input) => {
+      input.addEventListener("change", async () => {
+        const file = input.files[0];
+        if (!file) return;
+        const item = items.find((i) => i.id === input.dataset.itemId);
+        clearError(errorBox);
+        input.disabled = true;
+        try {
+          const url = await uploadImage(file, `${audit.project_id}/hs-audits`);
+          const { error } = await supabase.from("hs_audit_items").update({ photo_url: url }).eq("id", item.id);
+          if (error) throw error;
+          item.photo_url = url;
+          renderChecklist();
+        } catch (err) {
+          showError(errorBox, err);
+        } finally {
+          input.disabled = false;
+        }
+      });
+    });
+  }
+
+  function renderExternal() {
+    document.getElementById("externalCard").style.display = "block";
+    const row = document.getElementById("externalFileRow");
+    row.innerHTML = audit.file_url
+      ? `<a class="file-link" href="${audit.file_url}" target="_blank">📄 ${escapeHtml(audit.file_name || "View file")}</a>`
+      : `<span class="hint">No file uploaded yet.</span>`;
+  }
+
+  document.getElementById("externalReplaceInput")?.addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    clearError(errorBox);
+    e.target.disabled = true;
+    try {
+      const url = await uploadImage(file, `${audit.project_id}/hs-audits`);
+      const patch = { file_url: url, file_name: file.name };
+      const { error } = await supabase.from("hs_audits").update(patch).eq("id", auditId);
+      if (error) throw error;
+      Object.assign(audit, patch);
+      renderExternal();
+    } catch (err) {
+      showError(errorBox, err);
+    } finally {
+      e.target.disabled = false;
+      e.target.value = "";
+    }
+  });
+
+  document.getElementById("detailsForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearError(errorBox);
+    const monthVal = document.getElementById("month").value;
+    if (!monthVal) { showError(errorBox, { message: "Pick a month." }); return; }
+    const payload = {
+      month: `${monthVal}-01`,
+      conducted_date: document.getElementById("conductedDate").value || null,
+      conducted_by: document.getElementById("conductedBy").value.trim() || null,
+      notes: document.getElementById("notes").value.trim() || null,
+    };
+    const { data, error } = await supabase.from("hs_audits").update(payload).eq("id", auditId).select().single();
+    if (error) { showError(errorBox, error); return; }
+    audit = data;
+    renderTitle();
+  });
+
+  document.getElementById("deleteBtn").addEventListener("click", async () => {
+    if (!confirm("Delete this H&S audit? This cannot be undone.")) return;
+    const { error } = await supabase.from("hs_audits").delete().eq("id", auditId);
+    if (error) { showError(errorBox, error); return; }
+    window.location.href = `hs-audits.html?project=${audit.project_id}`;
+  });
+
+  function renderTitle() {
+    const monthLabel = new Date(audit.month + "T00:00:00").toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+    const typeLabel = audit.audit_type === "internal" ? "Internal Audit" : "External Audit";
+    document.getElementById("auditTitle").textContent = `${monthLabel} – ${typeLabel}`;
+  }
+
+  async function init() {
+    const { data, error } = await supabase.from("hs_audits").select("*, projects(*)").eq("id", auditId).single();
+    if (error) { document.getElementById("auditTitle").textContent = "H&S audit not found"; return; }
+    audit = data;
+    const project = audit.projects;
+
+    renderTitle();
+    document.getElementById("projectSub").textContent = project.name;
+    renderHeader([
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project.name, href: `project.html?id=${project.id}` },
+      { label: "H&S Audits", href: `hs-audits.html?project=${project.id}` },
+      { label: audit.audit_type === "internal" ? "Internal Audit" : "External Audit" },
+    ]);
+
+    document.getElementById("month").value = audit.month.slice(0, 7);
+    document.getElementById("conductedDate").value = audit.conducted_date || "";
+    document.getElementById("conductedBy").value = audit.conducted_by || "";
+    document.getElementById("notes").value = audit.notes || "";
+
+    if (audit.audit_type === "external") {
+      renderExternal();
+      return;
+    }
+
+    const { data: fetchedItems } = await supabase
+      .from("hs_audit_items")
+      .select("*")
+      .eq("audit_id", auditId)
+      .order("sort_order", { ascending: true });
+    items = fetchedItems || [];
+    renderChecklist();
+  }
+
+  init();
+</script>
+</body>
+</html>

@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Site Snag Sheet – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+<style>
+  .snag-table img { width: 60px; height: 60px; object-fit: cover; border-radius: 4px; border: 1px solid var(--rule); }
+  .snag-table td, .snag-table th { font-size: 0.82rem; }
+</style>
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="doc-toolbar no-print">
+    <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.85rem; color:var(--ink-soft);">
+      Show
+      <select id="statusFilter" style="width:auto;">
+        <option value="open">Open only</option>
+        <option value="open_flagged">Open (flagged first)</option>
+        <option value="all">All statuses</option>
+        <option value="closed">Closed only</option>
+        <option value="rejected">Rejected only</option>
+      </select>
+    </label>
+    <button class="btn btn-outline btn-sm" id="printBtn">Print / Save as PDF</button>
+    <a class="btn btn-amber btn-sm" id="emailLink" href="#">Email to Management</a>
+  </div>
+
+  <div class="doc" id="doc" style="max-width:1100px;">Loading…</div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, todayISO, getOrgLogoUrl, comparePlotNumbers } from "./js/app.js";
+
+  await requireAuth();
+  const projectId = getParam("project");
+  if (!projectId) window.location.href = "dashboard.html";
+
+  document.getElementById("printBtn").addEventListener("click", () => window.print());
+
+  const statusBadge = { open: "badge-red", closed: "badge-green", rejected: "badge-grey" };
+
+  // Browsers use document.title as the suggested filename when saving
+  // this page as a PDF — set from the project/filter/date before print,
+  // same convention as every other printable report in this app.
+  function fileDate(d) {
+    return `${d.getDate()}.${d.getMonth() + 1}.${String(d.getFullYear()).slice(-2)}`;
+  }
+
+  function rowPlot(item) {
+    return item.snag_lists?.plots?.plot_number || null;
+  }
+  function rowGroupLabel(item) {
+    return rowPlot(item) || item.snag_lists?.title || "—";
+  }
+
+  // Plot-tagged rows sort naturally by plot number first; general-list
+  // rows (no plot) sort after, alphabetically by list title.
+  function sortItems(items) {
+    return items.slice().sort((a, b) => {
+      const aPlot = rowPlot(a), bPlot = rowPlot(b);
+      if (aPlot && bPlot) return comparePlotNumbers(aPlot, bPlot) || (a.item_no || 0) - (b.item_no || 0);
+      if (!!aPlot !== !!bPlot) return aPlot ? -1 : 1;
+      return rowGroupLabel(a).localeCompare(rowGroupLabel(b)) || (a.item_no || 0) - (b.item_no || 0);
+    });
+  }
+
+  function filterItems(items, filter) {
+    if (filter === "all") return items;
+    if (filter === "closed") return items.filter((i) => i.status === "closed");
+    if (filter === "rejected") return items.filter((i) => i.status === "rejected");
+    // "open" and "open_flagged" both mean open items; the latter just
+    // sorts flagged ones first within that set.
+    const open = items.filter((i) => i.status === "open");
+    if (filter === "open_flagged") {
+      return open.slice().sort((a, b) => (b.delay_flag ? 1 : 0) - (a.delay_flag ? 1 : 0));
+    }
+    return open;
+  }
+
+  let allItems = [];
+  let project = null;
+  let logoUrl = null;
+
+  function render() {
+    const filter = document.getElementById("statusFilter").value;
+    const filtered = filterItems(sortItems(allItems), filter);
+    const filterLabel = { open: "Open", open_flagged: "Open (Flagged First)", all: "All", closed: "Closed", rejected: "Rejected" }[filter];
+
+    document.title = `Site Snag Sheet - ${project.name} - ${filterLabel} - ${fileDate(new Date())}`;
+
+    const openCount = allItems.filter((i) => i.status === "open").length;
+    const closedCount = allItems.filter((i) => i.status === "closed").length;
+    const rejectedCount = allItems.filter((i) => i.status === "rejected").length;
+    const flaggedCount = allItems.filter((i) => i.status === "open" && i.delay_flag).length;
+    const plotCount = new Set(filtered.map(rowGroupLabel)).size;
+
+    document.getElementById("emailLink").href = buildEmailHref(filterLabel, filtered.length);
+
+    document.getElementById("doc").innerHTML = `
+      <div class="doc-head">
+        <div>
+          ${logoUrl ? `<img class="doc-logo" src="${logoUrl}" alt="">` : ""}
+          <h1>Site Snag Sheet</h1>
+          <div style="color:var(--ink-soft); font-size:0.9rem; margin-top:0.2rem;">${escapeHtml(project.name)} — ${escapeHtml(filterLabel)}</div>
+        </div>
+        <div class="doc-meta">
+          ${project.contract_ref ? "Ref: " + escapeHtml(project.contract_ref) + "<br>" : ""}
+          Generated: ${formatDate(todayISO())}
+        </div>
+      </div>
+
+      <dl class="doc-facts">
+        <div><dt>Open</dt><dd>${openCount}</dd></div>
+        <div><dt>Flagged</dt><dd>${flaggedCount}</dd></div>
+        <div><dt>Closed</dt><dd>${closedCount}</dd></div>
+        <div><dt>Rejected</dt><dd>${rejectedCount}</dd></div>
+        <div><dt>Plots / Lists Shown</dt><dd>${plotCount}</dd></div>
+      </dl>
+
+      <div class="table-wrap">
+        <table class="snag-table">
+          <thead>
+            <tr><th>Plot / List</th><th>#</th><th>Photo</th><th>Location</th><th>Description</th><th>Trade</th><th>Status</th><th>Raised</th></tr>
+          </thead>
+          <tbody>
+            ${filtered.map((s) => `
+              <tr>
+                <td><strong>${escapeHtml(rowGroupLabel(s))}</strong></td>
+                <td>${s.item_no}</td>
+                <td>${s.photo_url ? `<img src="${s.photo_url}">` : "—"}</td>
+                <td>${escapeHtml(s.location) || "—"}</td>
+                <td>${escapeHtml(s.description)}</td>
+                <td>${escapeHtml(s.trade) || "—"}</td>
+                <td>
+                  <span class="badge ${statusBadge[s.status]}">${escapeHtml(s.status)}</span>
+                  ${s.delay_flag ? `<br><span class="badge badge-amber" style="margin-top:0.2rem;">⚠️ Delayed${s.delay_reason ? `: ${escapeHtml(s.delay_reason)}` : ""}</span>` : ""}
+                </td>
+                <td>${formatDate(s.raised_date)}</td>
+              </tr>
+            `).join("") || `<tr><td colspan="8" style="text-align:center; color:var(--ink-soft);">No matching snags.</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  function buildEmailHref(filterLabel, count) {
+    const subject = encodeURIComponent(`Site Snag Sheet – ${project.name} – ${filterLabel}`);
+    const body = encodeURIComponent(
+      `Hi,\n\nPlease find attached the ${filterLabel.toLowerCase()} snag sheet for ${project.name}, generated ${formatDate(todayISO())}.\n\n` +
+      `${count} item(s) listed.\n\n(Use "Print / Save as PDF" on this page and attach it here.)\n\nRegards,`
+    );
+    return `mailto:${project.main_contractor_email || ""}?subject=${subject}&body=${body}`;
+  }
+
+  document.getElementById("statusFilter").addEventListener("change", render);
+
+  async function load() {
+    const { data: proj } = await supabase.from("projects").select("*").eq("id", projectId).single();
+    if (!proj) { document.getElementById("doc").textContent = "Site not found."; return; }
+    project = proj;
+
+    renderHeader([
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project.name, href: `project.html?id=${projectId}` },
+      { label: "Snagging", href: `snagging.html?project=${projectId}` },
+      { label: "Site Snag Sheet" },
+    ]);
+
+    const { data: items, error } = await supabase
+      .from("snag_items")
+      .select("*, snag_lists(title, plot_id, plots(plot_number))")
+      .eq("project_id", projectId)
+      .order("raised_date", { ascending: true });
+    if (error) { document.getElementById("doc").textContent = "Could not load snags."; return; }
+    allItems = items || [];
+
+    logoUrl = await getOrgLogoUrl();
+    render();
+  }
+
+  load();
+</script>
+</body>
+</html>

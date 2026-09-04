@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Monthly Reports – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title">Monthly Reports</div>
+      <div class="page-sub" id="projectSub">Rolled up automatically from that month's weekly reports.</div>
+    </div>
+    <div class="btn-row">
+      <input type="month" id="monthPicker">
+      <button class="btn btn-amber" id="generateBtn">Generate Report</button>
+    </div>
+  </div>
+
+  <div id="errorBox" class="error-box"></div>
+
+  <div class="card">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Month</th><th>Weeks Covered</th><th>Programme</th><th>Lost Time</th><th>Generated</th></tr>
+        </thead>
+        <tbody id="reportRows"></tbody>
+      </table>
+    </div>
+    <div id="emptyState" class="empty" style="display:none;">
+      <p>No monthly reports generated yet. Pick a month above and click "Generate Report".</p>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, formatDate, RAG_LABEL, BUILD_MILESTONES, toLocalISODate, comparePlotNumbers, hsAuditScore } from "./js/app.js";
+
+  await requireAuth();
+  const projectId = getParam("project");
+  if (!projectId) window.location.href = "dashboard.html";
+
+  const errorBox = document.getElementById("errorBox");
+  const ragBadgeClass = { red: "badge-red", amber: "badge-amber", green: "badge-green" };
+
+  // Default the picker to last month (the most likely "generate now" case).
+  const now = new Date();
+  const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  document.getElementById("monthPicker").value = `${lastMonth.getFullYear()}-${String(lastMonth.getMonth() + 1).padStart(2, "0")}`;
+
+  // ─── Roll-up generation ────────────────────────────────────────
+  // Pulls every weekly report whose week_starting falls in the chosen
+  // calendar month and compiles them into one saved snapshot. Progress
+  // items are deduped by their stable id (the same id used for
+  // week-to-week carry-forward), taking the highest percent reached and
+  // the most recent plot/milestone/text seen for that id during the
+  // month — so a milestone that was carried across several weeks shows
+  // up once, not once per week.
+  async function generateReport(monthValue) {
+    clearError(errorBox);
+    if (!monthValue) { showError(errorBox, { message: "Pick a month first." }); return; }
+    const [y, m] = monthValue.split("-").map(Number);
+    const monthStart = `${y}-${String(m).padStart(2, "0")}-01`;
+    const monthEndDate = new Date(y, m, 0); // last day of the chosen month
+    const monthEnd = toLocalISODate(monthEndDate);
+
+    // Already generated? Just go straight to it.
+    const { data: existing } = await supabase
+      .from("monthly_reports")
+      .select("id")
+      .eq("project_id", projectId)
+      .eq("month", monthStart)
+      .maybeSingle();
+    if (existing) { window.location.href = `monthly-report-view.html?id=${existing.id}`; return; }
+
+    const { data: reports, error: reportsErr } = await supabase
+      .from("weekly_reports")
+      .select("*")
+      .eq("project_id", projectId)
+      .gte("week_starting", monthStart)
+      .lte("week_starting", monthEnd)
+      .order("week_starting", { ascending: true });
+    if (reportsErr) { showError(errorBox, reportsErr); return; }
+    if (!reports || !reports.length) {
+      showError(errorBox, { message: "No weekly reports found for that month — nothing to roll up." });
+      return;
+    }
+
+    const { data: project } = await supabase.from("projects").select("*").eq("id", projectId).single();
+
+    // Progress items: dedupe by id across the month, keep max percent +
+    // most recent plot/milestone/text, flag anything that hit 100%.
+    const progressMap = new Map();
+    for (const r of reports) {
+      for (const item of Array.isArray(r.progress_items) ? r.progress_items : []) {
+        if (typeof item === "string" || !item.id) continue;
+        const prev = progressMap.get(item.id);
+        const percent = typeof item.percent === "number" ? item.percent : 0;
+        if (!prev || percent >= prev.percent) {
+          progressMap.set(item.id, {
+            id: item.id,
+            plot: item.plot || "",
+            milestone: item.milestone || "",
+            text: item.text || "",
+            percent,
+            verification_notes: item.verification_notes || prev?.verification_notes || "",
+            completed_this_month: percent >= 100 || !!prev?.completed_this_month,
+          });
+        } else if (prev) {
+          prev.completed_this_month = prev.completed_this_month || percent >= 100;
+          prev.verification_notes = item.verification_notes || prev.verification_notes;
+        }
+      }
+    }
+    const milestoneOrder = new Map(BUILD_MILESTONES.map((m, i) => [m, i]));
+    const progressItems = Array.from(progressMap.values()).sort((a, b) => {
+      const ai = milestoneOrder.has(a.milestone) ? milestoneOrder.get(a.milestone) : 999;
+      const bi = milestoneOrder.has(b.milestone) ? milestoneOrder.get(b.milestone) : 999;
+      return ai - bi || a.plot.localeCompare(b.plot);
+    });
+
+    const healthSafetyNotes = reports
+      .filter((r) => r.health_safety_notes)
+      .map((r) => ({ week_starting: r.week_starting, week_ending: r.week_ending, weather: r.weather, health_safety_notes: r.health_safety_notes }));
+
+    const issuesRisks = reports
+      .filter((r) => r.issues_risks)
+      .map((r) => ({ week_starting: r.week_starting, week_ending: r.week_ending, issues_risks: r.issues_risks }));
+
+    // Structured risk/delay entries, flattened across the month's
+    // reports and tagged with the week each came from — same convention
+    // as commercial_items below. This is what future reports actually
+    // populate; issuesRisks above stays purely for backward
+    // compatibility with reports saved before this existed.
+    const riskItems = reports.flatMap((r) =>
+      (Array.isArray(r.risk_items) ? r.risk_items : []).map((i) => ({ ...i, week_starting: r.week_starting }))
+    );
+
+    const commercialItems = reports.flatMap((r) =>
+      (Array.isArray(r.commercial_items) ? r.commercial_items : []).map((c) => ({ ...c, week_starting: r.week_starting }))
+    );
+
+    const lastReport = reports[reports.length - 1];
+    const outstandingItems = Array.isArray(lastReport.next_week_items) ? lastReport.next_week_items : [];
+
+    // Weather: a lost-time subtotal per week, plus a flattened detail list
+    // of just the days where time was actually lost across the month.
+    const weatherSummary = reports.map((r) => {
+      const days = Array.isArray(r.weather_days) ? r.weather_days : [];
+      return {
+        week_starting: r.week_starting,
+        week_ending: r.week_ending,
+        lost_hours: days.reduce((sum, d) => sum + (Number(d.lost_hours) || 0), 0),
+      };
+    });
+    const weatherLostDays = reports.flatMap((r) =>
+      (Array.isArray(r.weather_days) ? r.weather_days : []).filter((d) => Number(d.lost_hours) > 0)
+    ).sort((a, b) => a.date.localeCompare(b.date));
+    const totalLostHours = weatherSummary.reduce((sum, w) => sum + w.lost_hours, 0);
+
+    const photos = reports.flatMap((r) => (Array.isArray(r.photos) ? r.photos : []));
+
+    // H&S audits logged for this exact month (hs_audits.month uses the
+    // same first-of-month format as monthly_reports.month), frozen into
+    // a snapshot here — a monthly report's own record of what happened
+    // shouldn't change if an audit is edited or deleted afterwards.
+    const { data: monthAudits } = await supabase
+      .from("hs_audits")
+      .select("*, hs_audit_items(status)")
+      .eq("project_id", projectId)
+      .eq("month", monthStart);
+    const hsAudits = (monthAudits || []).map((a) => {
+      const { scorePct, flaggedCount } = a.audit_type === "internal" ? hsAuditScore(a.hs_audit_items) : { scorePct: null, flaggedCount: null };
+      return {
+        audit_type: a.audit_type,
+        conducted_by: a.conducted_by,
+        conducted_date: a.conducted_date,
+        score_pct: scorePct,
+        flagged_count: flaggedCount,
+        file_url: a.file_url,
+        file_name: a.file_name,
+      };
+    });
+
+    const [{ count: snagsRaised }, { count: snagsClosed }] = await Promise.all([
+      supabase.from("snag_items").select("id", { count: "exact", head: true }).eq("project_id", projectId).gte("raised_date", monthStart).lte("raised_date", monthEnd),
+      supabase.from("snag_items").select("id", { count: "exact", head: true }).eq("project_id", projectId).gte("closed_date", monthStart).lte("closed_date", monthEnd),
+    ]);
+
+    const [{ data: plots }, { data: gates }, { data: docs }] = await Promise.all([
+      supabase.from("plots").select("*").eq("project_id", projectId),
+      supabase.from("quality_gates").select("plot_id, status").eq("project_id", projectId),
+      supabase.from("handover_documents").select("plot_id, status").eq("project_id", projectId),
+    ]);
+    (plots || []).sort((a, b) => comparePlotNumbers(a.plot_number, b.plot_number));
+    const gatesByPlot = {};
+    (gates || []).forEach((g) => {
+      if (g.status === "not_applicable") return;
+      gatesByPlot[g.plot_id] = gatesByPlot[g.plot_id] || { approved: 0, total: 0 };
+      gatesByPlot[g.plot_id].total++;
+      if (g.status === "approved") gatesByPlot[g.plot_id].approved++;
+    });
+    const docsByPlot = {};
+    (docs || []).forEach((d) => {
+      docsByPlot[d.plot_id] = docsByPlot[d.plot_id] || { ready: 0, total: 0 };
+      docsByPlot[d.plot_id].total++;
+      if (d.status === "approved_final") docsByPlot[d.plot_id].ready++;
+    });
+    const plotHandovers = (plots || []).map((p) => ({
+      plot_number: p.plot_number,
+      gates_approved: (gatesByPlot[p.id] || { approved: 0 }).approved,
+      gates_total: (gatesByPlot[p.id] || { total: 0 }).total,
+      docs_ready: (docsByPlot[p.id] || { ready: 0 }).ready,
+      docs_total: (docsByPlot[p.id] || { total: 0 }).total,
+    }));
+
+    const { data: { user } } = await supabase.auth.getUser();
+    const payload = {
+      project_id: projectId,
+      month: monthStart,
+      weekly_report_ids: reports.map((r) => r.id),
+      rag_status: project?.rag_status || null,
+      baseline_progress_pct: project?.baseline_progress_pct ?? null,
+      actual_progress_pct: project?.actual_progress_pct ?? null,
+      progress_items: progressItems,
+      health_safety_notes: healthSafetyNotes,
+      issues_risks: issuesRisks,
+      risk_items: riskItems,
+      commercial_items: commercialItems,
+      outstanding_items: outstandingItems,
+      snags_raised_count: snagsRaised || 0,
+      snags_closed_count: snagsClosed || 0,
+      plot_handovers: plotHandovers,
+      weather_summary: weatherSummary,
+      weather_lost_days: weatherLostDays,
+      total_lost_hours: totalLostHours,
+      hs_audits: hsAudits,
+      photos,
+      created_by: user.id,
+    };
+
+    const { data: saved, error: saveErr } = await supabase.from("monthly_reports").insert(payload).select().single();
+    if (saveErr) { showError(errorBox, saveErr); return; }
+    window.location.href = `monthly-report-view.html?id=${saved.id}`;
+  }
+
+  document.getElementById("generateBtn").addEventListener("click", () => {
+    generateReport(document.getElementById("monthPicker").value);
+  });
+
+  async function load() {
+    const { data: project } = await supabase.from("projects").select("name").eq("id", projectId).single();
+    renderHeader([
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project?.name || "Site", href: `project.html?id=${projectId}` },
+      { label: "Monthly Reports" },
+    ]);
+    document.getElementById("projectSub").textContent = project ? `${project.name} — rolled up automatically from that month's weekly reports.` : "";
+
+    const { data: monthlyReports, error } = await supabase
+      .from("monthly_reports")
+      .select("*")
+      .eq("project_id", projectId)
+      .order("month", { ascending: false });
+
+    if (error || !monthlyReports || !monthlyReports.length) {
+      document.getElementById("emptyState").style.display = "block";
+      return;
+    }
+
+    document.getElementById("reportRows").innerHTML = monthlyReports.map((r) => {
+      const monthLabel = new Date(r.month + "T00:00:00").toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+      const ragBadge = r.rag_status ? `<span class="badge ${ragBadgeClass[r.rag_status] || "badge-grey"}">${RAG_LABEL[r.rag_status] || r.rag_status}</span>` : "—";
+      return `
+        <tr class="row-link" onclick="window.location.href='monthly-report-view.html?id=${r.id}'">
+          <td><strong>${monthLabel}</strong></td>
+          <td>${(r.weekly_report_ids || []).length} report(s)</td>
+          <td>${ragBadge}</td>
+          <td>${r.total_lost_hours || 0} hrs</td>
+          <td>${formatDate(r.created_at?.slice(0, 10))}</td>
+        </tr>
+      `;
+    }).join("");
+  }
+
+  load();
+</script>
+</body>
+</html>

@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Snag List – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title" id="listTitle">Loading…</div>
+      <div class="page-sub" id="projectSub"></div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-danger btn-sm" id="deleteListBtn" style="display:none;">Delete List</button>
+      <a class="btn btn-outline" id="viewLink" href="#" target="_blank">Download PDF</a>
+      <button class="btn btn-amber" id="newSnagBtn">+ Add Item</button>
+    </div>
+  </div>
+
+  <div class="card" id="snagCard" style="display:none;">
+    <div id="errorBox" class="error-box"></div>
+    <form id="snagForm">
+      <input type="hidden" id="editingId">
+      <div class="field" id="plotFieldWrap" style="display:none;">
+        <label for="itemPlot">Plot</label>
+        <select id="itemPlot">
+          <option value="">External / Site-wide</option>
+        </select>
+      </div>
+      <div class="form-grid">
+        <div class="field"><label for="location">Location *</label><input type="text" id="location" required placeholder="e.g. First floor bathroom, Kitchen"></div>
+        <div class="field"><label for="trade">Trade responsible</label><input type="text" id="trade" placeholder="e.g. Plumbing"></div>
+      </div>
+      <div class="field"><label for="description">Description *</label><textarea id="description" rows="2" required placeholder="What's wrong and where exactly"></textarea></div>
+      <div class="field">
+        <label>Photo</label>
+        <input type="file" id="photoInput" accept="image/*">
+        <div class="photo-grid" id="photoGrid"></div>
+      </div>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-amber" id="saveBtn">Add Item</button>
+        <button type="button" class="btn btn-outline" id="cancelBtn">Cancel</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <div class="table-wrap">
+      <table>
+        <thead id="tableHead">
+          <tr><th>#</th><th>Location</th><th>Description</th><th>Trade</th><th>Status</th><th></th></tr>
+        </thead>
+        <tbody id="snagRows"></tbody>
+      </table>
+    </div>
+    <div id="emptyState" class="empty" style="display:none;"><p>No items in this list yet.</p></div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, uploadImage, todayISO, comparePlotNumbers } from "./js/app.js";
+
+  await requireAuth();
+  const listId = getParam("id");
+  if (!listId) window.location.href = "dashboard.html";
+
+  document.getElementById("viewLink").href = `snag-list-view.html?id=${listId}`;
+
+  let snagList = null;
+  let allSnags = [];
+  let photoUrl = null;
+  let isGeneralList = false;
+  let plotsById = {};
+
+  const errorBox = document.getElementById("errorBox");
+  const snagCard = document.getElementById("snagCard");
+  const snagForm = document.getElementById("snagForm");
+  const photoGrid = document.getElementById("photoGrid");
+  const photoInput = document.getElementById("photoInput");
+
+  function openForAdd() {
+    snagForm.reset();
+    document.getElementById("editingId").value = "";
+    if (isGeneralList) document.getElementById("itemPlot").value = "";
+    photoUrl = null;
+    photoGrid.innerHTML = "";
+    document.getElementById("saveBtn").textContent = "Add Item";
+    snagCard.style.display = "block";
+  }
+  function openForEdit(s) {
+    document.getElementById("editingId").value = s.id;
+    if (isGeneralList) document.getElementById("itemPlot").value = s.plot_id || "";
+    document.getElementById("location").value = s.location || "";
+    document.getElementById("trade").value = s.trade || "";
+    document.getElementById("description").value = s.description || "";
+    photoUrl = s.photo_url || null;
+    photoGrid.innerHTML = photoUrl ? `<div class="photo-thumb"><img src="${photoUrl}"></div>` : "";
+    document.getElementById("saveBtn").textContent = "Save Changes";
+    snagCard.style.display = "block";
+  }
+  window.editSnag = (id) => { const s = allSnags.find(x => x.id === id); if (s) openForEdit(s); };
+
+  document.getElementById("newSnagBtn").addEventListener("click", openForAdd);
+  document.getElementById("cancelBtn").addEventListener("click", () => { snagCard.style.display = "none"; });
+
+  document.getElementById("deleteListBtn").addEventListener("click", async () => {
+    if (!confirm(`Delete "${snagList.title}" and all its snag items? This cannot be undone.`)) return;
+    const { error } = await supabase.from("snag_lists").delete().eq("id", listId);
+    if (error) { showError(errorBox, error); return; }
+    window.location.href = `snagging.html?project=${snagList.project_id}`;
+  });
+
+  photoInput.addEventListener("change", async () => {
+    const file = photoInput.files[0];
+    if (!file) return;
+    photoInput.disabled = true;
+    try {
+      photoUrl = await uploadImage(file, `${snagList.project_id}/snags`);
+      photoGrid.innerHTML = `<div class="photo-thumb"><img src="${photoUrl}"></div>`;
+    } catch (err) {
+      showError(errorBox, err);
+    } finally {
+      photoInput.disabled = false;
+    }
+  });
+
+  snagForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearError(errorBox);
+    const editingId = document.getElementById("editingId").value;
+    const payload = {
+      location: document.getElementById("location").value.trim(),
+      trade: document.getElementById("trade").value.trim() || null,
+      description: document.getElementById("description").value.trim(),
+      photo_url: photoUrl,
+    };
+    if (isGeneralList) payload.plot_id = document.getElementById("itemPlot").value || null;
+    try {
+      if (editingId) {
+        const { error } = await supabase.from("snag_items").update(payload).eq("id", editingId);
+        if (error) throw error;
+      } else {
+        const { data: { user } } = await supabase.auth.getUser();
+        payload.project_id = snagList.project_id;
+        payload.snag_list_id = listId;
+        payload.raised_date = todayISO();
+        payload.created_by = user.id;
+        const { error } = await supabase.from("snag_items").insert(payload);
+        if (error) throw error;
+      }
+      snagCard.style.display = "none";
+      loadSnags();
+    } catch (err) {
+      showError(errorBox, err);
+    }
+  });
+
+  async function setStatus(id, newStatus) {
+    const patch = { status: newStatus, closed_date: newStatus === "closed" ? todayISO() : null };
+    await supabase.from("snag_items").update(patch).eq("id", id);
+    loadSnags();
+  }
+  window.setStatus = setStatus;
+
+  async function toggleDelayFlag(id, currentlyFlagged) {
+    if (currentlyFlagged) {
+      if (!confirm("Clear the delay flag on this snag?")) return;
+      await supabase.from("snag_items").update({ delay_flag: false, delay_reason: null }).eq("id", id);
+    } else {
+      const reason = prompt('What\'s delaying this snag? (e.g. "waiting on parts", "access blocked")', "");
+      if (reason === null) return;
+      await supabase.from("snag_items").update({ delay_flag: true, delay_reason: reason.trim() || null }).eq("id", id);
+    }
+    loadSnags();
+  }
+  window.toggleDelayFlag = toggleDelayFlag;
+
+  async function deleteSnag(id) {
+    if (!confirm("Delete this snag item?")) return;
+    await supabase.from("snag_items").delete().eq("id", id);
+    loadSnags();
+  }
+  window.deleteSnag = deleteSnag;
+
+  const statusBadge = { open: "badge-red", closed: "badge-green", rejected: "badge-grey" };
+
+  function render() {
+    if (isGeneralList) {
+      document.getElementById("tableHead").innerHTML = `<tr><th>#</th><th>Plot</th><th>Location</th><th>Description</th><th>Trade</th><th>Status</th><th></th></tr>`;
+    }
+    document.getElementById("emptyState").style.display = allSnags.length ? "none" : "block";
+    document.getElementById("snagRows").innerHTML = allSnags.map((s) => `
+      <tr>
+        <td>${s.item_no}</td>
+        ${isGeneralList ? `<td>${s.plot_id ? escapeHtml(plotsById[s.plot_id] || "—") : "External / Site-wide"}</td>` : ""}
+        <td>${escapeHtml(s.location)}</td>
+        <td>${escapeHtml(s.description)}${s.photo_url ? ' <span title="Has photo">📷</span>' : ""}</td>
+        <td>${escapeHtml(s.trade) || "—"}</td>
+        <td>
+          <select class="status-select ${statusBadge[s.status]}" style="width:auto;" onchange="setStatus('${s.id}', this.value)">
+            <option value="open" ${s.status === "open" ? "selected" : ""}>Open</option>
+            <option value="closed" ${s.status === "closed" ? "selected" : ""}>Closed</option>
+            <option value="rejected" ${s.status === "rejected" ? "selected" : ""}>Rejected</option>
+          </select>
+          ${s.delay_flag ? `<div class="badge badge-amber" style="margin-top:0.3rem; white-space:normal;" title="Flagged as delaying completion">⚠️ Delayed${s.delay_reason ? `: ${escapeHtml(s.delay_reason)}` : ""}</div>` : ""}
+        </td>
+        <td class="btn-row">
+          <button class="btn btn-outline btn-sm" onclick="editSnag('${s.id}')">Edit</button>
+          <button class="btn btn-outline btn-sm" onclick="toggleDelayFlag('${s.id}', ${s.delay_flag})">${s.delay_flag ? "Clear Flag" : "Flag Delay"}</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteSnag('${s.id}')">Delete</button>
+        </td>
+      </tr>
+    `).join("");
+  }
+
+  async function loadSnags() {
+    const { data, error } = await supabase
+      .from("snag_items")
+      .select("*")
+      .eq("snag_list_id", listId)
+      .order("item_no", { ascending: true });
+    if (!error) allSnags = data || [];
+    render();
+  }
+
+  async function init() {
+    const { data: list, error } = await supabase.from("snag_lists").select("*, projects(*), plots(*)").eq("id", listId).single();
+    if (error) { document.getElementById("listTitle").textContent = "Snag list not found"; return; }
+    snagList = list;
+    isGeneralList = !snagList.plot_id;
+    const project = list.projects;
+    const plotLabel = list.plots ? `${list.plots.plot_number} – Snag List` : list.title;
+
+    document.getElementById("listTitle").textContent = plotLabel;
+    document.getElementById("projectSub").textContent = project.name;
+    renderHeader([
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project.name, href: `project.html?id=${project.id}` },
+      { label: "Snagging", href: `snagging.html?project=${project.id}` },
+      { label: plotLabel },
+    ]);
+
+    if (isGeneralList) {
+      const { data: plots } = await supabase
+        .from("plots")
+        .select("id, plot_number")
+        .eq("project_id", snagList.project_id);
+      const sorted = (plots || []).slice().sort((a, b) => comparePlotNumbers(a.plot_number, b.plot_number));
+      sorted.forEach((p) => { plotsById[p.id] = p.plot_number; });
+      const itemPlot = document.getElementById("itemPlot");
+      sorted.forEach((p) => {
+        const opt = document.createElement("option");
+        opt.value = p.id;
+        opt.textContent = p.plot_number;
+        itemPlot.appendChild(opt);
+      });
+      document.getElementById("plotFieldWrap").style.display = "block";
+      document.getElementById("deleteListBtn").style.display = "inline-block";
+    }
+
+    loadSnags();
+  }
+
+  init();
+</script>
+</body>
+</html>

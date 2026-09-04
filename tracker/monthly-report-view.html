@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Monthly Report – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="doc-toolbar no-print">
+    <button class="btn btn-outline btn-sm" id="printBtn">Print / Save as PDF</button>
+    <a class="btn btn-amber btn-sm" id="emailLink" href="#">Email to Contractor</a>
+    <button class="btn btn-danger btn-sm" id="deleteBtn" style="margin-left:auto;">Delete Report</button>
+  </div>
+
+  <div class="doc" id="doc">Loading…</div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, getOrgLogoUrl, formatGBP, RAG_LABEL, renderProgressBlock, RISK_IMPACT_BADGE } from "./js/app.js";
+
+  await requireAuth();
+  const reportId = getParam("id");
+  if (!reportId) window.location.href = "dashboard.html";
+
+  document.getElementById("printBtn").addEventListener("click", () => window.print());
+
+  const commercialTypeLabel = { early_warning: "Early Warning", proposed_variation: "Proposed Variation", instruction: "Instruction" };
+
+  function progressSection(items) {
+    if (!items || !items.length) return "";
+    return `<div class="doc-section"><h3>Progress This Month</h3><ul class="body-list">${items.map((i) => {
+      const plotPrefix = i.plot ? `<strong>${escapeHtml(i.plot)}:</strong> ` : "";
+      const milestoneTag = i.milestone ? `<span class="milestone-tag">${escapeHtml(i.milestone)}</span> ` : "";
+      const text = i.text ? escapeHtml(i.text) : "";
+      const percentSuffix = typeof i.percent === "number" ? ` <strong>(${i.percent}% complete${i.completed_this_month ? " — completed this month" : ""})</strong>` : "";
+      return `<li>${plotPrefix}${milestoneTag}${text}${percentSuffix}</li>`;
+    }).join("")}</ul></div>`;
+  }
+
+  function outstandingSection(items) {
+    if (!items || !items.length) return "";
+    return `<div class="doc-section"><h3>Outstanding / Plan for Next Month</h3><ul class="body-list">${items.map((i) => {
+      if (typeof i === "string") return `<li>${escapeHtml(i)}</li>`;
+      const plotPrefix = i.plot ? `<strong>${escapeHtml(i.plot)}:</strong> ` : "";
+      const milestoneTag = i.milestone ? `<span class="milestone-tag">${escapeHtml(i.milestone)}</span> ` : "";
+      return `<li>${plotPrefix}${milestoneTag}${escapeHtml(i.text)}</li>`;
+    }).join("")}</ul></div>`;
+  }
+
+  function weeklyNotesSection(title, entries, field) {
+    if (!entries || !entries.length) return "";
+    return `<div class="doc-section"><h3>${escapeHtml(title)}</h3><ul class="body-list">${entries.map((e) =>
+      `<li><strong>${formatDate(e.week_starting)} – ${formatDate(e.week_ending)}:</strong> ${escapeHtml(e[field])}</li>`
+    ).join("")}</ul></div>`;
+  }
+
+  function riskItemsSection(items) {
+    const list = Array.isArray(items) ? items : [];
+    if (!list.length) return "";
+    return `<div class="doc-section">
+      <h3>Risk &amp; Delays Tracker</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Risk / Issue</th><th>Action Required</th><th>Owner</th><th>Target Date</th><th>Impact</th><th>Week</th></tr></thead>
+        <tbody>${list.map((i) => `
+          <tr>
+            <td>${escapeHtml(i.description) || "—"}</td>
+            <td>${escapeHtml(i.action_required) || "—"}</td>
+            <td>${escapeHtml(i.owner) || "—"}</td>
+            <td>${i.target_date ? formatDate(i.target_date) : "—"}</td>
+            <td>${i.impact ? `<span class="badge ${RISK_IMPACT_BADGE[i.impact] || "badge-grey"}">${escapeHtml(i.impact)}</span>` : "—"}</td>
+            <td>${formatDate(i.week_starting)}</td>
+          </tr>
+        `).join("")}</tbody>
+      </table></div>
+    </div>`;
+  }
+
+  function commercialSection(items) {
+    if (!items || !items.length) return "";
+    const totals = {};
+    items.forEach((i) => {
+      totals[i.type] = totals[i.type] || { count: 0, cost: 0 };
+      totals[i.type].count++;
+      if (typeof i.cost_impact === "number") totals[i.type].cost += i.cost_impact;
+    });
+    const totalsLine = Object.entries(totals)
+      .map(([type, t]) => `${commercialTypeLabel[type] || type}: ${t.count} (${formatGBP(t.cost) || "£0"})`)
+      .join(" · ");
+    return `<div class="doc-section">
+      <h3>Commercial Items This Month</h3>
+      <p class="hint" style="margin-bottom:0.5rem;">${totalsLine}</p>
+      <ul class="body-list">${items.map((i) => {
+        const cost = typeof i.cost_impact === "number" ? formatGBP(i.cost_impact) : "TBC";
+        const time = typeof i.time_impact_days === "number" ? (i.time_impact_days > 0 ? `+${i.time_impact_days} days` : `${i.time_impact_days} days`) : "Nil";
+        return `<li><strong>[${escapeHtml(commercialTypeLabel[i.type] || i.type)}]</strong> ${escapeHtml(i.title)} — ${cost}, ${time} <span class="hint">(w/c ${formatDate(i.week_starting)})</span></li>`;
+      }).join("")}</ul>
+    </div>`;
+  }
+
+  function weatherSection(summary, lostDays, totalHours) {
+    const weeks = Array.isArray(summary) ? summary.filter((w) => w.lost_hours > 0) : [];
+    const days = Array.isArray(lostDays) ? lostDays : [];
+    if (!weeks.length && !days.length) return "";
+    return `<div class="doc-section">
+      <h3>Weather / Lost Time</h3>
+      <p class="hint" style="margin-bottom:0.5rem;">Total lost time this month: <strong>${totalHours || 0} hours</strong>${weeks.length ? " · " + weeks.map((w) => `w/c ${formatDate(w.week_starting)}: ${w.lost_hours}h`).join(" · ") : ""}</p>
+      ${days.length ? `
+        <div class="table-wrap"><table>
+          <thead><tr><th>Date</th><th>Condition</th><th>Lost Time (hrs)</th><th>Notes</th></tr></thead>
+          <tbody>${days.map((d) => `
+            <tr>
+              <td>${new Date(d.date + "T00:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })}</td>
+              <td>${escapeHtml(d.condition) || "—"}</td>
+              <td>${d.lost_hours || 0}</td>
+              <td>${escapeHtml(d.notes) || "—"}</td>
+            </tr>
+          `).join("")}</tbody>
+        </table></div>
+      ` : ""}
+    </div>`;
+  }
+
+  function hsAuditSection(audits) {
+    const list = Array.isArray(audits) ? audits : [];
+    if (!list.length) {
+      return `<div class="doc-section">
+        <h3>H&amp;S Audit</h3>
+        <p><span class="badge badge-amber">⚠️ No H&amp;S audit was logged this month</span></p>
+      </div>`;
+    }
+    return `<div class="doc-section">
+      <h3>H&amp;S Audit</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Type</th><th>Conducted By</th><th>Date</th><th>Score</th><th>Flagged</th></tr></thead>
+        <tbody>${list.map((a) => {
+          const typeBadge = a.audit_type === "internal" ? `<span class="badge badge-blue">Internal</span>` : `<span class="badge badge-grey">External</span>`;
+          const score = a.audit_type === "internal" ? (a.score_pct === null ? "—" : `${a.score_pct}%`) : (a.file_url ? `<a href="${a.file_url}" target="_blank">📄 ${escapeHtml(a.file_name || "View file")}</a>` : "—");
+          const flagged = a.audit_type === "internal" ? (a.flagged_count > 0 ? `<span class="badge badge-red">${a.flagged_count}</span>` : "0") : "—";
+          return `<tr><td>${typeBadge}</td><td>${escapeHtml(a.conducted_by) || "—"}</td><td>${formatDate(a.conducted_date)}</td><td>${score}</td><td>${flagged}</td></tr>`;
+        }).join("")}</tbody>
+      </table></div>
+    </div>`;
+  }
+
+  function plotHandoversSection(plots) {
+    if (!plots || !plots.length) return "";
+    return `<div class="doc-section">
+      <h3>Plot Handovers (as of report date)</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Plot</th><th>Quality Gates</th><th>Handover Docs</th></tr></thead>
+        <tbody>${plots.map((p) => `
+          <tr>
+            <td>${escapeHtml(p.plot_number)}</td>
+            <td>${p.gates_approved} / ${p.gates_total} approved${p.gates_total === 0 ? " (N/A)" : ""}</td>
+            <td>${p.docs_ready} / ${p.docs_total} ready</td>
+          </tr>
+        `).join("")}</tbody>
+      </table></div>
+    </div>`;
+  }
+
+  async function load() {
+    const { data: r, error } = await supabase.from("monthly_reports").select("*, projects(*)").eq("id", reportId).single();
+    if (error) { document.getElementById("doc").textContent = "Monthly report not found."; return; }
+    const project = r.projects;
+    const monthLabel = new Date(r.month + "T00:00:00").toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+
+    renderHeader([
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project.name, href: `project.html?id=${project.id}` },
+      { label: "Monthly Reports", href: `monthly-reports.html?project=${project.id}` },
+      { label: monthLabel },
+    ]);
+
+    document.getElementById("deleteBtn").addEventListener("click", async () => {
+      if (!confirm(`Delete the ${monthLabel} report? You can regenerate it from Monthly Reports any time.`)) return;
+      await supabase.from("monthly_reports").delete().eq("id", reportId);
+      window.location.href = `monthly-reports.html?project=${project.id}`;
+    });
+
+    const openCommercial = Array.isArray(r.commercial_items) ? r.commercial_items.length : 0;
+    const subject = encodeURIComponent(`Monthly Site Report – ${project.name} – ${monthLabel}`);
+    const body = encodeURIComponent(
+      `Hi,\n\nPlease find this month's rolled-up site report for ${project.name} below.\n\n` +
+      `Month: ${monthLabel}\nWeekly reports covered: ${(r.weekly_report_ids || []).length}\n` +
+      (r.rag_status ? `Overall status: ${RAG_LABEL[r.rag_status] || r.rag_status}\n` : "") +
+      `Snags raised: ${r.snags_raised_count} · Snags closed: ${r.snags_closed_count}\n` +
+      (r.total_lost_hours > 0 ? `Weather lost time this month: ${r.total_lost_hours} hours\n` : "") +
+      (openCommercial ? `Commercial items this month: ${openCommercial}\n` : "") +
+      `\n(Full report with photos: use "Print / Save as PDF" on this page and attach it here.)\n\nRegards,`
+    );
+    document.getElementById("emailLink").href = `mailto:${project.main_contractor_email || ""}?subject=${subject}&body=${body}`;
+
+    const photos = Array.isArray(r.photos) ? r.photos : [];
+    const logoUrl = await getOrgLogoUrl();
+    const ragBadge = r.rag_status ? `<span class="badge badge-${r.rag_status}" style="display:inline-flex; align-items:center; gap:0.4rem;"><span class="rag-dot rag-${r.rag_status}"></span>${RAG_LABEL[r.rag_status] || r.rag_status}</span>` : "—";
+
+    document.getElementById("doc").innerHTML = `
+      <div class="doc-head">
+        <div>
+          ${logoUrl ? `<img class="doc-logo" src="${logoUrl}" alt="">` : ""}
+          <h1>Monthly Site Report</h1>
+          <div style="color:var(--ink-soft); font-size:0.9rem; margin-top:0.2rem;">${escapeHtml(project.name)} — ${monthLabel}</div>
+        </div>
+        <div class="doc-meta">
+          ${project.contract_ref ? "Ref: " + escapeHtml(project.contract_ref) + "<br>" : ""}
+          To: ${escapeHtml(project.main_contractor_name) || "Main Contractor"}
+        </div>
+      </div>
+
+      <dl class="doc-facts">
+        <div><dt>Month</dt><dd>${monthLabel}</dd></div>
+        <div><dt>Weekly Reports Covered</dt><dd>${(r.weekly_report_ids || []).length}</dd></div>
+        <div><dt>Overall Status</dt><dd>${ragBadge}</dd></div>
+        <div><dt>Snags Raised / Closed</dt><dd>${r.snags_raised_count} / ${r.snags_closed_count}</dd></div>
+        <div><dt>Weather Lost Time</dt><dd>${r.total_lost_hours || 0} hours</dd></div>
+      </dl>
+
+      ${r.baseline_progress_pct !== null && r.actual_progress_pct !== null ? `<div class="doc-section">${renderProgressBlock(r.baseline_progress_pct, r.actual_progress_pct, r.rag_status)}</div>` : ""}
+
+      ${weatherSection(r.weather_summary, r.weather_lost_days, r.total_lost_hours)}
+      ${progressSection(r.progress_items)}
+      ${outstandingSection(r.outstanding_items)}
+      ${weeklyNotesSection("Health & Safety Notes", r.health_safety_notes, "health_safety_notes")}
+      ${hsAuditSection(r.hs_audits)}
+      ${riskItemsSection(r.risk_items)}
+      ${weeklyNotesSection("Issues / Risks / Delays", r.issues_risks, "issues_risks")}
+      ${commercialSection(r.commercial_items)}
+      ${plotHandoversSection(r.plot_handovers)}
+
+      ${photos.length ? `
+        <div class="doc-section">
+          <h3>Site Photos</h3>
+          <div class="photo-grid">
+            ${photos.map(p => `<div class="photo-thumb"><img src="${p.url}" alt=""></div>`).join("")}
+          </div>
+        </div>` : ""}
+    `;
+  }
+
+  load();
+</script>
+</body>
+</html>

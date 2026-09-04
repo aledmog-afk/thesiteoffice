@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Drawings & Layouts – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title">Drawings &amp; Layouts</div>
+      <div class="page-sub" id="projectSub">Site layout for reference, plus plot floor plans for pinpointing snags.</div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:1.5rem;">
+    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.8rem;">Site Layout</h3>
+    <div id="errorBox" class="error-box"></div>
+    <div id="siteLayoutWrap"></div>
+    <input type="file" id="siteLayoutInput" accept="image/*" style="margin-top:0.8rem;">
+    <p class="hint">The overall site master plan — for reference. Individual plot floor plans below support pinning snags.</p>
+  </div>
+
+  <div class="page-head" style="margin-bottom:1.2rem;">
+    <div class="page-sub" style="font-family:var(--font-display); font-size:1.1rem; font-weight:700; color:var(--ink);">Plot Floor Plans</div>
+    <button class="btn btn-amber" id="newDrawingBtn">+ Upload Drawing</button>
+  </div>
+
+  <div class="card" id="newDrawingCard" style="display:none;">
+    <div id="drawingErrorBox" class="error-box"></div>
+    <form id="drawingForm">
+      <div class="form-grid">
+        <div class="field"><label for="drawingName">Drawing name *</label><input type="text" id="drawingName" required placeholder="e.g. Plot 4 Ground Floor Layout"></div>
+        <div class="field"><label for="plotNumber">Plot number (optional)</label><input type="text" id="plotNumber" placeholder="e.g. Plot 4"></div>
+      </div>
+      <div class="field"><label for="drawingFile">File *</label><input type="file" id="drawingFile" accept="image/*,application/pdf" required></div>
+      <p class="hint" id="pdfHint" style="display:none;">PDFs are stored as-is (they can't be compressed or pinned in the browser) — a PNG, JPG, or exported image will be resized and compressed automatically, and supports pinning.</p>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-amber" id="saveDrawingBtn">Upload</button>
+        <button type="button" class="btn btn-outline" id="cancelDrawingBtn">Cancel</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="grid" id="drawingsGrid"></div>
+  <div id="emptyState" class="empty" style="display:none;">
+    <p>No drawings uploaded yet. Upload a floor plan to start pinpointing snags.</p>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, uploadDrawing } from "./js/app.js";
+
+  await requireAuth();
+  const projectId = getParam("project");
+  if (!projectId) window.location.href = "dashboard.html";
+
+  const errorBox = document.getElementById("errorBox");
+  const drawingErrorBox = document.getElementById("drawingErrorBox");
+  let project = null;
+
+  // ─── Site layout ────────────────────────────────────────────────
+  function renderSiteLayout() {
+    const wrap = document.getElementById("siteLayoutWrap");
+    wrap.innerHTML = project.site_layout_url
+      ? `<img src="${project.site_layout_url}" style="max-width:100%; max-height:420px; border-radius:6px; border:1px solid var(--rule);">`
+      : `<p style="color:var(--ink-soft); font-size:0.9rem;">No site layout uploaded yet.</p>`;
+  }
+
+  document.getElementById("siteLayoutInput").addEventListener("change", async () => {
+    const file = document.getElementById("siteLayoutInput").files[0];
+    if (!file) return;
+    clearError(errorBox);
+    document.getElementById("siteLayoutInput").disabled = true;
+    try {
+      const url = await uploadDrawing(file, `${projectId}/site-layout`);
+      const { error } = await supabase.from("projects").update({ site_layout_url: url }).eq("id", projectId);
+      if (error) throw error;
+      project.site_layout_url = url;
+      renderSiteLayout();
+    } catch (err) {
+      showError(errorBox, err);
+    } finally {
+      document.getElementById("siteLayoutInput").value = "";
+      document.getElementById("siteLayoutInput").disabled = false;
+    }
+  });
+
+  // ─── Plot floor plans ───────────────────────────────────────────
+  const newDrawingCard = document.getElementById("newDrawingCard");
+  document.getElementById("newDrawingBtn").addEventListener("click", () => newDrawingCard.style.display = "block");
+  document.getElementById("cancelDrawingBtn").addEventListener("click", () => {
+    newDrawingCard.style.display = "none";
+    document.getElementById("drawingForm").reset();
+    document.getElementById("pdfHint").style.display = "none";
+  });
+
+  document.getElementById("drawingFile").addEventListener("change", () => {
+    const file = document.getElementById("drawingFile").files[0];
+    document.getElementById("pdfHint").style.display = (file && file.type === "application/pdf") ? "block" : "none";
+  });
+
+  document.getElementById("drawingForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearError(drawingErrorBox);
+    const file = document.getElementById("drawingFile").files[0];
+    if (!file) return;
+    document.getElementById("saveDrawingBtn").disabled = true;
+    try {
+      const url = await uploadDrawing(file, `${projectId}/drawings`);
+      const { data: { user } } = await supabase.auth.getUser();
+      const { error } = await supabase.from("drawings").insert({
+        project_id: projectId,
+        drawing_name: document.getElementById("drawingName").value.trim(),
+        plot_number: document.getElementById("plotNumber").value.trim() || null,
+        drawing_url: url,
+        created_by: user.id,
+      });
+      if (error) throw error;
+      document.getElementById("cancelDrawingBtn").click();
+      loadDrawings();
+    } catch (err) {
+      showError(drawingErrorBox, err);
+    } finally {
+      document.getElementById("saveDrawingBtn").disabled = false;
+    }
+  });
+
+  async function deleteDrawing(id, name) {
+    if (!confirm(`Delete "${name}"? Any pinned snags on it will keep their record but lose their pin.`)) return;
+    await supabase.from("drawings").delete().eq("id", id);
+    loadDrawings();
+  }
+  window.deleteDrawing = deleteDrawing;
+
+  async function loadDrawings() {
+    const { data: drawings, error } = await supabase
+      .from("drawings")
+      .select("*")
+      .eq("project_id", projectId)
+      .order("created_at", { ascending: false });
+
+    const grid = document.getElementById("drawingsGrid");
+    if (error || !drawings || !drawings.length) {
+      grid.innerHTML = "";
+      document.getElementById("emptyState").style.display = "block";
+      return;
+    }
+    document.getElementById("emptyState").style.display = "none";
+
+    const isPdf = (d) => d.drawing_url.toLowerCase().endsWith(".pdf");
+    grid.innerHTML = drawings.map((d) => `
+      <div class="tile" style="cursor:default;">
+        <a href="${isPdf(d) ? d.drawing_url : `drawing-view.html?id=${d.id}`}" ${isPdf(d) ? 'target="_blank"' : ""} style="text-decoration:none; color:inherit; display:block;">
+          ${isPdf(d)
+            ? `<div style="height:120px; display:flex; align-items:center; justify-content:center; background:var(--off); border-radius:6px; font-size:2rem;">📄</div>`
+            : `<img src="${d.drawing_url}" style="width:100%; height:120px; object-fit:cover; border-radius:6px;">`}
+          <div class="tile-name" style="margin-top:0.6rem; font-size:1rem;">${escapeHtml(d.drawing_name)}</div>
+          <div class="tile-meta">${d.plot_number ? escapeHtml(d.plot_number) : "No plot set"}${isPdf(d) ? " · PDF (view only, no pinning)" : ""}</div>
+        </a>
+        <button class="btn btn-outline btn-sm" style="margin-top:0.6rem; width:100%;" onclick="deleteDrawing('${d.id}', '${escapeHtml(d.drawing_name).replace(/'/g, "\\'")}')">Delete</button>
+      </div>
+    `).join("");
+  }
+
+  async function init() {
+    const { data, error } = await supabase.from("projects").select("*").eq("id", projectId).single();
+    if (error) { document.getElementById("projectSub").textContent = "Site not found."; return; }
+    project = data;
+    renderHeader([
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project.name, href: `project.html?id=${projectId}` },
+      { label: "Drawings & Layouts" },
+    ]);
+    document.getElementById("projectSub").textContent = `${project.name} — site layout for reference, plot floor plans for pinpointing snags.`;
+    renderSiteLayout();
+    loadDrawings();
+  }
+
+  init();
+</script>
+</body>
+</html>

@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Site – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title" id="projectName">Loading…</div>
+      <div class="page-sub" id="projectMeta"></div>
+    </div>
+    <div class="btn-row">
+      <select id="statusSelect" style="width:auto;">
+        <option value="active">Active</option>
+        <option value="on hold">On hold</option>
+        <option value="complete">Complete</option>
+      </select>
+      <button class="btn btn-outline btn-sm" id="editBtn">Edit details</button>
+    </div>
+  </div>
+
+  <div id="pageErrorBox" class="error-box"></div>
+
+  <div class="card" id="progressCard" style="margin-bottom:2rem;">
+    <div style="display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap; margin-bottom:0.5rem;">
+      <span class="badge rag-badge" id="ragBadge"></span>
+      <span class="hint" style="color:var(--ink-soft); font-size:0.8rem;">Overall status &amp; programme progress — edit below</span>
+    </div>
+    <div id="progressDisplay"></div>
+    <p class="hint" style="margin-top:0.5rem;">Actual Progress is a weighted average of every plot's own progress (set on its Plot Handovers page), each apartment block's own progress weighted by how many flats it has (a block's shared structure underpins every flat in it), plus External / Engineering Works below.</p>
+    <div id="generatePlotsWrap" style="display:none; margin-top:0.8rem;">
+      <button type="button" class="btn btn-outline btn-sm" id="generatePlotsBtn"></button>
+    </div>
+  </div>
+
+  <div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(220px,1fr)); margin-bottom:2rem;">
+    <a class="tile" href="weekly-reports.html?project=" id="reportsTile">
+      <div class="tile-icon">📋</div>
+      <div class="tile-name">Weekly Reports</div>
+      <div class="tile-stats"><div><strong id="reportCount">–</strong>reports logged</div></div>
+    </a>
+    <a class="tile" href="monthly-reports.html?project=" id="monthlyReportsTile">
+      <div class="tile-icon">🗓️</div>
+      <div class="tile-name">Monthly Reports</div>
+      <div class="tile-stats"><div><strong id="monthlyReportCount">–</strong>generated</div></div>
+    </a>
+    <a class="tile" href="snagging.html?project=" id="snaggingTile">
+      <div class="tile-icon">🔧</div>
+      <div class="tile-name">Snagging</div>
+      <div class="tile-stats">
+        <div><strong id="openSnagCount">–</strong>open</div>
+        <div><strong id="closedSnagCount">–</strong>closed</div>
+      </div>
+    </a>
+    <a class="tile" href="plot-handovers.html?project=" id="plotHandoversTile">
+      <div class="tile-icon">✅</div>
+      <div class="tile-name">Plot Handovers</div>
+      <div class="tile-stats">
+        <div><strong id="plotsCount">–</strong>plots</div>
+        <div><strong id="gatesApprovedCount">–</strong>gates approved</div>
+      </div>
+    </a>
+    <a class="tile" href="hs-audits.html?project=" id="hsAuditsTile">
+      <div class="tile-icon">🦺</div>
+      <div class="tile-name">H&amp;S Audits</div>
+      <div class="tile-stats"><div><strong id="hsAuditCount">–</strong>logged</div></div>
+      <div id="hsAuditFlag" class="badge badge-amber" style="display:none; margin-top:0.5rem;">⚠️ None this month</div>
+    </a>
+    <a class="tile" href="commercials.html?project=" id="commercialsTile">
+      <div class="tile-icon">💷</div>
+      <div class="tile-name">Commercials</div>
+      <div class="tile-stats"><div><strong id="commercialsPendingCount">–</strong>pending review</div></div>
+    </a>
+    <a class="tile" href="drawings.html?project=" id="drawingsTile">
+      <div class="tile-icon">📐</div>
+      <div class="tile-name">Drawings &amp; Layouts</div>
+      <div class="tile-stats"><div><strong id="drawingsCount">–</strong>drawings uploaded</div></div>
+    </a>
+  </div>
+
+  <div class="card" id="detailsCard">
+    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Site Details</h3>
+    <dl class="doc-facts" id="factsView"></dl>
+
+    <form id="editForm" style="display:none;">
+      <div id="errorBox" class="error-box"></div>
+      <div class="form-grid">
+        <div class="field"><label for="name">Site name *</label><input type="text" id="name" required></div>
+        <div class="field"><label for="contractRef">Contract reference</label><input type="text" id="contractRef"></div>
+      </div>
+      <div class="field"><label for="address">Site address</label><input type="text" id="address"></div>
+      <div class="field">
+        <label for="postcode">Postcode</label>
+        <input type="text" id="postcode" placeholder="e.g. B91 3XX" style="max-width:180px;">
+        <p class="hint" id="postcodeHint">Used to auto-fill weather on weekly reports.</p>
+      </div>
+      <div class="form-grid">
+        <div class="field"><label for="contractorName">Main contractor name</label><input type="text" id="contractorName"></div>
+        <div class="field"><label for="contractorEmail">Main contractor email</label><input type="email" id="contractorEmail"></div>
+      </div>
+      <div class="field"><label for="startDate">Start date</label><input type="date" id="startDate"></div>
+      <div class="form-grid">
+        <div class="field">
+          <label for="ragStatusInput">Overall status (RAG)</label>
+          <select id="ragStatusInput">
+            <option value="green">Green</option>
+            <option value="amber">Amber</option>
+            <option value="red">Red</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-grid">
+        <div class="field"><label for="baselinePct">Planned / baseline progress (%)</label><input type="number" id="baselinePct" min="0" max="100" step="1"></div>
+        <div class="field">
+          <label for="totalPlots">Total plots on site</label>
+          <input type="number" id="totalPlots" min="1" step="1" placeholder="e.g. 22">
+        </div>
+      </div>
+      <div class="field">
+        <label for="externalWorksPct">External / Engineering Works (%)</label>
+        <div class="btn-row" style="align-items:center;">
+          <input type="number" id="externalWorksPct" min="0" max="100" step="1" style="max-width:120px;">
+          <button type="button" class="btn btn-outline btn-sm" id="suggestExternalWorksBtn">Suggest from Milestones</button>
+        </div>
+      </div>
+      <p class="hint">Each plot's own progress is set on its Plot Handovers page. External / Engineering Works covers civils, drainage, and landscaping — work that isn't any one plot; tag weekly report items to "External / Engineering Works" in the plot picker to log progress against it, same as a plot. Total Plots is just a target count — set it and use "Generate Missing Plots" above to create any that don't exist yet, each with its own quality gates, handover documents, and snag list.</p>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-amber">Save Changes</button>
+        <button type="button" class="btn btn-outline" id="cancelEditBtn">Cancel</button>
+        <button type="button" class="btn btn-danger" id="deleteBtn" style="margin-left:auto;">Delete Site</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card" id="collaboratorsCard" style="margin-top:2rem;">
+    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Collaborators</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Email</th><th>Role</th><th>Joined</th><th></th></tr></thead>
+        <tbody id="memberRows"></tbody>
+      </table>
+    </div>
+    <div id="inviteSection" style="margin-top:1rem; display:none;">
+      <p class="hint" style="margin-bottom:0.5rem;">Full collaborator access — share with anyone who needs to create/edit reports, plots, snags etc. on this site. They'll join the moment they open it while signed in.</p>
+      <div class="btn-row" id="inviteLinkRow" style="display:none;">
+        <input type="text" id="inviteLinkInput" readonly style="flex:1; min-width:220px;">
+        <button type="button" class="btn btn-outline btn-sm" id="copyInviteBtn">Copy Link</button>
+        <button type="button" class="btn btn-outline btn-sm" id="regenerateInviteBtn">Regenerate</button>
+        <button type="button" class="btn btn-outline btn-sm" id="revokeInviteBtn">Revoke</button>
+      </div>
+      <button type="button" class="btn btn-outline btn-sm" id="getInviteLinkBtn">Get Invite Link</button>
+    </div>
+    <div id="snaggingInviteSection" style="margin-top:1.2rem; display:none;">
+      <p class="hint" style="margin-bottom:0.5rem;">Snagging-only access — for whoever closes out snags on site (e.g. the main contractor's site manager). They can see and edit this site's snag lists only — nothing else.</p>
+      <div class="btn-row" id="snaggingInviteLinkRow" style="display:none;">
+        <input type="text" id="snaggingInviteLinkInput" readonly style="flex:1; min-width:220px;">
+        <button type="button" class="btn btn-outline btn-sm" id="copySnaggingInviteBtn">Copy Link</button>
+        <button type="button" class="btn btn-outline btn-sm" id="regenerateSnaggingInviteBtn">Regenerate</button>
+        <button type="button" class="btn btn-outline btn-sm" id="revokeSnaggingInviteBtn">Revoke</button>
+      </div>
+      <button type="button" class="btn btn-outline btn-sm" id="getSnaggingInviteLinkBtn">Get Snagging Invite Link</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, geocodePostcode, recalculateActualProgress, generateMissingPlots, suggestPlotProgress, EXTERNAL_WORKS_TAG, monthStartISO } from "./js/app.js";
+
+  await requireAuth();
+  const projectId = getParam("id");
+  if (!projectId) window.location.href = "dashboard.html";
+
+  document.getElementById("reportsTile").href = `weekly-reports.html?project=${projectId}`;
+  document.getElementById("monthlyReportsTile").href = `monthly-reports.html?project=${projectId}`;
+  document.getElementById("snaggingTile").href = `snagging.html?project=${projectId}`;
+  document.getElementById("plotHandoversTile").href = `plot-handovers.html?project=${projectId}`;
+  document.getElementById("hsAuditsTile").href = `hs-audits.html?project=${projectId}`;
+  document.getElementById("commercialsTile").href = `commercials.html?project=${projectId}`;
+  document.getElementById("drawingsTile").href = `drawings.html?project=${projectId}`;
+
+  let project = null;
+  let plotsCount = 0;
+  let currentUserId = null;
+  let myRole = null;
+  const factsView = document.getElementById("factsView");
+  const detailsCard = document.getElementById("detailsCard");
+  const editForm = document.getElementById("editForm");
+  const errorBox = document.getElementById("errorBox");
+  // Site Details' own errorBox lives inside its edit form, which is
+  // display:none until "Edit details" is clicked — fine for errors that
+  // happen while the form is already open, useless for anything that can
+  // happen with the form closed (Collaborators, Generate Missing Plots).
+  // Those use this one instead, which is always visible.
+  const pageErrorBox = document.getElementById("pageErrorBox");
+
+  // ─── Collaborators ──────────────────────────────────────────────
+  function inviteLinkFor(code) {
+    return new URL(`join.html?code=${code}`, window.location.href).href;
+  }
+
+  async function copyToClipboard(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      prompt("Copy this link:", text);
+    }
+  }
+
+  const INVITE_KINDS = {
+    collaborator: { codeField: "invite_code", sectionId: "inviteSection", linkRowId: "inviteLinkRow", inputId: "inviteLinkInput", getBtnId: "getInviteLinkBtn", regenerateRpc: "regenerate_invite_code", revokeRpc: "revoke_invite_code" },
+    snagging: { codeField: "snagging_invite_code", sectionId: "snaggingInviteSection", linkRowId: "snaggingInviteLinkRow", inputId: "snaggingInviteLinkInput", getBtnId: "getSnaggingInviteLinkBtn", regenerateRpc: "regenerate_snagging_invite_code", revokeRpc: "revoke_snagging_invite_code" },
+  };
+
+  function renderInviteSection(kind, isOwner) {
+    const k = INVITE_KINDS[kind];
+    const section = document.getElementById(k.sectionId);
+    section.style.display = isOwner ? "block" : "none";
+    if (!isOwner) return;
+
+    const linkRow = document.getElementById(k.linkRowId);
+    const getBtn = document.getElementById(k.getBtnId);
+    const code = project[k.codeField];
+    if (code) {
+      linkRow.style.display = "flex";
+      getBtn.style.display = "none";
+      document.getElementById(k.inputId).value = inviteLinkFor(code);
+    } else {
+      linkRow.style.display = "none";
+      getBtn.style.display = "inline-flex";
+    }
+  }
+
+  const ROLE_LABEL = { owner: "Owner", collaborator: "Collaborator", snagging: "Snagging" };
+  const ROLE_BADGE = { owner: "badge-green", collaborator: "badge-grey", snagging: "badge-blue" };
+
+  function renderMembers(members, isOwner) {
+    document.getElementById("memberRows").innerHTML = members.map((m) => {
+      const isYou = m.user_id === currentUserId;
+      const canRemove = m.role !== "owner" && (isOwner || isYou);
+      return `
+        <tr>
+          <td>${escapeHtml(m.email)}${isYou ? ` <span class="hint">(you)</span>` : ""}</td>
+          <td><span class="badge ${ROLE_BADGE[m.role]}">${ROLE_LABEL[m.role]}</span></td>
+          <td>${formatDate(m.joined_at?.slice(0, 10))}</td>
+          <td>${canRemove ? `<button class="btn btn-outline btn-sm" onclick="removeMember('${m.member_id}', '${escapeHtml(m.email).replace(/'/g, "\\'")}', ${isYou})">${isYou ? "Leave" : "Remove"}</button>` : ""}</td>
+        </tr>
+      `;
+    }).join("");
+  }
+
+  async function loadMembers() {
+    clearError(pageErrorBox);
+    const { data: members, error } = await supabase.rpc("get_project_members", { p_project_id: projectId });
+    if (error) { showError(pageErrorBox, error); return; }
+    const isOwner = (members || []).some((m) => m.user_id === currentUserId && m.role === "owner");
+    renderMembers(members || [], isOwner);
+    renderInviteSection("collaborator", isOwner);
+    renderInviteSection("snagging", isOwner);
+    // Deleting the whole site is owner-only at the database level too —
+    // hide the button for collaborators rather than let them hit an error.
+    document.getElementById("deleteBtn").style.display = isOwner ? "inline-flex" : "none";
+  }
+
+  async function removeMember(memberId, email, isYou) {
+    const msg = isYou
+      ? `Leave this site? You'll need a new invite link to get back in.`
+      : `Remove "${email}" from this site? They'll lose access immediately.`;
+    if (!confirm(msg)) return;
+    clearError(pageErrorBox);
+    const { error } = await supabase.from("project_members").delete().eq("id", memberId);
+    if (error) { showError(pageErrorBox, error); return; }
+    if (isYou) { window.location.href = "dashboard.html"; return; }
+    loadMembers();
+  }
+  window.removeMember = removeMember;
+
+  async function getOrRegenerateInvite(kind, e) {
+    const k = INVITE_KINDS[kind];
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    clearError(pageErrorBox);
+    try {
+      const { data, error } = await supabase.rpc(k.regenerateRpc, { p_project_id: projectId });
+      if (error) throw error;
+      project[k.codeField] = data;
+      renderInviteSection(kind, true);
+    } catch (err) {
+      showError(pageErrorBox, err);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+  document.getElementById("getInviteLinkBtn").addEventListener("click", (e) => getOrRegenerateInvite("collaborator", e));
+  document.getElementById("regenerateInviteBtn").addEventListener("click", (e) => getOrRegenerateInvite("collaborator", e));
+  document.getElementById("getSnaggingInviteLinkBtn").addEventListener("click", (e) => getOrRegenerateInvite("snagging", e));
+  document.getElementById("regenerateSnaggingInviteBtn").addEventListener("click", (e) => getOrRegenerateInvite("snagging", e));
+
+  async function revokeInvite(kind, confirmMsg) {
+    const k = INVITE_KINDS[kind];
+    if (!confirm(confirmMsg)) return;
+    clearError(pageErrorBox);
+    const { error } = await supabase.rpc(k.revokeRpc, { p_project_id: projectId });
+    if (error) { showError(pageErrorBox, error); return; }
+    project[k.codeField] = null;
+    renderInviteSection(kind, true);
+  }
+  document.getElementById("revokeInviteBtn").addEventListener("click", () => revokeInvite("collaborator", "Revoke this invite link? Anyone who hasn't already joined won't be able to use it any more."));
+  document.getElementById("revokeSnaggingInviteBtn").addEventListener("click", () => revokeInvite("snagging", "Revoke this snagging invite link? Anyone who hasn't already joined won't be able to use it any more."));
+
+  document.getElementById("copyInviteBtn").addEventListener("click", () => {
+    copyToClipboard(document.getElementById("inviteLinkInput").value);
+  });
+  document.getElementById("copySnaggingInviteBtn").addEventListener("click", () => {
+    copyToClipboard(document.getElementById("snaggingInviteLinkInput").value);
+  });
+
+  function renderFacts() {
+    factsView.innerHTML = `
+      <div><dt>Address</dt><dd>${escapeHtml(project.address) || "—"}</dd></div>
+      <div><dt>Postcode</dt><dd>${escapeHtml(project.postcode) || "—"}${project.postcode && !project.latitude ? ` <span class="hint">(location not found)</span>` : ""}</dd></div>
+      <div><dt>Contract Ref</dt><dd>${escapeHtml(project.contract_ref) || "—"}</dd></div>
+      <div><dt>Main Contractor</dt><dd>${escapeHtml(project.main_contractor_name) || "—"}</dd></div>
+      <div><dt>Contractor Email</dt><dd>${escapeHtml(project.main_contractor_email) || "—"}</dd></div>
+      <div><dt>Start Date</dt><dd>${project.start_date ? formatDate(project.start_date) : "—"}</dd></div>
+      <div><dt>Total Plots (target)</dt><dd>${project.total_plots || "—"}</dd></div>
+      <div><dt>External / Engineering Works</dt><dd>${project.external_works_pct || 0}%</dd></div>
+    `;
+  }
+
+  function fillForm() {
+    document.getElementById("name").value = project.name || "";
+    document.getElementById("contractRef").value = project.contract_ref || "";
+    document.getElementById("address").value = project.address || "";
+    document.getElementById("postcode").value = project.postcode || "";
+    document.getElementById("contractorName").value = project.main_contractor_name || "";
+    document.getElementById("contractorEmail").value = project.main_contractor_email || "";
+    document.getElementById("startDate").value = project.start_date || "";
+    document.getElementById("ragStatusInput").value = project.rag_status;
+    document.getElementById("baselinePct").value = project.baseline_progress_pct;
+    document.getElementById("totalPlots").value = project.total_plots || "";
+    document.getElementById("externalWorksPct").value = project.external_works_pct || 0;
+  }
+
+  document.getElementById("editBtn").addEventListener("click", () => {
+    fillForm();
+    factsView.style.display = "none";
+    document.getElementById("editBtn").style.display = "none";
+    editForm.style.display = "block";
+  });
+  document.getElementById("cancelEditBtn").addEventListener("click", () => {
+    factsView.style.display = "grid";
+    document.getElementById("editBtn").style.display = "inline-flex";
+    editForm.style.display = "none";
+  });
+
+  editForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearError(errorBox);
+    const postcode = document.getElementById("postcode").value.trim() || null;
+    const totalPlotsVal = document.getElementById("totalPlots").value;
+    const payload = {
+      name: document.getElementById("name").value.trim(),
+      contract_ref: document.getElementById("contractRef").value.trim() || null,
+      address: document.getElementById("address").value.trim() || null,
+      postcode,
+      main_contractor_name: document.getElementById("contractorName").value.trim() || null,
+      main_contractor_email: document.getElementById("contractorEmail").value.trim() || null,
+      start_date: document.getElementById("startDate").value || null,
+      rag_status: document.getElementById("ragStatusInput").value,
+      baseline_progress_pct: Number(document.getElementById("baselinePct").value) || 0,
+      total_plots: totalPlotsVal === "" ? null : Number(totalPlotsVal),
+      external_works_pct: Math.max(0, Math.min(100, Number(document.getElementById("externalWorksPct").value) || 0)),
+    };
+
+    // Only re-geocode when the postcode actually changed — avoids an
+    // unnecessary lookup (and possible failure) on every unrelated edit.
+    if (postcode !== (project.postcode || null)) {
+      if (postcode) {
+        const saveBtn = editForm.querySelector('button[type="submit"]');
+        saveBtn.disabled = true;
+        saveBtn.textContent = "Looking up postcode…";
+        const coords = await geocodePostcode(postcode);
+        saveBtn.disabled = false;
+        saveBtn.textContent = "Save Changes";
+        payload.latitude = coords?.latitude ?? null;
+        payload.longitude = coords?.longitude ?? null;
+        if (!coords) showError(errorBox, { message: `Couldn't find a location for "${postcode}" — saved anyway, but weather auto-fill won't work until this is fixed.` });
+      } else {
+        payload.latitude = null;
+        payload.longitude = null;
+      }
+    }
+
+    const { data, error } = await supabase.from("projects").update(payload).eq("id", projectId).select().single();
+    if (error) { showError(errorBox, error); return; }
+    project = data;
+
+    // Recalculating can change actual_progress_pct on the row we just
+    // fetched (external_works_pct may have just changed), so pull the
+    // fresh value back in rather than trusting the pre-recalc `data`. A
+    // failure here is non-fatal — the site details themselves already
+    // saved fine.
+    try {
+      project.actual_progress_pct = await recalculateActualProgress(projectId);
+    } catch { /* non-fatal — details are already saved */ }
+
+    renderHeaderAndFacts();
+    updateGeneratePlotsButton();
+    if (!errorBox.textContent) document.getElementById("cancelEditBtn").click();
+  });
+
+  document.getElementById("deleteBtn").addEventListener("click", async () => {
+    if (!confirm(`Delete "${project.name}" and all its reports and snags? This cannot be undone.`)) return;
+    const { error } = await supabase.from("projects").delete().eq("id", projectId);
+    if (error) { showError(errorBox, error); return; }
+    window.location.href = "dashboard.html";
+  });
+
+  document.getElementById("suggestExternalWorksBtn").addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    btn.textContent = "Checking weekly reports…";
+    clearError(pageErrorBox);
+    try {
+      const suggested = await suggestPlotProgress(projectId, EXTERNAL_WORKS_TAG);
+      document.getElementById("externalWorksPct").value = suggested;
+    } catch (err) {
+      showError(pageErrorBox, err);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Suggest from Milestones";
+    }
+  });
+
+  function updateGeneratePlotsButton() {
+    const wrap = document.getElementById("generatePlotsWrap");
+    const missing = (project.total_plots || 0) - plotsCount;
+    if (missing <= 0) { wrap.style.display = "none"; return; }
+    wrap.style.display = "block";
+    document.getElementById("generatePlotsBtn").textContent = `Generate ${missing} Missing Plot${missing === 1 ? "" : "s"}`;
+  }
+
+  document.getElementById("generatePlotsBtn").addEventListener("click", async () => {
+    const missing = (project.total_plots || 0) - plotsCount;
+    if (missing <= 0) return;
+    if (!confirm(`Create ${missing} missing plot${missing === 1 ? "" : "s"} to reach ${project.total_plots} total? Each one gets its own quality gates, handover documents, and snag list automatically.`)) return;
+    const btn = document.getElementById("generatePlotsBtn");
+    btn.disabled = true;
+    btn.textContent = "Creating plots…";
+    clearError(pageErrorBox);
+    try {
+      const created = await generateMissingPlots(projectId, project.total_plots);
+      plotsCount += created;
+      document.getElementById("plotsCount").textContent = plotsCount;
+      updateGeneratePlotsButton();
+    } catch (err) {
+      showError(pageErrorBox, err);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  document.getElementById("statusSelect").addEventListener("change", async (e) => {
+    const { data, error } = await supabase.from("projects").update({ status: e.target.value }).eq("id", projectId).select().single();
+    if (!error) project = data;
+  });
+
+  function renderHeaderAndFacts() {
+    document.getElementById("projectName").textContent = project.name;
+    document.getElementById("projectMeta").textContent = project.contract_ref ? `Ref: ${project.contract_ref}` : "";
+    document.getElementById("statusSelect").value = project.status;
+    renderHeader([{ label: "Dashboard", href: "dashboard.html" }, { label: project.name }]);
+    renderFacts();
+
+    const ragBadge = document.getElementById("ragBadge");
+    ragBadge.className = `badge badge-${project.rag_status} rag-badge`;
+    ragBadge.innerHTML = `<span class="rag-dot rag-${project.rag_status}"></span>${RAG_LABEL[project.rag_status]}`;
+    document.getElementById("progressDisplay").innerHTML = renderProgressBlock(project.baseline_progress_pct, project.actual_progress_pct, project.rag_status);
+  }
+
+  // Snagging-only members can't read anything but plots/drawings/snag
+  // lists/snag items at the database level — this just matches the UI
+  // to that, hiding the site-wide cards/tiles they'd get nothing back
+  // from anyway, and leaving only the Snagging tile they actually have
+  // access to.
+  function applySnaggingOnlyView() {
+    document.getElementById("statusSelect").style.display = "none";
+    document.getElementById("editBtn").style.display = "none";
+    document.getElementById("progressCard").style.display = "none";
+    document.getElementById("detailsCard").style.display = "none";
+    document.getElementById("collaboratorsCard").style.display = "none";
+    ["reportsTile", "monthlyReportsTile", "plotHandoversTile", "hsAuditsTile", "commercialsTile", "drawingsTile"].forEach((id) => {
+      document.getElementById(id).style.display = "none";
+    });
+  }
+
+  async function load() {
+    const { data: { user } } = await supabase.auth.getUser();
+    currentUserId = user.id;
+
+    const [{ data: role }, { data, error }] = await Promise.all([
+      supabase.rpc("get_my_role", { p_project_id: projectId }),
+      supabase.from("projects").select("*").eq("id", projectId).single(),
+    ]);
+    myRole = role;
+    if (error) { document.getElementById("projectName").textContent = "Site not found"; return; }
+    project = data;
+    renderHeaderAndFacts();
+
+    if (myRole === "snagging") {
+      applySnaggingOnlyView();
+      const { data: snags } = await supabase.from("snag_items").select("status").eq("project_id", projectId);
+      document.getElementById("openSnagCount").textContent = (snags || []).filter(s => s.status === "open").length;
+      document.getElementById("closedSnagCount").textContent = (snags || []).filter(s => s.status === "closed").length;
+      return;
+    }
+
+    loadMembers();
+
+    const [{ count: reportCount }, { count: monthlyReportCount }, { data: snags }, { count: fetchedPlotsCount }, { data: gates }, { data: commercials }, { count: drawingsCount }, { data: hsAudits }] = await Promise.all([
+      supabase.from("weekly_reports").select("id", { count: "exact", head: true }).eq("project_id", projectId),
+      supabase.from("monthly_reports").select("id", { count: "exact", head: true }).eq("project_id", projectId),
+      supabase.from("snag_items").select("status").eq("project_id", projectId),
+      supabase.from("plots").select("id", { count: "exact", head: true }).eq("project_id", projectId),
+      supabase.from("quality_gates").select("status").eq("project_id", projectId),
+      supabase.from("commercial_items").select("status").eq("project_id", projectId),
+      supabase.from("drawings").select("id", { count: "exact", head: true }).eq("project_id", projectId),
+      supabase.from("hs_audits").select("month").eq("project_id", projectId),
+    ]);
+    document.getElementById("reportCount").textContent = reportCount ?? 0;
+    document.getElementById("monthlyReportCount").textContent = monthlyReportCount ?? 0;
+    document.getElementById("openSnagCount").textContent = (snags || []).filter(s => s.status === "open").length;
+    document.getElementById("closedSnagCount").textContent = (snags || []).filter(s => s.status === "closed").length;
+    plotsCount = fetchedPlotsCount ?? 0;
+    document.getElementById("plotsCount").textContent = plotsCount;
+    const applicableGates = (gates || []).filter(g => g.status !== "not_applicable");
+    document.getElementById("gatesApprovedCount").textContent = `${applicableGates.filter(g => g.status === "approved").length} / ${applicableGates.length}`;
+    document.getElementById("commercialsPendingCount").textContent = (commercials || []).filter(c => c.status === "pending_client_review").length;
+    document.getElementById("drawingsCount").textContent = drawingsCount ?? 0;
+    document.getElementById("hsAuditCount").textContent = (hsAudits || []).length;
+    document.getElementById("hsAuditFlag").style.display = (hsAudits || []).some(a => a.month === monthStartISO()) ? "none" : "inline-flex";
+    updateGeneratePlotsButton();
+  }
+
+  load();
+</script>
+</body>
+</html>

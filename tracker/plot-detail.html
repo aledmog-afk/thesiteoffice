@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Plot – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title" id="plotTitle">Loading…</div>
+      <div class="page-sub" id="projectSub"></div>
+    </div>
+    <button class="btn btn-danger btn-sm" id="deletePlotBtn">Delete Plot</button>
+  </div>
+
+  <div id="errorBox" class="error-box"></div>
+
+  <h3 style="font-family:var(--font-display); font-size:1.1rem; margin-bottom:1rem;">Plot Progress</h3>
+  <div class="card" style="margin-bottom:2.5rem;">
+    <div class="form-grid" style="align-items:end;">
+      <div class="field">
+        <label for="plotProgressInput">Progress complete (%)</label>
+        <input type="number" id="plotProgressInput" min="0" max="100" step="1">
+      </div>
+      <div class="btn-row">
+        <button type="button" class="btn btn-outline" id="suggestProgressBtn">Suggest from Milestones</button>
+        <button type="button" class="btn btn-amber" id="saveProgressBtn">Save</button>
+      </div>
+    </div>
+    <p class="hint" id="progressSavedHint" style="margin-top:0.5rem;"></p>
+  </div>
+
+  <h3 style="font-family:var(--font-display); font-size:1.1rem; margin-bottom:1rem;">Quality Gates</h3>
+  <div id="gatesWrap" style="margin-bottom:2.5rem;">Loading…</div>
+
+  <h3 style="font-family:var(--font-display); font-size:1.1rem; margin-bottom:1rem;">Handover Documents</h3>
+  <div class="card">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Document</th><th>Status</th><th>File</th></tr>
+        </thead>
+        <tbody id="docRows"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, uploadImage, suggestPlotProgress, recalculateActualProgress } from "./js/app.js";
+
+  await requireAuth();
+  const plotId = getParam("id");
+  if (!plotId) window.location.href = "dashboard.html";
+
+  const errorBox = document.getElementById("errorBox");
+  let plot = null;
+
+  // ─── Quality Gates ──────────────────────────────────────────────
+  const gateStatusBadge = { not_started: "badge-grey", in_progress: "badge-blue", under_review: "badge-amber", approved: "badge-green", not_applicable: "badge-grey" };
+  const gateStatusLabel = { not_started: "Not Started", in_progress: "In Progress", under_review: "Under Review", approved: "Approved", not_applicable: "N/A" };
+  const gatesWrap = document.getElementById("gatesWrap");
+
+  function gateCardHtml(gate) {
+    const checklist = Array.isArray(gate.checklist) ? gate.checklist : [];
+    return `
+      <div class="card gate-card" data-gate-id="${gate.id}">
+        <div class="gate-head">
+          <div>
+            <span class="badge ${gateStatusBadge[gate.status]}" style="margin-bottom:0.4rem; display:inline-block;">${gateStatusLabel[gate.status]}</span>
+            <div class="gate-head-title">${escapeHtml(gate.title)}</div>
+          </div>
+          <select class="gate-status-select" data-gate-id="${gate.id}">
+            <option value="not_started">Not Started</option>
+            <option value="in_progress">In Progress</option>
+            <option value="under_review">Under Review</option>
+            <option value="approved">Approved</option>
+            <option value="not_applicable">N/A</option>
+          </select>
+        </div>
+        <ul class="checklist">
+          ${checklist.map((item, i) => `
+            <li class="checklist-item ${item.checked ? "checked" : ""}">
+              <input type="checkbox" id="chk-${gate.id}-${i}" data-gate-id="${gate.id}" data-index="${i}" ${item.checked ? "checked" : ""}>
+              <label for="chk-${gate.id}-${i}">${escapeHtml(item.text)}</label>
+              <span class="checked-at">${item.checked_at ? new Date(item.checked_at).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : ""}</span>
+            </li>
+          `).join("")}
+        </ul>
+      </div>
+    `;
+  }
+
+  function wireGateCard(gate) {
+    const select = document.querySelector(`select.gate-status-select[data-gate-id="${gate.id}"]`);
+    select.value = gate.status;
+    select.addEventListener("change", async () => {
+      await supabase.from("quality_gates").update({ status: select.value }).eq("id", gate.id);
+      gate.status = select.value;
+      rerenderGateCard(gate);
+    });
+
+    document.querySelectorAll(`input[type="checkbox"][data-gate-id="${gate.id}"]`).forEach((cb) => {
+      cb.addEventListener("change", async () => {
+        const i = Number(cb.dataset.index);
+        const checklist = Array.isArray(gate.checklist) ? [...gate.checklist] : [];
+        checklist[i] = { ...checklist[i], checked: cb.checked, checked_at: cb.checked ? new Date().toISOString() : null };
+        gate.checklist = checklist;
+        await supabase.from("quality_gates").update({ checklist }).eq("id", gate.id);
+        rerenderGateCard(gate);
+      });
+    });
+  }
+
+  function rerenderGateCard(gate) {
+    const el = document.querySelector(`.gate-card[data-gate-id="${gate.id}"]`);
+    el.outerHTML = gateCardHtml(gate);
+    wireGateCard(gate);
+  }
+
+  async function loadGates() {
+    const { data: gates, error } = await supabase
+      .from("quality_gates")
+      .select("*")
+      .eq("plot_id", plotId)
+      .order("sort_order", { ascending: true });
+
+    if (error || !gates || !gates.length) {
+      gatesWrap.innerHTML = `<div class="empty"><p>No quality gates found for this plot.</p></div>`;
+      return;
+    }
+    gatesWrap.innerHTML = gates.map(gateCardHtml).join("");
+    gates.forEach(wireGateCard);
+  }
+
+  // ─── Handover Documents ─────────────────────────────────────────
+  const docStatusBadge = { missing: "badge-red", draft_received: "badge-amber", approved_final: "badge-green" };
+  const docStatusLabel = { missing: "Missing", draft_received: "Draft Received", approved_final: "Approved / Final" };
+
+  function docRowHtml(doc) {
+    return `
+      <tr data-doc-id="${doc.id}">
+        <td><strong>${escapeHtml(doc.title)}</strong></td>
+        <td>
+          <select class="status-select" data-doc-id="${doc.id}" style="width:auto;">
+            <option value="missing">Missing</option>
+            <option value="draft_received">Draft Received</option>
+            <option value="approved_final">Approved / Final</option>
+          </select>
+        </td>
+        <td class="file-row">
+          ${doc.file_url ? `<a class="file-link" href="${doc.file_url}" target="_blank">📄 ${escapeHtml(doc.file_name || "View file")}</a><br>` : ""}
+          <input type="file" data-doc-id="${doc.id}" accept="application/pdf,image/*">
+        </td>
+      </tr>
+    `;
+  }
+
+  function wireDocRow(doc) {
+    const select = document.querySelector(`select.status-select[data-doc-id="${doc.id}"]`);
+    select.value = doc.status;
+    select.addEventListener("change", async () => {
+      await supabase.from("handover_documents").update({ status: select.value, updated_at: new Date().toISOString() }).eq("id", doc.id);
+      doc.status = select.value;
+    });
+
+    const fileInput = document.querySelector(`input[type="file"][data-doc-id="${doc.id}"]`);
+    fileInput.addEventListener("change", async () => {
+      const file = fileInput.files[0];
+      if (!file) return;
+      clearError(errorBox);
+      fileInput.disabled = true;
+      try {
+        const url = await uploadImage(file, `${plot.project_id}/handover`);
+        const patch = { file_url: url, file_name: file.name, updated_at: new Date().toISOString() };
+        if (doc.status === "missing") patch.status = "draft_received";
+        const { error } = await supabase.from("handover_documents").update(patch).eq("id", doc.id);
+        if (error) throw error;
+        Object.assign(doc, patch);
+        rerenderDocRow(doc);
+      } catch (err) {
+        showError(errorBox, err);
+      } finally {
+        fileInput.disabled = false;
+      }
+    });
+  }
+
+  function rerenderDocRow(doc) {
+    const el = document.querySelector(`tr[data-doc-id="${doc.id}"]`);
+    el.outerHTML = docRowHtml(doc);
+    wireDocRow(doc);
+  }
+
+  async function loadDocs() {
+    const { data, error } = await supabase
+      .from("handover_documents")
+      .select("*")
+      .eq("plot_id", plotId)
+      .order("doc_key", { ascending: true });
+
+    if (error || !data || !data.length) {
+      document.getElementById("docRows").innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--ink-soft);">No handover documents found for this plot.</td></tr>`;
+      return;
+    }
+    document.getElementById("docRows").innerHTML = data.map(docRowHtml).join("");
+    data.forEach(wireDocRow);
+  }
+
+  // ─── Plot progress ──────────────────────────────────────────────
+  document.getElementById("suggestProgressBtn").addEventListener("click", async () => {
+    const btn = document.getElementById("suggestProgressBtn");
+    btn.disabled = true;
+    btn.textContent = "Checking weekly reports…";
+    const suggested = await suggestPlotProgress(plot.project_id, plot.plot_number);
+    document.getElementById("plotProgressInput").value = suggested;
+    document.getElementById("progressSavedHint").textContent = `Suggested from logged milestones — review and hit Save to apply.`;
+    btn.disabled = false;
+    btn.textContent = "Suggest from Milestones";
+  });
+
+  document.getElementById("saveProgressBtn").addEventListener("click", async () => {
+    clearError(errorBox);
+    const val = document.getElementById("plotProgressInput").value;
+    const pct = Math.max(0, Math.min(100, Number(val) || 0));
+    const saveBtn = document.getElementById("saveProgressBtn");
+    saveBtn.disabled = true;
+    try {
+      const { error } = await supabase.from("plots").update({ progress_pct: pct }).eq("id", plotId);
+      if (error) throw error;
+      plot.progress_pct = pct;
+      await recalculateActualProgress(plot.project_id);
+      document.getElementById("progressSavedHint").textContent = "Saved — site's Actual Progress has been updated.";
+    } catch (err) {
+      showError(errorBox, err);
+    } finally {
+      saveBtn.disabled = false;
+    }
+  });
+
+  // ─── Delete plot ────────────────────────────────────────────────
+  document.getElementById("deletePlotBtn").addEventListener("click", async () => {
+    if (!confirm(`Delete "${plot.plot_number}" and all its quality gates and handover documents? This cannot be undone.`)) return;
+    const { error } = await supabase.from("plots").delete().eq("id", plotId);
+    if (error) { showError(errorBox, error); return; }
+    window.location.href = plot.block_id
+      ? `block-detail.html?id=${plot.block_id}`
+      : `plot-handovers.html?project=${plot.project_id}`;
+  });
+
+  // ─── Init ───────────────────────────────────────────────────────
+  async function init() {
+    const { data, error } = await supabase.from("plots").select("*, projects(*), blocks(*)").eq("id", plotId).single();
+    if (error) { document.getElementById("plotTitle").textContent = "Plot not found"; return; }
+    plot = data;
+    const project = plot.projects;
+    const block = plot.blocks;
+
+    document.getElementById("plotTitle").textContent = plot.plot_number;
+    document.getElementById("projectSub").textContent = block ? `${project.name} — part of ${block.block_name}` : project.name;
+    document.getElementById("plotProgressInput").value = plot.progress_pct || 0;
+    document.getElementById("deletePlotBtn").textContent = block ? "Delete Flat" : "Delete Plot";
+    renderHeader(block ? [
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project.name, href: `project.html?id=${project.id}` },
+      { label: "Plot Handovers", href: `plot-handovers.html?project=${project.id}` },
+      { label: block.block_name, href: `block-detail.html?id=${block.id}` },
+      { label: plot.plot_number },
+    ] : [
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project.name, href: `project.html?id=${project.id}` },
+      { label: "Plot Handovers", href: `plot-handovers.html?project=${project.id}` },
+      { label: plot.plot_number },
+    ]);
+
+    loadGates();
+    loadDocs();
+  }
+
+  init();
+</script>
+</body>
+</html>

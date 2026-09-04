@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Weekly Reports – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title">Weekly Reports</div>
+      <div class="page-sub" id="projectSub"></div>
+    </div>
+    <a class="btn btn-amber" id="newReportLink" href="#">+ New Report</a>
+  </div>
+
+  <div class="card">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Week</th><th>Programme</th><th>Prepared by</th><th>Logged</th></tr>
+        </thead>
+        <tbody id="reportRows"></tbody>
+      </table>
+    </div>
+    <div id="emptyState" class="empty" style="display:none;">
+      <p>No weekly reports yet for this site.</p>
+      <a class="btn btn-amber" id="emptyNewLink" href="#">+ New Report</a>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate } from "./js/app.js";
+
+  await requireAuth();
+  const projectId = getParam("project");
+  if (!projectId) window.location.href = "dashboard.html";
+
+  document.getElementById("newReportLink").href = `weekly-report-form.html?project=${projectId}`;
+  document.getElementById("emptyNewLink").href = `weekly-report-form.html?project=${projectId}`;
+
+  const statusBadge = {
+    "ahead": "badge-blue",
+    "on-track": "badge-green",
+    "behind": "badge-red",
+  };
+
+  async function load() {
+    const { data: project } = await supabase.from("projects").select("name").eq("id", projectId).single();
+    renderHeader([
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project?.name || "Site", href: `project.html?id=${projectId}` },
+      { label: "Weekly Reports" },
+    ]);
+    document.getElementById("projectSub").textContent = project?.name || "";
+
+    const { data: reports, error } = await supabase
+      .from("weekly_reports")
+      .select("*")
+      .eq("project_id", projectId)
+      .order("week_starting", { ascending: false });
+
+    if (error || !reports || !reports.length) {
+      document.getElementById("emptyState").style.display = "block";
+      return;
+    }
+
+    document.getElementById("reportRows").innerHTML = reports.map((r) => `
+      <tr class="row-link" onclick="window.location.href='weekly-report-view.html?id=${r.id}'">
+        <td><strong>${formatDate(r.week_starting)} – ${formatDate(r.week_ending)}</strong></td>
+        <td><span class="badge ${statusBadge[r.programme_status] || "badge-grey"}">${escapeHtml(r.programme_status)}</span></td>
+        <td>${escapeHtml(r.prepared_by) || "—"}</td>
+        <td>${formatDate(r.created_at?.slice(0, 10))}</td>
+      </tr>
+    `).join("");
+  }
+
+  load();
+</script>
+</body>
+</html>

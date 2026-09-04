@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Weekly Report – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="doc-toolbar no-print">
+    <a class="btn btn-outline btn-sm" id="editLink" href="#">Edit</a>
+    <button class="btn btn-outline btn-sm" id="printBtn">Print / Save as PDF</button>
+    <a class="btn btn-amber btn-sm" id="emailLink" href="#">Email to Contractor</a>
+  </div>
+
+  <div class="doc" id="doc">Loading…</div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, getOrgLogoUrl, formatGBP, PHOTO_COMPLIANCE_BADGE, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_BADGE, STATUTORY_OUTCOME_BADGE } from "./js/app.js";
+
+  await requireAuth();
+  const reportId = getParam("id");
+  if (!reportId) window.location.href = "dashboard.html";
+
+  document.getElementById("printBtn").addEventListener("click", () => window.print());
+
+  // Browsers use document.title as the suggested filename when saving
+  // this page as a PDF, so this doubles as the download's file name —
+  // "Weekly Report - Red Dragon - 21.8.26" (day.month.2-digit-year, no
+  // leading zeros). Appending T00:00:00 avoids the date parsing through
+  // UTC and landing on the wrong day for anyone in a UTC-ahead timezone.
+  function fileDate(dateStr) {
+    const d = new Date(dateStr + "T00:00:00");
+    return `${d.getDate()}.${d.getMonth() + 1}.${String(d.getFullYear()).slice(-2)}`;
+  }
+
+  const programmeLabel = { "ahead": "Ahead of programme", "on-track": "On track", "behind": "Behind programme" };
+
+  function section(title, value) {
+    if (!value) return "";
+    return `<div class="doc-section"><h3>${escapeHtml(title)}</h3><div class="body-text">${escapeHtml(value)}</div></div>`;
+  }
+
+  function itemSection(title, items, fallbackText) {
+    const list = Array.isArray(items) && items.length ? items : (fallbackText ? [fallbackText] : []);
+    if (!list.length) return "";
+    return `<div class="doc-section"><h3>${escapeHtml(title)}</h3><ul class="body-list">${list.map(i => {
+      if (typeof i === "string") return `<li>${escapeHtml(i)}</li>`;
+      const percentSuffix = (typeof i.percent === "number") ? ` <strong>(${i.percent}% complete)</strong>` : "";
+      const plotPrefix = i.plot ? `<strong>${escapeHtml(i.plot)}:</strong> ` : "";
+      const milestoneTag = i.milestone ? `<span class="milestone-tag">${escapeHtml(i.milestone)}</span> ` : "";
+      return `<li>${plotPrefix}${milestoneTag}${escapeHtml(i.text)}${percentSuffix}</li>`;
+    }).join("")}</ul></div>`;
+  }
+
+  // Verified Quality & Works Audit — a structured table rather than a
+  // bullet list, so a Clerk of Works quality verification note sits
+  // directly against the plot/trade/% it verifies. Falls back to the
+  // legacy summary text for pre-migration reports with no progress_items.
+  function verifiedProgressSection(items, fallbackText) {
+    const list = Array.isArray(items) ? items : [];
+    if (!list.length) return fallbackText ? section("Progress This Week", fallbackText) : "";
+    return `<div class="doc-section">
+      <h3>Verified Quality &amp; Works Audit</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Plot / Unit</th><th>Trade / Work Package</th><th>Contractor %</th><th>CoW Quality Verification &amp; Notes</th></tr></thead>
+        <tbody>${list.map((i) => {
+          if (typeof i === "string") return `<tr><td colspan="3">${escapeHtml(i)}</td><td>—</td></tr>`;
+          const pct = typeof i.percent === "number" ? `${i.percent}%` : "—";
+          return `<tr>
+            <td>${i.plot ? escapeHtml(i.plot) : "—"}</td>
+            <td>${i.milestone ? escapeHtml(i.milestone) : escapeHtml(i.text) || "—"}</td>
+            <td>${pct}</td>
+            <td>${escapeHtml(i.verification_notes) || "—"}</td>
+          </tr>`;
+        }).join("")}</tbody>
+      </table></div>
+    </div>`;
+  }
+
+  function labourSection(rows) {
+    const list = Array.isArray(rows) ? rows : [];
+    if (!list.length) return "";
+    return `<div class="doc-section">
+      <h3>Labour &amp; Site Resource Tracker</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Trade</th><th>Headcount</th><th>Activity / Location</th><th>Resource Adequacy</th></tr></thead>
+        <tbody>${list.map((r) => `
+          <tr>
+            <td>${escapeHtml(r.trade) || "—"}</td>
+            <td>${r.headcount ?? "—"}</td>
+            <td>${escapeHtml(r.activity_location) || "—"}</td>
+            <td>${r.adequacy ? `<span class="badge ${RESOURCE_ADEQUACY_BADGE[r.adequacy] || "badge-grey"}">${escapeHtml(r.adequacy)}</span>` : "—"}</td>
+          </tr>
+        `).join("")}</tbody>
+      </table></div>
+    </div>`;
+  }
+
+  function riskSection(rows) {
+    const list = Array.isArray(rows) ? rows : [];
+    if (!list.length) return "";
+    return `<div class="doc-section">
+      <h3>Risk &amp; Delays Tracker</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Risk / Issue</th><th>Action Required</th><th>Owner</th><th>Target Date</th><th>Impact</th></tr></thead>
+        <tbody>${list.map((r) => `
+          <tr>
+            <td>${escapeHtml(r.description) || "—"}</td>
+            <td>${escapeHtml(r.action_required) || "—"}</td>
+            <td>${escapeHtml(r.owner) || "—"}</td>
+            <td>${r.target_date ? formatDate(r.target_date) : "—"}</td>
+            <td>${r.impact ? `<span class="badge ${RISK_IMPACT_BADGE[r.impact] || "badge-grey"}">${escapeHtml(r.impact)}</span>` : "—"}</td>
+          </tr>
+        `).join("")}</tbody>
+      </table></div>
+    </div>`;
+  }
+
+  function statutorySection(rows) {
+    const list = Array.isArray(rows) ? rows : [];
+    if (!list.length) return "";
+    return `<div class="doc-section">
+      <h3>Statutory &amp; Testing Milestones</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Type</th><th>Plot / Area</th><th>Date</th><th>Outcome</th><th>Notes</th></tr></thead>
+        <tbody>${list.map((r) => `
+          <tr>
+            <td>${escapeHtml(r.type) || "—"}</td>
+            <td>${escapeHtml(r.plot_area) || "—"}</td>
+            <td>${r.date ? formatDate(r.date) : "—"}</td>
+            <td>${r.outcome ? `<span class="badge ${STATUTORY_OUTCOME_BADGE[r.outcome] || "badge-grey"}">${escapeHtml(r.outcome)}</span>` : "—"}</td>
+            <td>${escapeHtml(r.notes) || "—"}</td>
+          </tr>
+        `).join("")}</tbody>
+      </table></div>
+    </div>`;
+  }
+
+  function photoGallerySection(photos) {
+    const list = Array.isArray(photos) ? photos : [];
+    if (!list.length) return "";
+    return `<div class="doc-section">
+      <h3>Site Photos</h3>
+      <div class="photo-gallery">
+        ${list.map((p) => `
+          <div class="photo-card">
+            <img src="${p.url}" alt="">
+            <div class="photo-card-body">
+              ${p.plot_area ? `<div class="photo-card-tag">${escapeHtml(p.plot_area)}</div>` : ""}
+              ${p.category ? `<div class="photo-card-category">${escapeHtml(p.category)}</div>` : ""}
+              ${p.compliance_status ? `<span class="badge ${PHOTO_COMPLIANCE_BADGE[p.compliance_status] || "badge-grey"}" style="align-self:flex-start;">${escapeHtml(p.compliance_status)}</span>` : ""}
+              ${p.caption ? `<p class="photo-card-caption">${escapeHtml(p.caption)}</p>` : ""}
+              ${p.snag_item_id ? `<a class="badge badge-green" style="align-self:flex-start;" href="snag-list-edit.html?id=${p.snag_list_id}">✓ Snag Raised</a>` : ""}
+            </div>
+          </div>
+        `).join("")}
+      </div>
+    </div>`;
+  }
+
+  function weatherSection(days) {
+    const list = Array.isArray(days) ? days : [];
+    if (!list.length) return "";
+    const total = list.reduce((sum, d) => sum + (Number(d.lost_hours) || 0), 0);
+    return `<div class="doc-section">
+      <h3>Weather / Lost Time</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Date</th><th>Condition</th><th>Lost Time (hrs)</th><th>Notes</th></tr></thead>
+        <tbody>${list.map((d) => `
+          <tr>
+            <td>${new Date(d.date + "T00:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })}</td>
+            <td>${escapeHtml(d.condition) || "—"}</td>
+            <td>${d.lost_hours || 0}</td>
+            <td>${escapeHtml(d.notes) || "—"}</td>
+          </tr>
+        `).join("")}</tbody>
+      </table></div>
+      <p class="hint" style="margin-top:0.4rem;">Total lost time this week: <strong>${total}</strong> hours</p>
+    </div>`;
+  }
+
+  const commercialTypeLabel = { early_warning: "Early Warning", proposed_variation: "Proposed Variation", instruction: "Instruction" };
+
+  function commercialSection(items) {
+    const list = Array.isArray(items) ? items : [];
+    if (!list.length) return "";
+    return `<div class="doc-section"><h3>Commercial Items This Week</h3><ul class="body-list">${list.map(i => {
+      const cost = (i.cost_impact !== null && i.cost_impact !== undefined) ? formatGBP(i.cost_impact) : "TBC";
+      const time = (i.time_impact_days !== null && i.time_impact_days !== undefined)
+        ? (i.time_impact_days > 0 ? `+${i.time_impact_days} days` : `${i.time_impact_days} days`)
+        : "Nil";
+      return `<li><strong>[${escapeHtml(commercialTypeLabel[i.type] || i.type)}]</strong> ${escapeHtml(i.title)} — ${cost}, ${time}</li>`;
+    }).join("")}</ul></div>`;
+  }
+
+  async function load() {
+    const { data: r, error } = await supabase.from("weekly_reports").select("*, projects(*)").eq("id", reportId).single();
+    if (error) { document.getElementById("doc").textContent = "Report not found."; return; }
+    const project = r.projects;
+    document.title = `Weekly Report - ${project.name} - ${fileDate(r.week_ending)}`;
+
+    renderHeader([
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project.name, href: `project.html?id=${project.id}` },
+      { label: "Weekly Reports", href: `weekly-reports.html?project=${project.id}` },
+      { label: `${formatDate(r.week_starting)} – ${formatDate(r.week_ending)}` },
+    ]);
+
+    document.getElementById("editLink").href = `weekly-report-form.html?project=${project.id}&id=${r.id}`;
+
+    const progressText = (Array.isArray(r.progress_items) && r.progress_items.length)
+      ? r.progress_items.map(i => {
+          if (typeof i === "string") return `- ${i}`;
+          const pct = typeof i.percent === "number" ? ` (${i.percent}%)` : "";
+          const plot = i.plot ? `[${i.plot}] ` : "";
+          const milestone = i.milestone ? `[${i.milestone}] ` : "";
+          return `- ${plot}${milestone}${i.text}${pct}`;
+        }).join("\n")
+      : (r.progress_summary || "—");
+
+    const commercialItems = Array.isArray(r.commercial_items) ? r.commercial_items : [];
+    const commercialText = commercialItems.length
+      ? commercialItems.map(i => `- [${commercialTypeLabel[i.type] || i.type}] ${i.title}`).join("\n")
+      : "";
+
+    const riskItems = Array.isArray(r.risk_items) ? r.risk_items : [];
+    const riskText = riskItems.length
+      ? riskItems.map(i => `- [${i.impact || "?"}] ${i.description}${i.owner ? ` (owner: ${i.owner})` : ""}`).join("\n")
+      : "";
+
+    const totalLostHours = (Array.isArray(r.weather_days) ? r.weather_days : []).reduce((sum, d) => sum + (Number(d.lost_hours) || 0), 0);
+
+    const subject = encodeURIComponent(`Weekly Site Report – ${project.name} – w/c ${formatDate(r.week_starting)}`);
+    const body = encodeURIComponent(
+      `Hi,\n\nPlease find this week's site report for ${project.name} below.\n\n` +
+      `Week: ${formatDate(r.week_starting)} – ${formatDate(r.week_ending)}\nProgramme status: ${programmeLabel[r.programme_status]}\n` +
+      (totalLostHours > 0 ? `Weather lost time this week: ${totalLostHours} hours\n` : "") +
+      `\nProgress this week:\n${progressText}\n\n` +
+      (riskText ? `Risks / delays:\n${riskText}\n\n` : "") +
+      (r.issues_risks ? `Issues / risks:\n${r.issues_risks}\n\n` : "") +
+      (commercialText ? `Commercial items:\n${commercialText}\n\n` : "") +
+      `(Full report with photos: use "Print / Save as PDF" on this page and attach it here.)\n\nRegards,`
+    );
+    document.getElementById("emailLink").href = `mailto:${project.main_contractor_email || ""}?subject=${subject}&body=${body}`;
+
+    const photos = Array.isArray(r.photos) ? r.photos : [];
+    const logoUrl = await getOrgLogoUrl();
+
+    document.getElementById("doc").innerHTML = `
+      <div class="doc-head">
+        <div>
+          ${logoUrl ? `<img class="doc-logo" src="${logoUrl}" alt="">` : ""}
+          <h1>Weekly Site Report</h1>
+          <div style="color:var(--ink-soft); font-size:0.9rem; margin-top:0.2rem;">${escapeHtml(project.name)}</div>
+        </div>
+        <div class="doc-meta">
+          ${project.contract_ref ? "Ref: " + escapeHtml(project.contract_ref) + "<br>" : ""}
+          To: ${escapeHtml(project.main_contractor_name) || "Main Contractor"}
+        </div>
+      </div>
+
+      <dl class="doc-facts">
+        <div><dt>Week Starting</dt><dd>${formatDate(r.week_starting)}</dd></div>
+        <div><dt>Week Ending</dt><dd>${formatDate(r.week_ending)}</dd></div>
+        <div><dt>Programme Status</dt><dd>${programmeLabel[r.programme_status]}</dd></div>
+        <div><dt>Prepared By</dt><dd>${escapeHtml(r.prepared_by) || "—"}</dd></div>
+      </dl>
+
+      ${weatherSection(r.weather_days)}
+      ${section("Weather Notes", r.weather)}
+      ${verifiedProgressSection(r.progress_items, r.progress_summary)}
+      ${labourSection(r.labour_records)}
+      ${section("Health & Safety Notes", r.health_safety_notes)}
+      ${riskSection(r.risk_items)}
+      ${section("Issues / Risks / Delays", r.issues_risks)}
+      ${statutorySection(r.statutory_milestones)}
+      ${commercialSection(r.commercial_items)}
+      ${itemSection("Plan for Next Week", r.next_week_items, r.next_week_plan)}
+      ${section("Other Comments", r.other_comments || r.deliveries_materials)}
+
+      ${photoGallerySection(photos)}
+    `;
+  }
+
+  load();
+</script>
+</body>
+</html>
