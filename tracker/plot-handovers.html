@@ -19,6 +19,7 @@
       <div class="page-sub" id="projectSub">Quality gates and statutory documents, tracked per plot — or per apartment block.</div>
     </div>
     <div class="btn-row">
+      <button class="btn btn-outline" id="exportTrackersBtn">📊 Export Trackers</button>
       <button class="btn btn-outline" id="newBlockBtn">+ Block</button>
       <button class="btn btn-amber" id="newPlotBtn">+ Plot</button>
     </div>
@@ -119,6 +120,103 @@
     load();
   }
   window.deleteBlock = deleteBlock;
+
+  // Regenerates the client-supplied progress trackers (a plot-by-milestone
+  // Internal Works breakdown, plus an Overall Progress summary) straight
+  // from the site's own live data — the reverse of how those spreadsheets
+  // originally got imported into this app. SheetJS is loaded on demand
+  // (not a top-level import) since most visits to this page never use it.
+  // "Not tracked for this plot" (e.g. Timber Frame on a flat) is left
+  // blank, distinct from a genuine 0% — see the Internal Works Milestones
+  // README note on why flats don't get every stage.
+  function fileDateStamp() {
+    const d = new Date();
+    return `${d.getDate()}.${d.getMonth() + 1}.${String(d.getFullYear()).slice(-2)}`;
+  }
+
+  // Pure row-builders — take already-fetched data, return plain arrays of
+  // arrays ready for XLSX.utils.aoa_to_sheet(). Kept separate from
+  // exportTrackers() below so they're testable without touching Supabase
+  // or the dynamically-imported SheetJS module at all.
+  function buildOverallRows(project, plots, blocks) {
+    const blockNameById = new Map((blocks || []).map((b) => [b.id, b.block_name]));
+    const rows = [["Plot / Block", "Type", "Progress %"]];
+    plots.forEach((p) => rows.push([p.plot_number, p.block_id ? `Flat (${blockNameById.get(p.block_id) || "block"})` : "Plot", p.progress_pct || 0]));
+    [...(blocks || [])].sort((a, b) => comparePlotNumbers(a.block_name, b.block_name)).forEach((b) => rows.push([b.block_name, "Block", b.progress_pct || 0]));
+    rows.push([]);
+    rows.push(["Site Actual Progress %", "", project?.actual_progress_pct ?? ""]);
+    rows.push(["Baseline Progress %", "", project?.baseline_progress_pct ?? ""]);
+    rows.push(["External / Engineering Works %", "", project?.external_works_pct ?? ""]);
+    return rows;
+  }
+
+  function buildInternalRows(plots, milestones, blocks) {
+    const blockNameById = new Map((blocks || []).map((b) => [b.id, b.block_name]));
+    const milestonesByPlot = new Map();
+    const milestoneMeta = new Map();
+    (milestones || []).forEach((m) => {
+      if (!milestonesByPlot.has(m.plot_id)) milestonesByPlot.set(m.plot_id, new Map());
+      milestonesByPlot.get(m.plot_id).set(m.milestone_key, m.percent);
+      const existing = milestoneMeta.get(m.milestone_key);
+      if (!existing || m.sort_order < existing.sort_order) milestoneMeta.set(m.milestone_key, { title: m.title, sort_order: m.sort_order });
+    });
+    const orderedKeys = [...milestoneMeta.entries()].sort((a, b) => a[1].sort_order - b[1].sort_order).map(([key]) => key);
+
+    const rows = [["Plot", "Block", ...orderedKeys.map((k) => milestoneMeta.get(k).title)]];
+    plots.forEach((p) => {
+      const plotMilestones = milestonesByPlot.get(p.id);
+      rows.push([
+        p.plot_number,
+        p.block_id ? blockNameById.get(p.block_id) || "" : "",
+        ...orderedKeys.map((k) => (plotMilestones?.has(k) ? plotMilestones.get(k) : "")),
+      ]);
+    });
+    return rows;
+  }
+
+  // Regenerates the client-supplied progress trackers (a plot-by-milestone
+  // Internal Works breakdown, plus an Overall Progress summary) straight
+  // from the site's own live data — the reverse of how those spreadsheets
+  // originally got imported into this app. SheetJS is loaded on demand
+  // (not a top-level import) since most visits to this page never use it.
+  // "Not tracked for this plot" (e.g. Timber Frame on a flat) is left
+  // blank, distinct from a genuine 0% — see the Internal Works Milestones
+  // README note on why flats don't get every stage.
+  async function exportTrackers() {
+    const btn = document.getElementById("exportTrackersBtn");
+    btn.disabled = true;
+    const originalText = btn.textContent;
+    btn.textContent = "Generating…";
+    try {
+      const XLSX = await import("https://esm.sh/xlsx@0.18.5");
+      const [{ data: project }, { data: allPlots }, { data: blocks }, { data: milestones }] = await Promise.all([
+        supabase.from("projects").select("name, baseline_progress_pct, actual_progress_pct, external_works_pct").eq("id", projectId).single(),
+        supabase.from("plots").select("id, plot_number, block_id, progress_pct").eq("project_id", projectId),
+        supabase.from("blocks").select("id, block_name, progress_pct").eq("project_id", projectId),
+        supabase.from("internal_milestones").select("plot_id, milestone_key, title, percent, sort_order").eq("project_id", projectId),
+      ]);
+
+      if (!allPlots?.length && !blocks?.length) {
+        alert("No plots or blocks on this site yet — nothing to export.");
+        return;
+      }
+
+      const plots = [...(allPlots || [])].sort((a, b) => comparePlotNumbers(a.plot_number, b.plot_number));
+      const overallRows = buildOverallRows(project, plots, blocks);
+      const internalRows = buildInternalRows(plots, milestones, blocks);
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(overallRows), "Overall Progress");
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(internalRows), "Internal Works");
+      XLSX.writeFile(wb, `${project?.name || "Site"} - Trackers - ${fileDateStamp()}.xlsx`);
+    } catch (err) {
+      alert(`Could not generate trackers: ${err.message}`);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalText;
+    }
+  }
+  document.getElementById("exportTrackersBtn").addEventListener("click", exportTrackers);
 
   async function load() {
     const { data: project } = await supabase.from("projects").select("name").eq("id", projectId).single();
