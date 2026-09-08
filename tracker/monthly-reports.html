@@ -132,6 +132,22 @@
       .filter((r) => r.health_safety_notes)
       .map((r) => ({ week_starting: r.week_starting, week_ending: r.week_ending, weather: r.weather, health_safety_notes: r.health_safety_notes }));
 
+    const programmeComments = reports
+      .filter((r) => r.programme_comments)
+      .map((r) => ({ week_starting: r.week_starting, week_ending: r.week_ending, programme_comments: r.programme_comments }));
+
+    const siteHousekeeping = reports
+      .filter((r) => r.site_housekeeping)
+      .map((r) => ({ week_starting: r.week_starting, week_ending: r.week_ending, site_housekeeping: r.site_housekeeping }));
+
+    const drawingsReceived = reports
+      .filter((r) => r.drawings_received)
+      .map((r) => ({ week_starting: r.week_starting, week_ending: r.week_ending, drawings_received: r.drawings_received }));
+
+    const visitors = reports
+      .filter((r) => r.visitors)
+      .map((r) => ({ week_starting: r.week_starting, week_ending: r.week_ending, visitors: r.visitors }));
+
     const issuesRisks = reports
       .filter((r) => r.issues_risks)
       .map((r) => ({ week_starting: r.week_starting, week_ending: r.week_ending, issues_risks: r.issues_risks }));
@@ -233,6 +249,10 @@
       actual_progress_pct: project?.actual_progress_pct ?? null,
       progress_items: progressItems,
       health_safety_notes: healthSafetyNotes,
+      programme_comments: programmeComments,
+      site_housekeeping: siteHousekeeping,
+      drawings_received: drawingsReceived,
+      visitors,
       issues_risks: issuesRisks,
       risk_items: riskItems,
       commercial_items: commercialItems,

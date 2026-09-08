@@ -1698,3 +1698,30 @@ alter table public.weekly_reports add column if not exists statutory_milestones 
 -- already-generated reports and any report where issues_risks was
 -- still set by hand.
 alter table public.monthly_reports add column if not exists risk_items jsonb not null default '[]'::jsonb;
+
+-- ─── v21 ADDITIONS ────────────────────────────────────────────────
+-- Closes the remaining gaps against the legacy paper "Clerk of Works
+-- Weekly Report" this app replaces: site-level contract/appointment
+-- names shown on every report's letterhead (main contractor name/email
+-- and contract_ref already existed), and four narrative fields the
+-- paper form had that the app didn't yet capture. The paper form's
+-- weekend weather rows (Saturday/Sunday) need no schema change at all
+-- — weather_days is already a plain jsonb array; the form just writes
+-- 7 entries into it instead of 5 going forward.
+
+alter table public.projects add column if not exists employers_agent_name text;
+alter table public.projects add column if not exists clerk_of_works_name text;
+alter table public.projects add column if not exists site_manager_name text;
+alter table public.projects add column if not exists contract_completion_date date;
+
+alter table public.weekly_reports add column if not exists programme_comments text;
+alter table public.weekly_reports add column if not exists site_housekeeping text;
+alter table public.weekly_reports add column if not exists drawings_received text;
+alter table public.weekly_reports add column if not exists visitors text;
+
+-- Same "one array entry per week that had something to say, tagged with
+-- which week" convention as health_safety_notes/issues_risks above.
+alter table public.monthly_reports add column if not exists programme_comments jsonb not null default '[]'::jsonb;
+alter table public.monthly_reports add column if not exists site_housekeeping jsonb not null default '[]'::jsonb;
+alter table public.monthly_reports add column if not exists drawings_received jsonb not null default '[]'::jsonb;
+alter table public.monthly_reports add column if not exists visitors jsonb not null default '[]'::jsonb;

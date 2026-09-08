@@ -208,6 +208,16 @@
     const project = r.projects;
     document.title = `Weekly Report - ${project.name} - ${fileDate(r.week_ending)}`;
 
+    // "Week No." — the paper form's sequential week counter, reconstructed
+    // as this report's ordinal position among the site's reports ordered
+    // by week_starting, rather than a stored column that could drift out
+    // of sync if reports are ever added out of order or backdated.
+    const { count: weekNo } = await supabase
+      .from("weekly_reports")
+      .select("id", { count: "exact", head: true })
+      .eq("project_id", project.id)
+      .lte("week_starting", r.week_starting);
+
     renderHeader([
       { label: "Dashboard", href: "dashboard.html" },
       { label: project.name, href: `project.html?id=${project.id}` },
@@ -269,20 +279,29 @@
       </div>
 
       <dl class="doc-facts">
+        <div><dt>Week No.</dt><dd>${weekNo || "—"}</dd></div>
         <div><dt>Week Starting</dt><dd>${formatDate(r.week_starting)}</dd></div>
         <div><dt>Week Ending</dt><dd>${formatDate(r.week_ending)}</dd></div>
         <div><dt>Programme Status</dt><dd>${programmeLabel[r.programme_status]}</dd></div>
         <div><dt>Prepared By</dt><dd>${escapeHtml(r.prepared_by) || "—"}</dd></div>
+        <div><dt>Clerk of Works</dt><dd>${escapeHtml(project.clerk_of_works_name) || "—"}</dd></div>
+        <div><dt>Site Manager</dt><dd>${escapeHtml(project.site_manager_name) || "—"}</dd></div>
+        <div><dt>Employer's Agent</dt><dd>${escapeHtml(project.employers_agent_name) || "—"}</dd></div>
+        <div><dt>Contract Period</dt><dd>${project.start_date ? formatDate(project.start_date) : "—"} – ${project.contract_completion_date ? formatDate(project.contract_completion_date) : "—"}</dd></div>
       </dl>
 
       ${weatherSection(r.weather_days)}
       ${section("Weather Notes", r.weather)}
       ${verifiedProgressSection(r.progress_items, r.progress_summary)}
+      ${section("Comments on Programme", r.programme_comments)}
       ${labourSection(r.labour_records)}
       ${section("Health & Safety Notes", r.health_safety_notes)}
       ${riskSection(r.risk_items)}
       ${section("Issues / Risks / Delays", r.issues_risks)}
       ${statutorySection(r.statutory_milestones)}
+      ${section("Site Housekeeping", r.site_housekeeping)}
+      ${section("Drawings / Information Received on Site", r.drawings_received)}
+      ${section("Visitors", r.visitors)}
       ${commercialSection(r.commercial_items)}
       ${itemSection("Plan for Next Week", r.next_week_items, r.next_week_plan)}
       ${section("Other Comments", r.other_comments || r.deliveries_materials)}

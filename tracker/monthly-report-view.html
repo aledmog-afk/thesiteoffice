@@ -222,6 +222,9 @@
         <div><dt>Overall Status</dt><dd>${ragBadge}</dd></div>
         <div><dt>Snags Raised / Closed</dt><dd>${r.snags_raised_count} / ${r.snags_closed_count}</dd></div>
         <div><dt>Weather Lost Time</dt><dd>${r.total_lost_hours || 0} hours</dd></div>
+        <div><dt>Clerk of Works</dt><dd>${escapeHtml(project.clerk_of_works_name) || "—"}</dd></div>
+        <div><dt>Site Manager</dt><dd>${escapeHtml(project.site_manager_name) || "—"}</dd></div>
+        <div><dt>Employer's Agent</dt><dd>${escapeHtml(project.employers_agent_name) || "—"}</dd></div>
       </dl>
 
       ${r.baseline_progress_pct !== null && r.actual_progress_pct !== null ? `<div class="doc-section">${renderProgressBlock(r.baseline_progress_pct, r.actual_progress_pct, r.rag_status)}</div>` : ""}
@@ -229,10 +232,14 @@
       ${weatherSection(r.weather_summary, r.weather_lost_days, r.total_lost_hours)}
       ${progressSection(r.progress_items)}
       ${outstandingSection(r.outstanding_items)}
+      ${weeklyNotesSection("Comments on Programme", r.programme_comments, "programme_comments")}
       ${weeklyNotesSection("Health & Safety Notes", r.health_safety_notes, "health_safety_notes")}
       ${hsAuditSection(r.hs_audits)}
       ${riskItemsSection(r.risk_items)}
       ${weeklyNotesSection("Issues / Risks / Delays", r.issues_risks, "issues_risks")}
+      ${weeklyNotesSection("Site Housekeeping", r.site_housekeeping, "site_housekeeping")}
+      ${weeklyNotesSection("Drawings / Information Received on Site", r.drawings_received, "drawings_received")}
+      ${weeklyNotesSection("Visitors", r.visitors, "visitors")}
       ${commercialSection(r.commercial_items)}
       ${plotHandoversSection(r.plot_handovers)}
 

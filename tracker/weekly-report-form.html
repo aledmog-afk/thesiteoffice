@@ -48,6 +48,7 @@
         <div id="progressItems"></div>
         <p class="hint" id="carriedOverHint" style="display:none;">Pre-filled from last week's plan, starting at last week's % complete on each — just update it if it's moved on. Anything under 100% carries into this week's own "Plan for next week" automatically; reaching 100% drops it for good.</p>
       </div>
+      <div class="field"><label for="programmeComments">Comments on programme</label><textarea id="programmeComments" rows="2" placeholder="Narrative behind the on-track/ahead/behind status above"></textarea></div>
       <div class="field"><label for="healthSafety">Health &amp; safety notes</label><textarea id="healthSafety" rows="3" placeholder="Inspections, incidents, near misses, toolbox talks held"></textarea></div>
 
       <div class="field">
@@ -68,6 +69,9 @@
         <p class="hint">Statutory witnessing (air permeability, sound, drainage pressure tests) and Building Control / warranty inspector (NHBC/Premier) visits and sign-offs.</p>
       </div>
 
+      <div class="field"><label for="siteHousekeeping">Site housekeeping</label><textarea id="siteHousekeeping" rows="2" placeholder="Conditions, cleanliness, access and egress"></textarea></div>
+      <div class="field"><label for="drawingsReceived">Drawings / information received on site</label><textarea id="drawingsReceived" rows="2"></textarea></div>
+      <div class="field"><label for="visitors">Visitors</label><textarea id="visitors" rows="2" placeholder="Who visited site this week and why"></textarea></div>
       <div class="field"><label for="otherComments">Other comments</label><textarea id="otherComments" rows="3"></textarea></div>
       <div class="field">
         <label>Commercial items this week</label>
@@ -165,14 +169,15 @@
   let statutoryEditor = mountTableEditor(document.getElementById("statutoryItems"), [], () => {}, { columns: statutoryColumns });
 
   // ─── Weather tracker ─────────────────────────────────────────────
-  // A fixed 5-day grid (Mon–Fri of the report's week, derived from
-  // weekStarting) capturing condition + lost hours + notes per day, with
-  // a live total. Rebuilds whenever weekStarting changes, carrying over
-  // any already-entered day (matched by date) that still falls in range.
-  // If the site has a geocoded location, each rebuild also fires an
-  // async Open-Meteo lookup that fills in only the still-blank
-  // conditions — it never overwrites a day the user (or a previous
-  // save) already set.
+  // A fixed 7-day grid (Saturday and Sunday immediately before
+  // weekStarting, then Mon–Fri of the report's week itself — the same
+  // order the paper Clerk of Works report used) capturing condition +
+  // lost hours + notes per day, with a live total. Rebuilds whenever
+  // weekStarting changes, carrying over any already-entered day (matched
+  // by date) that still falls in range. If the site has a geocoded
+  // location, each rebuild also fires an async Open-Meteo lookup that
+  // fills in only the still-blank conditions — it never overwrites a day
+  // the user (or a previous save) already set.
   function mountWeatherTracker(container, weekStartingInput) {
     let days = [];
 
@@ -180,9 +185,9 @@
       if (!weekStartingStr) return [];
       const start = new Date(weekStartingStr + "T00:00:00");
       const byDate = new Map((existingDays || []).map((d) => [d.date, d]));
-      return Array.from({ length: 5 }, (_, i) => {
+      return Array.from({ length: 7 }, (_, i) => {
         const d = new Date(start);
-        d.setDate(d.getDate() + i);
+        d.setDate(d.getDate() + (i - 2));
         const dateStr = toLocalISODate(d);
         const existing = byDate.get(dateStr);
         return {
@@ -621,7 +626,11 @@
     document.getElementById("programmeStatus").value = r.programme_status;
     document.getElementById("weather").value = r.weather || "";
     weatherTracker.setWeek(r.week_starting, r.weather_days);
+    document.getElementById("programmeComments").value = r.programme_comments || "";
     document.getElementById("healthSafety").value = r.health_safety_notes || "";
+    document.getElementById("siteHousekeeping").value = r.site_housekeeping || "";
+    document.getElementById("drawingsReceived").value = r.drawings_received || "";
+    document.getElementById("visitors").value = r.visitors || "";
     document.getElementById("otherComments").value = r.other_comments || r.deliveries_materials || "";
 
     const progressItems = (Array.isArray(r.progress_items) && r.progress_items.length)
@@ -662,7 +671,11 @@
       weather: document.getElementById("weather").value.trim() || null,
       weather_days: weatherTracker.getDays(),
       progress_items: progressEditor.getItems(),
+      programme_comments: document.getElementById("programmeComments").value.trim() || null,
       health_safety_notes: document.getElementById("healthSafety").value.trim() || null,
+      site_housekeeping: document.getElementById("siteHousekeeping").value.trim() || null,
+      drawings_received: document.getElementById("drawingsReceived").value.trim() || null,
+      visitors: document.getElementById("visitors").value.trim() || null,
       other_comments: document.getElementById("otherComments").value.trim() || null,
       next_week_items: syncNextWeekFromProgress(progressEditor.getItems(), nextWeekEditor.getItems()),
       commercial_items: commercialEditor.getItems(),
