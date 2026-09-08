@@ -1950,3 +1950,174 @@ cross join (values
 ) as m(milestone_key, title, sort_order)
 where p.block_id is not null
 on conflict (plot_id, milestone_key) do nothing;
+
+-- ─── v24 ADDITIONS ────────────────────────────────────────────────
+-- A second site's Internal Works tracker (Heol Crwys) uses two trade
+-- stages Tudor Inn's tracker never had: Carpentry Finals (after 2nd
+-- Fix Carpentry, before Decoration) and Mastic (after Flooring,
+-- before Clean). Extends the shared milestone list — used for every
+-- plot on every site, same as Quality Gates — to a proper superset
+-- rather than special-casing one site's schema. Existing
+-- Decoration/Flooring/Clean/Snagging rows shift to make room; the
+-- shift amount (+1 for Decoration/Flooring, +2 for Clean/Snagging) is
+-- the same whether a plot is standalone or a flat, since both stages
+-- were inserted before all four regardless.
+-- Each shift is keyed to the exact OLD sort_order it's moving away
+-- from (13/14/15/16 for a standalone plot, 11/12/13/14 for a flat —
+-- the v23 numbering), not a blanket "+1"/"+2" — a blanket shift would
+-- silently re-shift an already-corrected row (or a plot seeded fresh
+-- under this very migration, already at the right position) on every
+-- later re-run of this file, which is exactly the kind of thing
+-- schema.sql has to stay safe against.
+update public.internal_milestones im set sort_order = im.sort_order + 1
+from public.plots p
+where im.plot_id = p.id and im.milestone_key = 'decoration'
+  and ((p.block_id is null and im.sort_order = 13) or (p.block_id is not null and im.sort_order = 11));
+update public.internal_milestones im set sort_order = im.sort_order + 1
+from public.plots p
+where im.plot_id = p.id and im.milestone_key = 'flooring'
+  and ((p.block_id is null and im.sort_order = 14) or (p.block_id is not null and im.sort_order = 12));
+update public.internal_milestones im set sort_order = im.sort_order + 2
+from public.plots p
+where im.plot_id = p.id and im.milestone_key = 'clean'
+  and ((p.block_id is null and im.sort_order = 15) or (p.block_id is not null and im.sort_order = 13));
+update public.internal_milestones im set sort_order = im.sort_order + 2
+from public.plots p
+where im.plot_id = p.id and im.milestone_key = 'snagging'
+  and ((p.block_id is null and im.sort_order = 16) or (p.block_id is not null and im.sort_order = 14));
+
+insert into public.internal_milestones (project_id, plot_id, milestone_key, title, sort_order)
+select p.project_id, p.id, 'carpentry_finals', 'Carpentry Finals', case when p.block_id is null then 13 else 11 end
+from public.plots p
+on conflict (plot_id, milestone_key) do nothing;
+
+insert into public.internal_milestones (project_id, plot_id, milestone_key, title, sort_order)
+select p.project_id, p.id, 'mastic', 'Mastic', case when p.block_id is null then 16 else 14 end
+from public.plots p
+on conflict (plot_id, milestone_key) do nothing;
+
+-- Extends seed_plot_defaults() again (full body carried forward from
+-- v23) so every new plot gets the corrected 18/16-stage milestone set
+-- (was 16/14) going forward.
+create or replace function public.seed_plot_defaults()
+returns trigger as $$
+begin
+  if new.block_id is null then
+    insert into public.quality_gates (project_id, plot_id, gate_key, title, sort_order, checklist) values
+      (new.project_id, new.id, 'substructure_drainage', 'Substructure & Drainage', 1, '[
+         {"text": "Foundation excavation inspected by Building Control", "checked": false, "checked_at": null},
+         {"text": "Drainage test (air/water) passed and recorded", "checked": false, "checked_at": null},
+         {"text": "DPC level verified", "checked": false, "checked_at": null},
+         {"text": "Building Control sign-off for substructure received", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      (new.project_id, new.id, 'frame_watertight', 'Frame & Wind/Watertight', 2, '[
+         {"text": "Moisture readings recorded", "checked": false, "checked_at": null},
+         {"text": "Cavity barriers inspected", "checked": false, "checked_at": null},
+         {"text": "Structural engineer sign-off uploaded", "checked": false, "checked_at": null},
+         {"text": "Roof confirmed watertight", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      (new.project_id, new.id, 'pre_plaster_first_fix', 'Pre-Plaster / First Fix', 3, '[
+         {"text": "First fix electrical inspected", "checked": false, "checked_at": null},
+         {"text": "First fix plumbing & heating inspected", "checked": false, "checked_at": null},
+         {"text": "Insulation installed and inspected", "checked": false, "checked_at": null},
+         {"text": "Pre-plaster inspection sign-off received", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      (new.project_id, new.id, 'pre_handover_pc', 'Pre-Handover / PC', 4, '[
+         {"text": "Snagging list closed out", "checked": false, "checked_at": null},
+         {"text": "O&M manuals received", "checked": false, "checked_at": null},
+         {"text": "All statutory certificates received", "checked": false, "checked_at": null},
+         {"text": "Final client walkthrough completed", "checked": false, "checked_at": null}
+       ]'::jsonb)
+    on conflict (plot_id, gate_key) do nothing;
+
+    insert into public.handover_documents (project_id, plot_id, doc_key, title) values
+      (new.project_id, new.id, 'building_control', 'Building Control Sign-off (Initial/Final)'),
+      (new.project_id, new.id, 'air_acoustic_test', 'Air Permeability / Acoustic Test Certificates'),
+      (new.project_id, new.id, 'elec_gas_certs', 'Electrical & Gas Safety Certificates'),
+      (new.project_id, new.id, 'warranty_cover_note', 'NHBC/Structural Warranty Cover Note'),
+      (new.project_id, new.id, 'om_manuals', 'Draft O&M Manuals')
+    on conflict (plot_id, doc_key) do nothing;
+
+    insert into public.internal_milestones (project_id, plot_id, milestone_key, title, sort_order) values
+      (new.project_id, new.id, 'timber_frame', 'Timber Frame', 1),
+      (new.project_id, new.id, 'roof_covering', 'Roof Covering', 2),
+      (new.project_id, new.id, 'carpentry_first_fix', 'Carpentry First Fix', 3),
+      (new.project_id, new.id, 'electrical_first_fix', 'Electrical First Fix', 4),
+      (new.project_id, new.id, 'mechanical_first_fix', 'Mechanical First Fix', 5),
+      (new.project_id, new.id, 'dry_lining', 'Dry Lining', 6),
+      (new.project_id, new.id, 'plastering', 'Plastering Works', 7),
+      (new.project_id, new.id, 'kitchen', 'Kitchen', 8),
+      (new.project_id, new.id, 'bathroom', 'Bathroom', 9),
+      (new.project_id, new.id, 'second_fix_carpentry', 'Second Fix Carpentry', 10),
+      (new.project_id, new.id, 'second_fix_mechanical', 'Second Fix Mechanical', 11),
+      (new.project_id, new.id, 'second_fix_electrical', 'Second Fix Electrical', 12),
+      (new.project_id, new.id, 'carpentry_finals', 'Carpentry Finals', 13),
+      (new.project_id, new.id, 'decoration', 'Decoration', 14),
+      (new.project_id, new.id, 'flooring', 'Flooring', 15),
+      (new.project_id, new.id, 'mastic', 'Mastic', 16),
+      (new.project_id, new.id, 'clean', 'Clean', 17),
+      (new.project_id, new.id, 'snagging', 'Snagging', 18)
+    on conflict (plot_id, milestone_key) do nothing;
+  else
+    insert into public.quality_gates (project_id, plot_id, gate_key, title, sort_order, checklist) values
+      (new.project_id, new.id, 'flat_first_fix', '1st Fix (All Trades)', 1, '[
+         {"text": "First fix electrical inspected", "checked": false, "checked_at": null},
+         {"text": "First fix plumbing & heating inspected", "checked": false, "checked_at": null},
+         {"text": "Insulation installed and inspected", "checked": false, "checked_at": null},
+         {"text": "Pre-plaster inspection sign-off received", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      (new.project_id, new.id, 'flat_second_fix', '2nd Fix (All Trades)', 2, '[
+         {"text": "Second fix electrical complete and tested", "checked": false, "checked_at": null},
+         {"text": "Second fix plumbing & heating complete and tested", "checked": false, "checked_at": null},
+         {"text": "Sockets, switches and fittings installed", "checked": false, "checked_at": null},
+         {"text": "Heating system commissioned", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      (new.project_id, new.id, 'flat_kitchen_bathroom', 'Kitchen & Bathroom Fit', 3, '[
+         {"text": "Kitchen units, worktops and appliances installed", "checked": false, "checked_at": null},
+         {"text": "Bathroom / en-suite sanitaryware and tiling complete", "checked": false, "checked_at": null},
+         {"text": "Water pressure and drainage tested", "checked": false, "checked_at": null},
+         {"text": "Extractor fans tested", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      (new.project_id, new.id, 'flat_pre_handover', 'Decoration, Flooring & Pre-Handover Snagging', 4, '[
+         {"text": "Decoration (walls, ceilings, woodwork) complete", "checked": false, "checked_at": null},
+         {"text": "Flooring / carpets fitted", "checked": false, "checked_at": null},
+         {"text": "Unit snagging list closed out", "checked": false, "checked_at": null},
+         {"text": "Final clean completed", "checked": false, "checked_at": null}
+       ]'::jsonb)
+    on conflict (plot_id, gate_key) do nothing;
+
+    insert into public.handover_documents (project_id, plot_id, doc_key, title) values
+      (new.project_id, new.id, 'flat_air_acoustic_test', 'Air Permeability / Acoustic Test Certificate'),
+      (new.project_id, new.id, 'flat_elec_gas_certs', 'Electrical & Gas Safety Certificates'),
+      (new.project_id, new.id, 'flat_epc', 'EPC (Energy Performance Certificate)'),
+      (new.project_id, new.id, 'flat_warranty', 'Unit Warranty Cover Note'),
+      (new.project_id, new.id, 'flat_om_manuals', 'O&M Manuals (Unit)')
+    on conflict (plot_id, doc_key) do nothing;
+
+    insert into public.internal_milestones (project_id, plot_id, milestone_key, title, sort_order) values
+      (new.project_id, new.id, 'carpentry_first_fix', 'Carpentry First Fix', 1),
+      (new.project_id, new.id, 'electrical_first_fix', 'Electrical First Fix', 2),
+      (new.project_id, new.id, 'mechanical_first_fix', 'Mechanical First Fix', 3),
+      (new.project_id, new.id, 'dry_lining', 'Dry Lining', 4),
+      (new.project_id, new.id, 'plastering', 'Plastering Works', 5),
+      (new.project_id, new.id, 'kitchen', 'Kitchen', 6),
+      (new.project_id, new.id, 'bathroom', 'Bathroom', 7),
+      (new.project_id, new.id, 'second_fix_carpentry', 'Second Fix Carpentry', 8),
+      (new.project_id, new.id, 'second_fix_mechanical', 'Second Fix Mechanical', 9),
+      (new.project_id, new.id, 'second_fix_electrical', 'Second Fix Electrical', 10),
+      (new.project_id, new.id, 'carpentry_finals', 'Carpentry Finals', 11),
+      (new.project_id, new.id, 'decoration', 'Decoration', 12),
+      (new.project_id, new.id, 'flooring', 'Flooring', 13),
+      (new.project_id, new.id, 'mastic', 'Mastic', 14),
+      (new.project_id, new.id, 'clean', 'Clean', 15),
+      (new.project_id, new.id, 'snagging', 'Snagging', 16)
+    on conflict (plot_id, milestone_key) do nothing;
+  end if;
+
+  insert into public.snag_lists (project_id, plot_id, title)
+  values (new.project_id, new.id, new.plot_number)
+  on conflict (plot_id) do nothing;
+
+  return new;
+end;
+$$ language plpgsql;
