@@ -121,14 +121,6 @@
   }
   window.deleteBlock = deleteBlock;
 
-  // Regenerates the client-supplied progress trackers (a plot-by-milestone
-  // Internal Works breakdown, plus an Overall Progress summary) straight
-  // from the site's own live data — the reverse of how those spreadsheets
-  // originally got imported into this app. SheetJS is loaded on demand
-  // (not a top-level import) since most visits to this page never use it.
-  // "Not tracked for this plot" (e.g. Timber Frame on a flat) is left
-  // blank, distinct from a genuine 0% — see the Internal Works Milestones
-  // README note on why flats don't get every stage.
   function fileDateStamp() {
     const d = new Date();
     return `${d.getDate()}.${d.getMonth() + 1}.${String(d.getFullYear()).slice(-2)}`;
@@ -150,7 +142,16 @@
     return rows;
   }
 
-  function buildInternalRows(plots, milestones, blocks) {
+  // Laid out to match the client-supplied "Internal Works" tracker
+  // templates this feature was reverse-engineered from: a project-title
+  // header block, a "Plots X-Y" label, then a header row starting
+  // "Plots", then data grouped under a plain-text section row per block
+  // (the same role "Block 1-4" rows played in the original sheets) with
+  // standalone plots listed first under no section row. Milestone
+  // columns are whichever stages this project's plots actually have,
+  // in their sort_order — so a site using the 16-stage set doesn't grow
+  // two blank columns it never seeded.
+  function buildInternalRows(project, plots, milestones, blocks) {
     const blockNameById = new Map((blocks || []).map((b) => [b.id, b.block_name]));
     const milestonesByPlot = new Map();
     const milestoneMeta = new Map();
@@ -161,15 +162,32 @@
       if (!existing || m.sort_order < existing.sort_order) milestoneMeta.set(m.milestone_key, { title: m.title, sort_order: m.sort_order });
     });
     const orderedKeys = [...milestoneMeta.entries()].sort((a, b) => a[1].sort_order - b[1].sort_order).map(([key]) => key);
+    const titles = orderedKeys.map((k) => `${milestoneMeta.get(k).title} (%)`);
 
-    const rows = [["Plot", "Block", ...orderedKeys.map((k) => milestoneMeta.get(k).title)]];
+    const groups = new Map();
     plots.forEach((p) => {
-      const plotMilestones = milestonesByPlot.get(p.id);
-      rows.push([
-        p.plot_number,
-        p.block_id ? blockNameById.get(p.block_id) || "" : "",
-        ...orderedKeys.map((k) => (plotMilestones?.has(k) ? plotMilestones.get(k) : "")),
-      ]);
+      const label = p.block_id ? (blockNameById.get(p.block_id) || "Block") : "Plots";
+      if (!groups.has(label)) groups.set(label, []);
+      groups.get(label).push(p);
+    });
+    const groupLabels = [...groups.keys()].sort((a, b) => (a === "Plots" ? -1 : b === "Plots" ? 1 : a.localeCompare(b)));
+
+    const firstPlot = plots[0]?.plot_number || "";
+    const lastPlot = plots[plots.length - 1]?.plot_number || "";
+
+    const rows = [];
+    rows.push(["Project title:", "", project?.name || ""]);
+    rows.push(["Generated:", "", fileDateStamp()]);
+    rows.push([]);
+    rows.push([`Internal Works Plots ${firstPlot}-${lastPlot}`]);
+    rows.push([]);
+    rows.push(["Plots", ...titles]);
+    groupLabels.forEach((label) => {
+      if (label !== "Plots") rows.push([label]);
+      [...groups.get(label)].sort((a, b) => comparePlotNumbers(a.plot_number, b.plot_number)).forEach((p) => {
+        const plotMilestones = milestonesByPlot.get(p.id);
+        rows.push([p.plot_number, ...orderedKeys.map((k) => (plotMilestones?.has(k) ? plotMilestones.get(k) : ""))]);
+      });
     });
     return rows;
   }
@@ -203,7 +221,7 @@
 
       const plots = [...(allPlots || [])].sort((a, b) => comparePlotNumbers(a.plot_number, b.plot_number));
       const overallRows = buildOverallRows(project, plots, blocks);
-      const internalRows = buildInternalRows(plots, milestones, blocks);
+      const internalRows = buildInternalRows(project, plots, milestones, blocks);
 
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(overallRows), "Overall Progress");
