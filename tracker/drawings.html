@@ -30,7 +30,10 @@
 
   <div class="page-head" style="margin-bottom:1.2rem;">
     <div class="page-sub" style="font-family:var(--font-display); font-size:1.1rem; font-weight:700; color:var(--ink);">Plot Floor Plans</div>
-    <button class="btn btn-amber" id="newDrawingBtn">+ Upload Drawing</button>
+    <div class="btn-row">
+      <button class="btn btn-outline" id="bulkUploadBtn">📁 Bulk Upload</button>
+      <button class="btn btn-amber" id="newDrawingBtn">+ Upload Drawing</button>
+    </div>
   </div>
 
   <div class="card" id="newDrawingCard" style="display:none;">
@@ -38,7 +41,7 @@
     <form id="drawingForm">
       <div class="form-grid">
         <div class="field"><label for="drawingName">Drawing name *</label><input type="text" id="drawingName" required placeholder="e.g. Plot 4 Ground Floor Layout"></div>
-        <div class="field"><label for="plotNumber">Plot number (optional)</label><input type="text" id="plotNumber" placeholder="e.g. Plot 4"></div>
+        <div class="field"><label for="plotNumber">Plot number (optional)</label><input type="text" id="plotNumber" placeholder="e.g. Plot 4" list="plotSuggestions"></div>
       </div>
       <div class="field"><label for="drawingFile">File *</label><input type="file" id="drawingFile" accept="image/*,application/pdf" required></div>
       <p class="hint" id="pdfHint" style="display:none;">PDFs are stored as-is (they can't be compressed or pinned in the browser) — a PNG, JPG, or exported image will be resized and compressed automatically, and supports pinning.</p>
@@ -49,6 +52,30 @@
     </form>
   </div>
 
+  <div class="card" id="bulkUploadCard" style="display:none;">
+    <div id="bulkErrorBox" class="error-box"></div>
+    <div class="field">
+      <label for="bulkDrawingInput">Select all the drawings to upload</label>
+      <input type="file" id="bulkDrawingInput" accept="image/*,application/pdf" multiple>
+      <p class="hint">Each file's plot is guessed from its filename (e.g. "Plot 5 - Ground Floor.pdf" → Plot 5) — check the guesses below and fix any before uploading. A blank plot is fine too; you can set it later.</p>
+    </div>
+    <div id="bulkReviewWrap" style="display:none;">
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>File</th><th>Drawing name</th><th>Plot</th><th></th></tr></thead>
+          <tbody id="bulkReviewRows"></tbody>
+        </table>
+      </div>
+      <p class="hint" id="bulkStatus"></p>
+      <div class="btn-row" style="margin-top:1rem;">
+        <button type="button" class="btn btn-amber" id="bulkUploadAllBtn">Upload All</button>
+        <button type="button" class="btn btn-outline" id="bulkCancelBtn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <datalist id="plotSuggestions"></datalist>
+
   <div class="grid" id="drawingsGrid"></div>
   <div id="emptyState" class="empty" style="display:none;">
     <p>No drawings uploaded yet. Upload a floor plan to start pinpointing snags.</p>
@@ -57,7 +84,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, uploadDrawing } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, uploadDrawing, normalisePlotToken } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -66,6 +93,7 @@
   const errorBox = document.getElementById("errorBox");
   const drawingErrorBox = document.getElementById("drawingErrorBox");
   let project = null;
+  let plotNumbers = [];
 
   // ─── Site layout ────────────────────────────────────────────────
   function renderSiteLayout() {
@@ -134,6 +162,107 @@
     }
   });
 
+  // ─── Bulk upload ────────────────────────────────────────────────
+  // Guesses a file's plot from its own name, the same digit-based way
+  // plot tags are matched everywhere else in this app (so "Plot 5 -
+  // Ground Floor.pdf" and "P5-GF.pdf" both match a real plot named
+  // "Plot 5") — never trusted blindly, just a pre-fill the reviewer can
+  // fix per-file before anything actually uploads.
+  function guessPlotFromFilename(filename, plotList) {
+    const base = filename.replace(/\.[^.]+$/, "");
+    const token = normalisePlotToken(base);
+    if (!token) return null;
+    return plotList.find((pn) => normalisePlotToken(pn) === token) || null;
+  }
+
+  let bulkEntries = [];
+
+  function renderBulkReview() {
+    const wrap = document.getElementById("bulkReviewWrap");
+    if (!bulkEntries.length) { wrap.style.display = "none"; return; }
+    wrap.style.display = "block";
+    document.getElementById("bulkReviewRows").innerHTML = bulkEntries.map((entry, i) => `
+      <tr>
+        <td>${escapeHtml(entry.file.name)}</td>
+        <td><input type="text" class="bulk-name" data-i="${i}" value="${escapeHtml(entry.drawingName)}"></td>
+        <td><input type="text" class="bulk-plot" data-i="${i}" value="${escapeHtml(entry.plotNumber || "")}" list="plotSuggestions" placeholder="optional"></td>
+        <td><button type="button" class="btn btn-outline btn-sm" data-remove="${i}">Remove</button></td>
+      </tr>
+    `).join("");
+
+    document.querySelectorAll(".bulk-name").forEach((el) => el.addEventListener("input", () => {
+      bulkEntries[Number(el.dataset.i)].drawingName = el.value;
+    }));
+    document.querySelectorAll(".bulk-plot").forEach((el) => el.addEventListener("input", () => {
+      bulkEntries[Number(el.dataset.i)].plotNumber = el.value.trim() || null;
+    }));
+    document.querySelectorAll("[data-remove]").forEach((btn) => btn.addEventListener("click", () => {
+      bulkEntries.splice(Number(btn.dataset.remove), 1);
+      renderBulkReview();
+    }));
+  }
+
+  document.getElementById("bulkUploadBtn").addEventListener("click", () => {
+    document.getElementById("bulkUploadCard").style.display = "block";
+  });
+
+  function resetBulkUpload() {
+    document.getElementById("bulkUploadCard").style.display = "none";
+    document.getElementById("bulkDrawingInput").value = "";
+    document.getElementById("bulkStatus").textContent = "";
+    bulkEntries = [];
+    renderBulkReview();
+  }
+  document.getElementById("bulkCancelBtn").addEventListener("click", resetBulkUpload);
+
+  document.getElementById("bulkDrawingInput").addEventListener("change", () => {
+    const files = Array.from(document.getElementById("bulkDrawingInput").files);
+    bulkEntries = files.map((file) => ({
+      file,
+      drawingName: file.name.replace(/\.[^.]+$/, ""),
+      plotNumber: guessPlotFromFilename(file.name, plotNumbers),
+    }));
+    renderBulkReview();
+  });
+
+  document.getElementById("bulkUploadAllBtn").addEventListener("click", async () => {
+    clearError(document.getElementById("bulkErrorBox"));
+    const btn = document.getElementById("bulkUploadAllBtn");
+    btn.disabled = true;
+    const statusEl = document.getElementById("bulkStatus");
+    const { data: { user } } = await supabase.auth.getUser();
+    let succeeded = 0;
+    const failed = [];
+    for (let i = 0; i < bulkEntries.length; i++) {
+      const entry = bulkEntries[i];
+      statusEl.textContent = `Uploading ${i + 1} of ${bulkEntries.length}…`;
+      try {
+        const url = await uploadDrawing(entry.file, `${projectId}/drawings`);
+        const { error } = await supabase.from("drawings").insert({
+          project_id: projectId,
+          drawing_name: entry.drawingName.trim() || entry.file.name,
+          plot_number: entry.plotNumber,
+          drawing_url: url,
+          created_by: user.id,
+        });
+        if (error) throw error;
+        succeeded++;
+      } catch (err) {
+        failed.push({ name: entry.file.name, message: err.message });
+      }
+    }
+    btn.disabled = false;
+    if (failed.length) {
+      showError(document.getElementById("bulkErrorBox"), { message: `${succeeded} of ${bulkEntries.length} uploaded. Failed: ${failed.map((f) => `${f.name} (${f.message})`).join("; ")}` });
+      bulkEntries = bulkEntries.filter((entry) => failed.some((f) => f.name === entry.file.name));
+      renderBulkReview();
+      statusEl.textContent = "";
+    } else {
+      resetBulkUpload();
+    }
+    loadDrawings();
+  });
+
   async function deleteDrawing(id, name) {
     if (!confirm(`Delete "${name}"? Any pinned snags on it will keep their record but lose their pin.`)) return;
     await supabase.from("drawings").delete().eq("id", id);
@@ -183,6 +312,10 @@
     document.getElementById("projectSub").textContent = `${project.name} — site layout for reference, plot floor plans for pinpointing snags.`;
     renderSiteLayout();
     loadDrawings();
+
+    const { data: plots } = await supabase.from("plots").select("plot_number").eq("project_id", projectId);
+    plotNumbers = (plots || []).map((p) => p.plot_number);
+    document.getElementById("plotSuggestions").innerHTML = plotNumbers.map((p) => `<option value="${escapeHtml(p)}">`).join("");
   }
 
   init();
