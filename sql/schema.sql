@@ -2121,3 +2121,31 @@ begin
   return new;
 end;
 $$ language plpgsql;
+
+-- ─── v25 ADDITIONS ────────────────────────────────────────────────
+-- Specification documents: reference paperwork for a site (e.g. one
+-- per house type or per trade), shown alongside Site Layout and Plot
+-- Floor Plans on the Drawings page. Deliberately its own table rather
+-- than reusing `drawings` with a null plot_number — specs are never
+-- plot-scoped and never support pinning, so keeping them separate
+-- avoids drawings.html's plot/pinning logic having to special-case
+-- "a drawing that isn't really a drawing." Same shape and RLS as
+-- `drawings` otherwise (a simple named-file list per project).
+create table if not exists public.specifications (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  spec_name text not null,
+  spec_url text not null,
+  created_by uuid references auth.users(id),
+  created_at timestamptz not null default now()
+);
+
+alter table public.specifications enable row level security;
+drop policy if exists "members read specifications" on public.specifications;
+create policy "members read specifications" on public.specifications for select using (public.is_project_member(project_id));
+drop policy if exists "editors insert specifications" on public.specifications;
+create policy "editors insert specifications" on public.specifications for insert with check (public.is_project_editor(project_id));
+drop policy if exists "editors update specifications" on public.specifications;
+create policy "editors update specifications" on public.specifications for update using (public.is_project_editor(project_id));
+drop policy if exists "editors delete specifications" on public.specifications;
+create policy "editors delete specifications" on public.specifications for delete using (public.is_project_editor(project_id));

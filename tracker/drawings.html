@@ -29,6 +29,34 @@
   </div>
 
   <div class="page-head" style="margin-bottom:1.2rem;">
+    <div class="page-sub" style="font-family:var(--font-display); font-size:1.1rem; font-weight:700; color:var(--ink);">Specification</div>
+    <div class="btn-row">
+      <button class="btn btn-amber" id="newSpecBtn">+ Add Specification</button>
+    </div>
+  </div>
+
+  <div class="card" id="newSpecCard" style="display:none;">
+    <div id="specErrorBox" class="error-box"></div>
+    <form id="specForm">
+      <div class="field"><label for="specName">Specification name *</label><input type="text" id="specName" required placeholder="e.g. House Type A Specification"></div>
+      <div class="field"><label for="specFile">File *</label><input type="file" id="specFile" required></div>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-amber" id="saveSpecBtn">Upload</button>
+        <button type="button" class="btn btn-outline" id="cancelSpecBtn">Cancel</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card" style="margin-bottom:1.5rem;">
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Specification</th><th>Uploaded</th><th></th></tr></thead>
+        <tbody id="specRows"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="page-head" style="margin-bottom:1.2rem;">
     <div class="page-sub" style="font-family:var(--font-display); font-size:1.1rem; font-weight:700; color:var(--ink);">Plot Floor Plans</div>
     <div class="btn-row">
       <button class="btn btn-outline" id="bulkUploadBtn">📁 Bulk Upload</button>
@@ -84,7 +112,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, uploadDrawing, normalisePlotToken } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, uploadDrawing, normalisePlotToken, formatDate } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -121,6 +149,68 @@
       document.getElementById("siteLayoutInput").disabled = false;
     }
   });
+
+  // ─── Specification ──────────────────────────────────────────────
+  const specErrorBox = document.getElementById("specErrorBox");
+  const newSpecCard = document.getElementById("newSpecCard");
+  document.getElementById("newSpecBtn").addEventListener("click", () => newSpecCard.style.display = "block");
+  document.getElementById("cancelSpecBtn").addEventListener("click", () => {
+    newSpecCard.style.display = "none";
+    document.getElementById("specForm").reset();
+  });
+
+  document.getElementById("specForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearError(specErrorBox);
+    const file = document.getElementById("specFile").files[0];
+    if (!file) return;
+    document.getElementById("saveSpecBtn").disabled = true;
+    try {
+      const url = await uploadDrawing(file, `${projectId}/specifications`);
+      const { data: { user } } = await supabase.auth.getUser();
+      const { error } = await supabase.from("specifications").insert({
+        project_id: projectId,
+        spec_name: document.getElementById("specName").value.trim(),
+        spec_url: url,
+        created_by: user.id,
+      });
+      if (error) throw error;
+      document.getElementById("cancelSpecBtn").click();
+      loadSpecifications();
+    } catch (err) {
+      showError(specErrorBox, err);
+    } finally {
+      document.getElementById("saveSpecBtn").disabled = false;
+    }
+  });
+
+  async function deleteSpecification(id, name) {
+    if (!confirm(`Delete "${name}"?`)) return;
+    await supabase.from("specifications").delete().eq("id", id);
+    loadSpecifications();
+  }
+  window.deleteSpecification = deleteSpecification;
+
+  async function loadSpecifications() {
+    const { data: specs, error } = await supabase
+      .from("specifications")
+      .select("*")
+      .eq("project_id", projectId)
+      .order("created_at", { ascending: false });
+
+    const rows = document.getElementById("specRows");
+    if (error || !specs || !specs.length) {
+      rows.innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--ink-soft);">No specification documents uploaded yet.</td></tr>`;
+      return;
+    }
+    rows.innerHTML = specs.map((s) => `
+      <tr>
+        <td><a class="file-link" href="${s.spec_url}" target="_blank">📄 ${escapeHtml(s.spec_name)}</a></td>
+        <td>${formatDate(s.created_at)}</td>
+        <td><button class="btn btn-outline btn-sm" onclick="deleteSpecification('${s.id}', '${escapeHtml(s.spec_name).replace(/'/g, "\\'")}')">Delete</button></td>
+      </tr>
+    `).join("");
+  }
 
   // ─── Plot floor plans ───────────────────────────────────────────
   const newDrawingCard = document.getElementById("newDrawingCard");
@@ -311,6 +401,7 @@
     ]);
     document.getElementById("projectSub").textContent = `${project.name} — site layout for reference, plot floor plans for pinpointing snags.`;
     renderSiteLayout();
+    loadSpecifications();
     loadDrawings();
 
     const { data: plots } = await supabase.from("plots").select("plot_number").eq("project_id", projectId);
