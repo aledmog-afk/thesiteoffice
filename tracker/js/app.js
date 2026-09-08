@@ -293,6 +293,31 @@ export async function recalculateActualProgress(projectId) {
   return pct;
 }
 
+// Stamps a plot as fully handed over the moment ALL its quality gates
+// are Approved (or N/A — same exclusion rule the gate-approval ratios
+// use elsewhere) and ALL its handover documents are Approved/Final.
+// Called after any gate/document change on plot-detail.html. Only ever
+// sets handed_over_at once — it's a completion date, not a live status,
+// so it's never cleared if a gate is later reverted — and a plot with
+// no gates or no documents at all can never be "handed over" by this
+// check, since there's nothing to judge completeness from. Returns
+// true if this call is what just completed the plot (false otherwise,
+// including "already complete"), purely for callers that want to react
+// to it — nothing currently does.
+export async function checkAndMarkPlotHandedOver(plotId) {
+  const [{ data: gates }, { data: docs }, { data: plot }] = await Promise.all([
+    supabase.from("quality_gates").select("status").eq("plot_id", plotId),
+    supabase.from("handover_documents").select("status").eq("plot_id", plotId),
+    supabase.from("plots").select("handed_over_at").eq("id", plotId).single(),
+  ]);
+  if (!gates?.length || !docs?.length || plot?.handed_over_at) return false;
+  const gatesReady = gates.every((g) => g.status === "approved" || g.status === "not_applicable");
+  const docsReady = docs.every((d) => d.status === "approved_final");
+  if (!gatesReady || !docsReady) return false;
+  await supabase.from("plots").update({ handed_over_at: new Date().toISOString() }).eq("id", plotId);
+  return true;
+}
+
 // A weekly report's plot tag is freetext ("5", "5,6,7") and a plot's own
 // name is also freetext ("Plot 5", or just "5") — normalise both to
 // their digits where possible so "Plot 5" and "5" are recognised as the

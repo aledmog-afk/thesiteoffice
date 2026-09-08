@@ -150,20 +150,21 @@
     </div>`;
   }
 
+  // Achievement-based: only plots that actually reached full handover
+  // during this month appear here (see checkAndMarkPlotHandedOver in
+  // app.js) — a month with none renders nothing at all, rather than a
+  // full-site table repeating every already-complete plot's status.
+  // Filtering on handed_over_at (rather than trusting the array to
+  // already be scoped correctly) also means an older report generated
+  // before this section existed — whose plot_handovers array holds the
+  // old {plot_number, gates_approved, gates_total, ...} shape with no
+  // handed_over_at field at all — safely renders nothing here too.
   function plotHandoversSection(plots) {
-    if (!plots || !plots.length) return "";
+    const list = (Array.isArray(plots) ? plots : []).filter((p) => p.handed_over_at);
+    if (!list.length) return "";
     return `<div class="doc-section">
-      <h3>Plot Handovers (as of report date)</h3>
-      <div class="table-wrap"><table>
-        <thead><tr><th>Plot</th><th>Quality Gates</th><th>Handover Docs</th></tr></thead>
-        <tbody>${plots.map((p) => `
-          <tr>
-            <td>${escapeHtml(p.plot_number)}</td>
-            <td>${p.gates_approved} / ${p.gates_total} approved${p.gates_total === 0 ? " (N/A)" : ""}</td>
-            <td>${p.docs_ready} / ${p.docs_total} ready</td>
-          </tr>
-        `).join("")}</tbody>
-      </table></div>
+      <h3>Plot Handovers Completed This Month</h3>
+      <ul class="body-list">${list.map((p) => `<li><strong>${escapeHtml(p.plot_number)}</strong> — ${formatDate(p.handed_over_at.slice(0, 10))}</li>`).join("")}</ul>
     </div>`;
   }
 

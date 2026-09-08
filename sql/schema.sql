@@ -1725,3 +1725,16 @@ alter table public.monthly_reports add column if not exists programme_comments j
 alter table public.monthly_reports add column if not exists site_housekeeping jsonb not null default '[]'::jsonb;
 alter table public.monthly_reports add column if not exists drawings_received jsonb not null default '[]'::jsonb;
 alter table public.monthly_reports add column if not exists visitors jsonb not null default '[]'::jsonb;
+
+-- ─── v22 ADDITIONS ────────────────────────────────────────────────
+-- The monthly report's old "Plot Handovers" section listed every
+-- plot's current gate/document completion every single month,
+-- regardless of whether anything had changed — a full-site table that
+-- only grows longer as a site fills up, mostly repeating the same
+-- "fully approved" rows month after month. Replaced with an
+-- achievement-based section: only plots that actually reached full
+-- handover THAT calendar month are listed, and the section is left
+-- out of the report entirely in a month where nothing was handed
+-- over. That needs an actual point-in-time fact — when a plot became
+-- fully handed over — which nothing captured before now.
+alter table public.plots add column if not exists handed_over_at timestamptz;
