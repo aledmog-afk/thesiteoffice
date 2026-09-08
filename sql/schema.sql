@@ -1738,3 +1738,215 @@ alter table public.monthly_reports add column if not exists visitors jsonb not n
 -- over. That needs an actual point-in-time fact — when a plot became
 -- fully handed over — which nothing captured before now.
 alter table public.plots add column if not exists handed_over_at timestamptz;
+
+-- ─── v23 ADDITIONS ────────────────────────────────────────────────
+-- Internal Works Milestones: a second, more granular layer of per-plot
+-- progress tracking alongside plots.progress_pct (the single top-level
+-- "how complete is this plot" number, still set independently — see
+-- below) and the existing 4 Quality Gates. Modelled directly on a real
+-- client tracker spreadsheet: Timber Frame, Roof Covering, First/Second
+-- Fix per trade, Kitchen, Bathroom, Decoration, Flooring, Clean,
+-- Snagging — each stage tracked as its own 0-100%, not a fixed status
+-- enum, since the source tracker records genuine partial completion
+-- (e.g. plastering 80% through a plot), not just a done/not-done flag.
+-- Deliberately independent of progress_pct — like Quality Gates,
+-- nothing here is derived from or automatically feeds back into it;
+-- both are separately maintained facts about a plot.
+create table if not exists public.internal_milestones (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  plot_id uuid not null references public.plots(id) on delete cascade,
+  milestone_key text not null,
+  title text not null,
+  percent numeric not null default 0 check (percent >= 0 and percent <= 100),
+  sort_order integer not null default 0,
+  created_at timestamptz not null default now(),
+  unique (plot_id, milestone_key)
+);
+
+alter table public.internal_milestones enable row level security;
+drop policy if exists "editors read internal_milestones" on public.internal_milestones;
+create policy "editors read internal_milestones" on public.internal_milestones for select using (public.is_project_editor(project_id));
+drop policy if exists "editors insert internal_milestones" on public.internal_milestones;
+create policy "editors insert internal_milestones" on public.internal_milestones for insert with check (public.is_project_editor(project_id));
+drop policy if exists "editors update internal_milestones" on public.internal_milestones;
+create policy "editors update internal_milestones" on public.internal_milestones for update using (public.is_project_editor(project_id));
+drop policy if exists "editors delete internal_milestones" on public.internal_milestones;
+create policy "editors delete internal_milestones" on public.internal_milestones for delete using (public.is_project_editor(project_id));
+
+-- Extends seed_plot_defaults() (full body carried forward from v15,
+-- unchanged apart from the two new insert blocks below) so every new
+-- plot gets its Internal Works Milestones the same automatic way it
+-- already gets its quality gates/documents/snag list. Standalone plots
+-- get the full 16 stages; flats get 14 — Timber Frame and Roof
+-- Covering are excluded for flats since that structural work already
+-- lives on the block's own quality gates (Frame & Superstructure /
+-- Roof & Building Envelope), same reasoning the existing flat gate set
+-- already uses for excluding structural gates.
+create or replace function public.seed_plot_defaults()
+returns trigger as $$
+begin
+  if new.block_id is null then
+    insert into public.quality_gates (project_id, plot_id, gate_key, title, sort_order, checklist) values
+      (new.project_id, new.id, 'substructure_drainage', 'Substructure & Drainage', 1, '[
+         {"text": "Foundation excavation inspected by Building Control", "checked": false, "checked_at": null},
+         {"text": "Drainage test (air/water) passed and recorded", "checked": false, "checked_at": null},
+         {"text": "DPC level verified", "checked": false, "checked_at": null},
+         {"text": "Building Control sign-off for substructure received", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      (new.project_id, new.id, 'frame_watertight', 'Frame & Wind/Watertight', 2, '[
+         {"text": "Moisture readings recorded", "checked": false, "checked_at": null},
+         {"text": "Cavity barriers inspected", "checked": false, "checked_at": null},
+         {"text": "Structural engineer sign-off uploaded", "checked": false, "checked_at": null},
+         {"text": "Roof confirmed watertight", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      (new.project_id, new.id, 'pre_plaster_first_fix', 'Pre-Plaster / First Fix', 3, '[
+         {"text": "First fix electrical inspected", "checked": false, "checked_at": null},
+         {"text": "First fix plumbing & heating inspected", "checked": false, "checked_at": null},
+         {"text": "Insulation installed and inspected", "checked": false, "checked_at": null},
+         {"text": "Pre-plaster inspection sign-off received", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      (new.project_id, new.id, 'pre_handover_pc', 'Pre-Handover / PC', 4, '[
+         {"text": "Snagging list closed out", "checked": false, "checked_at": null},
+         {"text": "O&M manuals received", "checked": false, "checked_at": null},
+         {"text": "All statutory certificates received", "checked": false, "checked_at": null},
+         {"text": "Final client walkthrough completed", "checked": false, "checked_at": null}
+       ]'::jsonb)
+    on conflict (plot_id, gate_key) do nothing;
+
+    insert into public.handover_documents (project_id, plot_id, doc_key, title) values
+      (new.project_id, new.id, 'building_control', 'Building Control Sign-off (Initial/Final)'),
+      (new.project_id, new.id, 'air_acoustic_test', 'Air Permeability / Acoustic Test Certificates'),
+      (new.project_id, new.id, 'elec_gas_certs', 'Electrical & Gas Safety Certificates'),
+      (new.project_id, new.id, 'warranty_cover_note', 'NHBC/Structural Warranty Cover Note'),
+      (new.project_id, new.id, 'om_manuals', 'Draft O&M Manuals')
+    on conflict (plot_id, doc_key) do nothing;
+
+    insert into public.internal_milestones (project_id, plot_id, milestone_key, title, sort_order) values
+      (new.project_id, new.id, 'timber_frame', 'Timber Frame', 1),
+      (new.project_id, new.id, 'roof_covering', 'Roof Covering', 2),
+      (new.project_id, new.id, 'carpentry_first_fix', 'Carpentry First Fix', 3),
+      (new.project_id, new.id, 'electrical_first_fix', 'Electrical First Fix', 4),
+      (new.project_id, new.id, 'mechanical_first_fix', 'Mechanical First Fix', 5),
+      (new.project_id, new.id, 'dry_lining', 'Dry Lining', 6),
+      (new.project_id, new.id, 'plastering', 'Plastering Works', 7),
+      (new.project_id, new.id, 'kitchen', 'Kitchen', 8),
+      (new.project_id, new.id, 'bathroom', 'Bathroom', 9),
+      (new.project_id, new.id, 'second_fix_carpentry', 'Second Fix Carpentry', 10),
+      (new.project_id, new.id, 'second_fix_mechanical', 'Second Fix Mechanical', 11),
+      (new.project_id, new.id, 'second_fix_electrical', 'Second Fix Electrical', 12),
+      (new.project_id, new.id, 'decoration', 'Decoration', 13),
+      (new.project_id, new.id, 'flooring', 'Flooring', 14),
+      (new.project_id, new.id, 'clean', 'Clean', 15),
+      (new.project_id, new.id, 'snagging', 'Snagging', 16)
+    on conflict (plot_id, milestone_key) do nothing;
+  else
+    insert into public.quality_gates (project_id, plot_id, gate_key, title, sort_order, checklist) values
+      (new.project_id, new.id, 'flat_first_fix', '1st Fix (All Trades)', 1, '[
+         {"text": "First fix electrical inspected", "checked": false, "checked_at": null},
+         {"text": "First fix plumbing & heating inspected", "checked": false, "checked_at": null},
+         {"text": "Insulation installed and inspected", "checked": false, "checked_at": null},
+         {"text": "Pre-plaster inspection sign-off received", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      (new.project_id, new.id, 'flat_second_fix', '2nd Fix (All Trades)', 2, '[
+         {"text": "Second fix electrical complete and tested", "checked": false, "checked_at": null},
+         {"text": "Second fix plumbing & heating complete and tested", "checked": false, "checked_at": null},
+         {"text": "Sockets, switches and fittings installed", "checked": false, "checked_at": null},
+         {"text": "Heating system commissioned", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      (new.project_id, new.id, 'flat_kitchen_bathroom', 'Kitchen & Bathroom Fit', 3, '[
+         {"text": "Kitchen units, worktops and appliances installed", "checked": false, "checked_at": null},
+         {"text": "Bathroom / en-suite sanitaryware and tiling complete", "checked": false, "checked_at": null},
+         {"text": "Water pressure and drainage tested", "checked": false, "checked_at": null},
+         {"text": "Extractor fans tested", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      (new.project_id, new.id, 'flat_pre_handover', 'Decoration, Flooring & Pre-Handover Snagging', 4, '[
+         {"text": "Decoration (walls, ceilings, woodwork) complete", "checked": false, "checked_at": null},
+         {"text": "Flooring / carpets fitted", "checked": false, "checked_at": null},
+         {"text": "Unit snagging list closed out", "checked": false, "checked_at": null},
+         {"text": "Final clean completed", "checked": false, "checked_at": null}
+       ]'::jsonb)
+    on conflict (plot_id, gate_key) do nothing;
+
+    insert into public.handover_documents (project_id, plot_id, doc_key, title) values
+      (new.project_id, new.id, 'flat_air_acoustic_test', 'Air Permeability / Acoustic Test Certificate'),
+      (new.project_id, new.id, 'flat_elec_gas_certs', 'Electrical & Gas Safety Certificates'),
+      (new.project_id, new.id, 'flat_epc', 'EPC (Energy Performance Certificate)'),
+      (new.project_id, new.id, 'flat_warranty', 'Unit Warranty Cover Note'),
+      (new.project_id, new.id, 'flat_om_manuals', 'O&M Manuals (Unit)')
+    on conflict (plot_id, doc_key) do nothing;
+
+    insert into public.internal_milestones (project_id, plot_id, milestone_key, title, sort_order) values
+      (new.project_id, new.id, 'carpentry_first_fix', 'Carpentry First Fix', 1),
+      (new.project_id, new.id, 'electrical_first_fix', 'Electrical First Fix', 2),
+      (new.project_id, new.id, 'mechanical_first_fix', 'Mechanical First Fix', 3),
+      (new.project_id, new.id, 'dry_lining', 'Dry Lining', 4),
+      (new.project_id, new.id, 'plastering', 'Plastering Works', 5),
+      (new.project_id, new.id, 'kitchen', 'Kitchen', 6),
+      (new.project_id, new.id, 'bathroom', 'Bathroom', 7),
+      (new.project_id, new.id, 'second_fix_carpentry', 'Second Fix Carpentry', 8),
+      (new.project_id, new.id, 'second_fix_mechanical', 'Second Fix Mechanical', 9),
+      (new.project_id, new.id, 'second_fix_electrical', 'Second Fix Electrical', 10),
+      (new.project_id, new.id, 'decoration', 'Decoration', 11),
+      (new.project_id, new.id, 'flooring', 'Flooring', 12),
+      (new.project_id, new.id, 'clean', 'Clean', 13),
+      (new.project_id, new.id, 'snagging', 'Snagging', 14)
+    on conflict (plot_id, milestone_key) do nothing;
+  end if;
+
+  insert into public.snag_lists (project_id, plot_id, title)
+  values (new.project_id, new.id, new.plot_number)
+  on conflict (plot_id) do nothing;
+
+  return new;
+end;
+$$ language plpgsql;
+
+-- One-time backfill for every plot that already existed before this
+-- feature — same "nothing already on site loses out" approach used
+-- when quality gates/documents/snag lists were first introduced.
+insert into public.internal_milestones (project_id, plot_id, milestone_key, title, sort_order)
+select p.project_id, p.id, m.milestone_key, m.title, m.sort_order
+from public.plots p
+cross join (values
+  ('timber_frame', 'Timber Frame', 1),
+  ('roof_covering', 'Roof Covering', 2),
+  ('carpentry_first_fix', 'Carpentry First Fix', 3),
+  ('electrical_first_fix', 'Electrical First Fix', 4),
+  ('mechanical_first_fix', 'Mechanical First Fix', 5),
+  ('dry_lining', 'Dry Lining', 6),
+  ('plastering', 'Plastering Works', 7),
+  ('kitchen', 'Kitchen', 8),
+  ('bathroom', 'Bathroom', 9),
+  ('second_fix_carpentry', 'Second Fix Carpentry', 10),
+  ('second_fix_mechanical', 'Second Fix Mechanical', 11),
+  ('second_fix_electrical', 'Second Fix Electrical', 12),
+  ('decoration', 'Decoration', 13),
+  ('flooring', 'Flooring', 14),
+  ('clean', 'Clean', 15),
+  ('snagging', 'Snagging', 16)
+) as m(milestone_key, title, sort_order)
+where p.block_id is null
+on conflict (plot_id, milestone_key) do nothing;
+
+insert into public.internal_milestones (project_id, plot_id, milestone_key, title, sort_order)
+select p.project_id, p.id, m.milestone_key, m.title, m.sort_order
+from public.plots p
+cross join (values
+  ('carpentry_first_fix', 'Carpentry First Fix', 1),
+  ('electrical_first_fix', 'Electrical First Fix', 2),
+  ('mechanical_first_fix', 'Mechanical First Fix', 3),
+  ('dry_lining', 'Dry Lining', 4),
+  ('plastering', 'Plastering Works', 5),
+  ('kitchen', 'Kitchen', 6),
+  ('bathroom', 'Bathroom', 7),
+  ('second_fix_carpentry', 'Second Fix Carpentry', 8),
+  ('second_fix_mechanical', 'Second Fix Mechanical', 9),
+  ('second_fix_electrical', 'Second Fix Electrical', 10),
+  ('decoration', 'Decoration', 11),
+  ('flooring', 'Flooring', 12),
+  ('clean', 'Clean', 13),
+  ('snagging', 'Snagging', 14)
+) as m(milestone_key, title, sort_order)
+where p.block_id is not null
+on conflict (plot_id, milestone_key) do nothing;

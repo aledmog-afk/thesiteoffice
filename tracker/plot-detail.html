@@ -41,6 +41,18 @@
   <h3 style="font-family:var(--font-display); font-size:1.1rem; margin-bottom:1rem;">Quality Gates</h3>
   <div id="gatesWrap" style="margin-bottom:2.5rem;">Loading…</div>
 
+  <h3 style="font-family:var(--font-display); font-size:1.1rem; margin-bottom:1rem;">Internal Works Milestones</h3>
+  <div class="card" style="margin-bottom:2.5rem;">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Milestone</th><th>Status</th><th>% Complete</th></tr>
+        </thead>
+        <tbody id="milestoneRows"></tbody>
+      </table>
+    </div>
+  </div>
+
   <h3 style="font-family:var(--font-display); font-size:1.1rem; margin-bottom:1rem;">Handover Documents</h3>
   <div class="card">
     <div class="table-wrap">
@@ -141,6 +153,62 @@
     }
     gatesWrap.innerHTML = gates.map(gateCardHtml).join("");
     gates.forEach(wireGateCard);
+  }
+
+  // ─── Internal Works Milestones ───────────────────────────────────
+  // A second, more granular layer of progress alongside the Plot
+  // Progress % above and the 4 Quality Gates — one row per named trade
+  // stage (Timber Frame, First/Second Fix per trade, Kitchen,
+  // Decoration, Snagging, etc.), each its own 0-100% rather than a
+  // status enum, since real trackers record genuine partial completion
+  // per stage. Deliberately independent of Plot Progress — editing one
+  // never touches the other.
+  function milestoneStatusBadge(pct) {
+    return pct <= 0 ? "badge-grey" : pct >= 100 ? "badge-green" : "badge-blue";
+  }
+  function milestoneStatusLabel(pct) {
+    return pct <= 0 ? "Not Started" : pct >= 100 ? "Complete" : "In Progress";
+  }
+
+  function milestoneRowHtml(m) {
+    return `
+      <tr data-milestone-id="${m.id}">
+        <td><strong>${escapeHtml(m.title)}</strong></td>
+        <td><span class="badge ${milestoneStatusBadge(m.percent)}">${milestoneStatusLabel(m.percent)}</span></td>
+        <td><input type="number" class="milestone-percent" data-milestone-id="${m.id}" min="0" max="100" step="5" value="${m.percent}" style="width:90px;"></td>
+      </tr>
+    `;
+  }
+
+  function wireMilestoneRow(m) {
+    const input = document.querySelector(`input.milestone-percent[data-milestone-id="${m.id}"]`);
+    input.addEventListener("change", async () => {
+      const pct = Math.max(0, Math.min(100, Number(input.value) || 0));
+      await supabase.from("internal_milestones").update({ percent: pct }).eq("id", m.id);
+      m.percent = pct;
+      rerenderMilestoneRow(m);
+    });
+  }
+
+  function rerenderMilestoneRow(m) {
+    const el = document.querySelector(`tr[data-milestone-id="${m.id}"]`);
+    el.outerHTML = milestoneRowHtml(m);
+    wireMilestoneRow(m);
+  }
+
+  async function loadMilestones() {
+    const { data: milestones, error } = await supabase
+      .from("internal_milestones")
+      .select("*")
+      .eq("plot_id", plotId)
+      .order("sort_order", { ascending: true });
+
+    if (error || !milestones || !milestones.length) {
+      document.getElementById("milestoneRows").innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--ink-soft);">No internal works milestones found for this plot.</td></tr>`;
+      return;
+    }
+    document.getElementById("milestoneRows").innerHTML = milestones.map(milestoneRowHtml).join("");
+    milestones.forEach(wireMilestoneRow);
   }
 
   // ─── Handover Documents ─────────────────────────────────────────
@@ -285,6 +353,7 @@
     ]);
 
     loadGates();
+    loadMilestones();
     loadDocs();
   }
 
