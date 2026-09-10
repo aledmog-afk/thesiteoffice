@@ -97,9 +97,35 @@ export function clearError(el) {
 }
 
 // ─── Photo upload helper ────────────────────────────────────────
+// Mirrors the "site-photos" bucket's real limits (sql/schema.sql, v27) —
+// this is a fast client-side check for a friendly error before spending
+// time on an upload that the server would reject anyway; the actual
+// enforcement lives in Supabase Storage's bucket config, not here.
+export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024; // 50 MB
+const ALLOWED_UPLOAD_MIME_TYPES = new Set([
+  "image/jpeg", "image/png", "image/webp", "image/gif", "image/heic", "image/heif",
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "text/plain", "text/csv",
+]);
+
 // Uploads a File to the public "site-photos" bucket under the given path
 // and returns its public URL.
 export async function uploadPhoto(file, path) {
+  if (file.size > MAX_UPLOAD_BYTES) {
+    throw new Error(`"${file.name}" is ${(file.size / 1024 / 1024).toFixed(1)} MB — the limit is 50 MB.`);
+  }
+  // An empty file.type (some browsers omit it for less common extensions)
+  // is let through client-side rather than guessed at — the bucket's own
+  // MIME allow-list is the real, authoritative check either way.
+  if (file.type && !ALLOWED_UPLOAD_MIME_TYPES.has(file.type)) {
+    throw new Error(`"${file.name}" is a ${file.type} file, which isn't a supported type here.`);
+  }
   const ext = file.name.split(".").pop();
   const key = `${path}/${crypto.randomUUID()}.${ext}`;
   const { error } = await supabase.storage.from("site-photos").upload(key, file, {

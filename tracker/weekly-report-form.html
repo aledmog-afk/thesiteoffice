@@ -395,12 +395,13 @@
     const synced = [];
     for (const item of items) {
       if (item.ledger_id) {
-        await supabase.from("commercial_items").update({
+        const { error } = await supabase.from("commercial_items").update({
           title: item.title,
           type: item.type,
           cost_impact: item.cost_impact,
           time_impact_days: item.time_impact_days,
         }).eq("id", item.ledger_id);
+        if (error) throw error;
         synced.push(item);
       } else {
         const { data, error } = await supabase.from("commercial_items").insert({
@@ -698,10 +699,12 @@
       }
 
       const syncedItems = await syncCommercialItems(commercialEditor.getItems(), finalReportId, user.id);
-      await supabase.from("weekly_reports").update({ commercial_items: syncedItems }).eq("id", finalReportId);
+      const { error: commercialSaveError } = await supabase.from("weekly_reports").update({ commercial_items: syncedItems }).eq("id", finalReportId);
+      if (commercialSaveError) throw commercialSaveError;
 
       await syncActionRequiredSnags(photos, user.id);
-      await supabase.from("weekly_reports").update({ photos }).eq("id", finalReportId);
+      const { error: photosSaveError } = await supabase.from("weekly_reports").update({ photos }).eq("id", finalReportId);
+      if (photosSaveError) throw photosSaveError;
 
       // Non-fatal — the report itself is already saved either way. Moves
       // a tagged house plot's gate to Under Review once every milestone

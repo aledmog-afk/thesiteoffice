@@ -2496,3 +2496,149 @@ drop policy if exists "members insert org_settings" on public.org_settings;
 create policy "members insert org_settings" on public.org_settings for insert with check (public.is_org_member(org_id));
 drop policy if exists "members update org_settings" on public.org_settings;
 create policy "members update org_settings" on public.org_settings for update using (public.is_org_member(org_id));
+
+-- ─── v27 ADDITIONS ────────────────────────────────────────────────
+-- Storage hardening: the "site-photos" bucket's write policies (v1,
+-- top of this file) were never tightened past "any authenticated user,
+-- any path" — org isolation stopped at the database tables. A user from
+-- Organisation A could always have uploaded into, overwritten, or
+-- deleted an object under Organisation B's project folder, entirely
+-- independent of the organisation boundary added above. Fixed the same
+-- way every other write in this app is authorised: by re-deriving the
+-- real project (and its organisation) from the object's own path
+-- server-side, and checking real project membership — never by trusting
+-- a client-supplied id.
+
+-- Real upload limits, enforced by Supabase's storage engine itself, not
+-- just RLS — a request over either bound is rejected before the object
+-- is even written, regardless of what the client claims.
+--   50 MB: every photo already passes through client-side compression
+--   (WebP/JPEG, capped at 1920-2560px) before upload, so a legitimate
+--   photo is normally well under 5 MB — the ceiling exists for the
+--   uncompressed PDFs this app also stores (drawings, specifications,
+--   handover certificates), which can legitimately run to tens of MB
+--   for a real architectural drawing set.
+--   MIME allow-list: every image type actually produced by this app's
+--   own compression step (jpeg/webp) or a real phone camera before
+--   compression can run (heic/heif — compression silently falls back to
+--   the original file if the browser can't decode it), PDF (drawings,
+--   specs, handover certs, external H&S audits), and the common office
+--   formats the Specifications feature deliberately accepts "any
+--   document type" for. Deliberately EXCLUDES image/svg+xml and any
+--   text/html-shaped type: an SVG can carry an embedded <script>, and
+--   nothing in this app has ever asked to upload one — this is the one
+--   real gap this allow-list closes, not just a size cap.
+update storage.buckets
+set file_size_limit = 52428800, -- 50 MB, see above
+    allowed_mime_types = array[
+      'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/heic', 'image/heif',
+      'application/pdf',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-powerpoint',
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      'text/plain', 'text/csv'
+    ]
+where id = 'site-photos';
+
+-- Re-derives the real project_id an object path is actually FOR, from
+-- the path alone — every upload in this app writes to one of two
+-- shapes: "<project_id>/<area>/<file>" (uploadPhoto/uploadImage) or
+-- "drawings/<project_id>/<area>/<file>" (uploadDrawing, which prefixes
+-- every path it's given with "drawings/"). A candidate that isn't
+-- actually a uuid (e.g. "org-logo", or anything malformed) returns
+-- null rather than raising — callers treat null as "not project-scoped",
+-- never as "allowed".
+create or replace function public.site_photos_path_parts(object_name text)
+returns table (project_id uuid, area text)
+language plpgsql immutable
+as $$
+declare
+  seg1 text := (storage.foldername(object_name))[1];
+  seg2 text := (storage.foldername(object_name))[2];
+  seg3 text := (storage.foldername(object_name))[3];
+  candidate text;
+  candidate_area text;
+begin
+  if seg1 = 'drawings' then
+    candidate := seg2;
+    candidate_area := seg3;
+  else
+    candidate := seg1;
+    candidate_area := seg2;
+  end if;
+
+  if candidate is null or candidate !~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' then
+    return;
+  end if;
+
+  project_id := candidate::uuid;
+  area := candidate_area;
+  return next;
+end;
+$$;
+
+-- The actual authorisation check a storage.objects policy calls. Two
+-- shapes: the company logo ("org-logo/...", not project-scoped at all —
+-- any org member may replace it, same as before; the real authorisation
+-- for which organisation's org_settings row ends up pointing at the
+-- resulting file is enforced separately by org_settings' own RLS,
+-- unchanged by this migration) and everything else, which must resolve
+-- to a real project via site_photos_path_parts() above. Within that,
+-- "snags" photos (raised from snag items and drawing pins) follow
+-- snag_items' own access rule — any project member, including a
+-- snagging-only one, exactly like every other snag_items read/write in
+-- this app; every other area (reports, handover, hs-audits,
+-- site-layout, specifications, drawings) follows the editor-only rule
+-- the owning table itself already enforces.
+create or replace function public.site_photos_authorized(object_name text)
+returns boolean
+language plpgsql stable
+as $$
+declare
+  parts record;
+begin
+  if (storage.foldername(object_name))[1] = 'org-logo' then
+    return exists (select 1 from public.organisation_members where user_id = auth.uid());
+  end if;
+
+  select * into parts from public.site_photos_path_parts(object_name);
+  if parts.project_id is null then
+    return false;
+  end if;
+
+  if parts.area = 'snags' then
+    return public.is_project_member(parts.project_id);
+  end if;
+
+  return public.is_project_editor(parts.project_id);
+end;
+$$;
+grant execute on function public.site_photos_authorized(text) to authenticated;
+
+-- Read stays public (object URLs are unguessable UUID paths, same
+-- "public bucket, private-by-obscurity" model this app already uses
+-- throughout — tightening this would break printable report/snag-sheet
+-- views and shared links that aren't always loaded in an authenticated
+-- session). Re-created here only so re-running this file stays
+-- idempotent.
+drop policy if exists "public read site-photos" on storage.objects;
+create policy "public read site-photos" on storage.objects
+  for select using (bucket_id = 'site-photos');
+
+drop policy if exists "authenticated upload site-photos" on storage.objects;
+drop policy if exists "project editors upload site-photos" on storage.objects;
+create policy "project editors upload site-photos" on storage.objects
+  for insert with check (bucket_id = 'site-photos' and public.site_photos_authorized(name));
+
+drop policy if exists "authenticated delete site-photos" on storage.objects;
+drop policy if exists "project editors delete site-photos" on storage.objects;
+create policy "project editors delete site-photos" on storage.objects
+  for delete using (bucket_id = 'site-photos' and public.site_photos_authorized(name));
+
+-- No update policy, same as before this migration — every upload in
+-- this app always writes a fresh random filename (see uploadPhoto() in
+-- tracker/js/app.js), so in-place overwrite was never a real use case;
+-- leaving it unpolicied keeps it default-denied.

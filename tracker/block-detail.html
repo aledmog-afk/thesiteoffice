@@ -124,18 +124,22 @@
     const select = document.querySelector(`select.gate-status-select[data-gate-id="${gate.id}"]`);
     select.value = gate.status;
     select.addEventListener("change", async () => {
-      await supabase.from("quality_gates").update({ status: select.value }).eq("id", gate.id);
-      gate.status = select.value;
+      const newStatus = select.value;
+      const { error } = await supabase.from("quality_gates").update({ status: newStatus }).eq("id", gate.id);
+      if (error) { alert("Couldn't save that status change: " + error.message); select.value = gate.status; return; }
+      gate.status = newStatus;
       rerenderGateCard(gate);
     });
 
     document.querySelectorAll(`input[type="checkbox"][data-gate-id="${gate.id}"]`).forEach((cb) => {
       cb.addEventListener("change", async () => {
         const i = Number(cb.dataset.index);
+        const previousChecklist = gate.checklist;
         const checklist = Array.isArray(gate.checklist) ? [...gate.checklist] : [];
         checklist[i] = { ...checklist[i], checked: cb.checked, checked_at: cb.checked ? new Date().toISOString() : null };
+        const { error } = await supabase.from("quality_gates").update({ checklist }).eq("id", gate.id);
+        if (error) { alert("Couldn't save that checklist change: " + error.message); gate.checklist = previousChecklist; rerenderGateCard(gate); return; }
         gate.checklist = checklist;
-        await supabase.from("quality_gates").update({ checklist }).eq("id", gate.id);
         rerenderGateCard(gate);
       });
     });
@@ -189,8 +193,10 @@
     const select = document.querySelector(`select.status-select[data-doc-id="${doc.id}"]`);
     select.value = doc.status;
     select.addEventListener("change", async () => {
-      await supabase.from("handover_documents").update({ status: select.value, updated_at: new Date().toISOString() }).eq("id", doc.id);
-      doc.status = select.value;
+      const newStatus = select.value;
+      const { error } = await supabase.from("handover_documents").update({ status: newStatus, updated_at: new Date().toISOString() }).eq("id", doc.id);
+      if (error) { alert("Couldn't save that status change: " + error.message); select.value = doc.status; return; }
+      doc.status = newStatus;
     });
 
     const fileInput = document.querySelector(`input[type="file"][data-doc-id="${doc.id}"]`);

@@ -166,20 +166,23 @@
 
   async function setStatus(id, newStatus) {
     const patch = { status: newStatus, closed_date: newStatus === "closed" ? todayISO() : null };
-    await supabase.from("snag_items").update(patch).eq("id", id);
+    const { error } = await supabase.from("snag_items").update(patch).eq("id", id);
+    if (error) alert("Couldn't save that status change: " + error.message);
     loadSnags();
   }
   window.setStatus = setStatus;
 
   async function toggleDelayFlag(id, currentlyFlagged) {
+    let error;
     if (currentlyFlagged) {
       if (!confirm("Clear the delay flag on this snag?")) return;
-      await supabase.from("snag_items").update({ delay_flag: false, delay_reason: null }).eq("id", id);
+      ({ error } = await supabase.from("snag_items").update({ delay_flag: false, delay_reason: null }).eq("id", id));
     } else {
       const reason = prompt('What\'s delaying this snag? (e.g. "waiting on parts", "access blocked")', "");
       if (reason === null) return;
-      await supabase.from("snag_items").update({ delay_flag: true, delay_reason: reason.trim() || null }).eq("id", id);
+      ({ error } = await supabase.from("snag_items").update({ delay_flag: true, delay_reason: reason.trim() || null }).eq("id", id));
     }
+    if (error) alert("Couldn't save that change: " + error.message);
     loadSnags();
   }
   window.toggleDelayFlag = toggleDelayFlag;
