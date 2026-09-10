@@ -15,10 +15,13 @@
 <div class="page">
   <div class="page-head">
     <div>
-      <div class="page-title">Sites</div>
-      <div class="page-sub">Your live projects. Open one to add a weekly report or snagging item.</div>
+      <div class="page-title">Dashboard</div>
+      <div class="page-sub">What requires attention right now, across every site you can access.</div>
     </div>
-    <button class="btn btn-amber" id="newProjectBtn">+ New Site</button>
+    <div class="btn-row">
+      <button class="btn btn-outline btn-sm" id="refreshBtn">↻ Refresh</button>
+      <button class="btn btn-amber" id="newProjectBtn">+ New Site</button>
+    </div>
   </div>
 
   <div class="card" id="newProjectCard" style="display:none;">
@@ -59,6 +62,54 @@
     </form>
   </div>
 
+  <div id="controlErrorBox" class="error-box"></div>
+  <div id="controlErrorRetryWrap" style="display:none; margin-bottom:1.2rem;">
+    <button class="btn btn-outline btn-sm" id="controlRetryBtn">Retry loading control summary</button>
+  </div>
+
+  <div id="controlSection" style="display:none;">
+    <div class="totals-bar" id="totalsBar"></div>
+
+    <div class="card" style="margin-bottom:1.5rem;">
+      <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.6rem; margin-bottom:1rem;">
+        <h3 style="font-family:var(--font-display); font-size:1rem; margin:0;">⚠️ Actions Requiring Attention</h3>
+        <select id="attentionFilter" style="width:auto;">
+          <option value="all">All</option>
+          <option value="overdue">Overdue</option>
+          <option value="dueToday">Due Today</option>
+          <option value="dueSoon">Due Soon (7 days)</option>
+          <option value="blocked">Blocked</option>
+          <option value="highCritical">High / Critical Priority</option>
+        </select>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Title</th><th>Project</th><th>Owner</th><th>Priority</th><th>Status</th><th>Due</th></tr></thead>
+          <tbody id="attentionRows"></tbody>
+        </table>
+      </div>
+      <div id="attentionEmpty" class="empty" style="display:none;"><p>No actions currently require attention.</p></div>
+    </div>
+
+    <div class="card" style="margin-bottom:1.5rem;">
+      <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.6rem; margin-bottom:1rem;">
+        <h3 style="font-family:var(--font-display); font-size:1rem; margin:0;">Project Control List</h3>
+        <div class="btn-row" id="projectFilterGroup">
+          <button type="button" class="btn btn-outline btn-sm" data-filter="all">All</button>
+          <button type="button" class="btn btn-outline btn-sm" data-filter="attention">Attention</button>
+          <button type="button" class="btn btn-outline btn-sm" data-filter="watch">Watch</button>
+          <button type="button" class="btn btn-outline btn-sm" data-filter="on_track">On Track</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Project</th><th>Status</th><th>Open</th><th>Overdue</th><th>Blocked</th><th>Due Soon</th></tr></thead>
+          <tbody id="controlRows"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
   <div id="grid" class="grid" style="margin-top:1.5rem;"></div>
   <div id="emptyState" class="empty" style="display:none;">
     <p>No sites yet. Add your first one to start logging weekly reports and snags — or ask a teammate to send you an invite link to one of theirs.</p>
@@ -68,7 +119,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, ensureOrganisation } from "./js/app.js";
+  import { requireAuth, renderHeader, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, ensureOrganisation, getPortfolioControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE } from "./js/app.js";
 
   await requireAuth();
   renderHeader([{ label: "Dashboard" }]);
@@ -77,6 +128,14 @@
   const emptyState = document.getElementById("emptyState");
   const errorBox = document.getElementById("errorBox");
   const newProjectCard = document.getElementById("newProjectCard");
+  const controlErrorBox = document.getElementById("controlErrorBox");
+  const controlSection = document.getElementById("controlSection");
+
+  let controlSummary = null;
+  let attentionActions = [];
+  let memberEmails = {};
+  let projectFilter = "all";
+  let attentionFilter = "all";
 
   function toggleForm(show) {
     newProjectCard.style.display = show ? "block" : "none";
@@ -109,7 +168,100 @@
     }
   });
 
-  async function load() {
+  // ─── Control summary (portfolio) ───────────────────────────────
+  function renderTotals() {
+    const t = controlSummary.totals;
+    const cards = [
+      ["Projects Requiring Attention", controlSummary.projectsRequiringAttention, controlSummary.projectsRequiringAttention > 0 ? "var(--red)" : "var(--ink)"],
+      ["Open Actions", t.openActions, "var(--ink)"],
+      ["Overdue", t.overdue, t.overdue > 0 ? "var(--red)" : "var(--ink)"],
+      ["Due Today", t.dueToday, t.dueToday > 0 ? "var(--amber)" : "var(--ink)"],
+      ["Blocked", t.blocked, t.blocked > 0 ? "var(--red)" : "var(--ink)"],
+      ["High / Critical Priority", t.highCritical, t.highCritical > 0 ? "var(--amber)" : "var(--ink)"],
+    ];
+    document.getElementById("totalsBar").innerHTML = cards.map(([label, value, color]) => `
+      <div class="totals-box">
+        <div class="totals-label">${escapeHtml(label)}</div>
+        <div class="totals-value" style="color:${color};">${value}</div>
+      </div>
+    `).join("");
+  }
+
+  function renderAttentionActions() {
+    const filtered = attentionFilter === "all" ? attentionActions : attentionActions.filter((a) => a.categories[attentionFilter]);
+    document.getElementById("attentionEmpty").style.display = filtered.length ? "none" : "block";
+    document.getElementById("attentionRows").innerHTML = filtered.map((a) => {
+      const due = a.categories.overdue ? "overdue" : a.categories.dueToday ? "due_today" : a.categories.dueSoon ? "upcoming" : "none";
+      const dueBadge = due === "none" ? "" : `<span class="badge ${ACTION_DUE_BADGE[due]}">${ACTION_DUE_LABEL[due]}</span>`;
+      const dueText = a.due_date ? formatDate(a.due_date) : "—";
+      return `
+        <tr>
+          <td><a href="actions.html?project=${a.project_id}">${escapeHtml(a.title)}</a></td>
+          <td><a href="project.html?id=${a.project_id}">${escapeHtml(a.projects?.name || "—")}</a></td>
+          <td>${a.assigned_to ? escapeHtml(memberEmails[a.assigned_to] || "—") : "Unassigned"}</td>
+          <td><span class="badge ${ACTION_PRIORITY_BADGE[a.priority]}">${ACTION_PRIORITY_LABEL[a.priority]}</span></td>
+          <td><span class="badge ${ACTION_STATUS_BADGE[a.status]}">${ACTION_STATUS_LABEL[a.status]}</span></td>
+          <td>${dueText} ${dueBadge}</td>
+        </tr>
+      `;
+    }).join("");
+  }
+  document.getElementById("attentionFilter").addEventListener("change", (e) => {
+    attentionFilter = e.target.value;
+    renderAttentionActions();
+  });
+
+  function renderControlRows() {
+    const rows = projectFilter === "all" ? controlSummary.rows : controlSummary.rows.filter((r) => r.status.level === projectFilter);
+    document.getElementById("controlRows").innerHTML = rows.map((r) => {
+      const c = r.counts;
+      return `
+        <tr>
+          <td><a href="project.html?id=${r.project.id}">${escapeHtml(r.project.name)}</a></td>
+          <td><span class="badge ${CONTROL_LEVEL_BADGE[r.status.level]}" title="${escapeHtml(r.status.reason)}">${escapeHtml(r.status.label)}</span></td>
+          <td>${c ? c.openActions : "—"}</td>
+          <td>${c ? c.overdue : "—"}</td>
+          <td>${c ? c.blocked : "—"}</td>
+          <td>${c ? c.dueSoon : "—"}</td>
+        </tr>
+      `;
+    }).join("");
+  }
+  document.querySelectorAll("#projectFilterGroup button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      projectFilter = btn.dataset.filter;
+      document.querySelectorAll("#projectFilterGroup button").forEach((b) => b.classList.toggle("btn-amber", b === btn));
+      renderControlRows();
+    });
+  });
+  document.querySelector('#projectFilterGroup button[data-filter="all"]').classList.add("btn-amber");
+
+  async function loadControlSummary() {
+    clearError(controlErrorBox);
+    document.getElementById("controlErrorRetryWrap").style.display = "none";
+    try {
+      controlSummary = await getPortfolioControlSummary();
+      attentionActions = await getAttentionActions();
+      const projectIds = [...new Set(attentionActions.map((a) => a.project_id))];
+      memberEmails = projectIds.length ? await getMemberEmailMap(projectIds) : {};
+      controlSection.style.display = controlSummary.rows.length ? "block" : "none";
+      renderTotals();
+      renderAttentionActions();
+      renderControlRows();
+    } catch (err) {
+      // Never silently show 0s for a control dashboard — a failed query
+      // and "genuinely nothing outstanding" must look completely
+      // different to the person relying on this page.
+      controlSection.style.display = "none";
+      showError(controlErrorBox, err);
+      document.getElementById("controlErrorRetryWrap").style.display = "block";
+    }
+  }
+  document.getElementById("controlRetryBtn").addEventListener("click", loadControlSummary);
+  document.getElementById("refreshBtn").addEventListener("click", () => { loadControlSummary(); loadSites(); });
+
+  // ─── Site tiles (existing) ──────────────────────────────────────
+  async function loadSites() {
     const { data: projects, error } = await supabase
       .from("projects")
       .select("*")
@@ -120,6 +272,7 @@
       emptyState.style.display = "block";
       return;
     }
+    emptyState.style.display = "none";
 
     const [{ data: snags }, { data: reports }] = await Promise.all([
       supabase.from("snag_items").select("project_id, status"),
@@ -153,7 +306,8 @@
     `).join("");
   }
 
-  load();
+  loadControlSummary();
+  loadSites();
 </script>
 </body>
 </html>

@@ -3030,3 +3030,32 @@ drop trigger if exists trg_audit_actions on public.actions;
 create trigger trg_audit_actions
   after insert or update or delete on public.actions
   for each row execute function public.write_audit_log();
+
+-- ─── v30 ADDITIONS: Project Control Dashboard ───
+--
+-- No new tables — the dashboard is built entirely from existing data
+-- (actions, hs_audit_items, quality_gates, commercial_items, snag_items)
+-- via broad, unfiltered-by-project selects that rely on each table's
+-- own existing RLS to scope results, the same "RLS does the real
+-- scoping" pattern dashboard.html already used for snag_items before
+-- this priority. The one addition below exists purely to avoid an N+1
+-- query pattern in the portfolio view.
+--
+-- get_my_role(project_id) already lets a client learn its own role on
+-- ONE project even when it can't read project_members directly
+-- (snagging-only members can't — that table is editor-gated). The
+-- portfolio dashboard needs this for EVERY visible project at once, to
+-- label a snagging-only project honestly ("Snagging Only") instead of
+-- fabricating a misleading "0 exceptions" status for data that role was
+-- never entitled to see — calling get_my_role() once per project would
+-- be exactly the N+1 pattern this priority was told to watch for.
+create or replace function public.get_my_project_roles()
+returns table(project_id uuid, role text)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select project_id, role from public.project_members where user_id = auth.uid();
+$$;
+grant execute on function public.get_my_project_roles() to authenticated;

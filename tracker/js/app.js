@@ -376,6 +376,229 @@ export async function deleteAction(actionId) {
   if (error) throw error;
 }
 
+// ─── Project Control Dashboard ─────────────────────────────────
+// "What requires my attention right now?" — built entirely on top of
+// Actions (the one genuinely date-driven, unambiguous urgency signal
+// this schema has) plus hs_audit_items' real severity column for
+// unresolved high-severity H&S issues. Every query below is
+// UNFILTERED by project_id and relies entirely on each table's own RLS
+// (is_project_editor()) to return only rows the caller can already
+// see — the same "broad select, RLS does the real scoping" pattern
+// dashboard.html already used for snag_items before this priority
+// existed. This is not a security shortcut: RLS is the actual boundary
+// either way, and a database view/RPC would enforce nothing more.
+export const DUE_SOON_DAYS = 7;
+
+// Independent, non-exclusive category flags for one action — an action
+// can be both overdue AND high/critical priority at once. Only active
+// (not completed/cancelled) actions ever carry a true flag.
+export function categoriseAction(action, todayStr = todayISO()) {
+  const cats = { overdue: false, dueToday: false, dueSoon: false, blocked: false, highCritical: false };
+  if (["completed", "cancelled"].includes(action.status)) return cats;
+  if (action.status === "blocked") cats.blocked = true;
+  if (action.priority === "high" || action.priority === "critical") cats.highCritical = true;
+  if (action.due_date) {
+    if (action.due_date < todayStr) cats.overdue = true;
+    else if (action.due_date === todayStr) cats.dueToday = true;
+    else {
+      const due = new Date(action.due_date + "T00:00:00");
+      const today = new Date(todayStr + "T00:00:00");
+      const days = Math.round((due - today) / 86400000);
+      if (days > 0 && days <= DUE_SOON_DAYS) cats.dueSoon = true;
+    }
+  }
+  return cats;
+}
+
+// Rolls a raw actions array into the counts computeControlStatus() and
+// the summary cards need. completed/cancelled are excluded from every
+// count here (openActions and all category counts alike) — they are
+// resolved work, not exceptions.
+export function aggregateActionCounts(actions, todayStr = todayISO()) {
+  const counts = { openActions: 0, overdue: 0, overdueCritical: 0, dueToday: 0, dueSoon: 0, blocked: 0, highCritical: 0 };
+  for (const a of actions) {
+    if (!["completed", "cancelled"].includes(a.status)) counts.openActions++;
+    const cats = categoriseAction(a, todayStr);
+    if (cats.overdue) { counts.overdue++; if (cats.highCritical) counts.overdueCritical++; }
+    if (cats.dueToday) counts.dueToday++;
+    if (cats.dueSoon) counts.dueSoon++;
+    if (cats.blocked) counts.blocked++;
+    if (cats.highCritical) counts.highCritical++;
+  }
+  return counts;
+}
+
+export function countHighSeverityHsIssues(hsItems) {
+  return (hsItems || []).filter((h) => h.status === "non_compliant" && h.severity === "high").length;
+}
+
+// A transparent, explainable control status — never a numeric score.
+// ATTENTION: overdue actions, blocked actions, or unresolved
+// high-severity H&S issues exist — all unambiguous exceptions.
+// WATCH: nothing above, but something's coming up (due today/soon) or
+// there's open high/critical-priority work.
+// ON TRACK: no open exception of any kind. `restricted` is a distinct
+// 4th level (see getPortfolioControlSummary) for a snagging-only
+// member — it is never "on track", since that would misrepresent data
+// they simply aren't entitled to see, not data that's actually healthy.
+export function computeControlStatus(counts) {
+  const attentionReasons = [];
+  if (counts.overdue > 0) attentionReasons.push(`${counts.overdue} overdue action${counts.overdue === 1 ? "" : "s"}${counts.overdueCritical ? ` (${counts.overdueCritical} critical)` : ""}`);
+  if (counts.blocked > 0) attentionReasons.push(`${counts.blocked} blocked`);
+  if (counts.highSeverityHs > 0) attentionReasons.push(`${counts.highSeverityHs} unresolved high-severity H&S issue${counts.highSeverityHs === 1 ? "" : "s"}`);
+  if (attentionReasons.length) {
+    return { level: "attention", label: "Attention", reason: `Attention — ${attentionReasons.join(", ")}.` };
+  }
+
+  const watchReasons = [];
+  if (counts.dueToday > 0) watchReasons.push(`${counts.dueToday} due today`);
+  if (counts.dueSoon > 0) watchReasons.push(`${counts.dueSoon} due within ${DUE_SOON_DAYS} days`);
+  if (counts.highCritical > 0) watchReasons.push(`${counts.highCritical} high/critical priority open`);
+  if (watchReasons.length) {
+    return { level: "watch", label: "Watch", reason: `Watch — ${watchReasons.join(", ")}.` };
+  }
+
+  return counts.openActions > 0
+    ? { level: "on_track", label: "On Track", reason: `On track — ${counts.openActions} open action${counts.openActions === 1 ? "" : "s"}, no exceptions.` }
+    : { level: "on_track", label: "On Track", reason: "On track — no open actions." };
+}
+
+export const CONTROL_LEVEL_BADGE = { attention: "badge-red", watch: "badge-amber", on_track: "badge-green", restricted: "badge-grey" };
+export const CONTROL_LEVEL_ORDER = { attention: 0, watch: 1, on_track: 2, restricted: 3 };
+
+// Every project the caller can at least see (RLS: is_project_member),
+// plus its role, so a snagging-only project can be labelled honestly
+// instead of showing a fabricated "0 exceptions" status for data that
+// role was never entitled to see in the first place. Uses ONE bulk
+// get_my_project_roles() call rather than one get_my_role() call per
+// project — avoids an N+1 pattern that would otherwise scale with the
+// number of projects on every dashboard load.
+async function getProjectsWithRole() {
+  const [{ data: projects, error }, { data: roleRows, error: roleErr }] = await Promise.all([
+    supabase.from("projects").select("id, name, status, rag_status").order("name"),
+    supabase.rpc("get_my_project_roles"),
+  ]);
+  if (error) throw error;
+  if (roleErr) throw roleErr;
+  const roleByProject = {};
+  (roleRows || []).forEach((r) => { roleByProject[r.project_id] = r.role; });
+  return (projects || []).map((p) => ({ ...p, myRole: roleByProject[p.id] || null }));
+}
+
+// One fixed, small number of broad queries (never one per project) —
+// actions and hs_audit_items are each fetched ONCE, unfiltered, and
+// grouped client-side by project_id. This scales with total row count,
+// not project count, and is the same shape dashboard.html already used
+// for snag_items/weekly_reports before Actions existed.
+export async function getPortfolioControlSummary() {
+  const [projects, { data: actions, error: actErr }, { data: hsItems, error: hsErr }] = await Promise.all([
+    getProjectsWithRole(),
+    supabase.from("actions").select("id, project_id, status, priority, due_date"),
+    supabase.from("hs_audit_items").select("project_id, status, severity"),
+  ]);
+  if (actErr) throw actErr;
+  if (hsErr) throw hsErr;
+
+  const todayStr = todayISO();
+  const actionsByProject = new Map();
+  for (const a of actions || []) {
+    if (!actionsByProject.has(a.project_id)) actionsByProject.set(a.project_id, []);
+    actionsByProject.get(a.project_id).push(a);
+  }
+  const hsByProject = new Map();
+  for (const h of hsItems || []) {
+    if (!hsByProject.has(h.project_id)) hsByProject.set(h.project_id, []);
+    hsByProject.get(h.project_id).push(h);
+  }
+
+  const rows = projects.map((project) => {
+    if (project.myRole !== "owner" && project.myRole !== "collaborator") {
+      return { project, counts: null, status: { level: "restricted", label: "Snagging Only", reason: "Snagging-only access — control data isn't visible at this role." } };
+    }
+    const counts = aggregateActionCounts(actionsByProject.get(project.id) || [], todayStr);
+    counts.highSeverityHs = countHighSeverityHsIssues(hsByProject.get(project.id) || []);
+    return { project, counts, status: computeControlStatus(counts) };
+  });
+
+  rows.sort((a, b) =>
+    CONTROL_LEVEL_ORDER[a.status.level] - CONTROL_LEVEL_ORDER[b.status.level]
+    || (b.counts?.overdue || 0) - (a.counts?.overdue || 0)
+    || a.project.name.localeCompare(b.project.name)
+  );
+
+  const totals = rows.reduce((acc, r) => {
+    if (!r.counts) return acc;
+    acc.openActions += r.counts.openActions;
+    acc.overdue += r.counts.overdue;
+    acc.dueToday += r.counts.dueToday;
+    acc.blocked += r.counts.blocked;
+    acc.highCritical += r.counts.highCritical;
+    return acc;
+  }, { openActions: 0, overdue: 0, dueToday: 0, blocked: 0, highCritical: 0 });
+
+  return { rows, totals, projectsRequiringAttention: rows.filter((r) => r.status.level === "attention").length };
+}
+
+export async function getProjectControlSummary(projectId) {
+  const [actions, { data: hsItems, error: hsErr }] = await Promise.all([
+    listActions(projectId),
+    supabase.from("hs_audit_items").select("status, severity").eq("project_id", projectId),
+  ]);
+  if (hsErr) throw hsErr;
+  const todayStr = todayISO();
+  const counts = aggregateActionCounts(actions, todayStr);
+  counts.highSeverityHs = countHighSeverityHsIssues(hsItems || []);
+  return { actions, counts, status: computeControlStatus(counts) };
+}
+
+// Existing counts that support the picture without driving the control
+// status itself — their statuses don't carry the same clear "overdue"
+// semantics an Action's due_date does (e.g. "pending_client_review" is
+// a normal in-flight state, not automatically an exception).
+export async function getProjectSupportingSignals(projectId) {
+  const [{ data: snags }, { data: gates }, { data: commercial }] = await Promise.all([
+    supabase.from("snag_items").select("status").eq("project_id", projectId),
+    supabase.from("quality_gates").select("status").eq("project_id", projectId),
+    supabase.from("commercial_items").select("status").eq("project_id", projectId),
+  ]);
+  return {
+    openSnags: (snags || []).filter((s) => s.status === "open").length,
+    outstandingGates: (gates || []).filter((g) => !["approved", "not_applicable"].includes(g.status)).length,
+    pendingCommercial: (commercial || []).filter((c) => c.status === "pending_client_review").length,
+  };
+}
+
+// Actions actually worth surfacing in an "attention" list — overdue,
+// due today, due soon, blocked, or high/critical priority, among still-
+// active work. Portfolio-wide when no projectId is given (still RLS-
+// scoped, same as everything else here); embeds the project name via
+// the real actions.project_id -> projects FK relationship PostgREST
+// already exposes elsewhere in this app (e.g. weekly-report-view.html).
+export async function getAttentionActions({ projectId } = {}) {
+  let query = supabase.from("actions").select("id, project_id, title, status, priority, assigned_to, due_date, projects(name)");
+  if (projectId) query = query.eq("project_id", projectId);
+  const { data, error } = await query;
+  if (error) throw error;
+  const todayStr = todayISO();
+  const rank = (x) => (x.categories.overdue ? 0 : x.categories.dueToday ? 1 : x.categories.blocked ? 2 : x.categories.dueSoon ? 3 : 4);
+  return (data || [])
+    .map((a) => ({ ...a, categories: categoriseAction(a, todayStr) }))
+    .filter((a) => a.categories.overdue || a.categories.dueToday || a.categories.dueSoon || a.categories.blocked || a.categories.highCritical)
+    .sort((a, b) => rank(a) - rank(b) || (a.due_date || "9999-99-99").localeCompare(b.due_date || "9999-99-99"));
+}
+
+// Batches one get_project_members() call per DISTINCT project (never
+// per action/row) to resolve assigned_to user ids to display emails —
+// already an editor-gated RPC (see sql/schema.sql), so this adds no
+// new exposure.
+export async function getMemberEmailMap(projectIds) {
+  const unique = [...new Set(projectIds)];
+  const results = await Promise.all(unique.map((id) => supabase.rpc("get_project_members", { p_project_id: id })));
+  const map = {};
+  results.forEach(({ data }) => (data || []).forEach((m) => { map[m.user_id] = m.email; }));
+  return map;
+}
+
 // ─── Automatic progress ───────────────────────────────────────────
 // Actual Progress % is a weighted average of every plot's own
 // progress_pct, every block's own progress_pct, plus the site's

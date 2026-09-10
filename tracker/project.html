@@ -42,6 +42,25 @@
     </div>
   </div>
 
+  <div class="card" id="controlCard" style="margin-bottom:2rem; display:none;">
+    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.6rem; margin-bottom:0.8rem;">
+      <h3 style="font-family:var(--font-display); font-size:1rem; margin:0;">Control Summary</h3>
+      <span class="badge" id="controlStatusBadge"></span>
+    </div>
+    <p class="hint" id="controlStatusReason" style="margin-bottom:1rem;"></p>
+    <div class="totals-bar" id="controlTotalsBar"></div>
+    <div id="controlAttentionWrap">
+      <h4 style="font-family:var(--font-display); font-size:0.85rem; margin:0.6rem 0;">Actions Requiring Attention</h4>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Title</th><th>Owner</th><th>Priority</th><th>Status</th><th>Due</th></tr></thead>
+          <tbody id="controlAttentionRows"></tbody>
+        </table>
+      </div>
+      <div id="controlAttentionEmpty" class="empty" style="display:none;"><p>No actions currently require attention on this site.</p></div>
+    </div>
+  </div>
+
   <div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(220px,1fr)); margin-bottom:2rem;">
     <a class="tile" href="weekly-reports.html?project=" id="reportsTile">
       <div class="tile-icon">📋</div>
@@ -187,7 +206,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, geocodePostcode, recalculateActualProgress, generateMissingPlots, suggestPlotProgress, EXTERNAL_WORKS_TAG, monthStartISO } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, geocodePostcode, recalculateActualProgress, generateMissingPlots, suggestPlotProgress, EXTERNAL_WORKS_TAG, monthStartISO, getProjectControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("id");
@@ -514,6 +533,67 @@
     document.getElementById("progressDisplay").innerHTML = renderProgressBlock(project.baseline_progress_pct, project.actual_progress_pct, project.rag_status);
   }
 
+  // ─── Control Summary (Priority 6) ──────────────────────────────
+  async function loadControlSummary() {
+    clearError(pageErrorBox);
+    try {
+      const [summary, attention] = await Promise.all([
+        getProjectControlSummary(projectId),
+        getAttentionActions({ projectId }),
+      ]);
+      const memberEmails = attention.length
+        ? await getMemberEmailMap([projectId])
+        : {};
+
+      document.getElementById("controlCard").style.display = "block";
+      const statusBadge = document.getElementById("controlStatusBadge");
+      statusBadge.className = `badge ${CONTROL_LEVEL_BADGE[summary.status.level]}`;
+      statusBadge.textContent = summary.status.label;
+      document.getElementById("controlStatusReason").textContent = summary.status.reason;
+
+      const c = summary.counts;
+      const cards = [
+        ["Open Actions", c.openActions, "var(--ink)"],
+        ["Overdue", c.overdue, c.overdue > 0 ? "var(--red)" : "var(--ink)"],
+        ["Due Today", c.dueToday, c.dueToday > 0 ? "var(--amber)" : "var(--ink)"],
+        ["Due Soon (7 days)", c.dueSoon, c.dueSoon > 0 ? "var(--amber)" : "var(--ink)"],
+        ["Blocked", c.blocked, c.blocked > 0 ? "var(--red)" : "var(--ink)"],
+        ["High / Critical Priority", c.highCritical, c.highCritical > 0 ? "var(--amber)" : "var(--ink)"],
+      ];
+      document.getElementById("controlTotalsBar").innerHTML = cards.map(([label, value, color]) => `
+        <div class="totals-box">
+          <div class="totals-label">${escapeHtml(label)}</div>
+          <div class="totals-value" style="color:${color};">${value}</div>
+        </div>
+      `).join("");
+
+      document.getElementById("controlAttentionEmpty").style.display = attention.length ? "none" : "block";
+      document.getElementById("controlAttentionRows").innerHTML = attention.map((a) => {
+        const due = a.categories.overdue ? "overdue" : a.categories.dueToday ? "due_today" : a.categories.dueSoon ? "upcoming" : "none";
+        const dueBadge = due === "none" ? "" : `<span class="badge ${ACTION_DUE_BADGE[due]}">${ACTION_DUE_LABEL[due]}</span>`;
+        const dueText = a.due_date ? formatDate(a.due_date) : "—";
+        return `
+          <tr>
+            <td><a href="actions.html?project=${projectId}">${escapeHtml(a.title)}</a></td>
+            <td>${a.assigned_to ? escapeHtml(memberEmails[a.assigned_to] || "—") : "Unassigned"}</td>
+            <td><span class="badge ${ACTION_PRIORITY_BADGE[a.priority]}">${ACTION_PRIORITY_LABEL[a.priority]}</span></td>
+            <td><span class="badge ${ACTION_STATUS_BADGE[a.status]}">${ACTION_STATUS_LABEL[a.status]}</span></td>
+            <td>${dueText} ${dueBadge}</td>
+          </tr>
+        `;
+      }).join("");
+    } catch (err) {
+      // A failed control-summary query must never be silently hidden —
+      // show it alongside the rest of the page rather than leaving the
+      // card blank, which would look like "nothing needs attention".
+      document.getElementById("controlCard").style.display = "block";
+      document.getElementById("controlTotalsBar").innerHTML = "";
+      document.getElementById("controlAttentionRows").innerHTML = "";
+      document.getElementById("controlAttentionEmpty").style.display = "none";
+      showError(pageErrorBox, err);
+    }
+  }
+
   // Snagging-only members can't read anything but plots/drawings/snag
   // lists/snag items at the database level — this just matches the UI
   // to that, hiding the site-wide cards/tiles they'd get nothing back
@@ -523,6 +603,7 @@
     document.getElementById("statusSelect").style.display = "none";
     document.getElementById("editBtn").style.display = "none";
     document.getElementById("progressCard").style.display = "none";
+    document.getElementById("controlCard").style.display = "none";
     document.getElementById("detailsCard").style.display = "none";
     document.getElementById("collaboratorsCard").style.display = "none";
     ["reportsTile", "monthlyReportsTile", "plotHandoversTile", "hsAuditsTile", "commercialsTile", "drawingsTile", "actionsTile"].forEach((id) => {
@@ -552,6 +633,7 @@
     }
 
     loadMembers();
+    loadControlSummary();
 
     const [{ count: reportCount }, { count: monthlyReportCount }, { data: snags }, { count: fetchedPlotsCount }, { data: gates }, { data: commercials }, { count: drawingsCount }, { data: hsAudits }, { data: actions }] = await Promise.all([
       supabase.from("weekly_reports").select("id", { count: "exact", head: true }).eq("project_id", projectId),

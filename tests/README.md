@@ -68,6 +68,21 @@ tests/
                              authorisation, cross-org upload/delete denial,
                              snagging-only area restriction, bucket-level
                              size/MIME config.
+    dashboard.test.mjs       Project Control Dashboard: proves the
+                             dashboard's UNFILTERED-by-project query
+                             shape (relying entirely on RLS to scope
+                             results) still can't leak another
+                             organisation's or project's rows, that a
+                             snagging-only member's dashboard queries
+                             return zero rows (not partial ones), and
+                             that aggregate counts can't be used to
+                             infer an inaccessible project's existence.
+    dashboard_performance.test.mjs  Seeds 25 projects / 500 actions and
+                             proves the portfolio query shape stays a
+                             fixed small number of broad queries (never
+                             one per project — the N+1 pattern this
+                             priority was told to watch for), backed by
+                             real index usage (EXPLAIN).
     audit_log.test.mjs      Audit trail: INSERT/UPDATE/DELETE record
                              shape, chronological ordering, bulk-operation
                              fan-out, cross-org isolation, RLS mirroring
@@ -126,6 +141,20 @@ tests/
                              fed <script>/onerror payloads — asserts the
                              payload became inert text, not that it was
                              merely absent.
+    dashboard_helpers.test.mjs  categoriseAction()/aggregateActionCounts()/
+                             countHighSeverityHsIssues()/computeControlStatus()
+                             — overdue/due-today/due-soon boundaries, the
+                             completed/cancelled exclusion, and every
+                             Attention/Watch/On-Track rule, all against
+                             fixed date strings, never the real clock.
+    dashboard_control.test.mjs  dashboard.html's real inline script:
+                             totals/project-list/attention-list
+                             rendering, both filters, project/action
+                             navigation links, the empty-attention-list
+                             state, and — the state a control dashboard
+                             must never blur — a genuinely FAILED query
+                             rendered as a real error with Retry, never
+                             as misleading zeros.
     actions_helpers.test.mjs  actionDueState() (overdue/due-today/
                              upcoming/completed/cancelled/none) and
                              validActionStatusTransitions(), the client-

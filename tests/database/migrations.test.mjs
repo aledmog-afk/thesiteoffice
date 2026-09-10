@@ -277,3 +277,21 @@ test("Actions Engine: table, indexes, triggers and RLS policy are idempotent acr
     await dropTestDatabase(db);
   }
 });
+
+test("Project Control Dashboard: get_my_project_roles() is idempotent and adds no new table", async () => {
+  const db = "tracker_test_dashboard_idempotent";
+  await createTestDatabase(db);
+  try {
+    const client = adminClient(db);
+    await client.connect();
+    await runSqlFile(client, MOCK_SETUP);
+    for (let i = 0; i < 3; i++) {
+      await runSqlFile(client, CURRENT_SCHEMA);
+    }
+    const fn = await client.query("select count(*)::int as n from information_schema.routines where routine_schema = 'public' and routine_name = 'get_my_project_roles'");
+    assert.equal(fn.rows[0].n, 1, "get_my_project_roles must exist exactly once after repeated re-application");
+    await client.end();
+  } finally {
+    await dropTestDatabase(db);
+  }
+});
