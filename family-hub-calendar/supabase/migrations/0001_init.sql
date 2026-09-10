@@ -33,6 +33,13 @@ create table household_settings (
   longitude                  numeric(8,5),
   weather_units              text not null default 'metric' check (weather_units in ('metric','imperial')),
   week_starts_on             smallint not null default 1 check (week_starts_on between 0 and 6),
+  -- Which meal slots the household actually plans. Dinner-only by default; turning
+  -- lunch on is a settings change, not a migration.
+  enabled_meal_slots         text[] not null default '{dinner}'
+    -- cardinality(), not array_length(): the latter returns NULL for '{}' and a
+    -- CHECK passes on NULL, so the empty-array guard would be inert.
+    check (enabled_meal_slots <@ array['breakfast','lunch','dinner','snack']
+           and cardinality(enabled_meal_slots) >= 1),
   idle_timeout_seconds       int not null default 180,
   slideshow_interval_seconds int not null default 12,
   dim_starts_at              time,

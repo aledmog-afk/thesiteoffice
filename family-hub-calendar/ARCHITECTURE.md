@@ -292,7 +292,10 @@ suppressed write). Redemption *does* confirm, since it spends a balance.
 
 **Schema** — `recipes`, `recipe_ingredients`, `meal_plan_entries`
 (`unique (household_id, plan_date, slot)`, and a check that a slot has either a `recipe_id` or a
-`custom_title` so "Takeaway" needs no recipe row). `recipe_ingredients` is normalised specifically
+`custom_title` so "Takeaway" needs no recipe row). The `slot` CHECK still permits all four values,
+but `household_settings.enabled_meal_slots` defaults to `{dinner}` — this household plans dinner
+only, so enabling lunch later is a settings change rather than a migration.
+`recipe_ingredients` is normalised specifically
 so the shopping list can be generated; `unit` stays free text and **no unit conversion is attempted
 in v1** — the generator groups matching `(name, unit)` pairs and lists mismatched units as separate
 lines, which is honest and predictable.
@@ -304,15 +307,20 @@ ingredients from planned entries in the window into `list_items`, tagging each w
 week's meals to the shopping list" is safe to tap twice. Hand-added items are untouched. Removing a
 meal does *not* retract items already in the list — someone may have bought them.
 
-**Components** — `MealWeekGrid` (7 columns × slot rows, tap a cell to assign), `RecipePicker`
-(recent + search), `RecipeSheet` (title, freeform notes, ingredient rows), `GenerateListButton`
-(shows a diff preview: "adds 11 items, 3 already on the list").
+**Components** — `MealWeekGrid` (7 columns × one row per enabled slot, tap a cell to assign),
+`RecipePicker` (recent + search), `RecipeSheet` (title, freeform notes, ingredient rows),
+`GenerateListButton` (diff preview: "adds 11 items, 3 already on the list").
+
+With dinner as the only slot the grid is a single 7-cell strip, which changes the layout
+meaningfully: it fits as a row on the `/display` dashboard alongside the calendar rather than
+needing its own full-screen route, and each cell is large enough to show the meal name plus the
+cook's avatar without truncation. Drive the row count off `enabled_meal_slots` rather than
+hardcoding one row, so turning lunch on later doesn't require a rewrite.
 
 **Realtime** — `meal_plan_entries` subscription; list items arrive via the list feature's channel.
 
-**Kiosk UX** — the week grid is the whole screen with no scroll; slots the household doesn't use
-(breakfast, snack) are hidden by a setting rather than rendered empty. Assigning a meal is
-tap-cell → recent-recipes sheet, so the common case never reaches a keyboard.
+**Kiosk UX** — no scroll at any slot count; unused slots are absent, not rendered empty. Assigning
+a meal is tap-cell → recent-recipes sheet, so the common case never reaches a keyboard.
 
 ### 2.5 To-do / shopping list
 
@@ -396,30 +404,37 @@ icons as inline SVG (no icon-font FOUT on a device that reloads rarely).
 
 ### 2.8 Auto dim / brightness
 
-The wall device is Android running Fully Kiosk Browser, so this has two layers: real backlight
-control on the tablet, and a CSS overlay everywhere else (phones, or any browser without the Fully
-JS interface). No ambient-light sensor is involved either way.
+No ambient-light sensor, and no browser API for backlight. The app's own mechanism is therefore a
+CSS overlay, and real backlight reduction is delegated to the device.
 
-**Primary — Fully Kiosk's injected JS interface.** Still web; nothing native to build:
+**The app layer — `<DimOverlay/>`, primary and universal.** Works on the wall tablet and on phones,
+with no dependency on the browser shell or any licence tier. Implementation below.
+
+**The device layer — Android's own schedule, which costs nothing.** Bedtime mode / Digital Wellbeing
+dims the panel and can drop it to greyscale on a nightly schedule, and Dark theme carries its own
+schedule. Pure device configuration, no app code, and it delivers the one thing the overlay cannot:
+the panel actually emitting less light rather than a dark layer over a lit backlight. Set the
+Android schedule to match `dim_starts_at`/`dim_ends_at` and the two compose.
+
+**Optional — Fully Kiosk's `fully.*` JS interface**, if available on the licence tier in use:
 
 ```ts
-// lib/kiosk/fully.ts — feature-detected, never assumed.
+// lib/kiosk/fully.ts — feature-detected, never assumed, no-ops when absent.
 export const hasFully = () => typeof (globalThis as any).fully !== 'undefined';
-// fully.setScreenBrightness(0..255) — actual backlight, not a dark layer over a lit panel.
-// fully.setScreensaverEnabled / fully.startScreensaver — hand idle mode to the device.
+// fully.setScreenBrightness(0..255) — actual backlight, from inside the page.
 ```
 
-Two things this buys that the overlay cannot: the panel genuinely draws less light (a dimmed white
-background still glows grey in a hallway at night), and Fully restarts the app on boot, so a power
-cut doesn't leave a blank wall tablet until someone notices.
+Treat it as an enhancement that lights up on its own if present. Nothing in the dimming feature
+depends on it, so a free-tier Fully install loses no functionality against this design — it just
+doesn't get in-page backlight control, and the Android schedule covers that gap.
 
 **Schema** — `household_settings.dim_starts_at`, `dim_ends_at` (`time`), `dim_max_opacity`
 (capped at 0.95 by a CHECK so the screen can never be dimmed to fully black and appear dead).
 
-**Fallback — `<DimOverlay/>`**, also the phone path:
+**Overlay implementation**
 
 ```tsx
-// Mounted once in the kiosk layout; inert when hasFully() reports true.
+// Mounted once in the kiosk layout; yields to fully.setScreenBrightness when available.
 <div
   aria-hidden
   className="pointer-events-none fixed inset-0 z-50 bg-black transition-opacity duration-[3000ms]"
@@ -454,9 +469,10 @@ glows grey in a hallway at night.
 - **Session longevity.** `@supabase/ssr` with cookie storage so middleware can gate routes and the
   kiosk's refresh token rotates indefinitely as long as the app opens periodically.
 - **Household credential on a wall.** One shared login means the tablet holds full household
-  access, which is the accepted model — but the OAuth connect screens and member/reward settings
-  are worth putting behind a 4-digit PIN gate (`sessionStorage`-scoped, not auth, not RBAC) so a
-  visitor cannot revoke calendar access or invent a 500-point reward.
+  access — the accepted model, and deliberately un-gated: no PIN on settings. The residual risk is
+  that anyone with physical access can revoke calendar access or invent a 500-point reward. Both are
+  recoverable (re-consent; an `adjust_down` row), which is why it isn't worth a lock screen on a
+  device whose whole point is being tapped in passing.
 
 ## 3. Project Structure
 
@@ -513,7 +529,7 @@ family-hub-calendar/
 │  ├─ crypto/      tokens.ts        # AES-256-GCM seal/open, server-only
 │  ├─ points/      queries.ts       # rpc wrappers: complete, uncomplete, redeem, leaderboard
 │  ├─ shopping/    generate.ts
-│  ├─ kiosk/       fully.ts         # Fully Kiosk JS interface, feature-detected
+│  ├─ kiosk/       fully.ts         # optional Fully JS interface, feature-detected
 │  └─ weather/     openmeteo.ts
 ├─ hooks/          useMembers.ts  useOccurrences.ts  useIdle.ts  useDimLevel.ts  useWeather.ts
 ├─ supabase/
@@ -579,7 +595,9 @@ Dependency-critical edges: 2 before 5/6/13 · 3 before 4 · 5 before 11 · 6 bef
 | Event attribution | Single `events.member_id`, `NULL` = everyone | `event_members` dropped. Multi-person events are duplicated or left unassigned; upgrade path is the backfill in §2.2. |
 | Chore assignment | Fixed assignee per chore | No `chore_members` table. The instance generator copies `chores.member_id`; rotation can be added later without a schema change. |
 | Point penalties | Clamp at zero | `adjust_points()` and `uncomplete_chore_instance()` compute the clamp against the live ledger sum. Un-ticking a chore whose points were already spent reclaims nothing. |
-| Kiosk device | Android + Fully Kiosk Browser | §2.8 is Fully's brightness/screensaver API first, CSS overlay as the phone and no-Fully fallback. Fully's boot-restart also covers power cuts. |
+| Kiosk device | Android + Fully Kiosk Browser, **free tier** | §2.8 leads with the CSS overlay plus an Android Bedtime-mode schedule for real backlight reduction; Fully's `fully.*` interface is feature-detected and optional, so no functionality depends on a licence. |
+| Settings PIN gate | None | Settings, OAuth connect and reward config are reachable by anyone at the tablet. Accepted: both failure modes are recoverable (re-consent; an `adjust_down` row) and a lock screen fights the device's purpose. |
+| Meal slots | Dinner only (`enabled_meal_slots` default `{dinner}`) | §2.4 becomes a single 7-cell strip that fits on the `/display` dashboard instead of needing a full-screen route. The `slot` CHECK still allows all four, so enabling lunch is a settings change. |
 
 ### Defaulted — reversible, revisit at the relevant build step
 
@@ -594,8 +612,19 @@ Dependency-critical edges: 2 before 5/6/13 · 3 before 4 · 5 before 11 · 6 bef
 | Offline depth | A "reconnecting…" banner. No service-worker data caching in v1. | Step 14 |
 | Household count | One. The `households` table supports more at no extra cost, so a second household needs no migration. | — |
 
-### Still genuinely open
+### To verify on the actual device (not blocking)
 
-- Do you want the settings PIN gate from the cross-cutting section (protecting OAuth connect and reward config from a visitor tapping the wall tablet), or is that unnecessary friction in your house?
-- Which meal slots does your household actually use? Hiding breakfast and snack changes the §2.4 grid from 4 rows to 1, which materially changes the kiosk layout.
-- What's the Fully Kiosk licence situation — the free version shows a nag and lacks some JS interface calls, so is the ~€10 one-off Plus licence in scope?
+Two Fully Kiosk free-tier facts could not be checked while writing this — `fully-kiosk.com` is
+unreachable from the build environment — and both are worth a two-minute check once the tablet is
+set up, rather than trusting this document:
+
+- **Is the `fully.*` JavaScript interface available on the free tier?** Open the app's own
+  JavaScript console, or load any page in Fully and evaluate `typeof fully`. If it reports
+  `undefined`, the free tier excludes it and §2.8's optional layer simply never activates — nothing
+  to change, because the design already treats it as absent by default.
+- **Does the free tier restart the app on boot?** If not, a power cut leaves a blank wall tablet
+  until someone opens the browser. Android's own "open app at startup" behaviour or a launcher
+  setting may cover it; if nothing does, that alone is the argument for the paid licence, not the
+  dimming feature.
+
+Nothing in the schema, build order or component design changes on either answer.
