@@ -55,12 +55,26 @@ export default function DisplayPage() {
         ))}
       </div>
 
-      <Link
-        href="/settings/members"
-        className="self-start rounded-xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white"
-      >
-        Manage family
-      </Link>
+      <div className="flex flex-wrap gap-2">
+        <Link
+          href="/settings/members"
+          className="rounded-xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white"
+        >
+          Manage family
+        </Link>
+        <Link
+          href="/settings/display"
+          className="rounded-xl bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+        >
+          Display &amp; dimming
+        </Link>
+        <Link
+          href="/frame"
+          className="rounded-xl bg-white px-4 py-3 text-sm font-semibold text-slate-700"
+        >
+          Frame now
+        </Link>
+      </div>
     </main>
   );
 }

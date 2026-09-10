@@ -3,13 +3,14 @@ import { createClient } from '@/lib/supabase/server';
 import { ensureHousehold } from '@/lib/household';
 import { HouseholdChannelProvider } from '@/lib/realtime/HouseholdChannelProvider';
 import { MemberProvider } from '@/components/members/MemberProvider';
+import { KioskFrame } from '@/components/kiosk/KioskFrame';
 
 // Everything inside this group is signed-in-only (proxy.ts already redirected
 // otherwise) and gets the household context, the shared Realtime channel and
 // the member roster. §2.1: the roster is prefetched here and handed to the
 // provider so the wall display never renders uncoloured content.
 export default async function HouseholdLayout({ children }: { children: React.ReactNode }) {
-  const { household } = await ensureHousehold();
+  const { household, settings } = await ensureHousehold();
   const supabase = await createClient();
 
   const { data: members } = await supabase
@@ -22,6 +23,10 @@ export default async function HouseholdLayout({ children }: { children: React.Re
   return (
     <HouseholdChannelProvider householdId={household.id}>
       <MemberProvider householdId={household.id} initialMembers={members ?? []}>
+        {/* Idle handoff, scheduled dimming, wake lock and the stale-build
+            check. Mounted for every signed-in route, not just /display, since
+            the tablet can be left on any page. */}
+        <KioskFrame settings={settings} timeZone={household.timezone} />
         <div className="flex min-h-dvh flex-col">
           <header className="flex items-center gap-2 border-b border-slate-200 bg-white px-4 py-3">
             <Link href="/display" className="text-base font-semibold">

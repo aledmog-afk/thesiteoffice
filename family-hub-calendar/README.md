@@ -8,10 +8,10 @@ Schema: [`supabase/migrations/0001_init.sql`](supabase/migrations/0001_init.sql)
 
 ## Status
 
-Build-order steps 1–7 are done: foundation, family profiles, Realtime plumbing,
-shared lists, the calendar, the chore chart, and rewards. Meals, photo frame,
-weather and dimming are designed but not built — `/display` shows placeholders
-naming the step each lands in.
+Build-order steps 1–8 are done: foundation, family profiles, Realtime plumbing,
+shared lists, the calendar, the chore chart, rewards, and the kiosk shell.
+Weather, the photo slideshow and meals are designed but not built —
+`/display` shows placeholders naming the step each lands in.
 
 Usable now:
 
@@ -25,6 +25,11 @@ Usable now:
 - **`/rewards`** — leaderboard by points earned this week/month/all-time,
   household-configured rewards to spend on, and a queue of claimed rewards
   waiting to be handed over (or cancelled and refunded).
+- **Kiosk behaviour** — installable to the home screen and runs fullscreen;
+  goes to `/frame` (clock, date, next event) after inactivity and back on a
+  touch; dims on a schedule; holds a screen wake lock; and reloads itself if
+  it goes stale against a newer deploy. Configure it at
+  `/settings/display`.
 
 ## Setup
 
@@ -87,6 +92,9 @@ psql "$DATABASE_URL" -v uid="'<auth-user-uuid>'" -f supabase/seed.sql
 | `components/rewards/` | `PointsHub`, `Leaderboard`, `RewardShelf`, `RedemptionQueue`. |
 | `lib/points/` | `periods.ts` (leaderboard date ranges) and `errors.ts` (RPC error → readable text) — both unit tested. |
 | `app/api/cron/` | Scheduled routes. Each verifies `CRON_SECRET` itself and refuses to run without it. |
+| `components/kiosk/` | `KioskFrame`, `IdleWatcher`, `DimOverlay`, `ClockOverlay`, wake lock and build watcher. |
+| `lib/kiosk/` | `dim.ts` (the dim curve, unit tested) and `fully.ts` (optional Fully Kiosk interface). |
+| `scripts/make-icons.py` | Regenerates the PWA icons. No image library in the toolchain, so they are drawn and PNG-encoded directly — kept in the repo so they are reproducible rather than mystery binaries. |
 | `app/(household)/` | Signed-in routes; the layout supplies household + Realtime + roster context. |
 | `types/database.ts` | Hand-written for now; regenerate with `supabase gen types` once a project exists. |
 

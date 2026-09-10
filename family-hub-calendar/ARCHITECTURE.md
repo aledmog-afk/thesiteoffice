@@ -524,7 +524,15 @@ doesn't get in-page backlight control, and the Android schedule covers that gap.
 minutes at each edge so the change is never a visible step. A tap temporarily lifts the overlay to
 0 for 60 seconds (someone checking tomorrow's schedule at 11pm), then ramps back. Recompute on a
 60-second interval **and** on `visibilitychange` — a tablet that slept through the boundary must not
-wake up bright at 3am. `pointer-events-none` is load-bearing: the overlay must never eat taps.
+wake up bright at 3am, and `setInterval` is throttled or frozen while hidden.
+`pointer-events-none` is load-bearing: the overlay must never eat taps.
+
+The curve itself is `lib/kiosk/dim.ts`, unit tested, because two cases are easy to get wrong: the
+window normally **wraps midnight** (21:00 → 07:00), so "inside" is not `start <= t < end`; and a
+window shorter than two ramps has to clamp the ramp to half its length or it never reaches full
+strength. A half-set window (one bound only) returns 0 — dimming is opt-in and must not darken the
+screen on a partial config. The settings page previews the curve as a 24-hour strip using the same
+function, so the preview cannot drift from what the overlay actually does.
 
 **Kiosk UX** — pair dimming with `color-scheme` switching: the dashboard swaps to a dark, low-blue
 palette inside the dim window rather than only darkening, because a dimmed white background still
@@ -543,7 +551,19 @@ glows grey in a hallway at night.
   changes), and refetch on `visibilitychange` and every 15 minutes as a floor.
 - **Post-deploy staleness.** The kiosk may run a build from three deploys ago. A tiny
   `/api/build-id` polled hourly and compared to the baked-in build id triggers `location.reload()`
-  when idle — without it, a wall tablet silently runs stale JS against a migrated schema.
+  when idle — without it, a wall tablet silently runs stale JS against a migrated schema. It
+  reloads only while hidden or after ~2 minutes of no interaction, since reloading under someone's
+  finger mid-edit is worse than being a version behind. **That route has to be exempt from the auth
+  gate**: a stale session is exactly when the reload matters, and a gated endpoint returns login
+  HTML that `.json()` rejects, so the protection silently never fires.
+
+- **PWA installability.** `public/sw.js` deliberately caches nothing — caching app-shell JS on a
+  device that stays open for weeks is precisely how a kiosk ends up stale, and would fight the
+  build-id watcher. It exists only so the tablet can install to the home screen and run
+  `display: fullscreen`, and uses `skipWaiting` + `clients.claim` so a new worker never queues
+  behind an old one on a tablet nobody closes. **`sw.js` must also be excluded from the proxy
+  matcher**: a worker script that redirects to `/login` fails registration outright, and the app
+  then cannot be installed at all.
 - **Session longevity.** `@supabase/ssr` with cookie storage so `proxy.ts` can gate routes and the
   kiosk's refresh token rotates indefinitely as long as the app opens periodically. The gate reads
   `getUser()`, never `getSession()` — the latter trusts the cookie without verifying it against the
@@ -659,6 +679,9 @@ shipping the service-role key or the encryption key to a browser.
 8. **Kiosk shell** — `/display` dashboard, `KioskFrame`, `IdleWatcher`, `DimOverlay`, wake lock,
    PWA manifest + install on the tablet. Do this before the frame and weather so there is somewhere
    for them to live, and so the household starts using the wall device while sync is still landing.
+   **Done** — the dim curve is unit tested, `/frame` exists with a clock and the next event (its
+   slideshow ground arrives in step 10), and the stale-build watcher from the cross-cutting section
+   was pulled forward from step 14 because it is kiosk-specific and small.
 9. **Weather** — `weather_cache`, `/api/weather`, widgets. Small, independent, high visible value
    per hour spent; deliberately placed before the sync slog.
 10. **Photo frame** — Storage bucket, upload + downscale, signed-URL batching, `PhotoSlideshow`
