@@ -19,6 +19,7 @@ export type EventSyncStatus =
   | 'pending_push'
   | 'pending_delete'
   | 'conflict';
+export type RedemptionStatus = 'pending' | 'fulfilled' | 'cancelled';
 export type ChoreStatus = 'pending' | 'done' | 'skipped';
 export type LedgerDirection = 'earn' | 'redeem' | 'adjust_up' | 'adjust_down';
 
@@ -182,6 +183,47 @@ export type MemberPointsCache = {
   updated_at: string;
 };
 
+export type Reward = {
+  id: string;
+  household_id: string;
+  name: string;
+  description: string | null;
+  emoji: string | null;
+  point_cost: number;
+  is_active: boolean;
+  created_at: string;
+};
+
+export type RewardInsert = {
+  id?: string;
+  household_id: string;
+  name: string;
+  description?: string | null;
+  emoji?: string | null;
+  point_cost: number;
+  is_active?: boolean;
+};
+
+export type RewardRedemption = {
+  id: string;
+  household_id: string;
+  reward_id: string;
+  member_id: string;
+  point_cost_at_redemption: number;
+  status: RedemptionStatus;
+  redeemed_at: string;
+  fulfilled_at: string | null;
+};
+
+export type LeaderboardRow = {
+  member_id: string;
+  display_name: string;
+  color: string;
+  earned: number;
+  balance: number;
+  rank_position: number;
+};
+
 export type List = {
   id: string;
   household_id: string;
@@ -285,6 +327,21 @@ export type Database = {
         Update: never;
         Relationships: [];
       };
+      rewards: {
+        Row: Reward;
+        Insert: RewardInsert;
+        Update: Partial<Omit<RewardInsert, 'id' | 'household_id'>>;
+        Relationships: [];
+      };
+      reward_redemptions: {
+        Row: RewardRedemption;
+        // SELECT-only for the client: the balance check lives inside
+        // redeem_reward(), so a direct insert here would take a reward
+        // without paying for it (§2.3).
+        Insert: never;
+        Update: never;
+        Relationships: [];
+      };
       lists: {
         Row: List;
         Insert: {
@@ -330,16 +387,17 @@ export type Database = {
         };
         Returns: unknown;
       };
+      fulfil_redemption: {
+        Args: { p_redemption_id: string };
+        Returns: unknown;
+      };
+      cancel_redemption: {
+        Args: { p_redemption_id: string };
+        Returns: unknown;
+      };
       leaderboard: {
         Args: { p_from: string; p_to: string };
-        Returns: {
-          member_id: string;
-          display_name: string;
-          color: string;
-          earned: number;
-          balance: number;
-          rank_position: number;
-        }[];
+        Returns: LeaderboardRow[];
       };
     };
   };

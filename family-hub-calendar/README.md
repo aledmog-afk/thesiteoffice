@@ -8,10 +8,10 @@ Schema: [`supabase/migrations/0001_init.sql`](supabase/migrations/0001_init.sql)
 
 ## Status
 
-Build-order steps 1–6 are done: foundation, family profiles, Realtime plumbing,
-shared lists, the calendar, and the chore chart. Rewards/leaderboard, meals,
-photo frame, weather and dimming are designed but not built — `/display` shows
-placeholders naming the step each lands in.
+Build-order steps 1–7 are done: foundation, family profiles, Realtime plumbing,
+shared lists, the calendar, the chore chart, and rewards. Meals, photo frame,
+weather and dimming are designed but not built — `/display` shows placeholders
+naming the step each lands in.
 
 Usable now:
 
@@ -21,8 +21,10 @@ Usable now:
   add or edit, recurring events with per-occurrence edit and delete. Two-way
   Google/Outlook sync is step 11; everything here is local-only so far.
 - **`/chores`** — this week's chart as member columns × day rows, one-tap
-  ticking, live point balances, and a per-member ledger drawer. Spending those
-  points (rewards + leaderboard) is step 7.
+  ticking, live point balances, and a per-member ledger drawer.
+- **`/rewards`** — leaderboard by points earned this week/month/all-time,
+  household-configured rewards to spend on, and a queue of claimed rewards
+  waiting to be handed over (or cancelled and refunded).
 
 ## Setup
 
@@ -82,6 +84,8 @@ psql "$DATABASE_URL" -v uid="'<auth-user-uuid>'" -f supabase/seed.sql
 | `lib/calendar/` | `timezone.ts` (wall-clock ↔ instant, DST-safe), `occurrences.ts` (recurrence expansion), `rrule.ts` — 38 unit tests. |
 | `components/chores/` | `ChoreBoard`, `ChoreCheckbox`, `LedgerDrawer`, `useChoreBoard`. |
 | `lib/chores/` | `schedule.ts` (due-date generation, unit tested) and `generate.ts` (idempotent upsert). |
+| `components/rewards/` | `PointsHub`, `Leaderboard`, `RewardShelf`, `RedemptionQueue`. |
+| `lib/points/` | `periods.ts` (leaderboard date ranges) and `errors.ts` (RPC error → readable text) — both unit tested. |
 | `app/api/cron/` | Scheduled routes. Each verifies `CRON_SECRET` itself and refuses to run without it. |
 | `app/(household)/` | Signed-in routes; the layout supplies household + Realtime + roster context. |
 | `types/database.ts` | Hand-written for now; regenerate with `supabase gen types` once a project exists. |

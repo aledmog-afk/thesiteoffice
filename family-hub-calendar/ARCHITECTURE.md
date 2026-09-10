@@ -306,9 +306,16 @@ if v_balance < v_cost then raise exception 'insufficient_points'; end if;
 **Leaderboard** — ranking by *period earnings* rather than balance, because balance drops on
 redemption and a leaderboard that punishes spending points stops children spending them. The
 `leaderboard(p_from, p_to)` function returns both columns so the UI can offer "This week" /
-"This month" / "All time", ranks with `rank()` (ties share a position), converts the date bounds
-using `households.timezone` so "this week" means the household's week, and left-joins the roster so
-a member with zero points still appears.
+"This month" / "All time", ranks with `rank()` (ties share a position — so the UI renders
+`rank_position`, never the list index), converts the date bounds using `households.timezone` so
+"this week" means the household's week, and left-joins the roster so a member with zero points
+still appears.
+
+Because it is a **function, not a table, Realtime cannot publish it** — unlike
+`member_points_cache`. So the leaderboard owns its own fetching and re-runs on a `refreshKey` the
+points hub bumps whenever the ledger moves. The first version fed it rows from the hub's own
+refetch, which silently re-queried a single day and rendered it under the "This week" label;
+owning the query is what makes the period and the data impossible to disagree.
 
 **Components**
 
@@ -317,7 +324,7 @@ a member with zero points still appears.
 | `ChoreBoard` | Member-column × day-row grid for the current week; the kiosk's default chore view. |
 | `ChoreCheckbox` | 56px tap target, optimistic tick, `rpc('complete_chore_instance')`, haptic-free confetti burst on award. Rolls back visually if the RPC rejects. |
 | `Leaderboard` | Reads `member_points_cache` + `rpc('leaderboard')` (returns `earned`, `balance`, `rank_position`), period toggle. |
-| `RewardShelf` | Reward cards with cost and an affordability state derived from cached balance; redeem calls `rpc('redeem_reward')`, which re-checks against the ledger — the UI's affordability state is a hint, never the gate. |
+| `RewardShelf` | Reward cards with cost and an affordability state derived from cached balance; redeem calls `rpc('redeem_reward')`, which re-checks against the ledger — the UI's affordability state is a hint, never the gate. When that re-check refuses, the raised `insufficient_points: have N, need M` is mapped to "Ada needs 3 more points" by `lib/points/errors.ts`; a raw Postgres message on a wall tablet is noise, not an error report. |
 | `RedemptionQueue` | Pending redemptions awaiting a parent's `fulfil_redemption()` / `cancel_redemption()`. |
 | `LedgerDrawer` | Per-member reverse-chronological ledger — the visible payoff of the audit model, and how "that's not fair" arguments get settled. |
 | `app/settings/chores`, `app/settings/rewards` | Chore + reward CRUD, recurrence builder over `rrule`. |
@@ -646,7 +653,9 @@ shipping the service-role key or the encryption key to a browser.
    generation is in `lib/chores/schedule.ts` under unit test; the cron route fails closed without
    `CRON_SECRET`.
 7. **Rewards + leaderboard** — `rewards`, `reward_redemptions`, `redeem_reward` with the advisory
-   lock, `RewardShelf`, `Leaderboard`, `LedgerDrawer`. Depends on 6 for a balance to spend.
+   lock, `RewardShelf`, `Leaderboard`, `RedemptionQueue`. Depends on 6 for a balance to spend.
+   **Done** — all of it hangs off `/rewards`; period ranges and the RPC error mapping are unit
+   tested in `lib/points/`.
 8. **Kiosk shell** — `/display` dashboard, `KioskFrame`, `IdleWatcher`, `DimOverlay`, wake lock,
    PWA manifest + install on the tablet. Do this before the frame and weather so there is somewhere
    for them to live, and so the household starts using the wall device while sync is still landing.

@@ -33,6 +33,14 @@ export default function DisplayPage() {
           <p className="text-sm text-slate-500">This week&apos;s chart, with points.</p>
         </Link>
 
+        <Link
+          href="/rewards"
+          className="flex flex-col items-start justify-center rounded-2xl bg-white p-6 shadow-sm"
+        >
+          <h2 className="text-lg font-semibold text-slate-800">Points</h2>
+          <p className="text-sm text-slate-500">Leaderboard and rewards to spend on.</p>
+        </Link>
+
         {[
           { title: 'Weather', note: 'Step 9' },
           { title: 'Meals', note: 'Step 13' },

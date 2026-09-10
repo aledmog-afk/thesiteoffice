@@ -41,6 +41,12 @@ export default async function HouseholdLayout({ children }: { children: React.Re
                 Chores
               </Link>
               <Link
+                href="/rewards"
+                className="flex min-h-[44px] items-center rounded-xl px-3 text-sm font-medium text-slate-600"
+              >
+                Points
+              </Link>
+              <Link
                 href="/lists"
                 className="flex min-h-[44px] items-center rounded-xl px-3 text-sm font-medium text-slate-600"
               >
