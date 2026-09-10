@@ -2882,6 +2882,7 @@ create or replace function public.valid_action_status_transition(p_from text, p_
 returns boolean
 language sql
 immutable
+set search_path = public
 as $$
   select (p_from, p_to) in (
     ('open', 'in_progress'),
