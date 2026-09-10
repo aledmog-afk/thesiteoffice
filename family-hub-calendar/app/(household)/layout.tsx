@@ -29,6 +29,12 @@ export default async function HouseholdLayout({ children }: { children: React.Re
             </Link>
             <nav className="ml-auto flex items-center gap-1">
               <Link
+                href="/calendar"
+                className="flex min-h-[44px] items-center rounded-xl px-3 text-sm font-medium text-slate-600"
+              >
+                Calendar
+              </Link>
+              <Link
                 href="/lists"
                 className="flex min-h-[44px] items-center rounded-xl px-3 text-sm font-medium text-slate-600"
               >

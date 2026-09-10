@@ -97,7 +97,23 @@ server component and hydrate, so the wall display never flashes uncoloured event
 **Schema** — `calendar_accounts`, `private.oauth_tokens`, `calendars`, `events`, `sync_outbox`.
 
 Recurrence: store the **master** row with an RFC-5545 `rrule` and expand occurrences client-side
-with `rrule.js` over the visible window only. Provider exceptions ("this Tuesday's football moved")
+with `rrule.js` over the visible window only.
+
+**DST is the trap that decides how this is written.** Adding 7×24h to a UTC instant turns a weekly
+9am school run into 8am or 10am for half the year. So recurrence is enumerated in *wall-clock*
+space — rrule is driven with a floating-UTC `dtstart` — and each result is converted back to a real
+instant against the event's own timezone. `lib/calendar/timezone.ts` does that conversion with
+`Intl` alone, no date library. Inverting a zone is not a lookup, since the offset depends on the
+instant being solved for, so it tries both offsets in force around that day and keeps the
+candidates that read back correctly:
+
+- **Autumn-back overlap** (01:30 happens twice): both are valid, take the earlier — the RFC 5545
+  reading.
+- **Spring-forward gap** (01:30 does not exist): nothing reads back, so the time shifts forward by
+  the gap, as calendars do.
+
+A stored `UNTIL` also has to be re-read as a wall clock before being handed to rrule, or a series
+can end an hour early. Provider exceptions ("this Tuesday's football moved")
 arrive as separate rows with `recurrence_parent_id` + `recurrence_original_start`. Occurrences are
 never materialised — a daily chore for five years is 1,825 rows worth having, a daily standup for
 five years is not.
@@ -121,12 +137,19 @@ insert into event_members select id, member_id, true from events where member_id
 | `CalendarShell` | Owns the visible date range + view mode; single data fetch keyed on `[start, end]`. |
 | `MonthGrid` / `WeekGrid` / `DayAgenda` | Three renderers over one normalised `Occurrence[]`. Week/day are CSS-grid positioned by minute offset; month is 6×7 with an overflow count. |
 | `EventSheet` | Bottom sheet for create/edit — title, member picker, time wheel, all-day toggle, calendar target. |
-| `useOccurrences(start, end)` | Fetches `events` overlapping the window, expands `rrule`, subtracts cancellations, merges exceptions, sorts. |
+| `useOccurrences(start, end)` | Fetches `events` that can touch the window, expands `rrule`, subtracts cancellations, merges exceptions, sorts. |
+| `EventSheet` scope toggle | On a recurring event, "Just this one" vs "The whole series". Editing one occurrence writes an exception row against the slot it replaces and **never** an `rrule`, or that occurrence would become a series of its own. Deleting one writes a *cancelled* exception, because occurrences are computed — without a row the next expansion puts it straight back. |
 | `SyncStatusBadge` | Surfaces `calendar_accounts.status = 'needs_reauth'` and unresolved `sync_status = 'conflict'` rows. Silent sync failure is the #1 way a wall calendar quietly becomes wrong. |
 
-**Realtime** — subscribe to `events` filtered on `household_id`. Insert/update patches the local
-occurrence set; a change to a row carrying an `rrule` re-expands that master only. `events` is
-`replica identity full` so DELETE payloads still carry `household_id` for filtering.
+**Realtime** — subscribe to `events` filtered on `household_id`. Unlike lists, there is no useful
+in-place patch: one event row change can add, move or remove several *rendered* occurrences, so the
+handler refetches the window and re-expands. `events` is `replica identity full` so DELETE payloads
+still carry `household_id` for filtering.
+
+Fetching uses **two queries, not one `.or()` with a nested `and(...)`**: a recurring master can
+start years before the window and still have occurrences inside it, so it cannot be filtered by
+date at all, while one-offs must be. Two simple filters are clearer and less brittle than one
+PostgREST expression, and at household scale the extra round trip is irrelevant.
 
 **Integration notes — flagged security steps**
 
@@ -596,7 +619,9 @@ shipping the service-role key or the encryption key to a browser.
 5. **Local calendar** — `events`, the three grid renderers, `useOccurrences` with
    `rrule` expansion, `EventSheet`. **No provider sync yet**: get the data model and rendering right
    against local rows, because debugging recurrence expansion and delta sync simultaneously is the
-   single biggest schedule risk in this project.
+   single biggest schedule risk in this project. **Done** — expansion and the timezone core are in
+   `lib/calendar/` under 38 unit tests; `SyncStatusBadge` waits for step 11, when there is a
+   provider status to show.
 6. **Chores + ledger** — `chores`, `chore_instances`, the instance-generation cron, `points_ledger`,
    the cache trigger, `complete_chore_instance`. Ship earning before spending.
 7. **Rewards + leaderboard** — `rewards`, `reward_redemptions`, `redeem_reward` with the advisory

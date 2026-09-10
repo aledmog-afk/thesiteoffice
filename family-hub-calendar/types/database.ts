@@ -13,6 +13,12 @@
 
 export type MealSlot = 'breakfast' | 'lunch' | 'dinner' | 'snack';
 export type ListKind = 'shopping' | 'todo';
+export type EventSyncStatus =
+  | 'local_only'
+  | 'synced'
+  | 'pending_push'
+  | 'pending_delete'
+  | 'conflict';
 export type LedgerDirection = 'earn' | 'redeem' | 'adjust_up' | 'adjust_down';
 
 export type Household = {
@@ -59,6 +65,50 @@ export type FamilyMemberInsert = {
   avatar_emoji?: string | null;
   sort_order?: number;
   is_active?: boolean;
+};
+
+export type CalendarEvent = {
+  id: string;
+  household_id: string;
+  calendar_id: string | null;
+  member_id: string | null;
+  title: string;
+  description: string | null;
+  location: string | null;
+  starts_at: string;
+  ends_at: string;
+  all_day: boolean;
+  event_timezone: string | null;
+  rrule: string | null;
+  recurrence_parent_id: string | null;
+  recurrence_original_start: string | null;
+  is_cancelled: boolean;
+  provider_event_id: string | null;
+  provider_etag: string | null;
+  remote_updated_at: string | null;
+  local_updated_at: string;
+  sync_status: EventSyncStatus;
+  created_at: string;
+};
+
+export type CalendarEventInsert = {
+  id?: string;
+  household_id: string;
+  calendar_id?: string | null;
+  member_id?: string | null;
+  title: string;
+  description?: string | null;
+  location?: string | null;
+  starts_at: string;
+  ends_at: string;
+  all_day?: boolean;
+  event_timezone?: string | null;
+  rrule?: string | null;
+  recurrence_parent_id?: string | null;
+  recurrence_original_start?: string | null;
+  is_cancelled?: boolean;
+  sync_status?: EventSyncStatus;
+  local_updated_at?: string;
 };
 
 export type List = {
@@ -129,6 +179,12 @@ export type Database = {
         Row: FamilyMember;
         Insert: FamilyMemberInsert;
         Update: Partial<FamilyMemberInsert>;
+        Relationships: [];
+      };
+      events: {
+        Row: CalendarEvent;
+        Insert: CalendarEventInsert;
+        Update: Partial<Omit<CalendarEventInsert, 'id' | 'household_id'>>;
         Relationships: [];
       };
       lists: {

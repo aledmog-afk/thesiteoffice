@@ -10,6 +10,14 @@ export default function DisplayPage() {
 
       <div className="grid min-h-0 flex-1 gap-4 md:grid-cols-2">
         <Link
+          href="/calendar"
+          className="flex flex-col items-start justify-center rounded-2xl bg-white p-6 shadow-sm"
+        >
+          <h2 className="text-lg font-semibold text-slate-800">Calendar</h2>
+          <p className="text-sm text-slate-500">Day, week and month, colour-coded by member.</p>
+        </Link>
+
+        <Link
           href="/lists"
           className="flex flex-col items-start justify-center rounded-2xl bg-white p-6 shadow-sm"
         >
@@ -18,7 +26,6 @@ export default function DisplayPage() {
         </Link>
 
         {[
-          { title: 'Calendar', note: 'Step 5' },
           { title: 'Chores', note: 'Step 6' },
           { title: 'Weather', note: 'Step 9' },
           { title: 'Meals', note: 'Step 13' },

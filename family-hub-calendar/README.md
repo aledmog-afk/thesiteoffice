@@ -8,14 +8,18 @@ Schema: [`supabase/migrations/0001_init.sql`](supabase/migrations/0001_init.sql)
 
 ## Status
 
-Build-order steps 1–4 are done: foundation, family profiles, Realtime plumbing,
-and shared lists. Calendar, chores, meals, photo frame, weather and dimming are
-designed but not built — `/display` shows placeholders naming the step each
+Build-order steps 1–5 are done: foundation, family profiles, Realtime plumbing,
+shared lists, and the calendar. Chores, meals, photo frame, weather and dimming
+are designed but not built — `/display` shows placeholders naming the step each
 lands in.
 
-Lists are usable now: `/lists` has a Shopping and a To do list from first run,
-with quick add, tick, assign, delete and clear-completed, all syncing live
-across devices.
+Usable now:
+
+- **`/lists`** — a Shopping and a To do list from first run, with quick add,
+  tick, assign, delete and clear-completed, syncing live across devices.
+- **`/calendar`** — day, week and month views colour-coded by member, tap to
+  add or edit, recurring events with per-occurrence edit and delete. Two-way
+  Google/Outlook sync is step 11; everything here is local-only so far.
 
 ## Setup
 
@@ -69,6 +73,8 @@ psql "$DATABASE_URL" -v uid="'<auth-user-uuid>'" -f supabase/seed.sql
 | `components/members/` | `MemberProvider` (the roster every feature reads), avatar, chip, picker. |
 | `components/lists/` | `ListView`, `QuickAddBar`, `ItemRow`, and the `useListItems` hook. |
 | `lib/lists/` | `quickAdd.ts` (quantity parsing) and `reconcile.ts` (Realtime/optimistic merge) — both unit tested. |
+| `components/calendar/` | `CalendarShell` (owns view + window), `MonthGrid`, `WeekGrid`, `DayAgenda`, `EventSheet`, `useOccurrences`. |
+| `lib/calendar/` | `timezone.ts` (wall-clock ↔ instant, DST-safe), `occurrences.ts` (recurrence expansion), `rrule.ts` — 38 unit tests. |
 | `app/(household)/` | Signed-in routes; the layout supplies household + Realtime + roster context. |
 | `types/database.ts` | Hand-written for now; regenerate with `supabase gen types` once a project exists. |
 
