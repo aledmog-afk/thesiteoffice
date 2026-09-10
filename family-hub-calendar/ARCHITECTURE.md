@@ -466,8 +466,10 @@ glows grey in a hallway at night.
 - **Post-deploy staleness.** The kiosk may run a build from three deploys ago. A tiny
   `/api/build-id` polled hourly and compared to the baked-in build id triggers `location.reload()`
   when idle — without it, a wall tablet silently runs stale JS against a migrated schema.
-- **Session longevity.** `@supabase/ssr` with cookie storage so middleware can gate routes and the
-  kiosk's refresh token rotates indefinitely as long as the app opens periodically.
+- **Session longevity.** `@supabase/ssr` with cookie storage so `proxy.ts` can gate routes and the
+  kiosk's refresh token rotates indefinitely as long as the app opens periodically. The gate reads
+  `getUser()`, never `getSession()` — the latter trusts the cookie without verifying it against the
+  auth server, so it must not be what an auth check depends on.
 - **Household credential on a wall.** One shared login means the tablet holds full household
   access — the accepted model, and deliberately un-gated: no PIN on settings. The residual risk is
   that anyone with physical access can revoke calendar access or invent a 500-point reward. Both are
@@ -521,7 +523,7 @@ family-hub-calendar/
 │  ├─ weather/     WeatherWidget.tsx  ForecastStrip.tsx
 │  └─ kiosk/       DimOverlay.tsx  IdleWatcher.tsx  KioskFrame.tsx
 ├─ lib/
-│  ├─ supabase/    client.ts  server.ts  service.ts  middleware.ts   # service.ts = server-only
+│  ├─ supabase/    client.ts  server.ts  service.ts  proxy.ts       # service.ts = server-only
 │  ├─ realtime/    HouseholdChannelProvider.tsx  useTableSubscription.ts
 │  ├─ calendar/    occurrences.ts  rrule.ts  conflict.ts
 │  │               google/{auth,calendars,events,watch}.ts
@@ -537,7 +539,7 @@ family-hub-calendar/
 │  └─ seed.sql                       # one household, four members, a few chores/rewards
 ├─ public/         manifest.webmanifest  icons/  sw.js
 ├─ types/          database.ts        # generated: supabase gen types typescript
-├─ middleware.ts
+├─ proxy.ts                          # Next 16 renamed `middleware` to `proxy`
 └─ vercel.json                       # cron schedules
 ```
 
@@ -547,14 +549,17 @@ shipping the service-role key or the encryption key to a browser.
 
 ## 4. Build Order
 
-1. **Foundation** — Next.js + Tailwind + `@supabase/ssr`, household login, `middleware.ts` route
-   gate, `households` + `household_settings` + `current_household_id()` + the RLS policy pattern.
-   Everything downstream depends on the scoping helper being right.
+1. **Foundation** — Next.js + Tailwind + `@supabase/ssr`, household login, `proxy.ts` route gate
+   (Next 16's rename of `middleware`), `households` + `household_settings` +
+   `current_household_id()` + the RLS policy pattern. Everything downstream depends on the scoping
+   helper being right. **Done.**
 2. **Family members** — `family_members` CRUD, `MemberProvider`, `MemberChip`/`MemberPicker`,
    colour palette. Hard prerequisite: chores, events, lists and meals all FK to this, and no
-   colour-coded UI can be built or judged before the roster exists.
+   colour-coded UI can be built or judged before the roster exists. **Done.**
 3. **Realtime plumbing** — `HouseholdChannelProvider`, `useTableSubscription`, reconnect refetch.
    Built once now, on `family_members` as the guinea pig, rather than retrofitted per feature.
+   **Done** — the reconnect/staleness signal is an `epoch` counter on the channel context, bumped on
+   re-subscribe, on `visibilitychange` and on a 15-minute floor; features refetch when it changes.
 4. **Lists** — smallest full vertical slice (schema → RLS → optimistic write → Realtime →
    kiosk-sized rows). Proves the whole stack end-to-end in a day, and is immediately useful, which
    matters for getting the household onto the tablet early.

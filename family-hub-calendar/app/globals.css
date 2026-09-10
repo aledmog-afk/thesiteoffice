@@ -1,0 +1,23 @@
+@import 'tailwindcss';
+
+@theme {
+  --color-household: #64748b;
+}
+
+/* Kiosk baseline: a wall tablet must never rubber-band or show a text cursor,
+   and a long-press must not raise a text-selection menu mid-tap. */
+html,
+body {
+  height: 100%;
+  overscroll-behavior: none;
+}
+
+body {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Applied by the kiosk shell only, so phones keep normal selection. */
+.kiosk-nosel {
+  user-select: none;
+  -webkit-user-select: none;
+}
