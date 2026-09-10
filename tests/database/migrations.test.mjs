@@ -468,3 +468,98 @@ test("Defects / Snagging: new columns, indexes, helper function and trigger are 
     await dropTestDatabase(db);
   }
 });
+
+// ─── Weekly Reporting (Priority 9) ──────────────────────────────────
+// weekly_reports, like snag_items before it, already existed pre-
+// migration — this proves a realistic PRE-EXISTING report survives
+// with its human-entered content untouched, and is given the correct,
+// non-destructive default status ('draft') rather than retroactively
+// becoming "issued" or gaining a fabricated system_position.
+
+test("Weekly Reporting: an existing weekly_reports row survives the migration with its content preserved and status defaulted to draft", async () => {
+  const db = "tracker_test_weekly_reports_existing_data";
+  await createTestDatabase(db);
+  try {
+    const client = adminClient(db);
+    await client.connect();
+    await runSqlFile(client, MOCK_SETUP);
+    await runSqlFile(client, OLD_SCHEMA);
+    await runSqlFile(client, SEED);
+
+    const reportId = "99999999-0000-0000-0000-000000000002";
+    const projectRow = await client.query("select id from public.projects order by name limit 1");
+    const projectId = projectRow.rows[0].id;
+    await client.query(
+      `insert into public.weekly_reports (id, project_id, week_starting, week_ending, prepared_by, programme_status, progress_summary, created_by)
+       values ($1,$2,'2025-01-13','2025-01-17','Jane Doe','on-track','Frame complete on Plot 3','11111111-1111-1111-1111-111111111111')`,
+      [reportId, projectId]
+    );
+
+    const before = await client.query("select count(*)::int as n from public.weekly_reports");
+
+    await runSqlFile(client, CURRENT_SCHEMA); // the actual migration under test
+
+    const after = await client.query("select count(*)::int as n from public.weekly_reports");
+    assert.equal(after.rows[0].n, before.rows[0].n, "the migration must not add, remove, or duplicate any weekly_reports rows");
+
+    const report = await client.query("select * from public.weekly_reports where id = $1", [reportId]);
+    assert.equal(report.rowCount, 1, "the pre-existing report's id must be preserved exactly");
+    assert.equal(report.rows[0].prepared_by, "Jane Doe");
+    assert.equal(report.rows[0].programme_status, "on-track");
+    assert.equal(report.rows[0].progress_summary, "Frame complete on Plot 3");
+    assert.equal(report.rows[0].status, "draft", "a pre-existing report must default to draft, never be retroactively marked reviewed/approved/issued");
+    assert.deepEqual(report.rows[0].system_position, {}, "a pre-existing report must never be fabricated a system position");
+    assert.equal(report.rows[0].position_generated_at, null);
+
+    await client.end();
+  } finally {
+    await dropTestDatabase(db);
+  }
+});
+
+test("Weekly Reporting: new columns, indexes, trigger, and inspection_findings.resolved_at are idempotent across repeated re-application", async () => {
+  const db = "tracker_test_weekly_reports_idempotent";
+  await createTestDatabase(db);
+  try {
+    const client = adminClient(db);
+    await client.connect();
+    await runSqlFile(client, MOCK_SETUP);
+    for (let i = 0; i < 3; i++) {
+      await runSqlFile(client, CURRENT_SCHEMA);
+    }
+
+    const columns = await client.query(`
+      select column_name from information_schema.columns
+      where table_schema = 'public' and table_name = 'weekly_reports'
+        and column_name = any($1::text[])
+    `, [["status", "system_position", "position_generated_at", "updated_at"]]);
+    assert.equal(columns.rowCount, 4, "all 4 new columns must exist exactly once");
+
+    const indexes = await client.query("select count(*)::int as n from pg_indexes where tablename = 'weekly_reports' and indexname like 'weekly_reports_%_idx'");
+    assert.equal(indexes.rows[0].n, 2, "exactly 2 new named indexes on weekly_reports, never duplicated");
+
+    const triggers = await client.query("select count(*)::int as n from pg_trigger where tgrelid = 'public.weekly_reports'::regclass and tgname like 'trg_%'");
+    assert.equal(triggers.rows[0].n, 2, "exactly 2 triggers on weekly_reports (pre-existing audit + the new before-write trigger), never duplicated");
+
+    const fn = await client.query("select count(*)::int as n from information_schema.routines where routine_schema = 'public' and routine_name = 'valid_weekly_report_status_transition'");
+    assert.equal(fn.rows[0].n, 1);
+
+    // RLS on weekly_reports is deliberately UNCHANGED by this priority —
+    // still editor-only, still 4 policies.
+    const policies = await client.query("select count(*)::int as n from pg_policies where tablename = 'weekly_reports'");
+    assert.equal(policies.rows[0].n, 4, "weekly_reports RLS policy count must be unchanged by this priority");
+
+    const resolvedAtColumn = await client.query(`
+      select count(*)::int as n from information_schema.columns
+      where table_schema = 'public' and table_name = 'inspection_findings' and column_name = 'resolved_at'
+    `);
+    assert.equal(resolvedAtColumn.rows[0].n, 1, "inspection_findings.resolved_at must exist exactly once");
+
+    const findingTriggers = await client.query("select count(*)::int as n from pg_trigger where tgrelid = 'public.inspection_findings'::regclass and tgname like 'trg_%'");
+    assert.equal(findingTriggers.rows[0].n, 2, "inspection_findings keeps exactly 2 triggers (before-write + audit) — resolved_at reused the existing before-write trigger, no new one added");
+
+    await client.end();
+  } finally {
+    await dropTestDatabase(db);
+  }
+});

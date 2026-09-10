@@ -3466,3 +3466,177 @@ create trigger trg_snag_items_before_write
 -- by that same trigger with ZERO changes needed to it or to
 -- can_read_audit_row() (snag_items already sits in that function's
 -- member-level bucket, matching its own RLS exactly).
+
+-- ─── v33 ADDITIONS: Weekly Reporting (system position + lifecycle) ───
+--
+-- weekly_reports already existed as a rich, free-text/jsonb Clerk of
+-- Works record (progress, weather, labour, risks, commercial items,
+-- photos...) — that stays exactly what it is; the human side of the
+-- report needed no new fields. What was missing was (a) any lifecycle
+-- at all (every report was permanently a bare, unstatused row) and (b)
+-- somewhere to hold the SYSTEM-DERIVED weekly position (exceptions,
+-- what changed) as a real, reviewable, eventually-frozen part of the
+-- report rather than a purely live recomputation with nowhere to land.
+--
+-- Lifecycle: draft -> reviewed -> approved -> issued, one step forward
+-- at a time, with "back to draft" (Revise) as the one deliberate
+-- reopening path from any later stage — mirrors actions' own
+-- completed->open reopen path. Once a report is approved or issued its
+-- content (system_position included) is locked: the trigger below
+-- rejects any update that changes content while staying in, or moving
+-- into, one of those two statuses. A report can only be edited again by
+-- first Revising it back to draft, an explicit, visible action, not a
+-- side effect of an ordinary save.
+alter table public.weekly_reports add column if not exists status text not null default 'draft' check (status in ('draft', 'reviewed', 'approved', 'issued'));
+-- The frozen system-generated position — exceptions, activity, and
+-- per-module summaries computed by getWeeklyReportPosition() (see
+-- tracker/js/app.js) and written back into the report on save while
+-- still draft/reviewed. Never touched directly by any UI input; the
+-- ONLY thing that can change it is a fresh call to that same function.
+alter table public.weekly_reports add column if not exists system_position jsonb not null default '{}'::jsonb;
+alter table public.weekly_reports add column if not exists position_generated_at timestamptz;
+alter table public.weekly_reports add column if not exists updated_at timestamptz not null default now();
+
+create index if not exists weekly_reports_project_week_idx on public.weekly_reports (project_id, week_starting);
+create index if not exists weekly_reports_project_status_idx on public.weekly_reports (project_id, status);
+
+create or replace function public.valid_weekly_report_status_transition(p_from text, p_to text)
+returns boolean
+language sql
+immutable
+set search_path = public
+as $$
+  select (p_from, p_to) in (
+    ('draft', 'reviewed'),
+    ('reviewed', 'approved'),
+    ('approved', 'issued'),
+    ('reviewed', 'draft'),
+    ('approved', 'draft'),
+    ('issued', 'draft')
+  );
+$$;
+
+-- Server-side authority for created_by/created_at immutability,
+-- updated_at, status-transition validity, and — the part that actually
+-- matters — refusing to let ANY content field change while the report
+-- is (or is moving into) 'approved'/'issued'. Compares the whole row as
+-- jsonb, excluding only the two columns a locked report is still
+-- allowed to carry (status itself, and the updated_at stamp that comes
+-- with any write) — new columns added to weekly_reports later are
+-- automatically covered by this comparison with no trigger change
+-- needed, same dynamic-jsonb approach write_audit_log() already uses.
+create or replace function public.weekly_reports_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if TG_OP = 'INSERT' then
+    new.created_by := auth.uid();
+    new.created_at := now();
+    new.updated_at := now();
+    new.status := 'draft'; -- a report can never be created pre-approved/issued
+    return new;
+  end if;
+
+  new.created_by := old.created_by;
+  new.created_at := old.created_at;
+  new.updated_at := now();
+
+  if new.status <> old.status and not public.valid_weekly_report_status_transition(old.status, new.status) then
+    raise exception 'Invalid weekly report status transition: % -> %', old.status, new.status;
+  end if;
+
+  if new.status in ('approved', 'issued') then
+    if (to_jsonb(new) - array['status', 'updated_at']::text[]) is distinct from (to_jsonb(old) - array['status', 'updated_at']::text[]) then
+      raise exception 'This report is % — its content is locked. Use Revise to reopen it as a draft before editing.', new.status;
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_weekly_reports_before_write on public.weekly_reports;
+create trigger trg_weekly_reports_before_write
+  before insert or update on public.weekly_reports
+  for each row execute function public.weekly_reports_before_write();
+
+-- Audit integration: weekly_reports has been audited since Priority 4
+-- (trg_audit_weekly_reports) and already sits in can_read_audit_row()'s
+-- default editor-level bucket, matching its own RLS exactly — zero
+-- changes needed. Every status transition (and any rejected write) is
+-- captured automatically.
+
+-- Inspection Findings: a reliable "when did this actually get resolved"
+-- timestamp, needed so the weekly report can say "findings resolved
+-- this period" precisely rather than approximating it from updated_at
+-- (which any edit touches, not just a resolution). Mirrors
+-- actions.completed_at's own convention exactly: server-derived only,
+-- set the moment status transitions INTO 'resolved', cleared the
+-- moment it moves away (a finding can be freely reopened, same as a
+-- snag or an action).
+alter table public.inspection_findings add column if not exists resolved_at timestamptz;
+
+create or replace function public.inspection_findings_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_org_id uuid;
+  v_inspection_project_id uuid;
+  v_action_project_id uuid;
+begin
+  select org_id into v_org_id from public.projects where id = new.project_id;
+  if v_org_id is null then
+    raise exception 'inspection_findings.project_id must reference an existing project with an organisation';
+  end if;
+  new.org_id := v_org_id;
+
+  select project_id into v_inspection_project_id from public.inspections where id = new.inspection_id;
+  if v_inspection_project_id is null then
+    raise exception 'inspection_findings.inspection_id must reference an existing inspection';
+  end if;
+  if v_inspection_project_id <> new.project_id then
+    raise exception 'a finding''s project_id must match its inspection''s project_id';
+  end if;
+
+  if new.action_id is not null then
+    select project_id into v_action_project_id from public.actions where id = new.action_id;
+    if v_action_project_id is null then
+      raise exception 'inspection_findings.action_id must reference an existing action';
+    end if;
+    if v_action_project_id <> new.project_id then
+      raise exception 'a linked action must belong to the same project as the finding';
+    end if;
+  end if;
+
+  if TG_OP = 'INSERT' then
+    new.created_by := auth.uid();
+    new.created_at := now();
+    new.updated_at := now();
+    new.resolved_at := case when new.status = 'resolved' then now() else null end;
+    return new;
+  end if;
+
+  new.created_by := old.created_by;
+  new.created_at := old.created_at;
+  new.updated_at := now();
+
+  if new.status = 'resolved' and old.status <> 'resolved' then
+    new.resolved_at := now();
+  elsif new.status <> 'resolved' then
+    new.resolved_at := null;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_inspection_findings_before_write on public.inspection_findings;
+create trigger trg_inspection_findings_before_write
+  before insert or update on public.inspection_findings
+  for each row execute function public.inspection_findings_before_write();

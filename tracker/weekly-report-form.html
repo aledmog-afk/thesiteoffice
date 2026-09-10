@@ -18,11 +18,27 @@
       <div class="page-title" id="formTitle">New Weekly Report</div>
       <div class="page-sub" id="projectSub"></div>
     </div>
+    <span class="badge" id="statusBadge" style="display:none;"></span>
+  </div>
+
+  <div class="card" id="lockedBanner" style="display:none; border-color:var(--amber, #b5860b);">
+    <p style="margin:0;">This report is <strong id="lockedStatusText"></strong> and its content is locked. <button type="button" class="btn btn-outline btn-sm" id="reviseBtn" style="margin-left:0.5rem;">Revise (reopen as Draft)</button></p>
+  </div>
+
+  <div class="card" id="positionCard" style="display:none;">
+    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.6rem; margin-bottom:0.8rem;">
+      <h3 style="font-family:var(--font-display); font-size:1rem; margin:0;">System Position <span class="hint">(generated from Actions, Snags, Inspections &amp; H&amp;S — review before approving)</span></h3>
+      <button type="button" class="btn btn-outline btn-sm" id="refreshPositionBtn">↻ Refresh Position</button>
+    </div>
+    <div id="positionErrorBox" class="error-box"></div>
+    <div id="positionBody">Generating…</div>
+    <p class="hint" id="positionGeneratedHint" style="margin-top:0.6rem;"></p>
   </div>
 
   <div class="card">
     <div id="errorBox" class="error-box"></div>
     <form id="reportForm">
+      <fieldset id="formFieldset" style="border:none; padding:0; margin:0;">
       <div class="form-grid">
         <div class="field"><label for="weekStarting">Week starting *</label><input type="date" id="weekStarting" required></div>
         <div class="field"><label for="weekEnding">Week ending *</label><input type="date" id="weekEnding" required></div>
@@ -98,18 +114,122 @@
         <button type="submit" class="btn btn-amber" id="saveBtn">Save Report</button>
         <button type="button" class="btn btn-outline" id="cancelBtn">Cancel</button>
       </div>
+      </fieldset>
     </form>
   </div>
 </div>
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, mountTableEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions, comparePlotNumbers, normalisePlotToken, syncGateStatusFromMilestones, EXTERNAL_WORKS_TAG, PHOTO_COMPLIANCE_STATUS, RESOURCE_ADEQUACY, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_LEVELS, RISK_IMPACT_BADGE, RISK_OWNER_SUGGESTIONS, STATUTORY_MILESTONE_TYPES, STATUTORY_OUTCOMES, STATUTORY_OUTCOME_BADGE } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, mountTableEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions, comparePlotNumbers, normalisePlotToken, syncGateStatusFromMilestones, EXTERNAL_WORKS_TAG, PHOTO_COMPLIANCE_STATUS, RESOURCE_ADEQUACY, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_LEVELS, RISK_IMPACT_BADGE, RISK_OWNER_SUGGESTIONS, STATUTORY_MILESTONE_TYPES, STATUTORY_OUTCOMES, STATUTORY_OUTCOME_BADGE, getWeeklyReportPosition, isWeeklyReportLocked, reviseWeeklyReport, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, CONTROL_LEVEL_BADGE, FINDING_SEVERITY_LABEL } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
   const reportId = getParam("id");
   if (!projectId) window.location.href = "dashboard.html";
+
+  let existingReport = null; // the full row, once loaded — null for a brand-new report
+  let currentPosition = null; // the last-generated (or last-saved) system position
+
+  const positionErrorBox = document.getElementById("positionErrorBox");
+
+  function currentPeriod() {
+    return { weekStarting: document.getElementById("weekStarting").value, weekEnding: document.getElementById("weekEnding").value };
+  }
+
+  function renderPositionBody(position) {
+    if (!position) { document.getElementById("positionBody").innerHTML = `<p class="hint">Set both week dates above, then hit Refresh Position.</p>`; return; }
+    const { exceptions, activity, actionsSummary, snagsSummary, inspectionsSummary, hsSummary } = position;
+
+    const activityLines = [
+      ...activity.actionsCreated.map((a) => `<li>Action created: <a href="actions.html?project=${projectId}">${escapeHtml(a.title)}</a></li>`),
+      ...activity.actionsCompleted.map((a) => `<li>Action completed: <a href="actions.html?project=${projectId}">${escapeHtml(a.title)}</a></li>`),
+      ...activity.snagsRaised.map((s) => `<li>Snag raised: <a href="snag-list-edit.html?id=${s.snag_list_id}">#${s.item_no} ${escapeHtml(s.location) || ""}</a></li>`),
+      ...activity.snagsClosed.map((s) => `<li>Snag closed: <a href="snag-list-edit.html?id=${s.snag_list_id}">#${s.item_no} ${escapeHtml(s.location) || ""}</a></li>`),
+      ...activity.snagsVerified.map((s) => `<li>Snag verified: <a href="snag-list-edit.html?id=${s.snag_list_id}">#${s.item_no} ${escapeHtml(s.location) || ""}</a></li>`),
+      ...activity.findingsResolved.map((f) => `<li>Finding resolved: ${escapeHtml(f.title)}</li>`),
+      ...activity.inspectionsCompleted.map((i) => `<li>Inspection completed: <a href="inspection-detail.html?id=${i.id}">${escapeHtml(i.title)}</a></li>`),
+    ];
+
+    document.getElementById("positionBody").innerHTML = `
+      <div style="margin-bottom:1rem;">
+        <span class="badge ${CONTROL_LEVEL_BADGE[exceptions.status.level] || "badge-grey"}">${exceptions.status.label}</span>
+        <span style="margin-left:0.5rem;">${escapeHtml(exceptions.status.reason)}</span>
+      </div>
+
+      <div style="margin-bottom:1rem;">
+        <strong>What changed this period</strong>
+        ${activityLines.length ? `<ul class="body-list">${activityLines.join("")}</ul>` : `<p class="hint">No recorded Actions/Snags/Inspections activity in this period.</p>`}
+      </div>
+
+      <div class="form-grid" style="margin-bottom:0.4rem;">
+        <div>
+          <strong>Actions</strong>
+          <p class="hint">${actionsSummary.overdue.length} overdue · ${actionsSummary.dueDuringPeriod.length} due this period · ${actionsSummary.blocked.length} blocked · ${actionsSummary.highCriticalOpen.length} high/critical open</p>
+          ${actionsSummary.overdue.length ? `<ul class="body-list">${actionsSummary.overdue.map((a) => `<li><a href="actions.html?project=${projectId}">${escapeHtml(a.title)}</a> <span class="badge badge-red">Overdue</span></li>`).join("")}</ul>` : ""}
+        </div>
+        <div>
+          <strong>Snags / Defects</strong>
+          <p class="hint">${snagsSummary.overdue.length} overdue · ${snagsSummary.highPriorityOpen.length} high priority open</p>
+          ${snagsSummary.overdue.length ? `<ul class="body-list">${snagsSummary.overdue.map((s) => `<li><a href="snag-list-edit.html?id=${s.snag_list_id}">#${s.item_no} ${escapeHtml(s.location) || ""}</a></li>`).join("")}</ul>` : ""}
+        </div>
+      </div>
+
+      <div class="form-grid" style="margin-bottom:0.4rem;">
+        <div>
+          <strong>Inspections / Findings</strong>
+          <p class="hint">${inspectionsSummary.criticalFindings.length} critical open · ${inspectionsSummary.highSeverityFindings.length} high open · ${inspectionsSummary.openFindings.length} open total</p>
+          ${inspectionsSummary.criticalFindings.length ? `<ul class="body-list">${inspectionsSummary.criticalFindings.map((f) => `<li>${escapeHtml(f.title)} <span class="badge badge-red">${FINDING_SEVERITY_LABEL.critical}</span></li>`).join("")}</ul>` : ""}
+        </div>
+        <div>
+          <strong>Health &amp; Safety</strong>
+          <p class="hint">${hsSummary.auditLoggedThisMonth ? "Audit logged this month" : "⚠️ No H&S audit logged this month"} · ${hsSummary.highSeverityOpenCount} unresolved high-severity issue${hsSummary.highSeverityOpenCount === 1 ? "" : "s"}</p>
+        </div>
+      </div>
+    `;
+    document.getElementById("positionGeneratedHint").textContent = position.generatedAt ? `Position generated ${new Date(position.generatedAt).toLocaleString("en-GB")}` : "";
+  }
+
+  async function generatePosition() {
+    const period = currentPeriod();
+    if (!period.weekStarting || !period.weekEnding) { renderPositionBody(null); return; }
+    clearError(positionErrorBox);
+    document.getElementById("positionCard").style.display = "block";
+    document.getElementById("positionBody").textContent = "Generating…";
+    try {
+      currentPosition = await getWeeklyReportPosition(projectId, period);
+      renderPositionBody(currentPosition);
+    } catch (err) {
+      showError(positionErrorBox, err);
+      document.getElementById("positionBody").innerHTML = "";
+    }
+  }
+  document.getElementById("refreshPositionBtn").addEventListener("click", generatePosition);
+
+  function applyLockState() {
+    const locked = existingReport && isWeeklyReportLocked(existingReport);
+    document.getElementById("formFieldset").disabled = !!locked;
+    document.getElementById("refreshPositionBtn").disabled = !!locked;
+    document.getElementById("lockedBanner").style.display = locked ? "block" : "none";
+    if (locked) document.getElementById("lockedStatusText").textContent = WEEKLY_REPORT_STATUS_LABEL[existingReport.status];
+    if (existingReport) {
+      const badge = document.getElementById("statusBadge");
+      badge.style.display = "inline-flex";
+      badge.className = `badge ${WEEKLY_REPORT_STATUS_BADGE[existingReport.status] || "badge-grey"}`;
+      badge.textContent = WEEKLY_REPORT_STATUS_LABEL[existingReport.status] || existingReport.status;
+    }
+  }
+
+  document.getElementById("reviseBtn").addEventListener("click", async () => {
+    if (!reportId) return;
+    clearError(errorBox);
+    try {
+      existingReport = await reviseWeeklyReport(reportId);
+      applyLockState();
+    } catch (err) {
+      showError(errorBox, err);
+    }
+  });
 
   // Every plot on the site (houses and flats alike), every apartment
   // block (for shared structural work that isn't any one flat, e.g.
@@ -616,11 +736,14 @@
         progressEditor = mountItemListEditor(document.getElementById("progressItems"), carried, () => {}, { withPercent: true, withMilestone: true, withVerification: true, plotOptions });
         document.getElementById("carriedOverHint").style.display = "block";
       }
+      generatePosition();
       return;
     }
     document.getElementById("formTitle").textContent = "Edit Weekly Report";
     const { data: r, error } = await supabase.from("weekly_reports").select("*").eq("id", reportId).single();
     if (error) { showError(errorBox, error); return; }
+    existingReport = r;
+    applyLockState();
     document.getElementById("weekStarting").value = r.week_starting;
     document.getElementById("weekEnding").value = r.week_ending;
     document.getElementById("preparedBy").value = r.prepared_by || "";
@@ -657,6 +780,23 @@
       snag_list_id: p.snag_list_id || null,
     }));
     renderPhotos();
+
+    // Show whatever position was last saved — never silently re-fetch a
+    // fresh one on load, even while still draft, so opening a report
+    // never shows something different from what was last saved without
+    // the user explicitly asking (Refresh Position). Only auto-generate
+    // when there's genuinely nothing saved yet (a report saved before
+    // this feature existed).
+    document.getElementById("positionCard").style.display = "block";
+    if (r.system_position && Object.keys(r.system_position).length) {
+      currentPosition = r.system_position;
+      renderPositionBody(currentPosition);
+      document.getElementById("positionGeneratedHint").textContent = r.position_generated_at
+        ? `Position generated ${new Date(r.position_generated_at).toLocaleString("en-GB")}`
+        : "";
+    } else {
+      generatePosition();
+    }
   }
 
   document.getElementById("reportForm").addEventListener("submit", async (e) => {
@@ -684,6 +824,8 @@
       risk_items: riskEditor.getRows(),
       statutory_milestones: statutoryEditor.getRows(),
       photos,
+      system_position: currentPosition || {},
+      position_generated_at: currentPosition?.generatedAt || null,
     };
     document.getElementById("saveBtn").disabled = true;
     try {

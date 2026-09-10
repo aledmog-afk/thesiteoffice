@@ -25,7 +25,7 @@
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>Week</th><th>Programme</th><th>Prepared by</th><th>Logged</th></tr>
+          <tr><th>Week</th><th>Status</th><th>Programme</th><th>Exceptions</th><th>Prepared by</th><th>Last Updated</th></tr>
         </thead>
         <tbody id="reportRows"></tbody>
       </table>
@@ -39,7 +39,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, CONTROL_LEVEL_BADGE } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -48,7 +48,7 @@
   document.getElementById("newReportLink").href = `weekly-report-form.html?project=${projectId}`;
   document.getElementById("emptyNewLink").href = `weekly-report-form.html?project=${projectId}`;
 
-  const statusBadge = {
+  const programmeBadge = {
     "ahead": "badge-blue",
     "on-track": "badge-green",
     "behind": "badge-red",
@@ -74,14 +74,19 @@
       return;
     }
 
-    document.getElementById("reportRows").innerHTML = reports.map((r) => `
+    document.getElementById("reportRows").innerHTML = reports.map((r) => {
+      const exceptionStatus = r.system_position?.exceptions?.status;
+      return `
       <tr class="row-link" onclick="window.location.href='weekly-report-view.html?id=${r.id}'">
         <td><strong>${formatDate(r.week_starting)} – ${formatDate(r.week_ending)}</strong></td>
-        <td><span class="badge ${statusBadge[r.programme_status] || "badge-grey"}">${escapeHtml(r.programme_status)}</span></td>
+        <td><span class="badge ${WEEKLY_REPORT_STATUS_BADGE[r.status] || "badge-grey"}">${WEEKLY_REPORT_STATUS_LABEL[r.status] || escapeHtml(r.status)}</span></td>
+        <td><span class="badge ${programmeBadge[r.programme_status] || "badge-grey"}">${escapeHtml(r.programme_status)}</span></td>
+        <td>${exceptionStatus ? `<span class="badge ${CONTROL_LEVEL_BADGE[exceptionStatus.level] || "badge-grey"}">${exceptionStatus.label}</span>` : `<span class="hint">not generated</span>`}</td>
         <td>${escapeHtml(r.prepared_by) || "—"}</td>
-        <td>${formatDate(r.created_at?.slice(0, 10))}</td>
+        <td>${formatDate((r.updated_at || r.created_at)?.slice(0, 10))}</td>
       </tr>
-    `).join("");
+    `;
+    }).join("");
   }
 
   load();

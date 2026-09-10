@@ -1828,3 +1828,291 @@ export function mountTableEditor(container, initialRows, onChange, { columns }) 
   render();
   return { getRows: () => rows };
 }
+
+// ─── Weekly Reporting: system-generated position (Priority 9) ────
+// A weekly report already had a rich HUMAN side — progress, weather,
+// labour, risks, commercial items, photos, all pre-existing, all
+// exactly what they always were. This section adds the SYSTEM side:
+// what Actions/Snags/Inspections/H&S actually say "as of" the report's
+// own reporting period, structured the same transparent way
+// getProjectControlSummary() (Priority 6) already established — counts
+// plus a plain-English Attention/Watch/On Track reason, never a
+// numeric score. The one deliberate difference from the Dashboard:
+// every calculation here is anchored on the report's own week_ending,
+// never the real "today" — a report about a past week must always show
+// the same position however long after that week it's actually opened,
+// and must be exactly reproducible in a test against fixed dates, never
+// the live clock. Server-side triggers (sql/schema.sql, v33 —
+// weekly_reports_before_write()) are the real authority for the
+// status lifecycle and for locking content once approved/issued; these
+// functions exist only so every page shares one query shape and one
+// definition of "during this period," same as every prior priority.
+
+// Extracts the calendar-date component of a Postgres timestamptz value
+// (e.g. "2026-09-08T14:30:00+00:00" -> "2026-09-08") by slicing the ISO
+// string directly — never via `new Date(ts).toLocaleDateString()` or
+// toLocalISODate(new Date(ts)), both of which depend on the browser's
+// own local timezone offset. Period-membership checks need one fixed,
+// deterministic definition regardless of who's viewing the report or
+// what timezone a test happens to run in.
+export function dateOfTimestamp(ts) {
+  return ts ? String(ts).slice(0, 10) : null;
+}
+
+// The one, single definition of "happened during this reporting
+// period" every function below uses — a plain `date` string (or the
+// date component of a timestamp, via dateOfTimestamp() above) falling
+// within [weekStarting, weekEnding] inclusive.
+export function inPeriod(dateStr, weekStarting, weekEnding) {
+  return !!dateStr && dateStr >= weekStarting && dateStr <= weekEnding;
+}
+
+// Mirrors categoriseAction()'s own exclusion list — completed/cancelled
+// actions are resolved work, not outstanding, regardless of due_date.
+function isActionOutstanding(action) {
+  return !["completed", "cancelled"].includes(action.status);
+}
+
+// ─── Actions ─────────────────────────────────────────────────────
+export function summariseActionsForReport(actions, period) {
+  const { weekStarting, weekEnding } = period;
+  const overdue = actions.filter((a) => categoriseAction(a, weekEnding).overdue);
+  const dueDuringPeriod = actions.filter((a) => isActionOutstanding(a) && inPeriod(a.due_date, weekStarting, weekEnding));
+  const blocked = actions.filter((a) => a.status === "blocked");
+  const highCriticalOpen = actions.filter((a) => isActionOutstanding(a) && ["high", "critical"].includes(a.priority));
+  const createdDuringPeriod = actions.filter((a) => inPeriod(dateOfTimestamp(a.created_at), weekStarting, weekEnding));
+  const completedDuringPeriod = actions.filter((a) => a.completed_at && inPeriod(dateOfTimestamp(a.completed_at), weekStarting, weekEnding));
+  return { overdue, dueDuringPeriod, blocked, highCriticalOpen, createdDuringPeriod, completedDuringPeriod };
+}
+
+export async function getWeeklyReportActions(projectId, period) {
+  const { data, error } = await supabase.from("actions").select("id, title, status, priority, assigned_to, due_date, created_at, completed_at").eq("project_id", projectId);
+  if (error) throw error;
+  return summariseActionsForReport(data || [], period);
+}
+
+// ─── Snags / Defects ────────────────────────────────────────────
+export function summariseSnagsForReport(snags, period) {
+  const { weekStarting, weekEnding } = period;
+  const overdue = snags.filter((s) => categoriseSnag(s, weekEnding).overdue);
+  const highPriorityOpen = snags.filter((s) => isSnagOutstanding(s) && s.priority === "high");
+  const raisedDuringPeriod = snags.filter((s) => inPeriod(s.raised_date, weekStarting, weekEnding));
+  const closedDuringPeriod = snags.filter((s) => inPeriod(s.closed_date, weekStarting, weekEnding));
+  const verifiedDuringPeriod = snags.filter((s) => s.verified_at && inPeriod(dateOfTimestamp(s.verified_at), weekStarting, weekEnding));
+  return { overdue, highPriorityOpen, raisedDuringPeriod, closedDuringPeriod, verifiedDuringPeriod };
+}
+
+export async function getWeeklyReportSnags(projectId, period) {
+  const { data, error } = await supabase.from("snag_items").select("id, item_no, location, description, priority, status, raised_date, closed_date, verified_at, snag_list_id").eq("project_id", projectId);
+  if (error) throw error;
+  return summariseSnagsForReport(data || [], period);
+}
+
+// ─── Inspections / Findings ─────────────────────────────────────
+// "Inspections completed during period" uses inspection_date (a real,
+// deliberately-set field — when the inspection actually happened) not
+// created_at/updated_at, which would only say when the database row was
+// last touched. "Findings resolved during period" uses resolved_at
+// (v33 — set/cleared on transition into/out of 'resolved', mirroring
+// actions.completed_at exactly) rather than updated_at, which any
+// unrelated edit (a note, a severity change) would also touch.
+export function summariseInspectionsForReport(findings, inspections, period) {
+  const { weekStarting, weekEnding } = period;
+  const openFindings = findings.filter(isFindingOutstanding);
+  const criticalFindings = openFindings.filter((f) => f.severity === "critical");
+  const highSeverityFindings = openFindings.filter((f) => f.severity === "high");
+  const resolvedDuringPeriod = findings.filter((f) => f.resolved_at && inPeriod(dateOfTimestamp(f.resolved_at), weekStarting, weekEnding));
+  const completedDuringPeriod = inspections.filter((i) => i.status === "completed" && inPeriod(i.inspection_date, weekStarting, weekEnding));
+  return { openFindings, criticalFindings, highSeverityFindings, resolvedDuringPeriod, completedDuringPeriod };
+}
+
+export async function getWeeklyReportInspections(projectId, period) {
+  const [{ data: findings, error: findErr }, { data: inspections, error: inspErr }] = await Promise.all([
+    supabase.from("inspection_findings").select("id, title, severity, status, action_id, inspection_id, resolved_at").eq("project_id", projectId),
+    supabase.from("inspections").select("id, title, status, inspection_date").eq("project_id", projectId),
+  ]);
+  if (findErr) throw findErr;
+  if (inspErr) throw inspErr;
+  return summariseInspectionsForReport(findings || [], inspections || [], period);
+}
+
+// ─── H&S ──────────────────────────────────────────────────────────
+// Only the two signals hs_audits/hs_audit_items can actually support
+// reliably: whether the calendar month this reporting period falls in
+// has an audit logged yet (the same month-bucket check project.html's
+// own "⚠️ No H&S audit logged this month" flag already uses), and the
+// existing unresolved-high-severity count the Dashboard already
+// computes. hs_audits/hs_audit_items themselves are untouched.
+export function summariseHsForReport(hsAudits, hsItems, period) {
+  const monthOfPeriod = monthStartISO(new Date(period.weekEnding + "T00:00:00"));
+  const auditLoggedThisMonth = (hsAudits || []).some((a) => a.month === monthOfPeriod);
+  const highSeverityOpenCount = countHighSeverityHsIssues(hsItems);
+  return { auditLoggedThisMonth, highSeverityOpenCount };
+}
+
+export async function getWeeklyReportHs(projectId, period) {
+  const [{ data: hsAudits, error: auditErr }, { data: hsItems, error: itemsErr }] = await Promise.all([
+    supabase.from("hs_audits").select("month").eq("project_id", projectId),
+    supabase.from("hs_audit_items").select("status, severity").eq("project_id", projectId),
+  ]);
+  if (auditErr) throw auditErr;
+  if (itemsErr) throw itemsErr;
+  return summariseHsForReport(hsAudits || [], hsItems || [], period);
+}
+
+// ─── Exceptions (Red / Amber / Green) ───────────────────────────
+// Reuses the EXACT SAME counting/status functions the Project Control
+// Dashboard (Priority 6-8) already established — aggregateActionCounts(),
+// countHighSeverityHsIssues(), countFindingSignals(), countSnagSignals(),
+// computeControlStatus() — with one deliberate difference: every one of
+// them is called with the report's own week_ending as the reference
+// date, never todayISO(). Same transparent Attention/Watch/On Track
+// levels, same "never a numeric score, never a manufactured green" rule
+// — just anchored to the reporting period instead of the live clock.
+export function computeReportExceptions({ actions, snags, findings, hsItems }, period) {
+  const referenceDate = period.weekEnding;
+  const counts = aggregateActionCounts(actions, referenceDate);
+  counts.highSeverityHs = countHighSeverityHsIssues(hsItems);
+  const actionsById = new Map(actions.map((a) => [a.id, a]));
+  Object.assign(counts, countFindingSignals(findings, actionsById, referenceDate));
+  Object.assign(counts, countSnagSignals(snags, referenceDate));
+  return { counts, status: computeControlStatus(counts) };
+}
+
+export async function getWeeklyReportExceptions(projectId, period) {
+  const [{ data: actions, error: actErr }, { data: snags, error: snagErr }, { data: findings, error: findErr }, { data: hsItems, error: hsErr }] = await Promise.all([
+    supabase.from("actions").select("id, status, priority, due_date").eq("project_id", projectId),
+    supabase.from("snag_items").select("status, priority, due_date").eq("project_id", projectId),
+    supabase.from("inspection_findings").select("id, severity, status, action_id").eq("project_id", projectId),
+    supabase.from("hs_audit_items").select("status, severity").eq("project_id", projectId),
+  ]);
+  if (actErr) throw actErr;
+  if (snagErr) throw snagErr;
+  if (findErr) throw findErr;
+  if (hsErr) throw hsErr;
+  return computeReportExceptions({ actions: actions || [], snags: snags || [], findings: findings || [], hsItems: hsItems || [] }, period);
+}
+
+// ─── Activity ("What changed this week?") ───────────────────────
+// Deliberately built only from real existing timestamps (created_at/
+// completed_at/raised_date/closed_date/verified_at/resolved_at/
+// inspection_date) — never a raw audit_log dump. "Currently blocked" /
+// "currently overdue" / "currently high-priority" are STATES, not
+// events, and belong in Exceptions above, not here — this section only
+// ever answers "what happened," never "what's still wrong."
+export function computeReportActivity({ actions, snags, findings, inspections }, period) {
+  const a = summariseActionsForReport(actions, period);
+  const s = summariseSnagsForReport(snags, period);
+  const i = summariseInspectionsForReport(findings, inspections, period);
+  return {
+    actionsCreated: a.createdDuringPeriod,
+    actionsCompleted: a.completedDuringPeriod,
+    snagsRaised: s.raisedDuringPeriod,
+    snagsClosed: s.closedDuringPeriod,
+    snagsVerified: s.verifiedDuringPeriod,
+    findingsResolved: i.resolvedDuringPeriod,
+    inspectionsCompleted: i.completedDuringPeriod,
+  };
+}
+
+export async function getWeeklyReportActivity(projectId, period) {
+  const [{ data: actions, error: actErr }, { data: snags, error: snagErr }, { data: findings, error: findErr }, { data: inspections, error: inspErr }] = await Promise.all([
+    supabase.from("actions").select("id, title, status, priority, created_at, completed_at").eq("project_id", projectId),
+    supabase.from("snag_items").select("id, item_no, location, raised_date, closed_date, verified_at, snag_list_id").eq("project_id", projectId),
+    supabase.from("inspection_findings").select("id, title, severity, status, resolved_at").eq("project_id", projectId),
+    supabase.from("inspections").select("id, title, status, inspection_date").eq("project_id", projectId),
+  ]);
+  if (actErr) throw actErr;
+  if (snagErr) throw snagErr;
+  if (findErr) throw findErr;
+  if (inspErr) throw inspErr;
+  return computeReportActivity({ actions: actions || [], snags: snags || [], findings: findings || [], inspections: inspections || [] }, period);
+}
+
+// ─── The orchestrator ────────────────────────────────────────────
+// The ONE function that actually hits the network for the position as
+// a whole — six broad, project-scoped selects (actions, snag_items,
+// inspection_findings, inspections, hs_audits, hs_audit_items), each
+// issued exactly ONCE via Promise.all, never one per row and never one
+// per section re-fetching the same table (getWeeklyReportExceptions()/
+// getWeeklyReportActivity()/etc above each do their own single fetch
+// too, so they stay independently useful and independently testable,
+// but this orchestrator deliberately calls the pure compute functions
+// directly instead of those wrappers, to avoid fetching the same six
+// tables twice on every real page load). Returns a plain object — not
+// yet saved anywhere; the caller (weekly-report-form.html) decides
+// when to actually persist it into system_position, and only while the
+// report is still draft/reviewed (the v33 trigger enforces this).
+export async function getWeeklyReportPosition(projectId, period) {
+  const [
+    { data: actions, error: actErr },
+    { data: snags, error: snagErr },
+    { data: findings, error: findErr },
+    { data: inspections, error: inspErr },
+    { data: hsAudits, error: hsAuditErr },
+    { data: hsItems, error: hsItemErr },
+  ] = await Promise.all([
+    supabase.from("actions").select("id, title, status, priority, assigned_to, due_date, created_at, completed_at").eq("project_id", projectId),
+    supabase.from("snag_items").select("id, item_no, location, description, priority, status, raised_date, closed_date, verified_at, snag_list_id").eq("project_id", projectId),
+    supabase.from("inspection_findings").select("id, title, severity, status, action_id, inspection_id, resolved_at").eq("project_id", projectId),
+    supabase.from("inspections").select("id, title, status, inspection_date").eq("project_id", projectId),
+    supabase.from("hs_audits").select("month").eq("project_id", projectId),
+    supabase.from("hs_audit_items").select("status, severity").eq("project_id", projectId),
+  ]);
+  if (actErr) throw actErr;
+  if (snagErr) throw snagErr;
+  if (findErr) throw findErr;
+  if (inspErr) throw inspErr;
+  if (hsAuditErr) throw hsAuditErr;
+  if (hsItemErr) throw hsItemErr;
+
+  const data = { actions: actions || [], snags: snags || [], findings: findings || [], inspections: inspections || [], hsAudits: hsAudits || [], hsItems: hsItems || [] };
+
+  return {
+    period,
+    generatedAt: new Date().toISOString(),
+    exceptions: computeReportExceptions(data, period),
+    activity: computeReportActivity(data, period),
+    actionsSummary: summariseActionsForReport(data.actions, period),
+    snagsSummary: summariseSnagsForReport(data.snags, period),
+    inspectionsSummary: summariseInspectionsForReport(data.findings, data.inspections, period),
+    hsSummary: summariseHsForReport(data.hsAudits, data.hsItems, period),
+  };
+}
+
+// ─── Report lifecycle (Draft -> Reviewed -> Approved -> Issued) ──
+// Server-side triggers (sql/schema.sql, v33) are the real authority —
+// these are thin wrappers, plus a client-side mirror of the valid-
+// transition table for immediate UI feedback only, same convention as
+// validActionStatusTransitions().
+export const WEEKLY_REPORT_STATUSES = ["draft", "reviewed", "approved", "issued"];
+export const WEEKLY_REPORT_STATUS_LABEL = { draft: "Draft", reviewed: "Reviewed", approved: "Approved", issued: "Issued" };
+export const WEEKLY_REPORT_STATUS_BADGE = { draft: "badge-grey", reviewed: "badge-blue", approved: "badge-amber", issued: "badge-green" };
+
+const WEEKLY_REPORT_STATUS_TRANSITIONS = {
+  draft: ["reviewed"],
+  reviewed: ["approved", "draft"],
+  approved: ["issued", "draft"],
+  issued: ["draft"],
+};
+export function validWeeklyReportStatusTransitions(fromStatus) {
+  return WEEKLY_REPORT_STATUS_TRANSITIONS[fromStatus] || [];
+}
+
+// True once a report is approved/issued — its content (including
+// system_position) is locked server-side; only Revise (back to draft)
+// can reopen it for further editing.
+export function isWeeklyReportLocked(report) {
+  return report.status === "approved" || report.status === "issued";
+}
+
+async function updateWeeklyReportStatus(reportId, newStatus) {
+  const { data, error } = await supabase.from("weekly_reports").update({ status: newStatus }).eq("id", reportId).select().single();
+  if (error) throw error;
+  return data;
+}
+export async function reviewWeeklyReport(reportId) { return updateWeeklyReportStatus(reportId, "reviewed"); }
+export async function approveWeeklyReport(reportId) { return updateWeeklyReportStatus(reportId, "approved"); }
+export async function issueWeeklyReport(reportId) { return updateWeeklyReportStatus(reportId, "issued"); }
+export async function reviseWeeklyReport(reportId) { return updateWeeklyReportStatus(reportId, "draft"); }
+}

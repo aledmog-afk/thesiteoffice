@@ -14,17 +14,23 @@
 
 <div class="page">
   <div class="doc-toolbar no-print">
+    <span class="badge" id="statusBadge"></span>
     <a class="btn btn-outline btn-sm" id="editLink" href="#">Edit</a>
     <button class="btn btn-outline btn-sm" id="printBtn">Print / Save as PDF</button>
     <a class="btn btn-amber btn-sm" id="emailLink" href="#">Email to Contractor</a>
+    <button class="btn btn-outline btn-sm" id="reviewBtn" style="display:none;">Mark Reviewed</button>
+    <button class="btn btn-outline btn-sm" id="approveBtn" style="display:none;">Approve</button>
+    <button class="btn btn-amber btn-sm" id="issueBtn" style="display:none;">Issue</button>
+    <button class="btn btn-outline btn-sm" id="reviseBtn" style="display:none;">Revise (reopen as Draft)</button>
   </div>
+  <div id="lifecycleErrorBox" class="error-box no-print"></div>
 
   <div class="doc" id="doc">Loading…</div>
 </div>
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, getOrgLogoUrl, formatGBP, PHOTO_COMPLIANCE_BADGE, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_BADGE, STATUTORY_OUTCOME_BADGE } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, getOrgLogoUrl, formatGBP, showError, clearError, PHOTO_COMPLIANCE_BADGE, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_BADGE, STATUTORY_OUTCOME_BADGE, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, validWeeklyReportStatusTransitions, reviewWeeklyReport, approveWeeklyReport, issueWeeklyReport, reviseWeeklyReport, CONTROL_LEVEL_BADGE } from "./js/app.js";
 
   await requireAuth();
   const reportId = getParam("id");
@@ -202,6 +208,63 @@
     }).join("")}</ul></div>`;
   }
 
+  // Renders whatever was last SAVED into system_position — never a live
+  // re-fetch. This page is the record of what the report said; once a
+  // report is approved/issued this is frozen by the v33 trigger anyway,
+  // but even in draft, showing anything other than the last-saved
+  // snapshot here would defeat the point of a "position" at all.
+  function positionSection(position) {
+    if (!position || !position.exceptions) return "";
+    const { exceptions, activity, actionsSummary, snagsSummary, inspectionsSummary, hsSummary } = position;
+    const activityLines = [
+      ...activity.actionsCreated.map((a) => `<li>Action created: ${escapeHtml(a.title)}</li>`),
+      ...activity.actionsCompleted.map((a) => `<li>Action completed: ${escapeHtml(a.title)}</li>`),
+      ...activity.snagsRaised.map((s) => `<li>Snag raised: #${s.item_no} ${escapeHtml(s.location) || ""}</li>`),
+      ...activity.snagsClosed.map((s) => `<li>Snag closed: #${s.item_no} ${escapeHtml(s.location) || ""}</li>`),
+      ...activity.snagsVerified.map((s) => `<li>Snag verified: #${s.item_no} ${escapeHtml(s.location) || ""}</li>`),
+      ...activity.findingsResolved.map((f) => `<li>Finding resolved: ${escapeHtml(f.title)}</li>`),
+      ...activity.inspectionsCompleted.map((i) => `<li>Inspection completed: ${escapeHtml(i.title)}</li>`),
+    ];
+    return `<div class="doc-section">
+      <h3>System Position</h3>
+      <p><span class="badge ${CONTROL_LEVEL_BADGE[exceptions.status.level] || "badge-grey"}">${exceptions.status.label}</span> ${escapeHtml(exceptions.status.reason)}</p>
+      <p><strong>What changed this period:</strong></p>
+      ${activityLines.length ? `<ul class="body-list">${activityLines.join("")}</ul>` : `<p class="hint">No recorded Actions/Snags/Inspections activity in this period.</p>`}
+      <p class="hint">
+        Actions: ${actionsSummary.overdue.length} overdue, ${actionsSummary.dueDuringPeriod.length} due this period, ${actionsSummary.blocked.length} blocked, ${actionsSummary.highCriticalOpen.length} high/critical open.<br>
+        Snags: ${snagsSummary.overdue.length} overdue, ${snagsSummary.highPriorityOpen.length} high priority open.<br>
+        Inspections: ${inspectionsSummary.criticalFindings.length} critical open finding${inspectionsSummary.criticalFindings.length === 1 ? "" : "s"}, ${inspectionsSummary.openFindings.length} open total.<br>
+        H&amp;S: ${hsSummary.auditLoggedThisMonth ? "audit logged this month" : "no H&S audit logged this month"}, ${hsSummary.highSeverityOpenCount} unresolved high-severity issue${hsSummary.highSeverityOpenCount === 1 ? "" : "s"}.
+      </p>
+    </div>`;
+  }
+
+  function renderLifecycleControls(r) {
+    const badge = document.getElementById("statusBadge");
+    badge.className = `badge ${WEEKLY_REPORT_STATUS_BADGE[r.status] || "badge-grey"}`;
+    badge.textContent = WEEKLY_REPORT_STATUS_LABEL[r.status] || r.status;
+
+    const next = validWeeklyReportStatusTransitions(r.status);
+    document.getElementById("reviewBtn").style.display = next.includes("reviewed") ? "inline-flex" : "none";
+    document.getElementById("approveBtn").style.display = next.includes("approved") ? "inline-flex" : "none";
+    document.getElementById("issueBtn").style.display = next.includes("issued") ? "inline-flex" : "none";
+    document.getElementById("reviseBtn").style.display = next.includes("draft") ? "inline-flex" : "none";
+  }
+
+  async function transitionStatus(fn) {
+    clearError(document.getElementById("lifecycleErrorBox"));
+    try {
+      const updated = await fn(reportId);
+      renderLifecycleControls(updated);
+    } catch (err) {
+      showError(document.getElementById("lifecycleErrorBox"), err);
+    }
+  }
+  document.getElementById("reviewBtn").addEventListener("click", () => transitionStatus(reviewWeeklyReport));
+  document.getElementById("approveBtn").addEventListener("click", () => transitionStatus(approveWeeklyReport));
+  document.getElementById("issueBtn").addEventListener("click", () => transitionStatus(issueWeeklyReport));
+  document.getElementById("reviseBtn").addEventListener("click", () => transitionStatus(reviseWeeklyReport));
+
   async function load() {
     const { data: r, error } = await supabase.from("weekly_reports").select("*, projects(*)").eq("id", reportId).single();
     if (error) { document.getElementById("doc").textContent = "Report not found."; return; }
@@ -226,6 +289,7 @@
     ]);
 
     document.getElementById("editLink").href = `weekly-report-form.html?project=${project.id}&id=${r.id}`;
+    renderLifecycleControls(r);
 
     const progressText = (Array.isArray(r.progress_items) && r.progress_items.length)
       ? r.progress_items.map(i => {
@@ -282,6 +346,7 @@
         <div><dt>Week No.</dt><dd>${weekNo || "—"}</dd></div>
         <div><dt>Week Starting</dt><dd>${formatDate(r.week_starting)}</dd></div>
         <div><dt>Week Ending</dt><dd>${formatDate(r.week_ending)}</dd></div>
+        <div><dt>Status</dt><dd>${WEEKLY_REPORT_STATUS_LABEL[r.status] || r.status}</dd></div>
         <div><dt>Programme Status</dt><dd>${programmeLabel[r.programme_status]}</dd></div>
         <div><dt>Prepared By</dt><dd>${escapeHtml(r.prepared_by) || "—"}</dd></div>
         <div><dt>Clerk of Works</dt><dd>${escapeHtml(project.clerk_of_works_name) || "—"}</dd></div>
@@ -290,6 +355,7 @@
         <div><dt>Contract Period</dt><dd>${project.start_date ? formatDate(project.start_date) : "—"} – ${project.contract_completion_date ? formatDate(project.contract_completion_date) : "—"}</dd></div>
       </dl>
 
+      ${positionSection(r.system_position)}
       ${weatherSection(r.weather_days)}
       ${section("Weather Notes", r.weather)}
       ${verifiedProgressSection(r.progress_items, r.progress_summary)}

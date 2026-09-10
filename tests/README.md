@@ -134,6 +134,32 @@ tests/
                              stays one broad select, backed by real index
                              usage (project+status, project+due_date,
                              action_id), not a sequential scan.
+    weekly_reports.test.mjs  Weekly Reporting: the draft->reviewed->
+                             approved->issued lifecycle (including
+                             rejecting a skipped stage and a backward
+                             jump that isn't Revise), content-locking
+                             once approved/issued (including a single
+                             UPDATE that tries to transition into a
+                             locked status while also sneaking in a
+                             content edit), unchanged editor-only RLS
+                             (snagging-only fully excluded), cross-org
+                             and cross-project isolation (including that
+                             the underlying Actions/Snags/Findings data
+                             a report's position is built from can't
+                             leak across projects through aggregation),
+                             audit integration proving the pre-existing
+                             generic trigger needed zero changes, and
+                             inspection_findings.resolved_at's set/clear-
+                             on-transition behaviour.
+    weekly_reports_performance.test.mjs  Seeds 200 actions / 150 snags /
+                             100 findings on one project (plus 20 other
+                             projects in the same org with their own
+                             data) and proves getWeeklyReportPosition()'s
+                             six project-scoped queries stay fixed-cost
+                             and unaffected by the rest of the
+                             portfolio, backed by real index usage
+                             (including the new weekly_reports
+                             project+week_starting index).
 
   database/                Real database — migration integrity.
     migrations.test.mjs      Fresh install, required tables/functions/RLS,
@@ -160,7 +186,18 @@ tests/
                              verified_by) simply null, never fabricated —
                              plus idempotency of the new columns/indexes/
                              trigger/helper function across repeated
-                             re-application.
+                             re-application. Also covers Weekly
+                             Reporting (Priority 9): like snag_items,
+                             weekly_reports already existed pre-
+                             migration, so this proves a realistic PRE-
+                             EXISTING report (fixed id) keeps its human-
+                             entered content untouched and is
+                             automatically given status='draft' (the
+                             correct, non-destructive default for
+                             historical data — it never retroactively
+                             becomes "issued"), plus idempotency of the
+                             new columns/indexes/trigger and of
+                             inspection_findings.resolved_at.
     fixtures/
       pre_organisations_schema.sql   sql/schema.sql as it existed immediately
                                      before Priority 1 (git rev 0b37633) — a
@@ -233,6 +270,27 @@ tests/
                              critical create -> assign -> update ->
                              complete workflow, plus the default "Active"
                              filter correctly hiding completed work.
+    weekly_report_helpers.test.mjs  summariseActionsForReport()/
+                             summariseSnagsForReport()/
+                             summariseInspectionsForReport()/
+                             summariseHsForReport()/
+                             computeReportExceptions()/
+                             computeReportActivity() — period-boundary
+                             matching (inclusive both ends), overdue/
+                             due-during-period anchored on the report's
+                             own week_ending never the real clock, and
+                             the reused Attention/Watch/On Track rules
+                             — all against fixed date strings.
+    weekly_report_workflow.test.mjs  weekly-report-form.html's and
+                             weekly-report-view.html's real inline
+                             scripts: a new report auto-generates a
+                             system position, Refresh Position calls
+                             through with the current period, an
+                             approved/issued report disables the form
+                             and offers Revise (which unlocks it again),
+                             and the view page's lifecycle buttons show
+                             only the real valid next steps and call
+                             the right function.
 
   uploads/
     client.test.mjs          uploadPhoto()'s client-side size/MIME
