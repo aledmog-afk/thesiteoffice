@@ -2642,3 +2642,203 @@ create policy "project editors delete site-photos" on storage.objects
 -- this app always writes a fresh random filename (see uploadPhoto() in
 -- tracker/js/app.js), so in-place overwrite was never a real use case;
 -- leaving it unpolicied keeps it default-denied.
+
+-- ─── v28 ADDITIONS: audit trail ───
+--
+-- A generic, organisation-aware log of who changed what and when across
+-- the tables that matter for accountability. Scope is deliberately
+-- limited to 8 tables (see below) rather than "every table" — the goal
+-- is a trustworthy record of meaningful changes, not a log of
+-- everything. INSERT/UPDATE/DELETE only; reads/UI interaction are never
+-- audited. This is infrastructure only — no history UI, no retention
+-- policy, no admin edit/delete mechanism is built here.
+
+create table if not exists public.audit_log (
+  id uuid primary key default gen_random_uuid(),
+  -- on delete set null (never cascade): deleting a project/org must
+  -- never destroy the audit history that documents what happened to it.
+  -- Known accepted limitation: once org_id/project_id is nulled this
+  -- way, the row becomes unreachable under the SELECT policy below
+  -- (which requires a live project/org to check access against) except
+  -- to a superuser. Retention/archival of orphaned rows is out of scope
+  -- for this priority.
+  org_id uuid references public.organisations(id) on delete set null,
+  project_id uuid references public.projects(id) on delete set null,
+  -- The acting user, never client-supplied — see write_audit_log()
+  -- below, which reads this from auth.uid() (the session's own
+  -- authenticated identity), not from any value the row itself carries.
+  user_id uuid references auth.users(id) on delete set null,
+  action text not null check (action in ('INSERT', 'UPDATE', 'DELETE')),
+  table_name text not null,
+  record_id uuid not null,
+  -- null for INSERT (nothing existed before), null for DELETE (nothing
+  -- exists after) — never both null, never both populated for an
+  -- INSERT/DELETE.
+  old_data jsonb,
+  new_data jsonb,
+  created_at timestamptz not null default now()
+);
+
+comment on table public.audit_log is 'Append-only change history for INSERT/UPDATE/DELETE on the audited tables. Rows are only ever written by write_audit_log() triggers (security definer) — there is deliberately no INSERT/UPDATE/DELETE RLS policy for ordinary clients, so this table is tamper-resistant from any authenticated application context. Audit trail begins from this migration onward; no historical data is backfilled.';
+
+-- Query shapes this supports: "everything in this org", "everything in
+-- this project" (both newest-first, the natural reading order), "every
+-- change by this user", and "history of this one record". Deliberately
+-- not indexing old_data/new_data (no free-text search requirement yet)
+-- or created_at alone (redundant given the two composite indexes).
+create index if not exists audit_log_org_created_idx on public.audit_log (org_id, created_at desc);
+create index if not exists audit_log_project_created_idx on public.audit_log (project_id, created_at desc);
+create index if not exists audit_log_user_idx on public.audit_log (user_id);
+create index if not exists audit_log_table_record_idx on public.audit_log (table_name, record_id);
+
+alter table public.audit_log enable row level security;
+
+-- Mirrors each underlying table's own real SELECT policy rather than a
+-- blanket "any org member can read" rule. Several audited tables
+-- (project_members, quality_gates, handover_documents, commercial_items,
+-- weekly_reports) are editor-only to read, not member-level — verified
+-- directly against this file's own policies, not assumed. Auditing must
+-- not become a backdoor that lets a snagging-only member read history
+-- for data they could never read directly. projects/snag_items are
+-- member-level (matching their own SELECT policies); org_settings is
+-- org-member-level; everything else defaults to editor-level, fail
+-- closed for any future table added to the audited set.
+create or replace function public.can_read_audit_row(p_table_name text, p_project_id uuid, p_org_id uuid)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+begin
+  if p_table_name = 'org_settings' then
+    return p_org_id is not null and public.is_org_member(p_org_id);
+  end if;
+
+  if p_project_id is null then
+    return false;
+  end if;
+
+  if p_table_name in ('projects', 'snag_items') then
+    return public.is_project_member(p_project_id);
+  end if;
+
+  return public.is_project_editor(p_project_id);
+end;
+$$;
+grant execute on function public.can_read_audit_row(text, uuid, uuid) to authenticated;
+
+drop policy if exists "read own audit history" on public.audit_log;
+create policy "read own audit history" on public.audit_log
+  for select using (public.can_read_audit_row(table_name, project_id, org_id));
+
+-- Deliberately no insert/update/delete policy: RLS is enabled and zero
+-- policies exist for those operations, so Postgres denies them outright
+-- to every role except the table owner / a security-definer function
+-- that bypasses RLS — the same "enabled, unpolicied = default-denied"
+-- pattern already used elsewhere in this schema (e.g. handover_documents
+-- has no UPDATE policy). The only way a row can ever be inserted is via
+-- write_audit_log() below, which runs as security definer.
+
+-- One generic trigger function reused across every audited table rather
+-- than one per table. It uses to_jsonb(NEW/OLD)->>'column' (dynamic key
+-- lookup) instead of static field access (NEW.project_id etc.)
+-- specifically so it stays safe to attach to differently-shaped rows —
+-- projects has no project_id column (the row IS the project), and
+-- org_settings has no project_id at all.
+create or replace function public.write_audit_log()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_record jsonb := to_jsonb(coalesce(new, old));
+  v_record_id uuid;
+  v_project_id uuid;
+  v_org_id uuid;
+begin
+  if TG_TABLE_NAME = 'projects' then
+    v_record_id := (v_record->>'id')::uuid;
+    v_project_id := v_record_id;
+    v_org_id := (v_record->>'org_id')::uuid;
+  elsif TG_TABLE_NAME = 'org_settings' then
+    -- org_settings.id is a legacy smallint singleton (always 1), not a
+    -- uuid — the row's real identity is its org_id, so use that as the
+    -- audit record_id instead of the generic id-based column.
+    v_project_id := null;
+    v_org_id := (v_record->>'org_id')::uuid;
+    v_record_id := v_org_id;
+  else
+    v_record_id := (v_record->>'id')::uuid;
+    v_project_id := (v_record->>'project_id')::uuid;
+    select org_id into v_org_id from public.projects where id = v_project_id;
+  end if;
+
+  insert into public.audit_log (org_id, project_id, user_id, action, table_name, record_id, old_data, new_data)
+  values (
+    v_org_id,
+    v_project_id,
+    auth.uid(),
+    TG_OP,
+    TG_TABLE_NAME,
+    v_record_id,
+    case when TG_OP = 'INSERT' then null else to_jsonb(old) end,
+    case when TG_OP = 'DELETE' then null else to_jsonb(new) end
+  );
+
+  return coalesce(new, old);
+end;
+$$;
+
+-- Audited tables: projects, project_members, quality_gates,
+-- handover_documents, commercial_items and snag_items were named
+-- explicitly by this priority's brief (quality/handover/commercial) or
+-- are the core project/membership/snagging records those depend on.
+-- weekly_reports and org_settings were added after inspection as the
+-- other genuinely high-value, low-noise tables (a weekly report is a
+-- formal record; org name/logo changes are rare and worth tracking).
+-- Deliberately NOT audited yet: plots, blocks, drawings, specifications,
+-- internal_milestones, monthly_reports, hs_audits/hs_audit_items,
+-- snag_lists, organisation_members — straightforward to extend later
+-- (just add a trigger, same function) but out of scope for this pass;
+-- see tracker/README.md.
+drop trigger if exists trg_audit_projects on public.projects;
+create trigger trg_audit_projects
+  after insert or update or delete on public.projects
+  for each row execute function public.write_audit_log();
+
+drop trigger if exists trg_audit_project_members on public.project_members;
+create trigger trg_audit_project_members
+  after insert or update or delete on public.project_members
+  for each row execute function public.write_audit_log();
+
+drop trigger if exists trg_audit_quality_gates on public.quality_gates;
+create trigger trg_audit_quality_gates
+  after insert or update or delete on public.quality_gates
+  for each row execute function public.write_audit_log();
+
+drop trigger if exists trg_audit_handover_documents on public.handover_documents;
+create trigger trg_audit_handover_documents
+  after insert or update or delete on public.handover_documents
+  for each row execute function public.write_audit_log();
+
+drop trigger if exists trg_audit_commercial_items on public.commercial_items;
+create trigger trg_audit_commercial_items
+  after insert or update or delete on public.commercial_items
+  for each row execute function public.write_audit_log();
+
+drop trigger if exists trg_audit_snag_items on public.snag_items;
+create trigger trg_audit_snag_items
+  after insert or update or delete on public.snag_items
+  for each row execute function public.write_audit_log();
+
+drop trigger if exists trg_audit_weekly_reports on public.weekly_reports;
+create trigger trg_audit_weekly_reports
+  after insert or update or delete on public.weekly_reports
+  for each row execute function public.write_audit_log();
+
+drop trigger if exists trg_audit_org_settings on public.org_settings;
+create trigger trg_audit_org_settings
+  after insert or update or delete on public.org_settings
+  for each row execute function public.write_audit_log();

@@ -188,3 +188,43 @@ test("Idempotency: re-applying the current schema after an existing-data migrati
     await dropTestDatabase(db);
   }
 });
+
+test("Audit trail: migrating a pre-existing database never fabricates historical audit records for the backfill itself", async () => {
+  const db = "tracker_test_audit_no_backfill";
+  await createTestDatabase(db);
+  try {
+    const client = adminClient(db);
+    await client.connect();
+    await runSqlFile(client, MOCK_SETUP);
+    await runSqlFile(client, OLD_SCHEMA);
+    await runSqlFile(client, SEED); // pre-existing data, created before audit_log ever existed
+    await runSqlFile(client, CURRENT_SCHEMA); // creates audit_log + triggers AND runs the org/owner backfill in the same execution
+
+    const { rows } = await client.query("select table_name, action, count(*)::int as n from public.audit_log group by table_name, action order by table_name, action");
+    assert.deepEqual(rows, [], `installing the audit trail on an existing database must not invent audit history for data or backfill logic that predates it, found: ${JSON.stringify(rows)}`);
+
+    await client.end();
+  } finally {
+    await dropTestDatabase(db);
+  }
+});
+
+test("Audit trail: the v28 migration block (table, triggers, policies) is idempotent on a fresh install", async () => {
+  const db = "tracker_test_audit_idempotent";
+  await createTestDatabase(db);
+  try {
+    const client = adminClient(db);
+    await client.connect();
+    await runSqlFile(client, MOCK_SETUP);
+    for (let i = 0; i < 3; i++) {
+      await runSqlFile(client, CURRENT_SCHEMA);
+    }
+    const triggers = await client.query(`
+      select count(*)::int as n from pg_trigger where tgname like 'trg_audit_%'
+    `);
+    assert.equal(triggers.rows[0].n, 8, "exactly 8 audit triggers must exist after repeated re-application, never duplicated");
+    await client.end();
+  } finally {
+    await dropTestDatabase(db);
+  }
+});

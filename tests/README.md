@@ -68,12 +68,24 @@ tests/
                              authorisation, cross-org upload/delete denial,
                              snagging-only area restriction, bucket-level
                              size/MIME config.
+    audit_log.test.mjs      Audit trail: INSERT/UPDATE/DELETE record
+                             shape, chronological ordering, bulk-operation
+                             fan-out, cross-org isolation, RLS mirroring
+                             the audited table's own read rule, and
+                             tamper prevention (no client can INSERT,
+                             UPDATE, or DELETE an audit_log row directly).
 
   database/                Real database — migration integrity.
     migrations.test.mjs      Fresh install, required tables/functions/RLS,
-                             idempotent re-run, and the actual pre-existing
+                             idempotent re-run, the actual pre-existing
                              -data migration path (old schema + real data →
-                             current schema), also re-run for idempotency.
+                             current schema, also re-run for idempotency),
+                             and two audit-trail-specific checks: that
+                             installing audit_log on an existing database
+                             never fabricates historical records for the
+                             backfill itself, and that the 8 audit
+                             triggers are never duplicated on repeated
+                             re-application.
     fixtures/
       pre_organisations_schema.sql   sql/schema.sql as it existed immediately
                                      before Priority 1 (git rev 0b37633) — a
