@@ -222,7 +222,56 @@ test("Audit trail: the v28 migration block (table, triggers, policies) is idempo
     const triggers = await client.query(`
       select count(*)::int as n from pg_trigger where tgname like 'trg_audit_%'
     `);
-    assert.equal(triggers.rows[0].n, 8, "exactly 8 audit triggers must exist after repeated re-application, never duplicated");
+    assert.equal(triggers.rows[0].n, 9, "exactly 9 audit triggers must exist after repeated re-application (the original 8 from Priority 4 plus actions from Priority 5), never duplicated");
+    await client.end();
+  } finally {
+    await dropTestDatabase(db);
+  }
+});
+
+test("Actions Engine: migrating a pre-existing database never fabricates historical Actions or audit records", async () => {
+  const db = "tracker_test_actions_no_backfill";
+  await createTestDatabase(db);
+  try {
+    const client = adminClient(db);
+    await client.connect();
+    await runSqlFile(client, MOCK_SETUP);
+    await runSqlFile(client, OLD_SCHEMA);
+    await runSqlFile(client, SEED);
+    await runSqlFile(client, CURRENT_SCHEMA);
+
+    const actions = await client.query("select count(*)::int as n from public.actions");
+    assert.equal(actions.rows[0].n, 0, "installing the Actions Engine on an existing database must not invent any Actions from pre-existing data");
+
+    const actionAudit = await client.query("select count(*)::int as n from public.audit_log where table_name = 'actions'");
+    assert.equal(actionAudit.rows[0].n, 0, "no actions audit history should exist either, since no actions were ever created");
+
+    await client.end();
+  } finally {
+    await dropTestDatabase(db);
+  }
+});
+
+test("Actions Engine: table, indexes, triggers and RLS policy are idempotent across repeated re-application", async () => {
+  const db = "tracker_test_actions_idempotent";
+  await createTestDatabase(db);
+  try {
+    const client = adminClient(db);
+    await client.connect();
+    await runSqlFile(client, MOCK_SETUP);
+    for (let i = 0; i < 3; i++) {
+      await runSqlFile(client, CURRENT_SCHEMA);
+    }
+
+    const triggers = await client.query("select count(*)::int as n from pg_trigger where tgrelid = 'public.actions'::regclass and tgname like 'trg_%'");
+    assert.equal(triggers.rows[0].n, 2, "exactly 2 triggers on actions (before-write + audit), never duplicated");
+
+    const indexes = await client.query("select count(*)::int as n from pg_indexes where tablename = 'actions' and indexname like 'actions_%_idx'");
+    assert.equal(indexes.rows[0].n, 4, "exactly 4 named indexes on actions, never duplicated");
+
+    const policies = await client.query("select count(*)::int as n from pg_policies where tablename = 'actions'");
+    assert.equal(policies.rows[0].n, 4, "exactly 4 RLS policies on actions (select/insert/update/delete), never duplicated");
+
     await client.end();
   } finally {
     await dropTestDatabase(db);

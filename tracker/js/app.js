@@ -279,6 +279,103 @@ export async function getOrgLogoUrl(orgId) {
   return data?.logo_url || null;
 }
 
+// ─── Actions Engine ─────────────────────────────────────────────
+// Server-side triggers (sql/schema.sql, v29 — actions_before_write())
+// are the real authority for org_id derivation, status-transition
+// validity, assignee legitimacy, and created_by/completed_at. These
+// helpers exist only so every page uses the same Supabase query shape
+// instead of duplicating it — they never substitute for that
+// server-side enforcement, and a direct API call bypassing this file
+// entirely is still fully covered by the database itself.
+export const ACTION_STATUSES = ["open", "in_progress", "blocked", "completed", "cancelled"];
+export const ACTION_STATUS_LABEL = { open: "Open", in_progress: "In Progress", blocked: "Blocked", completed: "Completed", cancelled: "Cancelled" };
+export const ACTION_STATUS_BADGE = { open: "badge-grey", in_progress: "badge-blue", blocked: "badge-red", completed: "badge-green", cancelled: "badge-grey" };
+
+export const ACTION_PRIORITIES = ["low", "medium", "high", "critical"];
+export const ACTION_PRIORITY_LABEL = { low: "Low", medium: "Medium", high: "High", critical: "Critical" };
+export const ACTION_PRIORITY_BADGE = { low: "badge-grey", medium: "badge-blue", high: "badge-amber", critical: "badge-red" };
+
+// Mirrors valid_action_status_transition() in sql/schema.sql exactly —
+// duplicated here only for immediate UI feedback (e.g. only offering
+// valid next statuses in a dropdown). The database is still the real
+// authority and independently rejects anything this misses.
+const ACTION_STATUS_TRANSITIONS = {
+  open: ["in_progress", "completed", "cancelled"],
+  in_progress: ["blocked", "completed", "cancelled"],
+  blocked: ["in_progress", "cancelled"],
+  completed: ["open"],
+  cancelled: [],
+};
+export function validActionStatusTransitions(fromStatus) {
+  return ACTION_STATUS_TRANSITIONS[fromStatus] || [];
+}
+
+// Due-date state for display. "overdue"/"due_today"/"upcoming" only
+// apply while an action is still active work — completed/cancelled are
+// their own terminal states regardless of due_date.
+export function actionDueState(action, todayStr = todayISO()) {
+  if (action.status === "completed") return "completed";
+  if (action.status === "cancelled") return "cancelled";
+  if (!action.due_date) return "none";
+  if (action.due_date < todayStr) return "overdue";
+  if (action.due_date === todayStr) return "due_today";
+  return "upcoming";
+}
+export const ACTION_DUE_LABEL = { overdue: "Overdue", due_today: "Due Today", upcoming: "Upcoming", completed: "Completed", cancelled: "Cancelled", none: "" };
+export const ACTION_DUE_BADGE = { overdue: "badge-red", due_today: "badge-amber", upcoming: "badge-grey", completed: "badge-green", cancelled: "badge-grey", none: "" };
+
+export async function listActions(projectId) {
+  const { data, error } = await supabase.from("actions").select("*").eq("project_id", projectId).order("created_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function getAction(actionId) {
+  const { data, error } = await supabase.from("actions").select("*").eq("id", actionId).single();
+  if (error) throw error;
+  return data;
+}
+
+export async function createAction(projectId, { title, description = null, priority = "medium", assignedTo = null, dueDate = null }) {
+  const { data, error } = await supabase.from("actions").insert({
+    project_id: projectId,
+    title,
+    description,
+    priority,
+    assigned_to: assignedTo,
+    due_date: dueDate,
+  }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateAction(actionId, fields) {
+  const { data, error } = await supabase.from("actions").update(fields).eq("id", actionId).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function changeActionStatus(actionId, status) {
+  return updateAction(actionId, { status });
+}
+
+export async function assignAction(actionId, userId) {
+  return updateAction(actionId, { assigned_to: userId });
+}
+
+export async function completeAction(actionId) {
+  return updateAction(actionId, { status: "completed" });
+}
+
+export async function cancelAction(actionId) {
+  return updateAction(actionId, { status: "cancelled" });
+}
+
+export async function deleteAction(actionId) {
+  const { error } = await supabase.from("actions").delete().eq("id", actionId);
+  if (error) throw error;
+}
+
 // ─── Automatic progress ───────────────────────────────────────────
 // Actual Progress % is a weighted average of every plot's own
 // progress_pct, every block's own progress_pct, plus the site's

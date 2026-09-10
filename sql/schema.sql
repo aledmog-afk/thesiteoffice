@@ -2842,3 +2842,190 @@ drop trigger if exists trg_audit_org_settings on public.org_settings;
 create trigger trg_audit_org_settings
   after insert or update or delete on public.org_settings
   for each row execute function public.write_audit_log();
+
+-- ─── v29 ADDITIONS: Actions Engine ───
+--
+-- A generic, project-scoped accountable action: something happens ->
+-- an action is created -> an owner is assigned -> a due date -> a
+-- status -> completion. Foundation for future modules (inspections,
+-- defects, risk, commercial control) — those integrations are NOT
+-- built here, only the reusable engine itself.
+
+-- Parameterised twin of is_project_editor() — takes an explicit
+-- p_user_id rather than always using auth.uid(), so it can validate
+-- someone OTHER than the caller (the assignee) is a legitimate editor
+-- of the project, not just that the caller is. Mirrors is_project_editor
+-- exactly (owner/collaborator, joined through organisation_members).
+create or replace function public.is_project_editor_user(p_project_id uuid, p_user_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.project_members pm
+    join public.projects p on p.id = pm.project_id
+    join public.organisation_members om on om.org_id = p.org_id and om.user_id = pm.user_id
+    where pm.project_id = p_project_id and pm.user_id = p_user_id and pm.role in ('owner', 'collaborator')
+  );
+$$;
+grant execute on function public.is_project_editor_user(uuid, uuid) to authenticated;
+
+-- Deliberately simple fixed transition table, not a workflow engine.
+-- completed -> open is the one explicit "reopen" path; cancelled is
+-- terminal (no transitions out); same-status "changes" (re-saving other
+-- fields without touching status) are always allowed and never reach
+-- this function at all — see actions_before_write() below.
+create or replace function public.valid_action_status_transition(p_from text, p_to text)
+returns boolean
+language sql
+immutable
+as $$
+  select (p_from, p_to) in (
+    ('open', 'in_progress'),
+    ('open', 'completed'),
+    ('open', 'cancelled'),
+    ('in_progress', 'blocked'),
+    ('in_progress', 'completed'),
+    ('in_progress', 'cancelled'),
+    ('blocked', 'in_progress'),
+    ('blocked', 'cancelled'),
+    ('completed', 'open')
+  );
+$$;
+
+create table if not exists public.actions (
+  id uuid primary key default gen_random_uuid(),
+  -- Always trigger-derived from project_id below, never trusted from the
+  -- client — same principle audit_log's org_id already uses. No ON
+  -- DELETE clause, matching projects.org_id's own convention (orgs are
+  -- never deleted through this app; if one ever were, this would
+  -- correctly block it rather than silently orphaning actions).
+  org_id uuid not null references public.organisations(id),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  title text not null,
+  description text,
+  status text not null default 'open' check (status in ('open', 'in_progress', 'blocked', 'completed', 'cancelled')),
+  priority text not null default 'medium' check (priority in ('low', 'medium', 'high', 'critical')),
+  -- References auth.users directly rather than project_members (which
+  -- is per-project membership, not identity) — the safest existing
+  -- pattern already used by created_by throughout this schema. Who is a
+  -- LEGITIMATE assignee for a given project is enforced separately, in
+  -- the trigger below and in RLS, not by the foreign key itself.
+  assigned_to uuid references auth.users(id) on delete set null,
+  created_by uuid references auth.users(id) on delete set null,
+  due_date date,
+  completed_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- Indexes tied to real query shapes: a project's action list (optionally
+-- filtered by status or sorted by due date), and "my open actions"
+-- across projects. org_id is indexed on its own to support isolation
+-- queries and keep it from ever showing up as an unindexed foreign key.
+create index if not exists actions_project_status_idx on public.actions (project_id, status);
+create index if not exists actions_project_due_date_idx on public.actions (project_id, due_date);
+create index if not exists actions_assigned_status_idx on public.actions (assigned_to, status);
+create index if not exists actions_org_id_idx on public.actions (org_id);
+
+-- Server-side authority for everything the frontend also checks for UX:
+-- org_id derivation, created_by/created_at immutability, updated_at,
+-- assignee legitimacy, status-transition validity, and completed_at
+-- set/clear. Client-supplied values for any of these are overridden,
+-- not merely validated, so there is no way to bypass this from a direct
+-- API call. security definer so it can read public.projects regardless
+-- of the caller's own row-level access to that specific row (same
+-- reasoning as write_audit_log()).
+create or replace function public.actions_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_org_id uuid;
+begin
+  select org_id into v_org_id from public.projects where id = new.project_id;
+  if v_org_id is null then
+    raise exception 'actions.project_id must reference an existing project with an organisation';
+  end if;
+  new.org_id := v_org_id;
+
+  if new.assigned_to is not null and not public.is_project_editor_user(new.project_id, new.assigned_to) then
+    raise exception 'assigned_to must be a project editor (owner or collaborator) for this project';
+  end if;
+
+  if TG_OP = 'INSERT' then
+    new.created_by := auth.uid();
+    new.created_at := now();
+    new.updated_at := now();
+  else
+    if new.status <> old.status and not public.valid_action_status_transition(old.status, new.status) then
+      raise exception 'Invalid action status transition: % -> %', old.status, new.status;
+    end if;
+    -- creator/creation time are immutable once set, regardless of what
+    -- an UPDATE payload includes.
+    new.created_by := old.created_by;
+    new.created_at := old.created_at;
+    new.updated_at := now();
+  end if;
+
+  -- completed_at reflects the moment status most recently BECAME
+  -- 'completed' — set on the transition in, left untouched while it
+  -- stays 'completed' (so re-saving other fields doesn't reset it), and
+  -- cleared the moment status moves away from 'completed' (reopening).
+  if new.status = 'completed' and (TG_OP = 'INSERT' or old.status <> 'completed') then
+    new.completed_at := now();
+  elsif new.status <> 'completed' then
+    new.completed_at := null;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_actions_before_write on public.actions;
+create trigger trg_actions_before_write
+  before insert or update on public.actions
+  for each row execute function public.actions_before_write();
+
+alter table public.actions enable row level security;
+
+-- Editor-only (owner/collaborator), matching the majority convention
+-- already used by quality_gates/commercial_items/handover_documents/
+-- weekly_reports/etc. — Actions is a general accountability tool, not
+-- snag-specific, so it belongs in that tier rather than the member-level
+-- exception snag_items deliberately carves out. This also means it
+-- needs no change to can_read_audit_row() (Priority 4) — Actions falls
+-- into that function's existing editor-level default bucket exactly.
+drop policy if exists "editors read actions" on public.actions;
+create policy "editors read actions" on public.actions for select using (public.is_project_editor(project_id));
+
+drop policy if exists "editors insert actions" on public.actions;
+create policy "editors insert actions" on public.actions for insert with check (
+  public.is_project_editor(project_id)
+  and (assigned_to is null or public.is_project_editor_user(project_id, assigned_to))
+);
+
+drop policy if exists "editors update actions" on public.actions;
+create policy "editors update actions" on public.actions for update using (
+  public.is_project_editor(project_id)
+) with check (
+  public.is_project_editor(project_id)
+  and (assigned_to is null or public.is_project_editor_user(project_id, assigned_to))
+);
+
+drop policy if exists "editors delete actions" on public.actions;
+create policy "editors delete actions" on public.actions for delete using (public.is_project_editor(project_id));
+
+-- Audit integration: write_audit_log()'s existing generic "else" branch
+-- (schema.sql v28) already handles any table shaped like this one (a
+-- plain project_id column, uuid id) with zero changes — this is the
+-- ONLY line needed to bring Actions under the existing audit trail.
+drop trigger if exists trg_audit_actions on public.actions;
+create trigger trg_audit_actions
+  after insert or update or delete on public.actions
+  for each row execute function public.write_audit_log();

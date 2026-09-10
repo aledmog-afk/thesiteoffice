@@ -74,18 +74,32 @@ tests/
                              the audited table's own read rule, and
                              tamper prevention (no client can INSERT,
                              UPDATE, or DELETE an audit_log row directly).
+    actions.test.mjs        Actions Engine: CRUD, org_id derivation
+                             (never client-trusted, even when spoofed),
+                             cross-org isolation, cross-project isolation
+                             within the same org, snagging-only members
+                             fully excluded, invalid-assignee rejection,
+                             audit integration (via the existing generic
+                             trigger — no second audit system), and
+                             status/priority/transition validation edge
+                             cases (including the completed->open reopen
+                             path and cancelled being terminal).
 
   database/                Real database — migration integrity.
     migrations.test.mjs      Fresh install, required tables/functions/RLS,
                              idempotent re-run, the actual pre-existing
                              -data migration path (old schema + real data →
                              current schema, also re-run for idempotency),
-                             and two audit-trail-specific checks: that
-                             installing audit_log on an existing database
-                             never fabricates historical records for the
-                             backfill itself, and that the 8 audit
-                             triggers are never duplicated on repeated
-                             re-application.
+                             audit-trail-specific checks (installing
+                             audit_log on an existing database never
+                             fabricates historical records for the
+                             backfill itself, and its triggers are never
+                             duplicated on repeated re-application), and
+                             the equivalent pair for the Actions Engine
+                             (no Actions or Actions audit history
+                             fabricated from pre-existing data; its
+                             table/indexes/triggers/policies are
+                             idempotent).
     fixtures/
       pre_organisations_schema.sql   sql/schema.sql as it existed immediately
                                      before Priority 1 (git rev 0b37633) — a
@@ -112,6 +126,14 @@ tests/
                              fed <script>/onerror payloads — asserts the
                              payload became inert text, not that it was
                              merely absent.
+    actions_helpers.test.mjs  actionDueState() (overdue/due-today/
+                             upcoming/completed/cancelled/none) and
+                             validActionStatusTransitions(), the client-
+                             side mirror of the server's transition table.
+    actions_workflow.test.mjs  actions.html's real inline script: the
+                             critical create -> assign -> update ->
+                             complete workflow, plus the default "Active"
+                             filter correctly hiding completed work.
 
   uploads/
     client.test.mjs          uploadPhoto()'s client-side size/MIME

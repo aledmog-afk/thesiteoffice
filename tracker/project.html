@@ -80,6 +80,11 @@
       <div class="tile-name">Commercials</div>
       <div class="tile-stats"><div><strong id="commercialsPendingCount">–</strong>pending review</div></div>
     </a>
+    <a class="tile" href="actions.html?project=" id="actionsTile">
+      <div class="tile-icon">📌</div>
+      <div class="tile-name">Actions</div>
+      <div class="tile-stats"><div><strong id="actionsOpenCount">–</strong>open</div></div>
+    </a>
     <a class="tile" href="drawings.html?project=" id="drawingsTile">
       <div class="tile-icon">📐</div>
       <div class="tile-name">Drawings &amp; Layouts</div>
@@ -195,6 +200,7 @@
   document.getElementById("hsAuditsTile").href = `hs-audits.html?project=${projectId}`;
   document.getElementById("commercialsTile").href = `commercials.html?project=${projectId}`;
   document.getElementById("drawingsTile").href = `drawings.html?project=${projectId}`;
+  document.getElementById("actionsTile").href = `actions.html?project=${projectId}`;
 
   let project = null;
   let plotsCount = 0;
@@ -519,7 +525,7 @@
     document.getElementById("progressCard").style.display = "none";
     document.getElementById("detailsCard").style.display = "none";
     document.getElementById("collaboratorsCard").style.display = "none";
-    ["reportsTile", "monthlyReportsTile", "plotHandoversTile", "hsAuditsTile", "commercialsTile", "drawingsTile"].forEach((id) => {
+    ["reportsTile", "monthlyReportsTile", "plotHandoversTile", "hsAuditsTile", "commercialsTile", "drawingsTile", "actionsTile"].forEach((id) => {
       document.getElementById(id).style.display = "none";
     });
   }
@@ -547,7 +553,7 @@
 
     loadMembers();
 
-    const [{ count: reportCount }, { count: monthlyReportCount }, { data: snags }, { count: fetchedPlotsCount }, { data: gates }, { data: commercials }, { count: drawingsCount }, { data: hsAudits }] = await Promise.all([
+    const [{ count: reportCount }, { count: monthlyReportCount }, { data: snags }, { count: fetchedPlotsCount }, { data: gates }, { data: commercials }, { count: drawingsCount }, { data: hsAudits }, { data: actions }] = await Promise.all([
       supabase.from("weekly_reports").select("id", { count: "exact", head: true }).eq("project_id", projectId),
       supabase.from("monthly_reports").select("id", { count: "exact", head: true }).eq("project_id", projectId),
       supabase.from("snag_items").select("status").eq("project_id", projectId),
@@ -556,6 +562,7 @@
       supabase.from("commercial_items").select("status").eq("project_id", projectId),
       supabase.from("drawings").select("id", { count: "exact", head: true }).eq("project_id", projectId),
       supabase.from("hs_audits").select("month").eq("project_id", projectId),
+      supabase.from("actions").select("status").eq("project_id", projectId),
     ]);
     document.getElementById("reportCount").textContent = reportCount ?? 0;
     document.getElementById("monthlyReportCount").textContent = monthlyReportCount ?? 0;
@@ -569,6 +576,7 @@
     document.getElementById("drawingsCount").textContent = drawingsCount ?? 0;
     document.getElementById("hsAuditCount").textContent = (hsAudits || []).length;
     document.getElementById("hsAuditFlag").style.display = (hsAudits || []).some(a => a.month === monthStartISO()) ? "none" : "inline-flex";
+    document.getElementById("actionsOpenCount").textContent = (actions || []).filter(a => ["open", "in_progress", "blocked"].includes(a.status)).length;
     updateGeneratePlotsButton();
   }
 

@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Actions – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title">Actions</div>
+      <div class="page-sub" id="projectSub">Accountable follow-ups — an owner, a due date, and a status, through to completion.</div>
+    </div>
+    <button class="btn btn-amber" id="newActionBtn">+ New Action</button>
+  </div>
+
+  <div id="pageErrorBox" class="error-box"></div>
+
+  <div class="card" id="actionCard" style="display:none;">
+    <div id="formErrorBox" class="error-box"></div>
+    <form id="actionForm">
+      <input type="hidden" id="editingId">
+      <div class="field"><label for="title">Title *</label><input type="text" id="title" required placeholder="e.g. Chase Building Control re: substructure sign-off"></div>
+      <div class="field"><label for="description">Description</label><textarea id="description" rows="3" placeholder="Optional detail / evidence / notes"></textarea></div>
+      <div class="form-grid">
+        <div class="field">
+          <label for="priority">Priority</label>
+          <select id="priority"></select>
+        </div>
+        <div class="field">
+          <label for="dueDate">Due date</label>
+          <input type="date" id="dueDate">
+        </div>
+      </div>
+      <div class="form-grid">
+        <div class="field">
+          <label for="assignedTo">Assigned to</label>
+          <select id="assignedTo"><option value="">Unassigned</option></select>
+        </div>
+        <div class="field" id="statusField" style="display:none;">
+          <label for="status">Status</label>
+          <select id="status"></select>
+        </div>
+      </div>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-amber" id="saveBtn">Create Action</button>
+        <button type="button" class="btn btn-outline" id="cancelFormBtn">Cancel</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <div class="btn-row" style="margin-bottom:1rem;">
+      <select id="statusFilter" style="width:auto;">
+        <option value="active">Active (open / in progress / blocked)</option>
+        <option value="all">All</option>
+        <option value="open">Open</option>
+        <option value="in_progress">In Progress</option>
+        <option value="blocked">Blocked</option>
+        <option value="completed">Completed</option>
+        <option value="cancelled">Cancelled</option>
+      </select>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Title</th><th>Priority</th><th>Assigned To</th><th>Due</th><th>Status</th><th></th></tr>
+        </thead>
+        <tbody id="actionRows"></tbody>
+      </table>
+    </div>
+    <div id="emptyState" class="empty" style="display:none;"><p>No actions yet.</p></div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, ACTION_STATUSES, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, actionDueState, validActionStatusTransitions, listActions, createAction, updateAction, deleteAction } from "./js/app.js";
+
+  await requireAuth();
+  const projectId = getParam("project");
+  if (!projectId) window.location.href = "dashboard.html";
+
+  let allActions = [];
+  let editors = []; // { user_id, email } — owner/collaborator only, the only legitimate assignees
+  let statusFilter = "active";
+
+  const pageErrorBox = document.getElementById("pageErrorBox");
+  const formErrorBox = document.getElementById("formErrorBox");
+  const actionCard = document.getElementById("actionCard");
+  const actionForm = document.getElementById("actionForm");
+  const prioritySelect = document.getElementById("priority");
+  const statusSelect = document.getElementById("status");
+  const assignedToSelect = document.getElementById("assignedTo");
+
+  prioritySelect.innerHTML = ACTION_PRIORITIES.map((p) => `<option value="${p}">${ACTION_PRIORITY_LABEL[p]}</option>`).join("");
+  prioritySelect.value = "medium";
+
+  function openForAdd() {
+    actionForm.reset();
+    document.getElementById("editingId").value = "";
+    document.getElementById("statusField").style.display = "none";
+    document.getElementById("saveBtn").textContent = "Create Action";
+    prioritySelect.value = "medium";
+    clearError(formErrorBox);
+    actionCard.style.display = "block";
+  }
+
+  function openForEdit(action) {
+    document.getElementById("editingId").value = action.id;
+    document.getElementById("title").value = action.title;
+    document.getElementById("description").value = action.description || "";
+    prioritySelect.value = action.priority;
+    document.getElementById("dueDate").value = action.due_date || "";
+    assignedToSelect.value = action.assigned_to || "";
+    document.getElementById("statusField").style.display = "block";
+    statusSelect.innerHTML = [action.status, ...validActionStatusTransitions(action.status)]
+      .map((s) => `<option value="${s}">${ACTION_STATUS_LABEL[s]}</option>`).join("");
+    statusSelect.value = action.status;
+    document.getElementById("saveBtn").textContent = "Save Changes";
+    clearError(formErrorBox);
+    actionCard.style.display = "block";
+  }
+  window.editAction = (id) => { const a = allActions.find((x) => x.id === id); if (a) openForEdit(a); };
+
+  document.getElementById("newActionBtn").addEventListener("click", openForAdd);
+  document.getElementById("cancelFormBtn").addEventListener("click", () => { actionCard.style.display = "none"; });
+
+  actionForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearError(formErrorBox);
+    const editingId = document.getElementById("editingId").value;
+    const dueDate = document.getElementById("dueDate").value || null;
+    try {
+      if (editingId) {
+        const payload = {
+          title: document.getElementById("title").value.trim(),
+          description: document.getElementById("description").value.trim() || null,
+          priority: prioritySelect.value,
+          due_date: dueDate,
+          assigned_to: assignedToSelect.value || null,
+          status: statusSelect.value,
+        };
+        await updateAction(editingId, payload);
+      } else {
+        await createAction(projectId, {
+          title: document.getElementById("title").value.trim(),
+          description: document.getElementById("description").value.trim() || null,
+          priority: prioritySelect.value,
+          assignedTo: assignedToSelect.value || null,
+          dueDate,
+        });
+      }
+      actionCard.style.display = "none";
+      load();
+    } catch (err) {
+      showError(formErrorBox, err);
+    }
+  });
+
+  async function quickComplete(id) {
+    clearError(pageErrorBox);
+    try { await updateAction(id, { status: "completed" }); load(); }
+    catch (err) { showError(pageErrorBox, err); }
+  }
+  window.quickComplete = quickComplete;
+
+  async function quickCancel(id) {
+    if (!confirm("Cancel this action?")) return;
+    clearError(pageErrorBox);
+    try { await updateAction(id, { status: "cancelled" }); load(); }
+    catch (err) { showError(pageErrorBox, err); }
+  }
+  window.quickCancel = quickCancel;
+
+  async function removeAction(id) {
+    if (!confirm("Delete this action? This cannot be undone.")) return;
+    clearError(pageErrorBox);
+    try { await deleteAction(id); load(); }
+    catch (err) { showError(pageErrorBox, err); }
+  }
+  window.removeAction = removeAction;
+
+  function editorEmail(userId) {
+    return editors.find((m) => m.user_id === userId)?.email || "—";
+  }
+
+  function visibleActions() {
+    if (statusFilter === "all") return allActions;
+    if (statusFilter === "active") return allActions.filter((a) => ["open", "in_progress", "blocked"].includes(a.status));
+    return allActions.filter((a) => a.status === statusFilter);
+  }
+
+  function render() {
+    const rows = visibleActions();
+    document.getElementById("emptyState").style.display = rows.length ? "none" : "block";
+    document.getElementById("actionRows").innerHTML = rows.map((a) => {
+      const due = actionDueState(a);
+      const dueText = a.due_date ? formatDate(a.due_date) : "—";
+      const dueBadge = due === "none" ? "" : `<span class="badge ${ACTION_DUE_BADGE[due]}" style="margin-left:0.4rem;">${ACTION_DUE_LABEL[due]}</span>`;
+      const active = !["completed", "cancelled"].includes(a.status);
+      return `
+        <tr>
+          <td><strong>${escapeHtml(a.title)}</strong>${a.description ? `<div class="hint">${escapeHtml(a.description)}</div>` : ""}</td>
+          <td><span class="badge ${ACTION_PRIORITY_BADGE[a.priority]}">${ACTION_PRIORITY_LABEL[a.priority]}</span></td>
+          <td>${a.assigned_to ? escapeHtml(editorEmail(a.assigned_to)) : "Unassigned"}</td>
+          <td>${dueText}${dueBadge}</td>
+          <td><span class="badge ${ACTION_STATUS_BADGE[a.status]}">${ACTION_STATUS_LABEL[a.status]}</span></td>
+          <td class="btn-row">
+            <button class="btn btn-outline btn-sm" onclick="editAction('${a.id}')">Edit</button>
+            ${active ? `<button class="btn btn-outline btn-sm" onclick="quickComplete('${a.id}')">Complete</button>` : ""}
+            ${active ? `<button class="btn btn-outline btn-sm" onclick="quickCancel('${a.id}')">Cancel</button>` : ""}
+            <button class="btn btn-danger btn-sm" onclick="removeAction('${a.id}')">Delete</button>
+          </td>
+        </tr>
+      `;
+    }).join("");
+  }
+
+  document.getElementById("statusFilter").addEventListener("change", (e) => {
+    statusFilter = e.target.value;
+    render();
+  });
+
+  async function loadEditors() {
+    const { data, error } = await supabase.rpc("get_project_members", { p_project_id: projectId });
+    if (error) { showError(pageErrorBox, error); return; }
+    editors = (data || []).filter((m) => m.role === "owner" || m.role === "collaborator");
+    assignedToSelect.innerHTML = `<option value="">Unassigned</option>` +
+      editors.map((m) => `<option value="${m.user_id}">${escapeHtml(m.email)}</option>`).join("");
+  }
+
+  async function load() {
+    clearError(pageErrorBox);
+    try {
+      allActions = await listActions(projectId);
+    } catch (err) {
+      showError(pageErrorBox, err);
+      allActions = [];
+    }
+    render();
+  }
+
+  async function init() {
+    const { data: project } = await supabase.from("projects").select("name").eq("id", projectId).single();
+    renderHeader([
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project?.name || "Site", href: `project.html?id=${projectId}` },
+      { label: "Actions" },
+    ]);
+    document.getElementById("projectSub").textContent = project ? `${project.name} — accountable follow-ups.` : "";
+    await loadEditors();
+    load();
+  }
+
+  init();
+</script>
+</body>
+</html>
