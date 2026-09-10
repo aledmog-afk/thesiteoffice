@@ -376,6 +376,152 @@ export async function deleteAction(actionId) {
   if (error) throw error;
 }
 
+// ─── Inspections ────────────────────────────────────────────────
+// Inspection -> Finding -> Evidence -> Action -> Owner -> Due Date ->
+// Completion -> Audit Trail. A separate, general-purpose, ad-hoc
+// inspection workflow — deliberately independent of hs_audits/
+// hs_audit_items (a specific, fixed-checklist MONTHLY H&S compliance
+// mechanism that already feeds monthly_reports; a genuinely different
+// concept, left untouched). Findings that need follow-up link to the
+// EXISTING actions table (Priority 5) via inspection_findings.action_id
+// — there is no second task system. Server-side triggers (sql/schema.sql,
+// v31) are the real authority for org_id/project_id derivation,
+// created_by/created_at immutability, and cross-project linkage
+// validation; these helpers exist only so every page shares one query
+// shape.
+export const INSPECTION_TYPES = ["quality", "health_safety", "progress", "handover", "general"];
+export const INSPECTION_TYPE_LABEL = { quality: "Quality", health_safety: "Health & Safety", progress: "Progress", handover: "Handover", general: "General" };
+
+export const INSPECTION_STATUSES = ["draft", "completed", "cancelled"];
+export const INSPECTION_STATUS_LABEL = { draft: "Draft", completed: "Completed", cancelled: "Cancelled" };
+export const INSPECTION_STATUS_BADGE = { draft: "badge-grey", completed: "badge-green", cancelled: "badge-red" };
+
+export const FINDING_SEVERITIES = ["low", "medium", "high", "critical"];
+export const FINDING_SEVERITY_LABEL = { low: "Low", medium: "Medium", high: "High", critical: "Critical" };
+export const FINDING_SEVERITY_BADGE = { low: "badge-grey", medium: "badge-blue", high: "badge-amber", critical: "badge-red" };
+
+export const FINDING_STATUSES = ["open", "action_required", "resolved", "accepted", "cancelled"];
+export const FINDING_STATUS_LABEL = { open: "Open", action_required: "Action Required", resolved: "Resolved", accepted: "Accepted", cancelled: "Cancelled" };
+export const FINDING_STATUS_BADGE = { open: "badge-red", action_required: "badge-amber", resolved: "badge-green", accepted: "badge-blue", cancelled: "badge-grey" };
+
+// A finding still counts as outstanding work until it's explicitly
+// resolved, accepted, or cancelled — used both for UI and for the
+// dashboard-integration counts below.
+export function isFindingOutstanding(finding) {
+  return !["resolved", "accepted", "cancelled"].includes(finding.status);
+}
+
+export async function getInspections(projectId) {
+  const { data, error } = await supabase.from("inspections").select("*").eq("project_id", projectId).order("inspection_date", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function getInspection(inspectionId) {
+  const { data, error } = await supabase.from("inspections").select("*, projects(name)").eq("id", inspectionId).single();
+  if (error) throw error;
+  return data;
+}
+
+export async function createInspection(projectId, { title, inspectionType = "general", inspectionDate = todayISO(), conductedBy = null, description = null }) {
+  const { data, error } = await supabase.from("inspections").insert({
+    project_id: projectId,
+    title,
+    inspection_type: inspectionType,
+    inspection_date: inspectionDate,
+    conducted_by: conductedBy,
+    description,
+  }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateInspection(inspectionId, fields) {
+  const { data, error } = await supabase.from("inspections").update(fields).eq("id", inspectionId).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function completeInspection(inspectionId) {
+  return updateInspection(inspectionId, { status: "completed" });
+}
+
+export async function cancelInspection(inspectionId) {
+  return updateInspection(inspectionId, { status: "cancelled" });
+}
+
+export async function deleteInspection(inspectionId) {
+  const { error } = await supabase.from("inspections").delete().eq("id", inspectionId);
+  if (error) throw error;
+}
+
+export async function getFindings(inspectionId) {
+  const { data, error } = await supabase.from("inspection_findings").select("*").eq("inspection_id", inspectionId).order("created_at", { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function createFinding(inspectionId, projectId, { title, description = null, severity = "medium" }) {
+  const { data, error } = await supabase.from("inspection_findings").insert({
+    inspection_id: inspectionId,
+    project_id: projectId,
+    title,
+    description,
+    severity,
+  }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateFinding(findingId, fields) {
+  const { data, error } = await supabase.from("inspection_findings").update(fields).eq("id", findingId).select().single();
+  if (error) throw error;
+  return data;
+}
+
+// Explicit, human-driven only — never called automatically because an
+// Action was completed. See createActionFromFinding() below for the
+// one deliberate, explicit status side-effect this module makes.
+export async function resolveFinding(findingId) {
+  return updateFinding(findingId, { status: "resolved" });
+}
+
+export async function deleteFinding(findingId) {
+  const { error } = await supabase.from("inspection_findings").delete().eq("id", findingId);
+  if (error) throw error;
+}
+
+// Creates a brand-new Action in the existing Actions Engine and links
+// it back to this finding — the ONLY way a finding ever gets an
+// action_id; nothing here happens automatically for every finding, only
+// when a user explicitly clicks "Create Action". Also moves the finding
+// to 'action_required' — a direct, deliberate consequence of that same
+// explicit click, not a background workflow — so resolving it later is
+// still always a separate, explicit step (resolveFinding() above).
+export async function createActionFromFinding(finding, { title, description = null, assignedTo = null, priority = "medium", dueDate = null }) {
+  const action = await createAction(finding.project_id, { title, description, priority, assignedTo, dueDate });
+  const updated = await updateFinding(finding.id, { action_id: action.id, status: "action_required" });
+  return { action, finding: updated };
+}
+
+export async function getFindingPhotos(findingId) {
+  const { data, error } = await supabase.from("inspection_finding_photos").select("*").eq("finding_id", findingId).order("created_at", { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function addFindingPhoto(findingId, projectId, file) {
+  const url = await uploadImage(file, `${projectId}/inspections`);
+  const { data, error } = await supabase.from("inspection_finding_photos").insert({ finding_id: findingId, project_id: projectId, photo_url: url }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function deleteFindingPhoto(photoId) {
+  const { error } = await supabase.from("inspection_finding_photos").delete().eq("id", photoId);
+  if (error) throw error;
+}
+
 // ─── Project Control Dashboard ─────────────────────────────────
 // "What requires my attention right now?" — built entirely on top of
 // Actions (the one genuinely date-driven, unambiguous urgency signal
@@ -432,6 +578,32 @@ export function countHighSeverityHsIssues(hsItems) {
   return (hsItems || []).filter((h) => h.status === "non_compliant" && h.severity === "high").length;
 }
 
+// Inspection-finding signals for the dashboard (Priority 7) — only
+// rules the actual data model can support cleanly: a critical finding
+// is urgent on its own; a high-severity finding only becomes urgent
+// once it has a linked Action whose own due_date says so (findings
+// themselves have no due date). actionsById must contain every action
+// visible to the caller (already fetched for the Actions counts above)
+// so this adds no extra query.
+export function countFindingSignals(findings, actionsById, todayStr = todayISO()) {
+  let criticalOpenFindings = 0;
+  let highSeverityOverdueLinkedFindings = 0;
+  let highSeverityDueSoonLinkedFindings = 0;
+  for (const f of findings || []) {
+    if (!isFindingOutstanding(f)) continue;
+    if (f.severity === "critical") criticalOpenFindings++;
+    if (f.severity === "high" && f.action_id) {
+      const linkedAction = actionsById.get(f.action_id);
+      if (linkedAction) {
+        const cats = categoriseAction(linkedAction, todayStr);
+        if (cats.overdue) highSeverityOverdueLinkedFindings++;
+        else if (cats.dueSoon) highSeverityDueSoonLinkedFindings++;
+      }
+    }
+  }
+  return { criticalOpenFindings, highSeverityOverdueLinkedFindings, highSeverityDueSoonLinkedFindings };
+}
+
 // A transparent, explainable control status — never a numeric score.
 // ATTENTION: overdue actions, blocked actions, or unresolved
 // high-severity H&S issues exist — all unambiguous exceptions.
@@ -446,6 +618,8 @@ export function computeControlStatus(counts) {
   if (counts.overdue > 0) attentionReasons.push(`${counts.overdue} overdue action${counts.overdue === 1 ? "" : "s"}${counts.overdueCritical ? ` (${counts.overdueCritical} critical)` : ""}`);
   if (counts.blocked > 0) attentionReasons.push(`${counts.blocked} blocked`);
   if (counts.highSeverityHs > 0) attentionReasons.push(`${counts.highSeverityHs} unresolved high-severity H&S issue${counts.highSeverityHs === 1 ? "" : "s"}`);
+  if (counts.criticalOpenFindings > 0) attentionReasons.push(`${counts.criticalOpenFindings} critical open inspection finding${counts.criticalOpenFindings === 1 ? "" : "s"}`);
+  if (counts.highSeverityOverdueLinkedFindings > 0) attentionReasons.push(`${counts.highSeverityOverdueLinkedFindings} high-severity finding${counts.highSeverityOverdueLinkedFindings === 1 ? "" : "s"} with an overdue Action`);
   if (attentionReasons.length) {
     return { level: "attention", label: "Attention", reason: `Attention — ${attentionReasons.join(", ")}.` };
   }
@@ -454,6 +628,7 @@ export function computeControlStatus(counts) {
   if (counts.dueToday > 0) watchReasons.push(`${counts.dueToday} due today`);
   if (counts.dueSoon > 0) watchReasons.push(`${counts.dueSoon} due within ${DUE_SOON_DAYS} days`);
   if (counts.highCritical > 0) watchReasons.push(`${counts.highCritical} high/critical priority open`);
+  if (counts.highSeverityDueSoonLinkedFindings > 0) watchReasons.push(`${counts.highSeverityDueSoonLinkedFindings} high-severity finding${counts.highSeverityDueSoonLinkedFindings === 1 ? "" : "s"} with an Action due soon`);
   if (watchReasons.length) {
     return { level: "watch", label: "Watch", reason: `Watch — ${watchReasons.join(", ")}.` };
   }
@@ -491,24 +666,33 @@ async function getProjectsWithRole() {
 // not project count, and is the same shape dashboard.html already used
 // for snag_items/weekly_reports before Actions existed.
 export async function getPortfolioControlSummary() {
-  const [projects, { data: actions, error: actErr }, { data: hsItems, error: hsErr }] = await Promise.all([
+  const [projects, { data: actions, error: actErr }, { data: hsItems, error: hsErr }, { data: findings, error: findErr }] = await Promise.all([
     getProjectsWithRole(),
     supabase.from("actions").select("id, project_id, status, priority, due_date"),
     supabase.from("hs_audit_items").select("project_id, status, severity"),
+    supabase.from("inspection_findings").select("id, project_id, severity, status, action_id"),
   ]);
   if (actErr) throw actErr;
   if (hsErr) throw hsErr;
+  if (findErr) throw findErr;
 
   const todayStr = todayISO();
   const actionsByProject = new Map();
+  const actionsById = new Map();
   for (const a of actions || []) {
     if (!actionsByProject.has(a.project_id)) actionsByProject.set(a.project_id, []);
     actionsByProject.get(a.project_id).push(a);
+    actionsById.set(a.id, a);
   }
   const hsByProject = new Map();
   for (const h of hsItems || []) {
     if (!hsByProject.has(h.project_id)) hsByProject.set(h.project_id, []);
     hsByProject.get(h.project_id).push(h);
+  }
+  const findingsByProject = new Map();
+  for (const f of findings || []) {
+    if (!findingsByProject.has(f.project_id)) findingsByProject.set(f.project_id, []);
+    findingsByProject.get(f.project_id).push(f);
   }
 
   const rows = projects.map((project) => {
@@ -517,6 +701,7 @@ export async function getPortfolioControlSummary() {
     }
     const counts = aggregateActionCounts(actionsByProject.get(project.id) || [], todayStr);
     counts.highSeverityHs = countHighSeverityHsIssues(hsByProject.get(project.id) || []);
+    Object.assign(counts, countFindingSignals(findingsByProject.get(project.id) || [], actionsById, todayStr));
     return { project, counts, status: computeControlStatus(counts) };
   });
 
@@ -540,14 +725,18 @@ export async function getPortfolioControlSummary() {
 }
 
 export async function getProjectControlSummary(projectId) {
-  const [actions, { data: hsItems, error: hsErr }] = await Promise.all([
+  const [actions, { data: hsItems, error: hsErr }, { data: findings, error: findErr }] = await Promise.all([
     listActions(projectId),
     supabase.from("hs_audit_items").select("status, severity").eq("project_id", projectId),
+    supabase.from("inspection_findings").select("id, severity, status, action_id").eq("project_id", projectId),
   ]);
   if (hsErr) throw hsErr;
+  if (findErr) throw findErr;
   const todayStr = todayISO();
   const counts = aggregateActionCounts(actions, todayStr);
   counts.highSeverityHs = countHighSeverityHsIssues(hsItems || []);
+  const actionsById = new Map(actions.map((a) => [a.id, a]));
+  Object.assign(counts, countFindingSignals(findings || [], actionsById, todayStr));
   return { actions, counts, status: computeControlStatus(counts) };
 }
 

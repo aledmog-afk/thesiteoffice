@@ -222,7 +222,7 @@ test("Audit trail: the v28 migration block (table, triggers, policies) is idempo
     const triggers = await client.query(`
       select count(*)::int as n from pg_trigger where tgname like 'trg_audit_%'
     `);
-    assert.equal(triggers.rows[0].n, 9, "exactly 9 audit triggers must exist after repeated re-application (the original 8 from Priority 4 plus actions from Priority 5), never duplicated");
+    assert.equal(triggers.rows[0].n, 11, "exactly 11 audit triggers must exist after repeated re-application (the original 8 from Priority 4, actions from Priority 5, inspections + inspection_findings from Priority 7), never duplicated");
     await client.end();
   } finally {
     await dropTestDatabase(db);
@@ -290,6 +290,75 @@ test("Project Control Dashboard: get_my_project_roles() is idempotent and adds n
     }
     const fn = await client.query("select count(*)::int as n from information_schema.routines where routine_schema = 'public' and routine_name = 'get_my_project_roles'");
     assert.equal(fn.rows[0].n, 1, "get_my_project_roles must exist exactly once after repeated re-application");
+    await client.end();
+  } finally {
+    await dropTestDatabase(db);
+  }
+});
+
+test("Inspections: migrating a pre-existing database never fabricates historical inspections, findings, or audit records", async () => {
+  const db = "tracker_test_inspections_no_backfill";
+  await createTestDatabase(db);
+  try {
+    const client = adminClient(db);
+    await client.connect();
+    await runSqlFile(client, MOCK_SETUP);
+    await runSqlFile(client, OLD_SCHEMA);
+    await runSqlFile(client, SEED);
+    await runSqlFile(client, CURRENT_SCHEMA);
+
+    const inspections = await client.query("select count(*)::int as n from public.inspections");
+    assert.equal(inspections.rows[0].n, 0, "installing Inspections on an existing database must not invent any inspections from pre-existing data");
+
+    const findings = await client.query("select count(*)::int as n from public.inspection_findings");
+    assert.equal(findings.rows[0].n, 0);
+
+    const auditRows = await client.query("select count(*)::int as n from public.audit_log where table_name in ('inspections', 'inspection_findings')");
+    assert.equal(auditRows.rows[0].n, 0, "no inspection audit history should exist either, since nothing was ever created");
+
+    // hs_audits/hs_audit_items — a genuinely different, pre-existing
+    // mechanism — must be completely untouched by this migration.
+    const hsAudits = await client.query("select count(*)::int as n from public.hs_audits");
+    assert.equal(hsAudits.rows[0].n, 0, "hs_audits must not gain any rows from the Inspections migration");
+
+    await client.end();
+  } finally {
+    await dropTestDatabase(db);
+  }
+});
+
+test("Inspections: tables, indexes, triggers and RLS policies are idempotent across repeated re-application", async () => {
+  const db = "tracker_test_inspections_idempotent";
+  await createTestDatabase(db);
+  try {
+    const client = adminClient(db);
+    await client.connect();
+    await runSqlFile(client, MOCK_SETUP);
+    for (let i = 0; i < 3; i++) {
+      await runSqlFile(client, CURRENT_SCHEMA);
+    }
+
+    const tables = await client.query("select count(*)::int as n from information_schema.tables where table_schema = 'public' and table_name in ('inspections', 'inspection_findings', 'inspection_finding_photos')");
+    assert.equal(tables.rows[0].n, 3);
+
+    const inspectionTriggers = await client.query("select count(*)::int as n from pg_trigger where tgrelid = 'public.inspections'::regclass and tgname like 'trg_%'");
+    assert.equal(inspectionTriggers.rows[0].n, 2, "exactly 2 triggers on inspections (before-write + audit), never duplicated");
+
+    const findingTriggers = await client.query("select count(*)::int as n from pg_trigger where tgrelid = 'public.inspection_findings'::regclass and tgname like 'trg_%'");
+    assert.equal(findingTriggers.rows[0].n, 2, "exactly 2 triggers on inspection_findings (before-write + audit), never duplicated");
+
+    const inspectionPolicies = await client.query("select count(*)::int as n from pg_policies where tablename = 'inspections'");
+    assert.equal(inspectionPolicies.rows[0].n, 4);
+
+    const findingPolicies = await client.query("select count(*)::int as n from pg_policies where tablename = 'inspection_findings'");
+    assert.equal(findingPolicies.rows[0].n, 4);
+
+    const photoPolicies = await client.query("select count(*)::int as n from pg_policies where tablename = 'inspection_finding_photos'");
+    assert.equal(photoPolicies.rows[0].n, 3, "inspection_finding_photos has select/insert/delete only, no update policy");
+
+    const indexes = await client.query("select count(*)::int as n from pg_indexes where tablename in ('inspections', 'inspection_findings', 'inspection_finding_photos') and indexname like '%_idx'");
+    assert.equal(indexes.rows[0].n, 7, "2 on inspections + 4 on inspection_findings + 1 on inspection_finding_photos, never duplicated");
+
     await client.end();
   } finally {
     await dropTestDatabase(db);

@@ -77,6 +77,12 @@ tests/
                              return zero rows (not partial ones), and
                              that aggregate counts can't be used to
                              infer an inaccessible project's existence.
+    inspections_performance.test.mjs  Seeds 15 projects / 75 inspections /
+                             300 findings and proves the portfolio
+                             finding-signal query stays one broad
+                             select, backed by real index usage
+                             (inspection_id and project_id+severity),
+                             not a sequential scan.
     dashboard_performance.test.mjs  Seeds 25 projects / 500 actions and
                              proves the portfolio query shape stays a
                              fixed small number of broad queries (never
@@ -89,6 +95,17 @@ tests/
                              the audited table's own read rule, and
                              tamper prevention (no client can INSERT,
                              UPDATE, or DELETE an audit_log row directly).
+    inspections.test.mjs    Inspections: CRUD (inspections, findings,
+                             evidence), org_id derivation, cross-org and
+                             cross-project isolation, snagging-only
+                             members fully excluded, IDOR (a finding
+                             cannot be attached to another project's
+                             inspection; a linked Action must belong to
+                             the finding's own project), audit
+                             integration (including Action linkage and
+                             that a rejected cross-org write fabricates
+                             no audit row), and CHECK-constraint/
+                             immutability edge cases.
     actions.test.mjs        Actions Engine: CRUD, org_id derivation
                              (never client-trusted, even when spoofed),
                              cross-org isolation, cross-project isolation
@@ -141,6 +158,19 @@ tests/
                              fed <script>/onerror payloads — asserts the
                              payload became inert text, not that it was
                              merely absent.
+    inspections_helpers.test.mjs  countFindingSignals() and the two new
+                             computeControlStatus() rules it feeds —
+                             critical open findings, and high-severity
+                             findings escalated only via their linked
+                             Action's own due_date (findings have no
+                             due date of their own) — against fixed
+                             dates.
+    inspections_workflow.test.mjs  inspection-detail.html's real inline
+                             script: create inspection -> add finding ->
+                             create Action -> verify the linkage renders
+                             -> resolve finding, plus proof that
+                             completing the linked Action elsewhere
+                             never auto-resolves the finding.
     dashboard_helpers.test.mjs  categoriseAction()/aggregateActionCounts()/
                              countHighSeverityHsIssues()/computeControlStatus()
                              — overdue/due-today/due-soon boundaries, the

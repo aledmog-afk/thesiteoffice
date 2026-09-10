@@ -104,6 +104,11 @@
       <div class="tile-name">Actions</div>
       <div class="tile-stats"><div><strong id="actionsOpenCount">–</strong>open</div></div>
     </a>
+    <a class="tile" href="inspections.html?project=" id="inspectionsTile">
+      <div class="tile-icon">🔍</div>
+      <div class="tile-name">Inspections</div>
+      <div class="tile-stats"><div><strong id="findingsOpenCount">–</strong>open findings</div></div>
+    </a>
     <a class="tile" href="drawings.html?project=" id="drawingsTile">
       <div class="tile-icon">📐</div>
       <div class="tile-name">Drawings &amp; Layouts</div>
@@ -206,7 +211,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, geocodePostcode, recalculateActualProgress, generateMissingPlots, suggestPlotProgress, EXTERNAL_WORKS_TAG, monthStartISO, getProjectControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, geocodePostcode, recalculateActualProgress, generateMissingPlots, suggestPlotProgress, EXTERNAL_WORKS_TAG, monthStartISO, getProjectControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, isFindingOutstanding } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("id");
@@ -220,6 +225,7 @@
   document.getElementById("commercialsTile").href = `commercials.html?project=${projectId}`;
   document.getElementById("drawingsTile").href = `drawings.html?project=${projectId}`;
   document.getElementById("actionsTile").href = `actions.html?project=${projectId}`;
+  document.getElementById("inspectionsTile").href = `inspections.html?project=${projectId}`;
 
   let project = null;
   let plotsCount = 0;
@@ -606,7 +612,7 @@
     document.getElementById("controlCard").style.display = "none";
     document.getElementById("detailsCard").style.display = "none";
     document.getElementById("collaboratorsCard").style.display = "none";
-    ["reportsTile", "monthlyReportsTile", "plotHandoversTile", "hsAuditsTile", "commercialsTile", "drawingsTile", "actionsTile"].forEach((id) => {
+    ["reportsTile", "monthlyReportsTile", "plotHandoversTile", "hsAuditsTile", "commercialsTile", "drawingsTile", "actionsTile", "inspectionsTile"].forEach((id) => {
       document.getElementById(id).style.display = "none";
     });
   }
@@ -635,7 +641,7 @@
     loadMembers();
     loadControlSummary();
 
-    const [{ count: reportCount }, { count: monthlyReportCount }, { data: snags }, { count: fetchedPlotsCount }, { data: gates }, { data: commercials }, { count: drawingsCount }, { data: hsAudits }, { data: actions }] = await Promise.all([
+    const [{ count: reportCount }, { count: monthlyReportCount }, { data: snags }, { count: fetchedPlotsCount }, { data: gates }, { data: commercials }, { count: drawingsCount }, { data: hsAudits }, { data: actions }, { data: findings }] = await Promise.all([
       supabase.from("weekly_reports").select("id", { count: "exact", head: true }).eq("project_id", projectId),
       supabase.from("monthly_reports").select("id", { count: "exact", head: true }).eq("project_id", projectId),
       supabase.from("snag_items").select("status").eq("project_id", projectId),
@@ -645,6 +651,7 @@
       supabase.from("drawings").select("id", { count: "exact", head: true }).eq("project_id", projectId),
       supabase.from("hs_audits").select("month").eq("project_id", projectId),
       supabase.from("actions").select("status").eq("project_id", projectId),
+      supabase.from("inspection_findings").select("status").eq("project_id", projectId),
     ]);
     document.getElementById("reportCount").textContent = reportCount ?? 0;
     document.getElementById("monthlyReportCount").textContent = monthlyReportCount ?? 0;
@@ -659,6 +666,7 @@
     document.getElementById("hsAuditCount").textContent = (hsAudits || []).length;
     document.getElementById("hsAuditFlag").style.display = (hsAudits || []).some(a => a.month === monthStartISO()) ? "none" : "inline-flex";
     document.getElementById("actionsOpenCount").textContent = (actions || []).filter(a => ["open", "in_progress", "blocked"].includes(a.status)).length;
+    document.getElementById("findingsOpenCount").textContent = (findings || []).filter(isFindingOutstanding).length;
     updateGeneratePlotsButton();
   }
 

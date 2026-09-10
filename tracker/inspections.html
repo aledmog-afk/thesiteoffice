@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Inspections – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title">Inspections</div>
+      <div class="page-sub" id="projectSub">Ad-hoc inspections — findings can raise Actions to track and close out.</div>
+    </div>
+    <button class="btn btn-amber" id="newInspectionBtn">+ New Inspection</button>
+  </div>
+
+  <div class="card" id="newCard" style="display:none;">
+    <div id="errorBox" class="error-box"></div>
+    <form id="newForm">
+      <div class="field"><label for="title">Title *</label><input type="text" id="title" required placeholder="e.g. Roofing quality walk-round"></div>
+      <div class="form-grid">
+        <div class="field">
+          <label for="inspectionType">Type</label>
+          <select id="inspectionType"></select>
+        </div>
+        <div class="field"><label for="inspectionDate">Date</label><input type="date" id="inspectionDate" required></div>
+      </div>
+      <div class="field"><label for="conductedBy">Inspector</label><input type="text" id="conductedBy" placeholder="Name or company"></div>
+      <div class="field"><label for="description">Notes</label><textarea id="description" rows="2"></textarea></div>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-amber">Create Inspection</button>
+        <button type="button" class="btn btn-outline" id="cancelBtn">Cancel</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Date</th><th>Type</th><th>Title</th><th>Inspector</th><th>Status</th><th>Open Findings</th><th></th></tr>
+        </thead>
+        <tbody id="inspectionRows"></tbody>
+      </table>
+    </div>
+    <div id="emptyState" class="empty" style="display:none;"><p>No inspections logged yet.</p></div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, formatDate, todayISO, getInspections, createInspection, deleteInspection, INSPECTION_TYPES, INSPECTION_TYPE_LABEL, INSPECTION_STATUS_LABEL, INSPECTION_STATUS_BADGE, isFindingOutstanding, FINDING_SEVERITY_BADGE } from "./js/app.js";
+
+  await requireAuth();
+  const projectId = getParam("project");
+  if (!projectId) window.location.href = "dashboard.html";
+
+  const errorBox = document.getElementById("errorBox");
+  const newCard = document.getElementById("newCard");
+  const inspectionTypeSelect = document.getElementById("inspectionType");
+  inspectionTypeSelect.innerHTML = INSPECTION_TYPES.map((t) => `<option value="${t}">${INSPECTION_TYPE_LABEL[t]}</option>`).join("");
+
+  document.getElementById("newInspectionBtn").addEventListener("click", () => {
+    document.getElementById("newForm").reset();
+    document.getElementById("inspectionDate").value = todayISO();
+    clearError(errorBox);
+    newCard.style.display = "block";
+  });
+  document.getElementById("cancelBtn").addEventListener("click", () => { newCard.style.display = "none"; });
+
+  document.getElementById("newForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearError(errorBox);
+    try {
+      const inspection = await createInspection(projectId, {
+        title: document.getElementById("title").value.trim(),
+        inspectionType: inspectionTypeSelect.value,
+        inspectionDate: document.getElementById("inspectionDate").value,
+        conductedBy: document.getElementById("conductedBy").value.trim() || null,
+        description: document.getElementById("description").value.trim() || null,
+      });
+      window.location.href = `inspection-detail.html?id=${inspection.id}`;
+    } catch (err) {
+      showError(errorBox, err);
+    }
+  });
+
+  async function removeInspection(id) {
+    if (!confirm("Delete this inspection and all its findings? This cannot be undone.")) return;
+    clearError(errorBox);
+    try {
+      await deleteInspection(id);
+      load();
+    } catch (err) {
+      showError(errorBox, err);
+    }
+  }
+  window.removeInspection = removeInspection;
+
+  async function load() {
+    const { data: project } = await supabase.from("projects").select("name").eq("id", projectId).single();
+    renderHeader([
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project?.name || "Site", href: `project.html?id=${projectId}` },
+      { label: "Inspections" },
+    ]);
+    document.getElementById("projectSub").textContent = project ? `${project.name} — ad-hoc inspections.` : "";
+
+    let inspections = [];
+    try {
+      inspections = await getInspections(projectId);
+    } catch (err) {
+      showError(errorBox, err);
+    }
+
+    document.getElementById("emptyState").style.display = inspections.length ? "none" : "block";
+    if (!inspections.length) { document.getElementById("inspectionRows").innerHTML = ""; return; }
+
+    const { data: findings } = await supabase
+      .from("inspection_findings")
+      .select("inspection_id, severity, status")
+      .in("inspection_id", inspections.map((i) => i.id));
+    const openByInspection = {};
+    (findings || []).forEach((f) => {
+      if (!isFindingOutstanding(f)) return;
+      openByInspection[f.inspection_id] = openByInspection[f.inspection_id] || { count: 0, hasHighCritical: false };
+      openByInspection[f.inspection_id].count++;
+      if (f.severity === "high" || f.severity === "critical") openByInspection[f.inspection_id].hasHighCritical = true;
+    });
+
+    document.getElementById("inspectionRows").innerHTML = inspections.map((i) => {
+      const open = openByInspection[i.id];
+      const openCell = open
+        ? `<span class="badge ${open.hasHighCritical ? "badge-red" : "badge-amber"}">${open.count}</span>`
+        : "0";
+      return `
+        <tr class="row-link" onclick="window.location.href='inspection-detail.html?id=${i.id}'">
+          <td><strong>${formatDate(i.inspection_date)}</strong></td>
+          <td><span class="badge badge-blue">${INSPECTION_TYPE_LABEL[i.inspection_type]}</span></td>
+          <td>${escapeHtml(i.title)}</td>
+          <td>${escapeHtml(i.conducted_by) || "—"}</td>
+          <td><span class="badge ${INSPECTION_STATUS_BADGE[i.status]}">${INSPECTION_STATUS_LABEL[i.status]}</span></td>
+          <td>${openCell}</td>
+          <td onclick="event.stopPropagation()"><button class="btn btn-outline btn-sm" onclick="removeInspection('${i.id}')">Delete</button></td>
+        </tr>
+      `;
+    }).join("");
+  }
+
+  load();
+</script>
+</body>
+</html>

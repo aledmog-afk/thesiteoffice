@@ -3059,3 +3059,236 @@ as $$
   select project_id, role from public.project_members where user_id = auth.uid();
 $$;
 grant execute on function public.get_my_project_roles() to authenticated;
+
+-- ─── v31 ADDITIONS: Inspections ───
+--
+-- A general-purpose, ad-hoc inspection workflow: Inspection -> Finding
+-- -> Evidence -> Action -> Owner -> Due Date -> Completion -> Audit
+-- Trail. Deliberately separate from hs_audits/hs_audit_items (a
+-- specific, fixed-checklist MONTHLY H&S compliance mechanism already
+-- feeding monthly_reports — a genuinely different concept, left
+-- entirely untouched here, not merged or replaced). Findings that need
+-- follow-up link to the EXISTING actions table (Priority 5) — there is
+-- no second task system.
+
+create table if not exists public.inspections (
+  id uuid primary key default gen_random_uuid(),
+  -- Always trigger-derived from project_id, never trusted from the
+  -- client — same principle actions.org_id already uses.
+  org_id uuid not null references public.organisations(id),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  title text not null,
+  inspection_type text not null default 'general' check (inspection_type in ('quality', 'health_safety', 'progress', 'handover', 'general')),
+  status text not null default 'draft' check (status in ('draft', 'completed', 'cancelled')),
+  inspection_date date not null default current_date,
+  -- Free-text name/company, matching hs_audits.conducted_by's own
+  -- established naming/shape rather than inventing a parallel field.
+  conducted_by text,
+  description text,
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists inspections_project_status_idx on public.inspections (project_id, status);
+create index if not exists inspections_project_date_idx on public.inspections (project_id, inspection_date);
+
+alter table public.inspections enable row level security;
+
+-- Editor-only, matching hs_audits/quality_gates/commercial_items/
+-- actions — inspections are management/control data, not the
+-- snag_items member-level exception (snagging-only members don't get
+-- this module, same as they don't get Actions).
+drop policy if exists "editors read inspections" on public.inspections;
+create policy "editors read inspections" on public.inspections for select using (public.is_project_editor(project_id));
+drop policy if exists "editors insert inspections" on public.inspections;
+create policy "editors insert inspections" on public.inspections for insert with check (public.is_project_editor(project_id));
+drop policy if exists "editors update inspections" on public.inspections;
+create policy "editors update inspections" on public.inspections for update using (public.is_project_editor(project_id)) with check (public.is_project_editor(project_id));
+drop policy if exists "editors delete inspections" on public.inspections;
+create policy "editors delete inspections" on public.inspections for delete using (public.is_project_editor(project_id));
+
+-- Server-side authority for org_id derivation and created_by/created_at
+-- immutability — same pattern as actions_before_write().
+create or replace function public.inspections_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_org_id uuid;
+begin
+  select org_id into v_org_id from public.projects where id = new.project_id;
+  if v_org_id is null then
+    raise exception 'inspections.project_id must reference an existing project with an organisation';
+  end if;
+  new.org_id := v_org_id;
+
+  if TG_OP = 'INSERT' then
+    new.created_by := auth.uid();
+    new.created_at := now();
+    new.updated_at := now();
+  else
+    new.created_by := old.created_by;
+    new.created_at := old.created_at;
+    new.updated_at := now();
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_inspections_before_write on public.inspections;
+create trigger trg_inspections_before_write
+  before insert or update on public.inspections
+  for each row execute function public.inspections_before_write();
+
+create table if not exists public.inspection_findings (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.organisations(id),
+  -- Denormalised onto the finding (not just reachable via inspection_id)
+  -- for the same reason hs_audit_items.project_id is denormalised onto
+  -- items rather than requiring a join through hs_audits every time —
+  -- simpler RLS and query patterns. The trigger below enforces it always
+  -- matches the parent inspection's own project_id.
+  project_id uuid not null references public.projects(id) on delete cascade,
+  inspection_id uuid not null references public.inspections(id) on delete cascade,
+  title text not null,
+  description text,
+  severity text not null default 'medium' check (severity in ('low', 'medium', 'high', 'critical')),
+  status text not null default 'open' check (status in ('open', 'action_required', 'resolved', 'accepted', 'cancelled')),
+  -- The finding (the origin) references its consequence, not the other
+  -- way around — adding an inspection_finding_id column to actions
+  -- would couple the deliberately reusable Actions Engine (Priority 5)
+  -- to one specific origin module. A finding has at most one action;
+  -- nothing here is created automatically — see createActionFromFinding()
+  -- in tracker/js/app.js, always an explicit user choice.
+  action_id uuid references public.actions(id) on delete set null,
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- inspection_id is the primary per-inspection lookup; the other two
+-- support project/portfolio-level rollups (open high/critical findings,
+-- findings with a linked action) the same way actions' own indexes do.
+create index if not exists inspection_findings_inspection_idx on public.inspection_findings (inspection_id);
+create index if not exists inspection_findings_project_severity_idx on public.inspection_findings (project_id, severity);
+create index if not exists inspection_findings_project_status_idx on public.inspection_findings (project_id, status);
+create index if not exists inspection_findings_action_idx on public.inspection_findings (action_id);
+
+alter table public.inspection_findings enable row level security;
+
+drop policy if exists "editors read inspection_findings" on public.inspection_findings;
+create policy "editors read inspection_findings" on public.inspection_findings for select using (public.is_project_editor(project_id));
+drop policy if exists "editors insert inspection_findings" on public.inspection_findings;
+create policy "editors insert inspection_findings" on public.inspection_findings for insert with check (public.is_project_editor(project_id));
+drop policy if exists "editors update inspection_findings" on public.inspection_findings;
+create policy "editors update inspection_findings" on public.inspection_findings for update using (public.is_project_editor(project_id)) with check (public.is_project_editor(project_id));
+drop policy if exists "editors delete inspection_findings" on public.inspection_findings;
+create policy "editors delete inspection_findings" on public.inspection_findings for delete using (public.is_project_editor(project_id));
+
+-- Validates org_id derivation, created_by/created_at immutability, AND
+-- (the important part) that a finding's project_id always matches its
+-- own inspection's project_id, and a linked action always belongs to
+-- that same project — closing the "attach a finding to another
+-- project's inspection" / "link an action across projects" IDOR paths
+-- server-side, not merely in the UI.
+create or replace function public.inspection_findings_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_org_id uuid;
+  v_inspection_project_id uuid;
+  v_action_project_id uuid;
+begin
+  select org_id into v_org_id from public.projects where id = new.project_id;
+  if v_org_id is null then
+    raise exception 'inspection_findings.project_id must reference an existing project with an organisation';
+  end if;
+  new.org_id := v_org_id;
+
+  select project_id into v_inspection_project_id from public.inspections where id = new.inspection_id;
+  if v_inspection_project_id is null then
+    raise exception 'inspection_findings.inspection_id must reference an existing inspection';
+  end if;
+  if v_inspection_project_id <> new.project_id then
+    raise exception 'a finding''s project_id must match its inspection''s project_id';
+  end if;
+
+  if new.action_id is not null then
+    select project_id into v_action_project_id from public.actions where id = new.action_id;
+    if v_action_project_id is null then
+      raise exception 'inspection_findings.action_id must reference an existing action';
+    end if;
+    if v_action_project_id <> new.project_id then
+      raise exception 'a linked action must belong to the same project as the finding';
+    end if;
+  end if;
+
+  if TG_OP = 'INSERT' then
+    new.created_by := auth.uid();
+    new.created_at := now();
+    new.updated_at := now();
+  else
+    new.created_by := old.created_by;
+    new.created_at := old.created_at;
+    new.updated_at := now();
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_inspection_findings_before_write on public.inspection_findings;
+create trigger trg_inspection_findings_before_write
+  before insert or update on public.inspection_findings
+  for each row execute function public.inspection_findings_before_write();
+
+-- Evidence — a proper relational table (not a jsonb blob) so a finding
+-- can carry more than one photo. Storage itself needs no schema
+-- change: uploads live at "<project_id>/inspections/..." in the
+-- existing site-photos bucket, which site_photos_authorized() (v27)
+-- already authorises via is_project_editor() for any area other than
+-- "snags" — the exact tier this module needs.
+create table if not exists public.inspection_finding_photos (
+  id uuid primary key default gen_random_uuid(),
+  finding_id uuid not null references public.inspection_findings(id) on delete cascade,
+  project_id uuid not null references public.projects(id) on delete cascade,
+  photo_url text not null,
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+create index if not exists inspection_finding_photos_finding_idx on public.inspection_finding_photos (finding_id);
+
+alter table public.inspection_finding_photos enable row level security;
+drop policy if exists "editors read inspection_finding_photos" on public.inspection_finding_photos;
+create policy "editors read inspection_finding_photos" on public.inspection_finding_photos for select using (public.is_project_editor(project_id));
+drop policy if exists "editors insert inspection_finding_photos" on public.inspection_finding_photos;
+create policy "editors insert inspection_finding_photos" on public.inspection_finding_photos for insert with check (public.is_project_editor(project_id));
+drop policy if exists "editors delete inspection_finding_photos" on public.inspection_finding_photos;
+create policy "editors delete inspection_finding_photos" on public.inspection_finding_photos for delete using (public.is_project_editor(project_id));
+-- No update policy — a photo is replaced by deleting and re-adding, same
+-- convention as every other photo attachment in this app.
+
+-- Audit integration: write_audit_log()'s existing generic "else" branch
+-- (v28) already handles any plain project_id-shaped table — inspections
+-- and inspection_findings both fit it with zero changes to that
+-- function. inspection_finding_photos is deliberately NOT audited,
+-- matching this schema's existing convention that not every child
+-- table is (e.g. hs_audit_items itself isn't audited either) — the
+-- audited unit here is the finding's own state, not each evidence
+-- upload.
+drop trigger if exists trg_audit_inspections on public.inspections;
+create trigger trg_audit_inspections
+  after insert or update or delete on public.inspections
+  for each row execute function public.write_audit_log();
+
+drop trigger if exists trg_audit_inspection_findings on public.inspection_findings;
+create trigger trg_audit_inspection_findings
+  after insert or update or delete on public.inspection_findings
+  for each row execute function public.write_audit_log();
