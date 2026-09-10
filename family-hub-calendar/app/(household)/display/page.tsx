@@ -25,8 +25,15 @@ export default function DisplayPage() {
           <p className="text-sm text-slate-500">Shopping and to-dos, shared live.</p>
         </Link>
 
+        <Link
+          href="/chores"
+          className="flex flex-col items-start justify-center rounded-2xl bg-white p-6 shadow-sm"
+        >
+          <h2 className="text-lg font-semibold text-slate-800">Chores</h2>
+          <p className="text-sm text-slate-500">This week&apos;s chart, with points.</p>
+        </Link>
+
         {[
-          { title: 'Chores', note: 'Step 6' },
           { title: 'Weather', note: 'Step 9' },
           { title: 'Meals', note: 'Step 13' },
         ].map((panel) => (

@@ -210,6 +210,25 @@ who ticked it, when, for how many points. A nightly job generates instances 14 d
 active chore's `rrule`; `unique (chore_id, due_on)` makes re-running it a no-op. `points_value` is
 snapshotted onto the instance so raising a chore's value tomorrow never rewrites yesterday.
 
+Generation is deliberately reachable three ways — the cron, a chore edit, and a manual "Refresh
+schedule" button — because that unique index makes it idempotent, so the three need no
+coordination. Upserts pass `ignoreDuplicates`: an upsert that *overwrote* would silently un-tick
+completed chores. It also means the feature works before any cron is wired up, which is what makes
+step 6 shippable on its own.
+
+Editing a chore deletes its **pending future** instances and regenerates them; completed ones are
+history and are left alone, since ledger rows reference them. Retiring a chore does the same
+without regenerating — hence retire rather than delete.
+
+The cron route is not session-authenticated (the scheduler has no session), so it verifies a
+bearer `CRON_SECRET` itself and **fails closed when that is unset** — a public endpoint that writes
+rows must not default to open. Each household's horizon is measured in its own timezone, so "today"
+means today where the tablet is.
+
+One consequence worth surfacing in the UI rather than hiding: an **unassigned chore earns nothing**,
+because there is no member to credit and no per-member login to infer one from. The chore form says
+so instead of silently awarding zero.
+
 **`points_ledger` — append-only**
 
 ```sql
@@ -623,7 +642,9 @@ shipping the service-role key or the encryption key to a browser.
    `lib/calendar/` under 38 unit tests; `SyncStatusBadge` waits for step 11, when there is a
    provider status to show.
 6. **Chores + ledger** — `chores`, `chore_instances`, the instance-generation cron, `points_ledger`,
-   the cache trigger, `complete_chore_instance`. Ship earning before spending.
+   the cache trigger, `complete_chore_instance`. Ship earning before spending. **Done** — due-date
+   generation is in `lib/chores/schedule.ts` under unit test; the cron route fails closed without
+   `CRON_SECRET`.
 7. **Rewards + leaderboard** — `rewards`, `reward_redemptions`, `redeem_reward` with the advisory
    lock, `RewardShelf`, `Leaderboard`, `LedgerDrawer`. Depends on 6 for a balance to spend.
 8. **Kiosk shell** — `/display` dashboard, `KioskFrame`, `IdleWatcher`, `DimOverlay`, wake lock,

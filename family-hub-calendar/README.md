@@ -8,10 +8,10 @@ Schema: [`supabase/migrations/0001_init.sql`](supabase/migrations/0001_init.sql)
 
 ## Status
 
-Build-order steps 1–5 are done: foundation, family profiles, Realtime plumbing,
-shared lists, and the calendar. Chores, meals, photo frame, weather and dimming
-are designed but not built — `/display` shows placeholders naming the step each
-lands in.
+Build-order steps 1–6 are done: foundation, family profiles, Realtime plumbing,
+shared lists, the calendar, and the chore chart. Rewards/leaderboard, meals,
+photo frame, weather and dimming are designed but not built — `/display` shows
+placeholders naming the step each lands in.
 
 Usable now:
 
@@ -20,6 +20,9 @@ Usable now:
 - **`/calendar`** — day, week and month views colour-coded by member, tap to
   add or edit, recurring events with per-occurrence edit and delete. Two-way
   Google/Outlook sync is step 11; everything here is local-only so far.
+- **`/chores`** — this week's chart as member columns × day rows, one-tap
+  ticking, live point balances, and a per-member ledger drawer. Spending those
+  points (rewards + leaderboard) is step 7.
 
 ## Setup
 
@@ -37,8 +40,10 @@ Usable now:
    # fill NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY
    ```
 
-   `SUPABASE_SERVICE_ROLE_KEY` and `TOKEN_ENC_KEY` are only needed from step 11
-   (calendar sync) and can stay empty for now.
+   `SUPABASE_SERVICE_ROLE_KEY` and `CRON_SECRET` are needed only for the
+   scheduled chore-instance top-up; without them the board's "Refresh
+   schedule" button does the same job on demand. `TOKEN_ENC_KEY` is for
+   calendar sync (step 11) and can stay empty.
 
 4. **Enable Realtime** for the tables in the publication. The migration already
    runs `alter publication supabase_realtime add table …`, so this only needs
@@ -75,6 +80,9 @@ psql "$DATABASE_URL" -v uid="'<auth-user-uuid>'" -f supabase/seed.sql
 | `lib/lists/` | `quickAdd.ts` (quantity parsing) and `reconcile.ts` (Realtime/optimistic merge) — both unit tested. |
 | `components/calendar/` | `CalendarShell` (owns view + window), `MonthGrid`, `WeekGrid`, `DayAgenda`, `EventSheet`, `useOccurrences`. |
 | `lib/calendar/` | `timezone.ts` (wall-clock ↔ instant, DST-safe), `occurrences.ts` (recurrence expansion), `rrule.ts` — 38 unit tests. |
+| `components/chores/` | `ChoreBoard`, `ChoreCheckbox`, `LedgerDrawer`, `useChoreBoard`. |
+| `lib/chores/` | `schedule.ts` (due-date generation, unit tested) and `generate.ts` (idempotent upsert). |
+| `app/api/cron/` | Scheduled routes. Each verifies `CRON_SECRET` itself and refuses to run without it. |
 | `app/(household)/` | Signed-in routes; the layout supplies household + Realtime + roster context. |
 | `types/database.ts` | Hand-written for now; regenerate with `supabase gen types` once a project exists. |
 

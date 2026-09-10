@@ -19,6 +19,7 @@ export type EventSyncStatus =
   | 'pending_push'
   | 'pending_delete'
   | 'conflict';
+export type ChoreStatus = 'pending' | 'done' | 'skipped';
 export type LedgerDirection = 'earn' | 'redeem' | 'adjust_up' | 'adjust_down';
 
 export type Household = {
@@ -111,6 +112,76 @@ export type CalendarEventInsert = {
   local_updated_at?: string;
 };
 
+export type Chore = {
+  id: string;
+  household_id: string;
+  title: string;
+  notes: string | null;
+  member_id: string | null;
+  points_value: number;
+  rrule: string | null;
+  starts_on: string; // date
+  ends_on: string | null;
+  is_active: boolean;
+  created_at: string;
+};
+
+export type ChoreInsert = {
+  id?: string;
+  household_id: string;
+  title: string;
+  notes?: string | null;
+  member_id?: string | null;
+  points_value?: number;
+  rrule?: string | null;
+  starts_on?: string;
+  ends_on?: string | null;
+  is_active?: boolean;
+};
+
+export type ChoreInstance = {
+  id: string;
+  household_id: string;
+  chore_id: string;
+  member_id: string | null;
+  due_on: string; // date
+  points_value: number;
+  status: ChoreStatus;
+  completed_at: string | null;
+  completed_by_member_id: string | null;
+};
+
+export type ChoreInstanceInsert = {
+  id?: string;
+  household_id: string;
+  chore_id: string;
+  member_id?: string | null;
+  due_on: string;
+  points_value: number;
+  status?: ChoreStatus;
+};
+
+export type PointsLedgerEntry = {
+  id: number;
+  household_id: string;
+  member_id: string;
+  direction: LedgerDirection;
+  amount: number;
+  signed_amount: number;
+  source_chore_instance_id: string | null;
+  source_redemption_id: string | null;
+  note: string | null;
+  occurred_at: string;
+};
+
+export type MemberPointsCache = {
+  member_id: string;
+  household_id: string;
+  balance: number;
+  lifetime_earned: number;
+  updated_at: string;
+};
+
 export type List = {
   id: string;
   household_id: string;
@@ -185,6 +256,33 @@ export type Database = {
         Row: CalendarEvent;
         Insert: CalendarEventInsert;
         Update: Partial<Omit<CalendarEventInsert, 'id' | 'household_id'>>;
+        Relationships: [];
+      };
+      chores: {
+        Row: Chore;
+        Insert: ChoreInsert;
+        Update: Partial<Omit<ChoreInsert, 'id' | 'household_id'>>;
+        Relationships: [];
+      };
+      chore_instances: {
+        Row: ChoreInstance;
+        Insert: ChoreInstanceInsert;
+        // No UPDATE policy exists for the client (§2.3): status moves only
+        // through complete_/uncomplete_chore_instance so a tick always writes
+        // a matching ledger row.
+        Update: never;
+        Relationships: [];
+      };
+      points_ledger: {
+        Row: PointsLedgerEntry;
+        Insert: never; // append-only, RPC-written
+        Update: never;
+        Relationships: [];
+      };
+      member_points_cache: {
+        Row: MemberPointsCache;
+        Insert: never; // trigger-maintained projection
+        Update: never;
         Relationships: [];
       };
       lists: {

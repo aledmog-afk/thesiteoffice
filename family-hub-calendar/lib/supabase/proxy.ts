@@ -1,7 +1,10 @@
 import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
 
-const PUBLIC_PATHS = ['/login', '/auth'];
+// /api/cron is not session-authenticated: it is called by the platform's
+// scheduler with a bearer secret, which each route verifies itself and fails
+// closed on. Nothing else may be added here without its own auth.
+const PUBLIC_PATHS = ['/login', '/auth', '/api/cron'];
 
 // Refreshes the session cookie on every request and gates the app behind the
 // single household login. The wall tablet stays signed in indefinitely because

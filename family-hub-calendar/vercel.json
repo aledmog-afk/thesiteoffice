@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/generate-chore-instances",
+      "schedule": "0 3 * * *"
+    }
+  ]
+}
