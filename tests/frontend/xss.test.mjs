@@ -20,6 +20,18 @@ import { extractScript, runPage, wait } from "../lib/jsdom-harness.mjs";
 const SCRIPT_PAYLOAD = "<script>alert(1)</script>";
 const IMG_PAYLOAD = '<img src=x onerror=alert(1)>';
 
+const APP_JS = fs.readFileSync(new URL("../../tracker/js/app.js", import.meta.url).pathname, "utf8");
+function extractConst(name) {
+  const m = APP_JS.match(new RegExp(`(?:export )?const ${name} = [\\s\\S]*?;\\n`));
+  if (!m) throw new Error(`${name} not found in app.js`);
+  return new Function(`${m[0].replace(/^export /, "")} return ${name};`)();
+}
+const SNAG_PRIORITIES = extractConst("SNAG_PRIORITIES");
+const SNAG_PRIORITY_LABEL = extractConst("SNAG_PRIORITY_LABEL");
+const SNAG_PRIORITY_BADGE = extractConst("SNAG_PRIORITY_BADGE");
+const SNAG_STATUS_LABEL = extractConst("SNAG_STATUS_LABEL");
+const SNAG_STATUS_BADGE = extractConst("SNAG_STATUS_BADGE");
+
 function assertRenderedSafely(container, payload, fieldDescription) {
   assert.ok(
     container.innerHTML.includes(payload) === false || container.textContent.includes(payload),
@@ -33,7 +45,6 @@ function assertRenderedSafely(container, payload, fieldDescription) {
 }
 
 // ─── Unit level: escapeHtml() itself ──────────────────────────────
-const APP_JS = fs.readFileSync(new URL("../../tracker/js/app.js", import.meta.url).pathname, "utf8");
 const escapeHtmlSrc = APP_JS.match(/export function escapeHtml\(str\)[\s\S]*?\n\}/)[0]
   .replace(/^export function escapeHtml\(str\)\s*\{/, "")
   .replace(/\}$/, "");
@@ -127,9 +138,14 @@ test("snag-list-edit.html: malicious snag description/location/trade render as i
   const snagList = { id: "l1", plot_id: null, title: "General", projects: { id: "p1", name: "Site", main_contractor_email: null }, plots: null };
   const supabase = {
     auth: { getUser: async () => ({ data: { user: { id: "u1" } } }) },
+    rpc: (name) => {
+      if (name === "get_project_members") return { then: (resolve) => resolve({ data: [], error: null }) };
+      if (name === "get_my_role") return { then: (resolve) => resolve({ data: "owner", error: null }) };
+      return { then: (resolve) => resolve({ data: null, error: null }) };
+    },
     from(table) {
       const api = {
-        select() { return api; }, eq() { return api; }, order() { return api; },
+        select() { return api; }, eq() { return api; }, order() { return api; }, in() { return api; },
         single: async () => (table === "snag_lists" ? { data: snagList, error: null } : { data: null, error: null }),
         then(resolve) {
           if (table === "snag_items") resolve({ data: [snag], error: null });
@@ -146,7 +162,12 @@ test("snag-list-edit.html: malicious snag description/location/trade render as i
     renderHeader: () => {},
     getParam: () => "l1",
     escapeHtml,
+    formatDate: (d) => d || "",
     todayISO: () => "2026-01-01",
+    comparePlotNumbers: (a, b) => String(a).localeCompare(String(b)),
+    categoriseSnag: () => ({ overdue: false, dueToday: false, dueSoon: false, highPriority: false }),
+    assignSnag: async () => {}, verifySnag: async () => {}, unverifySnag: async () => {}, createActionFromSnag: async () => {},
+    SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_PRIORITY_BADGE, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE,
     showError: () => {}, clearError: () => {},
   });
   await wait(30);

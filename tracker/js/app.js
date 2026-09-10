@@ -522,6 +522,141 @@ export async function deleteFindingPhoto(photoId) {
   if (error) throw error;
 }
 
+// ─── Snags / Defects (Priority 8) ──────────────────────────────
+// snag_items has existed since the very first schema (a defect record:
+// location, description, trade, photo, open/closed/rejected status) and
+// stays exactly that — this only adds the missing accountability layer
+// (assigned_to, due_date, verified_at/verified_by) and two optional
+// links to the other control-loop records: inspection_finding_id (the
+// snag's origin, if it came from a Finding) and action_id (its
+// consequence, if follow-up work was raised). Server-side triggers
+// (sql/schema.sql, v32) are the real authority for assignee/action/
+// finding legitimacy and verification permission; these helpers exist
+// only so every page shares one query shape. RLS on snag_items itself
+// is UNCHANGED — still member-level, snagging-only members included,
+// exactly as it always has been.
+export const SNAG_PRIORITIES = ["low", "medium", "high"];
+export const SNAG_PRIORITY_LABEL = { low: "Low", medium: "Medium", high: "High" };
+export const SNAG_PRIORITY_BADGE = { low: "badge-grey", medium: "badge-blue", high: "badge-amber" };
+
+export const SNAG_STATUSES = ["open", "closed", "rejected"];
+export const SNAG_STATUS_LABEL = { open: "Open", closed: "Closed", rejected: "Rejected" };
+export const SNAG_STATUS_BADGE = { open: "badge-red", closed: "badge-green", rejected: "badge-grey" };
+
+export function isSnagOutstanding(snag) {
+  return !["closed", "rejected"].includes(snag.status);
+}
+
+export async function listSnags(projectId) {
+  const { data, error } = await supabase.from("snag_items").select("*").eq("project_id", projectId).order("item_no", { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function getSnag(snagId) {
+  const { data, error } = await supabase.from("snag_items").select("*, projects(name)").eq("id", snagId).single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateSnag(snagId, fields) {
+  const { data, error } = await supabase.from("snag_items").update(fields).eq("id", snagId).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function assignSnag(snagId, userId) {
+  return updateSnag(snagId, { assigned_to: userId });
+}
+
+// "Resolve" in the sense this module uses it — moves status to
+// 'closed'. Kept as its own function name (matching the app-wide
+// convention of a named verb per lifecycle step) even though it's a
+// thin wrapper, so pages never hand-write the status string.
+export async function resolveSnag(snagId) {
+  return updateSnag(snagId, { status: "closed" });
+}
+
+// Editor-only server-side (enforced by the trigger, not just here) —
+// independent confirmation that a closed snag is genuinely fixed.
+export async function verifySnag(snagId) {
+  return updateSnag(snagId, { verified_at: new Date().toISOString() });
+}
+
+export async function unverifySnag(snagId) {
+  return updateSnag(snagId, { verified_at: null });
+}
+
+// Creates a brand-new Action and links it back to this snag — the ONLY
+// way a snag ever gets an action_id; nothing here happens automatically
+// for every snag, only when a user explicitly clicks "Create Action".
+// Unlike createActionFromFinding(), a snag's own status is left
+// untouched (it stays whatever it already was) — snag_items has no
+// "action_required" status to move it to, and it must stay open/
+// tracked until the defect is actually fixed regardless of whether an
+// Action now exists for it.
+export async function createActionFromSnag(snag, { title, description = null, assignedTo = null, priority = "medium", dueDate = null }) {
+  const action = await createAction(snag.project_id, { title, description, priority, assignedTo, dueDate });
+  const updated = await updateSnag(snag.id, { action_id: action.id });
+  return { action, snag: updated };
+}
+
+// Every snag-viewing page (snag-list-edit.html, snagging.html) filters
+// strictly by snag_list_id, so a snag can't just be inserted without one
+// or it's invisible in the UI. Findings aren't tied to a plot, so this
+// gets-or-creates one general, project-wide list to hold them — the same
+// "general list" convention weekly-report-form.html already established
+// for its own auto-raised snags (resolveSnagListId(), general list titled
+// "Weekly Report Issues"), reused here rather than invented fresh.
+const FINDING_SNAG_LIST_TITLE = "Inspection Findings";
+
+async function resolveFindingSnagListId(projectId) {
+  const { data: existing, error: findError } = await supabase
+    .from("snag_lists")
+    .select("id")
+    .eq("project_id", projectId)
+    .is("plot_id", null)
+    .ilike("title", FINDING_SNAG_LIST_TITLE)
+    .maybeSingle();
+  if (findError) throw findError;
+  if (existing) return existing.id;
+
+  const { data: { user } } = await supabase.auth.getUser();
+  const { data: created, error: createError } = await supabase
+    .from("snag_lists")
+    .insert({ project_id: projectId, plot_id: null, title: FINDING_SNAG_LIST_TITLE, created_by: user.id })
+    .select()
+    .single();
+  if (createError) throw createError;
+  return created.id;
+}
+
+// Creates a brand-new snag from an inspection finding and links it back
+// (inspection_finding_id) — the origin references its consequence's
+// origin, not the reverse. Also moves the FINDING to 'action_required',
+// the same status a finding gets when an Action is created from it —
+// reusing that existing vocabulary rather than inventing a new one,
+// since a linked snag is exactly the same kind of "this now has
+// tracked follow-up" signal.
+export async function createSnagFromFinding(finding, { location, description = null, trade = null, priority = "medium" }) {
+  const { data: { user } } = await supabase.auth.getUser();
+  const snagListId = await resolveFindingSnagListId(finding.project_id);
+  const { data: snag, error } = await supabase.from("snag_items").insert({
+    project_id: finding.project_id,
+    snag_list_id: snagListId,
+    location,
+    description: description ?? finding.description ?? finding.title,
+    trade,
+    priority,
+    inspection_finding_id: finding.id,
+    raised_date: todayISO(),
+    created_by: user.id,
+  }).select().single();
+  if (error) throw error;
+  const updatedFinding = await updateFinding(finding.id, { status: "action_required" });
+  return { snag, finding: updatedFinding };
+}
+
 // ─── Project Control Dashboard ─────────────────────────────────
 // "What requires my attention right now?" — built entirely on top of
 // Actions (the one genuinely date-driven, unambiguous urgency signal
@@ -604,9 +739,47 @@ export function countFindingSignals(findings, actionsById, todayStr = todayISO()
   return { criticalOpenFindings, highSeverityOverdueLinkedFindings, highSeverityDueSoonLinkedFindings };
 }
 
+// Snag signals (Priority 8) — mirrors categoriseAction()/
+// aggregateActionCounts() exactly, on the snag's own due_date, since
+// snag_items now carries one just like actions do. A rejected/closed
+// snag is resolved work, not an exception, same exclusion rule
+// isSnagOutstanding() already uses everywhere else. Priority alone
+// (with no due date) only ever reaches Watch, mirroring how an
+// action's own high/critical priority works — never Attention on
+// priority alone, and never a fabricated numeric score.
+export function categoriseSnag(snag, todayStr = todayISO()) {
+  const cats = { overdue: false, dueToday: false, dueSoon: false, highPriority: false };
+  if (!isSnagOutstanding(snag)) return cats;
+  if (snag.priority === "high") cats.highPriority = true;
+  if (snag.due_date) {
+    if (snag.due_date < todayStr) cats.overdue = true;
+    else if (snag.due_date === todayStr) cats.dueToday = true;
+    else {
+      const due = new Date(snag.due_date + "T00:00:00");
+      const today = new Date(todayStr + "T00:00:00");
+      const days = Math.round((due - today) / 86400000);
+      if (days > 0 && days <= DUE_SOON_DAYS) cats.dueSoon = true;
+    }
+  }
+  return cats;
+}
+
+export function countSnagSignals(snags, todayStr = todayISO()) {
+  const counts = { overdueSnags: 0, dueTodaySnags: 0, dueSoonSnags: 0, highPrioritySnags: 0 };
+  for (const s of snags || []) {
+    const cats = categoriseSnag(s, todayStr);
+    if (cats.overdue) counts.overdueSnags++;
+    if (cats.dueToday) counts.dueTodaySnags++;
+    if (cats.dueSoon) counts.dueSoonSnags++;
+    if (cats.highPriority) counts.highPrioritySnags++;
+  }
+  return counts;
+}
+
 // A transparent, explainable control status — never a numeric score.
-// ATTENTION: overdue actions, blocked actions, or unresolved
-// high-severity H&S issues exist — all unambiguous exceptions.
+// ATTENTION: overdue actions, blocked actions, overdue snags, or
+// unresolved high-severity H&S issues exist — all unambiguous
+// exceptions.
 // WATCH: nothing above, but something's coming up (due today/soon) or
 // there's open high/critical-priority work.
 // ON TRACK: no open exception of any kind. `restricted` is a distinct
@@ -620,6 +793,7 @@ export function computeControlStatus(counts) {
   if (counts.highSeverityHs > 0) attentionReasons.push(`${counts.highSeverityHs} unresolved high-severity H&S issue${counts.highSeverityHs === 1 ? "" : "s"}`);
   if (counts.criticalOpenFindings > 0) attentionReasons.push(`${counts.criticalOpenFindings} critical open inspection finding${counts.criticalOpenFindings === 1 ? "" : "s"}`);
   if (counts.highSeverityOverdueLinkedFindings > 0) attentionReasons.push(`${counts.highSeverityOverdueLinkedFindings} high-severity finding${counts.highSeverityOverdueLinkedFindings === 1 ? "" : "s"} with an overdue Action`);
+  if (counts.overdueSnags > 0) attentionReasons.push(`${counts.overdueSnags} overdue snag${counts.overdueSnags === 1 ? "" : "s"}`);
   if (attentionReasons.length) {
     return { level: "attention", label: "Attention", reason: `Attention — ${attentionReasons.join(", ")}.` };
   }
@@ -629,6 +803,9 @@ export function computeControlStatus(counts) {
   if (counts.dueSoon > 0) watchReasons.push(`${counts.dueSoon} due within ${DUE_SOON_DAYS} days`);
   if (counts.highCritical > 0) watchReasons.push(`${counts.highCritical} high/critical priority open`);
   if (counts.highSeverityDueSoonLinkedFindings > 0) watchReasons.push(`${counts.highSeverityDueSoonLinkedFindings} high-severity finding${counts.highSeverityDueSoonLinkedFindings === 1 ? "" : "s"} with an Action due soon`);
+  if (counts.dueTodaySnags > 0) watchReasons.push(`${counts.dueTodaySnags} snag${counts.dueTodaySnags === 1 ? "" : "s"} due today`);
+  if (counts.dueSoonSnags > 0) watchReasons.push(`${counts.dueSoonSnags} snag${counts.dueSoonSnags === 1 ? "" : "s"} due within ${DUE_SOON_DAYS} days`);
+  if (counts.highPrioritySnags > 0) watchReasons.push(`${counts.highPrioritySnags} high-priority snag${counts.highPrioritySnags === 1 ? "" : "s"} open`);
   if (watchReasons.length) {
     return { level: "watch", label: "Watch", reason: `Watch — ${watchReasons.join(", ")}.` };
   }
@@ -666,15 +843,17 @@ async function getProjectsWithRole() {
 // not project count, and is the same shape dashboard.html already used
 // for snag_items/weekly_reports before Actions existed.
 export async function getPortfolioControlSummary() {
-  const [projects, { data: actions, error: actErr }, { data: hsItems, error: hsErr }, { data: findings, error: findErr }] = await Promise.all([
+  const [projects, { data: actions, error: actErr }, { data: hsItems, error: hsErr }, { data: findings, error: findErr }, { data: snags, error: snagErr }] = await Promise.all([
     getProjectsWithRole(),
     supabase.from("actions").select("id, project_id, status, priority, due_date"),
     supabase.from("hs_audit_items").select("project_id, status, severity"),
     supabase.from("inspection_findings").select("id, project_id, severity, status, action_id"),
+    supabase.from("snag_items").select("project_id, status, priority, due_date"),
   ]);
   if (actErr) throw actErr;
   if (hsErr) throw hsErr;
   if (findErr) throw findErr;
+  if (snagErr) throw snagErr;
 
   const todayStr = todayISO();
   const actionsByProject = new Map();
@@ -694,6 +873,11 @@ export async function getPortfolioControlSummary() {
     if (!findingsByProject.has(f.project_id)) findingsByProject.set(f.project_id, []);
     findingsByProject.get(f.project_id).push(f);
   }
+  const snagsByProject = new Map();
+  for (const s of snags || []) {
+    if (!snagsByProject.has(s.project_id)) snagsByProject.set(s.project_id, []);
+    snagsByProject.get(s.project_id).push(s);
+  }
 
   const rows = projects.map((project) => {
     if (project.myRole !== "owner" && project.myRole !== "collaborator") {
@@ -702,6 +886,7 @@ export async function getPortfolioControlSummary() {
     const counts = aggregateActionCounts(actionsByProject.get(project.id) || [], todayStr);
     counts.highSeverityHs = countHighSeverityHsIssues(hsByProject.get(project.id) || []);
     Object.assign(counts, countFindingSignals(findingsByProject.get(project.id) || [], actionsById, todayStr));
+    Object.assign(counts, countSnagSignals(snagsByProject.get(project.id) || [], todayStr));
     return { project, counts, status: computeControlStatus(counts) };
   });
 
@@ -725,18 +910,21 @@ export async function getPortfolioControlSummary() {
 }
 
 export async function getProjectControlSummary(projectId) {
-  const [actions, { data: hsItems, error: hsErr }, { data: findings, error: findErr }] = await Promise.all([
+  const [actions, { data: hsItems, error: hsErr }, { data: findings, error: findErr }, { data: snags, error: snagErr }] = await Promise.all([
     listActions(projectId),
     supabase.from("hs_audit_items").select("status, severity").eq("project_id", projectId),
     supabase.from("inspection_findings").select("id, severity, status, action_id").eq("project_id", projectId),
+    supabase.from("snag_items").select("status, priority, due_date").eq("project_id", projectId),
   ]);
   if (hsErr) throw hsErr;
   if (findErr) throw findErr;
+  if (snagErr) throw snagErr;
   const todayStr = todayISO();
   const counts = aggregateActionCounts(actions, todayStr);
   counts.highSeverityHs = countHighSeverityHsIssues(hsItems || []);
   const actionsById = new Map(actions.map((a) => [a.id, a]));
   Object.assign(counts, countFindingSignals(findings || [], actionsById, todayStr));
+  Object.assign(counts, countSnagSignals(snags || [], todayStr));
   return { actions, counts, status: computeControlStatus(counts) };
 }
 

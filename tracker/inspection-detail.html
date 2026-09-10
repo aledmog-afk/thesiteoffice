@@ -87,7 +87,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, getInspection, updateInspection, deleteInspection, getFindings, createFinding, updateFinding, resolveFinding, deleteFinding, createActionFromFinding, getFindingPhotos, addFindingPhoto, deleteFindingPhoto, INSPECTION_TYPES, INSPECTION_TYPE_LABEL, INSPECTION_STATUSES, INSPECTION_STATUS_LABEL, INSPECTION_STATUS_BADGE, FINDING_SEVERITIES, FINDING_SEVERITY_LABEL, FINDING_SEVERITY_BADGE, FINDING_STATUSES, FINDING_STATUS_LABEL, FINDING_STATUS_BADGE, isFindingOutstanding, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, getInspection, updateInspection, deleteInspection, getFindings, createFinding, updateFinding, resolveFinding, deleteFinding, createActionFromFinding, createSnagFromFinding, getFindingPhotos, addFindingPhoto, deleteFindingPhoto, INSPECTION_TYPES, INSPECTION_TYPE_LABEL, INSPECTION_STATUSES, INSPECTION_STATUS_LABEL, INSPECTION_STATUS_BADGE, FINDING_SEVERITIES, FINDING_SEVERITY_LABEL, FINDING_SEVERITY_BADGE, FINDING_STATUSES, FINDING_STATUS_LABEL, FINDING_STATUS_BADGE, isFindingOutstanding, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE } from "./js/app.js";
 
   await requireAuth();
   const inspectionId = getParam("id");
@@ -98,6 +98,7 @@
   let findings = [];
   let photosByFinding = {};
   let actionsById = {};
+  let snagByFinding = {}; // finding.id -> its (first) linked snag_items row, for the link box below
   let editors = [];
 
   document.getElementById("inspectionType").innerHTML = INSPECTION_TYPES.map((t) => `<option value="${t}">${INSPECTION_TYPE_LABEL[t]}</option>`).join("");
@@ -238,6 +239,31 @@
     }
   };
 
+  window.toggleCreateSnagForm = (id) => {
+    const el = document.getElementById(`snag-form-${id}`);
+    if (el) el.style.display = el.style.display === "none" ? "block" : "none";
+  };
+
+  window.submitCreateSnag = async (findingId, e) => {
+    e.preventDefault();
+    clearError(errorBox);
+    const form = e.target;
+    try {
+      const finding = findings.find((f) => f.id === findingId);
+      const { snag, finding: updatedFinding } = await createSnagFromFinding(finding, {
+        location: form.querySelector(".snag-location").value.trim(),
+        trade: form.querySelector(".snag-trade").value.trim() || null,
+        priority: form.querySelector(".snag-priority").value,
+      });
+      snagByFinding[findingId] = snag;
+      const idx = findings.findIndex((f) => f.id === findingId);
+      if (idx >= 0) findings[idx] = updatedFinding;
+      renderFindings();
+    } catch (err) {
+      showError(errorBox, err);
+    }
+  };
+
   window.uploadFindingPhoto = async (findingId, input) => {
     const file = input.files[0];
     if (!file) return;
@@ -280,6 +306,7 @@
   function findingCardHtml(f) {
     const photos = photosByFinding[f.id] || [];
     const linkedAction = f.action_id ? actionsById[f.action_id] : null;
+    const linkedSnag = snagByFinding[f.id] || null;
     const outstanding = isFindingOutstanding(f);
 
     const actionBox = f.action_id
@@ -309,6 +336,28 @@
         </form>
       `;
 
+    const snagBox = linkedSnag
+      ? `<div class="action-link-box">
+           <a href="snag-list-edit.html?id=${linkedSnag.snag_list_id}">🔧 Linked Snag</a>
+           — <span class="badge ${SNAG_STATUS_BADGE[linkedSnag.status]}">${SNAG_STATUS_LABEL[linkedSnag.status]}</span>
+         </div>`
+      : `
+        <button type="button" class="btn btn-outline btn-sm" style="margin-top:0.6rem;" onclick="toggleCreateSnagForm('${f.id}')">Create Snag</button>
+        <form id="snag-form-${f.id}" style="display:none; margin-top:0.6rem;" onsubmit="submitCreateSnag('${f.id}', event)">
+          <div class="field"><label>Location *</label><input type="text" class="snag-location" required placeholder="e.g. First floor bathroom"></div>
+          <div class="form-grid">
+            <div class="field"><label>Trade responsible</label><input type="text" class="snag-trade"></div>
+            <div class="field">
+              <label>Priority</label>
+              <select class="snag-priority">${SNAG_PRIORITIES.map((p) => `<option value="${p}" ${p === (f.severity === "critical" || f.severity === "high" ? "high" : "medium") ? "selected" : ""}>${SNAG_PRIORITY_LABEL[p]}</option>`).join("")}</select>
+            </div>
+          </div>
+          <div class="btn-row">
+            <button type="submit" class="btn btn-amber btn-sm">Create Snag</button>
+          </div>
+        </form>
+      `;
+
     return `
       <div class="finding-card">
         <div class="finding-head">
@@ -320,6 +369,7 @@
         </div>
         ${f.description ? `<p class="hint" style="margin-top:0.4rem;">${escapeHtml(f.description)}</p>` : ""}
         ${actionBox}
+        ${snagBox}
         <div class="finding-photos">
           ${photos.map((p) => `<a href="${p.photo_url}" target="_blank"><img src="${p.photo_url}" alt=""></a>`).join("")}
         </div>
@@ -352,6 +402,13 @@
         const { data: actions } = await supabase.from("actions").select("id, status, due_date").in("id", actionIds);
         actionsById = {};
         (actions || []).forEach((a) => { actionsById[a.id] = a; });
+      }
+
+      const findingIds = findings.map((f) => f.id);
+      snagByFinding = {};
+      if (findingIds.length) {
+        const { data: snags } = await supabase.from("snag_items").select("id, status, snag_list_id, inspection_finding_id").in("inspection_finding_id", findingIds);
+        (snags || []).forEach((s) => { if (!snagByFinding[s.inspection_finding_id]) snagByFinding[s.inspection_finding_id] = s; });
       }
       renderFindings();
     } catch (err) {

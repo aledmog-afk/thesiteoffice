@@ -116,6 +116,24 @@ tests/
                              status/priority/transition validation edge
                              cases (including the completed->open reopen
                              path and cancelled being terminal).
+    snags.test.mjs          Defects / Snagging rationalisation: assignee
+                             validation (any project role, including
+                             snagging-only — unlike Actions), action_id/
+                             inspection_finding_id linkage IDOR (same-
+                             project required, cross-project rejected),
+                             the resolved-vs-verified model (editor-only,
+                             closed-only, reopen always auto-clears with
+                             no permission barrier), closed_date auto-
+                             fill/clear, cross-org and cross-project
+                             isolation, and audit integration proving the
+                             pre-existing generic trigger needed zero
+                             changes (including that a rejected
+                             cross-project link fabricates no audit row).
+    snags_performance.test.mjs  Seeds 15 projects / 60 plots / 300 snags
+                             and proves the portfolio snag-signal query
+                             stays one broad select, backed by real index
+                             usage (project+status, project+due_date,
+                             action_id), not a sequential scan.
 
   database/                Real database — migration integrity.
     migrations.test.mjs      Fresh install, required tables/functions/RLS,
@@ -131,7 +149,18 @@ tests/
                              (no Actions or Actions audit history
                              fabricated from pre-existing data; its
                              table/indexes/triggers/policies are
-                             idempotent).
+                             idempotent). Also covers Defects / Snagging
+                             (Priority 8): unlike Actions/Inspections,
+                             snag_items already existed pre-migration, so
+                             this proves a realistic PRE-EXISTING snag
+                             (fixed id) survives with every existing
+                             field/photo preserved and its new columns
+                             (assigned_to/due_date/action_id/
+                             inspection_finding_id/verified_at/
+                             verified_by) simply null, never fabricated —
+                             plus idempotency of the new columns/indexes/
+                             trigger/helper function across repeated
+                             re-application.
     fixtures/
       pre_organisations_schema.sql   sql/schema.sql as it existed immediately
                                      before Priority 1 (git rev 0b37633) — a
@@ -170,13 +199,24 @@ tests/
                              create Action -> verify the linkage renders
                              -> resolve finding, plus proof that
                              completing the linked Action elsewhere
-                             never auto-resolves the finding.
+                             never auto-resolves the finding. Also
+                             covers Create Snag from the same finding
+                             (Priority 8) — independent of the Action,
+                             and the finding card renders the linked
+                             snag.
     dashboard_helpers.test.mjs  categoriseAction()/aggregateActionCounts()/
                              countHighSeverityHsIssues()/computeControlStatus()
                              — overdue/due-today/due-soon boundaries, the
                              completed/cancelled exclusion, and every
                              Attention/Watch/On-Track rule, all against
                              fixed date strings, never the real clock.
+                             Also covers categoriseSnag()/countSnagSignals()
+                             (Priority 8) — the same due_date boundaries
+                             applied to snags, high-priority-with-no-due-
+                             date as a Watch-only signal (never Attention
+                             on priority alone), and the new Attention/
+                             Watch reasons computeControlStatus() derives
+                             from them.
     dashboard_control.test.mjs  dashboard.html's real inline script:
                              totals/project-list/attention-list
                              rendering, both filters, project/action

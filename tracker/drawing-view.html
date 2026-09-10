@@ -70,14 +70,11 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, uploadImage, todayISO } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, uploadImage, todayISO, SNAG_PRIORITY_LABEL, SNAG_PRIORITY_BADGE, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE } from "./js/app.js";
 
   await requireAuth();
   const drawingId = getParam("id");
   if (!drawingId) window.location.href = "dashboard.html";
-
-  const priorityBadge = { high: "badge-red", medium: "badge-amber", low: "badge-grey" };
-  const statusBadgeCls = { open: "badge-red", closed: "badge-green" };
 
   let drawing = null;
   let pins = [];
@@ -212,8 +209,8 @@
           <div style="color:var(--ink-soft); font-size:0.8rem;">Raised ${formatDate(pin.raised_date)}${pin.trade ? " · " + escapeHtml(pin.trade) : ""}</div>
         </div>
         <div class="btn-row">
-          <span class="badge ${priorityBadge[pin.priority]}">${escapeHtml(pin.priority)}</span>
-          <span class="badge ${statusBadgeCls[pin.status]}">${escapeHtml(pin.status)}</span>
+          <span class="badge ${SNAG_PRIORITY_BADGE[pin.priority] || "badge-grey"}">${SNAG_PRIORITY_LABEL[pin.priority] || pin.priority}</span>
+          <span class="badge ${SNAG_STATUS_BADGE[pin.status] || "badge-grey"}">${SNAG_STATUS_LABEL[pin.status] || pin.status}</span>
         </div>
       </div>
       <p style="font-size:0.92rem; margin-bottom:1rem;">${escapeHtml(pin.description)}</p>

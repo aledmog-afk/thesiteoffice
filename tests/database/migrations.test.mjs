@@ -364,3 +364,107 @@ test("Inspections: tables, indexes, triggers and RLS policies are idempotent acr
     await dropTestDatabase(db);
   }
 });
+
+// ─── Defects / Snagging rationalisation (Priority 8) ────────────────
+// snag_items is NOT a new table — it's existed since before Priority 1
+// (OLD_SCHEMA below). This migration only ADDS nullable columns, so the
+// critical thing to prove is that real pre-existing rows survive with
+// every existing field untouched, IDs preserved, and the new columns
+// simply null (never fabricated) — the opposite of the Actions/
+// Inspections tests above, which prove NO historical rows are invented.
+
+test("Defects / Snagging: existing snag_items rows survive the migration with IDs, fields and photos preserved, and new columns default to null", async () => {
+  const db = "tracker_test_snags_existing_data";
+  await createTestDatabase(db);
+  try {
+    const client = adminClient(db);
+    await client.connect();
+    await runSqlFile(client, MOCK_SETUP);
+    await runSqlFile(client, OLD_SCHEMA);
+    await runSqlFile(client, SEED);
+
+    // A realistic pre-existing snag, exactly as the old schema (and the
+    // real production database) could have recorded one, with a fixed
+    // id so it can be re-identified after the migration.
+    const snagId = "99999999-0000-0000-0000-000000000001";
+    const projectRow = await client.query("select id from public.projects order by name limit 1");
+    const projectId = projectRow.rows[0].id;
+    await client.query(
+      `insert into public.snag_items (id, project_id, item_no, location, description, trade, priority, status, photo_url, raised_date, notes, created_by)
+       values ($1,$2,1,'Kitchen','Cracked tile','Tiling','high','open','https://example.com/photo.jpg','2025-01-15','Chase up with tiler','11111111-1111-1111-1111-111111111111')`,
+      [snagId, projectId]
+    );
+
+    const before = await client.query("select count(*)::int as n from public.snag_items");
+
+    await runSqlFile(client, CURRENT_SCHEMA); // the actual migration under test
+
+    const after = await client.query("select count(*)::int as n from public.snag_items");
+    assert.equal(after.rows[0].n, before.rows[0].n, "the migration must not add, remove, or duplicate any snag_items rows");
+
+    const snag = await client.query("select * from public.snag_items where id = $1", [snagId]);
+    assert.equal(snag.rowCount, 1, "the pre-existing snag's id must be preserved exactly");
+    assert.equal(snag.rows[0].location, "Kitchen");
+    assert.equal(snag.rows[0].description, "Cracked tile");
+    assert.equal(snag.rows[0].trade, "Tiling");
+    assert.equal(snag.rows[0].priority, "high");
+    assert.equal(snag.rows[0].status, "open");
+    assert.equal(snag.rows[0].photo_url, "https://example.com/photo.jpg");
+    assert.equal(snag.rows[0].notes, "Chase up with tiler");
+    assert.equal(snag.rows[0].assigned_to, null, "a pre-existing snag must never be fabricated an assignee");
+    assert.equal(snag.rows[0].due_date, null);
+    assert.equal(snag.rows[0].action_id, null, "the migration must never invent an Action link for pre-existing snags");
+    assert.equal(snag.rows[0].inspection_finding_id, null);
+    assert.equal(snag.rows[0].verified_at, null, "a pre-existing closed/open snag must never be fabricated as verified");
+    assert.equal(snag.rows[0].verified_by, null);
+
+    // No Actions, audit history, or anything else invented as a side
+    // effect of this migration.
+    const actions = await client.query("select count(*)::int as n from public.actions");
+    assert.equal(actions.rows[0].n, 0, "installing the accountability columns must not invent any Actions from pre-existing snags");
+    const snagAudit = await client.query("select count(*)::int as n from public.audit_log where table_name = 'snag_items'");
+    assert.equal(snagAudit.rows[0].n, 0, "adding columns to an existing table must not fabricate any audit history for the backfill itself");
+
+    await client.end();
+  } finally {
+    await dropTestDatabase(db);
+  }
+});
+
+test("Defects / Snagging: new columns, indexes, helper function and trigger are idempotent across repeated re-application", async () => {
+  const db = "tracker_test_snags_idempotent";
+  await createTestDatabase(db);
+  try {
+    const client = adminClient(db);
+    await client.connect();
+    await runSqlFile(client, MOCK_SETUP);
+    for (let i = 0; i < 3; i++) {
+      await runSqlFile(client, CURRENT_SCHEMA);
+    }
+
+    const columns = await client.query(`
+      select column_name from information_schema.columns
+      where table_schema = 'public' and table_name = 'snag_items'
+        and column_name = any($1::text[])
+    `, [["assigned_to", "due_date", "action_id", "inspection_finding_id", "verified_at", "verified_by"]]);
+    assert.equal(columns.rowCount, 6, "all 6 new columns must exist exactly once");
+
+    const indexes = await client.query("select count(*)::int as n from pg_indexes where tablename = 'snag_items' and indexname like 'snag_items_%_idx'");
+    assert.equal(indexes.rows[0].n, 4, "exactly 4 new named indexes on snag_items, never duplicated");
+
+    const triggers = await client.query("select count(*)::int as n from pg_trigger where tgrelid = 'public.snag_items'::regclass and tgname like 'trg_%'");
+    assert.equal(triggers.rows[0].n, 3, "exactly 3 triggers on snag_items (pre-existing item-numbering + pre-existing audit + the new before-write trigger), never duplicated");
+
+    const fn = await client.query("select count(*)::int as n from information_schema.routines where routine_schema = 'public' and routine_name = 'is_project_member_user'");
+    assert.equal(fn.rows[0].n, 1, "is_project_member_user must exist exactly once after repeated re-application");
+
+    // RLS on snag_items is deliberately UNCHANGED by this priority —
+    // still member-level, still 4 policies (select/insert/update/delete).
+    const policies = await client.query("select count(*)::int as n from pg_policies where tablename = 'snag_items'");
+    assert.equal(policies.rows[0].n, 4, "snag_items RLS policy count must be unchanged by this priority");
+
+    await client.end();
+  } finally {
+    await dropTestDatabase(db);
+  }
+});

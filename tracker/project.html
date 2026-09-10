@@ -78,6 +78,7 @@
       <div class="tile-stats">
         <div><strong id="openSnagCount">–</strong>open</div>
         <div><strong id="closedSnagCount">–</strong>closed</div>
+        <div><strong id="overdueSnagCount">–</strong>overdue</div>
       </div>
     </a>
     <a class="tile" href="plot-handovers.html?project=" id="plotHandoversTile">
@@ -211,7 +212,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, geocodePostcode, recalculateActualProgress, generateMissingPlots, suggestPlotProgress, EXTERNAL_WORKS_TAG, monthStartISO, getProjectControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, isFindingOutstanding } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, geocodePostcode, recalculateActualProgress, generateMissingPlots, suggestPlotProgress, EXTERNAL_WORKS_TAG, monthStartISO, getProjectControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, isFindingOutstanding, categoriseSnag } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("id");
@@ -632,9 +633,10 @@
 
     if (myRole === "snagging") {
       applySnaggingOnlyView();
-      const { data: snags } = await supabase.from("snag_items").select("status").eq("project_id", projectId);
+      const { data: snags } = await supabase.from("snag_items").select("status, due_date, priority").eq("project_id", projectId);
       document.getElementById("openSnagCount").textContent = (snags || []).filter(s => s.status === "open").length;
       document.getElementById("closedSnagCount").textContent = (snags || []).filter(s => s.status === "closed").length;
+      document.getElementById("overdueSnagCount").textContent = (snags || []).filter(s => categoriseSnag(s).overdue).length;
       return;
     }
 
@@ -644,7 +646,7 @@
     const [{ count: reportCount }, { count: monthlyReportCount }, { data: snags }, { count: fetchedPlotsCount }, { data: gates }, { data: commercials }, { count: drawingsCount }, { data: hsAudits }, { data: actions }, { data: findings }] = await Promise.all([
       supabase.from("weekly_reports").select("id", { count: "exact", head: true }).eq("project_id", projectId),
       supabase.from("monthly_reports").select("id", { count: "exact", head: true }).eq("project_id", projectId),
-      supabase.from("snag_items").select("status").eq("project_id", projectId),
+      supabase.from("snag_items").select("status, due_date, priority").eq("project_id", projectId),
       supabase.from("plots").select("id", { count: "exact", head: true }).eq("project_id", projectId),
       supabase.from("quality_gates").select("status").eq("project_id", projectId),
       supabase.from("commercial_items").select("status").eq("project_id", projectId),
@@ -657,6 +659,7 @@
     document.getElementById("monthlyReportCount").textContent = monthlyReportCount ?? 0;
     document.getElementById("openSnagCount").textContent = (snags || []).filter(s => s.status === "open").length;
     document.getElementById("closedSnagCount").textContent = (snags || []).filter(s => s.status === "closed").length;
+    document.getElementById("overdueSnagCount").textContent = (snags || []).filter(s => categoriseSnag(s).overdue).length;
     plotsCount = fetchedPlotsCount ?? 0;
     document.getElementById("plotsCount").textContent = plotsCount;
     const applicableGates = (gates || []).filter(g => g.status !== "not_applicable");

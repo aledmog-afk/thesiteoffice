@@ -3292,3 +3292,177 @@ drop trigger if exists trg_audit_inspection_findings on public.inspection_findin
 create trigger trg_audit_inspection_findings
   after insert or update or delete on public.inspection_findings
   for each row execute function public.write_audit_log();
+
+-- ─── v32 ADDITIONS: Defects / Snagging rationalisation ───
+--
+-- snag_items already existed (since v1) as a defect record — location,
+-- description, trade, photo, a light open/closed/rejected status, and
+-- an independent delay flag. It was never a task system and stays one:
+-- this adds only the missing accountability layer (owner, due date,
+-- verification) plus optional links to the two other control-loop
+-- records, without touching its existing meaning, data, or the
+-- existing member-level (snagging-only-inclusive) RLS. Every column
+-- below is nullable and additive — the 70 real production snag rows at
+-- the time of writing get NULL (unassigned/no due date/not verified),
+-- which is the correct, non-fabricated reading of data that predates
+-- this feature, not an error to correct.
+--
+-- Deliberately NOT touched: hs_audits/hs_audit_items (a separate,
+-- unrelated monthly compliance mechanism), snag_items.status's existing
+-- vocabulary (open/closed/rejected — reinterpreting it would risk
+-- silently changing the meaning of real historical rows), and the
+-- existing member-level RLS on snag_items/snag_items (snagging-only
+-- members keep exactly the access they have always had).
+
+alter table public.snag_items add column if not exists assigned_to uuid references auth.users(id) on delete set null;
+alter table public.snag_items add column if not exists due_date date;
+-- The origin (a snag) references its consequence (an action) and, if
+-- applicable, its own origin (a finding) — never the reverse, keeping
+-- the deliberately reusable Actions Engine (Priority 5) and Inspections
+-- (Priority 7) uncoupled from this one module, same principle used for
+-- inspection_findings.action_id.
+alter table public.snag_items add column if not exists action_id uuid references public.actions(id) on delete set null;
+alter table public.snag_items add column if not exists inspection_finding_id uuid references public.inspection_findings(id) on delete set null;
+-- Resolved (status = 'closed') is deliberately kept separate from
+-- Verified: a contractor/snagging-only member marking a snag closed is
+-- not the same as a project editor independently confirming it. Both
+-- columns are trigger-managed below — never directly client-trusted.
+alter table public.snag_items add column if not exists verified_at timestamptz;
+alter table public.snag_items add column if not exists verified_by uuid references auth.users(id) on delete set null;
+
+-- Real query shapes: a project's snag list grouped by status (both the
+-- existing per-list views and the new dashboard rollup), overdue/due-
+-- soon filtering, and the two new cross-references (Priority 7's own
+-- "Inspection Finding -> resulting Snag" navigation, and "does this
+-- Action originate from a snag").
+create index if not exists snag_items_project_status_idx on public.snag_items (project_id, status);
+create index if not exists snag_items_project_due_date_idx on public.snag_items (project_id, due_date);
+create index if not exists snag_items_action_idx on public.snag_items (action_id);
+create index if not exists snag_items_inspection_finding_idx on public.snag_items (inspection_finding_id);
+
+-- Parameterised twin of is_project_member() — mirrors
+-- is_project_editor_user() (Priority 5), but at member level, since a
+-- snag's assignee is deliberately NOT restricted to editors: snagging-
+-- only members are exactly the people who do the physical fix work and
+-- are the most natural assignees for a snag.
+create or replace function public.is_project_member_user(p_project_id uuid, p_user_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.project_members pm
+    join public.projects p on p.id = pm.project_id
+    join public.organisation_members om on om.org_id = p.org_id and om.user_id = pm.user_id
+    where pm.project_id = p_project_id and pm.user_id = p_user_id
+  );
+$$;
+grant execute on function public.is_project_member_user(uuid, uuid) to authenticated;
+
+-- Server-side authority for the new columns. Existing snag_items RLS
+-- (member-level select/insert/update/delete) is completely unchanged —
+-- this trigger adds business rules RLS can't express at row level:
+-- assignee/action/finding must be legitimate and same-project, and
+-- verification specifically requires a project editor, gated on the
+-- snag actually being closed, and auto-cleared the moment it's
+-- reopened (mirrors actions.completed_at's own set/clear-on-transition
+-- pattern from Priority 5).
+create or replace function public.snag_items_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_action_project_id uuid;
+  v_finding_project_id uuid;
+  v_client_changed_verification boolean;
+  v_reopened boolean;
+begin
+  if new.assigned_to is not null and not public.is_project_member_user(new.project_id, new.assigned_to) then
+    raise exception 'assigned_to must be a member of this project';
+  end if;
+
+  if new.action_id is not null then
+    select project_id into v_action_project_id from public.actions where id = new.action_id;
+    if v_action_project_id is null then
+      raise exception 'snag_items.action_id must reference an existing action';
+    end if;
+    if v_action_project_id <> new.project_id then
+      raise exception 'a linked action must belong to the same project as the snag';
+    end if;
+  end if;
+
+  if new.inspection_finding_id is not null then
+    select project_id into v_finding_project_id from public.inspection_findings where id = new.inspection_finding_id;
+    if v_finding_project_id is null then
+      raise exception 'snag_items.inspection_finding_id must reference an existing inspection finding';
+    end if;
+    if v_finding_project_id <> new.project_id then
+      raise exception 'a linked inspection finding must belong to the same project as the snag';
+    end if;
+  end if;
+
+  if TG_OP = 'INSERT' then
+    -- A snag can never be created pre-verified, or pre-closed with a
+    -- backdated closed_date — both are always derived from a real
+    -- status transition, never trusted from the client.
+    new.verified_at := null;
+    new.verified_by := null;
+    new.closed_date := case when new.status = 'closed' then coalesce(new.closed_date, current_date) else null end;
+    return new;
+  end if;
+
+  -- UPDATE: capture whether the CLIENT itself is trying to change
+  -- verification, and whether this write is a genuine reopen (closed ->
+  -- not closed), BEFORE any auto-management below runs. A reopen auto-
+  -- clears a stale verification as a side effect and must not be
+  -- blocked by the editor-only check that guards a DELIBERATE
+  -- verification change — but it must also not silently swallow a
+  -- client's attempt to verify a snag that was never closed to begin
+  -- with, which needs its own real error below.
+  v_client_changed_verification := new.verified_at is distinct from old.verified_at;
+  v_reopened := old.status = 'closed' and new.status <> 'closed';
+
+  if new.status = 'closed' and old.status <> 'closed' then
+    new.closed_date := coalesce(new.closed_date, current_date);
+  elsif new.status <> 'closed' then
+    new.closed_date := null;
+  end if;
+
+  if v_reopened then
+    new.verified_at := null;
+    new.verified_by := null;
+  elsif v_client_changed_verification then
+    if not public.is_project_editor(new.project_id) then
+      raise exception 'only a project editor (owner or collaborator) can change a snag''s verification';
+    end if;
+    if new.verified_at is not null then
+      if new.status <> 'closed' then
+        raise exception 'a snag must be closed before it can be verified';
+      end if;
+      new.verified_at := now();
+      new.verified_by := auth.uid();
+    else
+      new.verified_by := null;
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_snag_items_before_write on public.snag_items;
+create trigger trg_snag_items_before_write
+  before insert or update on public.snag_items
+  for each row execute function public.snag_items_before_write();
+
+-- Audit integration: snag_items has been audited since Priority 4
+-- (trg_audit_snag_items, already wired to the existing generic
+-- write_audit_log()) — every new column above is captured automatically
+-- by that same trigger with ZERO changes needed to it or to
+-- can_read_audit_row() (snag_items already sits in that function's
+-- member-level bucket, matching its own RLS exactly).

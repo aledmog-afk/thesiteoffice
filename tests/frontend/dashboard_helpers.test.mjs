@@ -27,10 +27,13 @@ const scope = `
   ${extractFunction("categoriseAction")}
   ${extractFunction("aggregateActionCounts")}
   ${extractFunction("countHighSeverityHsIssues")}
+  ${extractFunction("isSnagOutstanding")}
+  ${extractFunction("categoriseSnag")}
+  ${extractFunction("countSnagSignals")}
   ${extractFunction("computeControlStatus")}
-  return { categoriseAction, aggregateActionCounts, countHighSeverityHsIssues, computeControlStatus };
+  return { categoriseAction, aggregateActionCounts, countHighSeverityHsIssues, categoriseSnag, countSnagSignals, computeControlStatus };
 `;
-const { categoriseAction, aggregateActionCounts, countHighSeverityHsIssues, computeControlStatus } = new Function(scope)();
+const { categoriseAction, aggregateActionCounts, countHighSeverityHsIssues, categoriseSnag, countSnagSignals, computeControlStatus } = new Function(scope)();
 
 const TODAY = "2026-09-10";
 
@@ -130,4 +133,64 @@ test("computeControlStatus: On Track with no open actions at all is explicitly w
 test("computeControlStatus: Attention outranks Watch even when both kinds of signal are present", () => {
   const status = computeControlStatus({ openActions: 5, overdue: 1, overdueCritical: 0, dueToday: 1, dueSoon: 1, blocked: 0, highCritical: 1, highSeverityHs: 0 });
   assert.equal(status.level, "attention", "a single overdue action must win over any number of watch-level signals");
+});
+
+// ─── Snag signals (Priority 8) ─────────────────────────────────────
+
+test("categoriseSnag: overdue/dueToday/dueSoon mirror categoriseAction's own boundaries, on the snag's own due_date", () => {
+  assert.equal(categoriseSnag({ status: "open", due_date: "2026-09-01" }, TODAY).overdue, true);
+  assert.equal(categoriseSnag({ status: "open", due_date: TODAY }, TODAY).dueToday, true);
+  assert.equal(categoriseSnag({ status: "open", due_date: "2026-09-17" }, TODAY).dueSoon, true, "exactly 7 days out counts as due soon");
+  assert.equal(categoriseSnag({ status: "open", due_date: "2026-09-18" }, TODAY).dueSoon, false, "8 days out is upcoming, not due soon");
+});
+
+test("categoriseSnag: closed and rejected snags are never categorised as any exception, regardless of due_date/priority", () => {
+  const closed = categoriseSnag({ status: "closed", priority: "high", due_date: "2020-01-01" }, TODAY);
+  assert.deepEqual(closed, { overdue: false, dueToday: false, dueSoon: false, highPriority: false });
+  const rejected = categoriseSnag({ status: "rejected", priority: "high", due_date: "2020-01-01" }, TODAY);
+  assert.deepEqual(rejected, { overdue: false, dueToday: false, dueSoon: false, highPriority: false });
+});
+
+test("categoriseSnag: high priority is its own flag, independent of due_date, but only while outstanding", () => {
+  assert.equal(categoriseSnag({ status: "open", priority: "high", due_date: null }, TODAY).highPriority, true, "a high-priority snag with no due date still flags as high priority");
+  assert.equal(categoriseSnag({ status: "open", priority: "medium", due_date: null }, TODAY).highPriority, false);
+  assert.equal(categoriseSnag({ status: "closed", priority: "high", due_date: null }, TODAY).highPriority, false, "a closed snag is resolved work, not an exception, even at high priority");
+});
+
+test("countSnagSignals: correctly tallies a realistic mixed set, excluding closed/rejected from every count", () => {
+  const snags = [
+    { status: "open", priority: "medium", due_date: "2026-09-01" }, // overdue
+    { status: "open", priority: "low", due_date: TODAY }, // due today
+    { status: "open", priority: "high", due_date: "2026-09-14" }, // due soon + high priority
+    { status: "open", priority: "high", due_date: null }, // high priority only
+    { status: "open", priority: "medium", due_date: "2026-10-01" }, // upcoming, no signal
+    { status: "closed", priority: "high", due_date: "2020-01-01" }, // excluded entirely
+    { status: "rejected", priority: "high", due_date: "2020-01-01" }, // excluded entirely
+  ];
+  const counts = countSnagSignals(snags, TODAY);
+  assert.equal(counts.overdueSnags, 1);
+  assert.equal(counts.dueTodaySnags, 1);
+  assert.equal(counts.dueSoonSnags, 1);
+  assert.equal(counts.highPrioritySnags, 2, "both high-priority open snags count, whether or not they also carry a due date");
+});
+
+test("computeControlStatus: an overdue snag alone is Attention, worded like the other exceptions", () => {
+  const status = computeControlStatus({ openActions: 0, overdue: 0, overdueCritical: 0, dueToday: 0, dueSoon: 0, blocked: 0, highCritical: 0, highSeverityHs: 0, overdueSnags: 2 });
+  assert.equal(status.level, "attention");
+  assert.equal(status.reason, "Attention — 2 overdue snags.");
+});
+
+test("computeControlStatus: a due-soon or high-priority snag alone is Watch, never Attention on priority alone", () => {
+  const dueSoon = computeControlStatus({ openActions: 0, overdue: 0, overdueCritical: 0, dueToday: 0, dueSoon: 0, blocked: 0, highCritical: 0, highSeverityHs: 0, dueSoonSnags: 1 });
+  assert.equal(dueSoon.level, "watch");
+  assert.equal(dueSoon.reason, "Watch — 1 snag due within 7 days.");
+
+  const highPriority = computeControlStatus({ openActions: 0, overdue: 0, overdueCritical: 0, dueToday: 0, dueSoon: 0, blocked: 0, highCritical: 0, highSeverityHs: 0, highPrioritySnags: 3 });
+  assert.equal(highPriority.level, "watch", "priority alone, with no due date, never escalates past Watch — never a fabricated numeric score");
+  assert.equal(highPriority.reason, "Watch — 3 high-priority snags open.");
+});
+
+test("computeControlStatus: an overdue snag outranks a due-soon Action, same as every other Attention/Watch pairing", () => {
+  const status = computeControlStatus({ openActions: 2, overdue: 0, overdueCritical: 0, dueToday: 0, dueSoon: 1, blocked: 0, highCritical: 0, highSeverityHs: 0, overdueSnags: 1 });
+  assert.equal(status.level, "attention");
 });

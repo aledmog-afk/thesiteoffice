@@ -40,6 +40,20 @@
         <div class="field"><label for="trade">Trade responsible</label><input type="text" id="trade" placeholder="e.g. Plumbing"></div>
       </div>
       <div class="field"><label for="description">Description *</label><textarea id="description" rows="2" required placeholder="What's wrong and where exactly"></textarea></div>
+      <div class="form-grid">
+        <div class="field">
+          <label for="priority">Priority</label>
+          <select id="priority"></select>
+        </div>
+        <div class="field">
+          <label for="dueDate">Due date</label>
+          <input type="date" id="dueDate">
+        </div>
+      </div>
+      <div class="field">
+        <label for="assignedTo">Assigned to</label>
+        <select id="assignedTo"><option value="">Unassigned</option></select>
+      </div>
       <div class="field">
         <label>Photo</label>
         <input type="file" id="photoInput" accept="image/*">
@@ -67,7 +81,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, uploadImage, todayISO, comparePlotNumbers } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, uploadImage, todayISO, comparePlotNumbers, SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_PRIORITY_BADGE, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE, categoriseSnag, assignSnag, verifySnag, unverifySnag, createActionFromSnag, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE } from "./js/app.js";
 
   await requireAuth();
   const listId = getParam("id");
@@ -80,17 +94,26 @@
   let photoUrl = null;
   let isGeneralList = false;
   let plotsById = {};
+  let members = []; // { user_id, email, role } — every project member is a legitimate snag assignee
+  let actionsById = {}; // linked actions.id -> {status, due_date} for the badge, keyed once per load
+  let myRole = null; // owner/collaborator/snagging — verification is editor-only
 
   const errorBox = document.getElementById("errorBox");
   const snagCard = document.getElementById("snagCard");
   const snagForm = document.getElementById("snagForm");
   const photoGrid = document.getElementById("photoGrid");
   const photoInput = document.getElementById("photoInput");
+  const prioritySelect = document.getElementById("priority");
+  const assignedToSelect = document.getElementById("assignedTo");
+
+  prioritySelect.innerHTML = SNAG_PRIORITIES.map((p) => `<option value="${p}">${SNAG_PRIORITY_LABEL[p]}</option>`).join("");
 
   function openForAdd() {
     snagForm.reset();
     document.getElementById("editingId").value = "";
     if (isGeneralList) document.getElementById("itemPlot").value = "";
+    prioritySelect.value = "medium";
+    assignedToSelect.value = "";
     photoUrl = null;
     photoGrid.innerHTML = "";
     document.getElementById("saveBtn").textContent = "Add Item";
@@ -102,6 +125,9 @@
     document.getElementById("location").value = s.location || "";
     document.getElementById("trade").value = s.trade || "";
     document.getElementById("description").value = s.description || "";
+    prioritySelect.value = s.priority || "medium";
+    document.getElementById("dueDate").value = s.due_date || "";
+    assignedToSelect.value = s.assigned_to || "";
     photoUrl = s.photo_url || null;
     photoGrid.innerHTML = photoUrl ? `<div class="photo-thumb"><img src="${photoUrl}"></div>` : "";
     document.getElementById("saveBtn").textContent = "Save Changes";
@@ -142,6 +168,9 @@
       trade: document.getElementById("trade").value.trim() || null,
       description: document.getElementById("description").value.trim(),
       photo_url: photoUrl,
+      priority: prioritySelect.value,
+      due_date: document.getElementById("dueDate").value || null,
+      assigned_to: assignedToSelect.value || null,
     };
     if (isGeneralList) payload.plot_id = document.getElementById("itemPlot").value || null;
     try {
@@ -165,12 +194,45 @@
   });
 
   async function setStatus(id, newStatus) {
-    const patch = { status: newStatus, closed_date: newStatus === "closed" ? todayISO() : null };
-    const { error } = await supabase.from("snag_items").update(patch).eq("id", id);
+    // closed_date/verified_at clearing on reopen is now handled server-side
+    // (sql/schema.sql snag_items_before_write trigger) — this just sends
+    // the status change itself.
+    const { error } = await supabase.from("snag_items").update({ status: newStatus }).eq("id", id);
     if (error) alert("Couldn't save that status change: " + error.message);
     loadSnags();
   }
   window.setStatus = setStatus;
+
+  async function quickAssign(id, userId) {
+    try { await assignSnag(id, userId || null); loadSnags(); }
+    catch (err) { alert("Couldn't save that assignment: " + err.message); }
+  }
+  window.quickAssign = quickAssign;
+
+  async function toggleVerify(id, currentlyVerified) {
+    try {
+      if (currentlyVerified) await unverifySnag(id);
+      else await verifySnag(id);
+      loadSnags();
+    } catch (err) {
+      alert("Couldn't save that verification change: " + err.message);
+    }
+  }
+  window.toggleVerify = toggleVerify;
+
+  async function quickCreateAction(id) {
+    const s = allSnags.find((x) => x.id === id);
+    if (!s) return;
+    const title = prompt("Action title:", `Fix: ${s.location}`);
+    if (!title || !title.trim()) return;
+    try {
+      await createActionFromSnag(s, { title: title.trim(), priority: s.priority || "medium", assignedTo: null, dueDate: s.due_date || null });
+      loadSnags();
+    } catch (err) {
+      alert("Couldn't create that action: " + err.message);
+    }
+  }
+  window.quickCreateAction = quickCreateAction;
 
   async function toggleDelayFlag(id, currentlyFlagged) {
     let error;
@@ -194,44 +256,83 @@
   }
   window.deleteSnag = deleteSnag;
 
-  const statusBadge = { open: "badge-red", closed: "badge-green", rejected: "badge-grey" };
+  function memberEmail(userId) {
+    return members.find((m) => m.user_id === userId)?.email || "—";
+  }
+
+  const isEditor = () => myRole === "owner" || myRole === "collaborator";
 
   function render() {
     if (isGeneralList) {
-      document.getElementById("tableHead").innerHTML = `<tr><th>#</th><th>Plot</th><th>Location</th><th>Description</th><th>Trade</th><th>Status</th><th></th></tr>`;
+      document.getElementById("tableHead").innerHTML = `<tr><th>#</th><th>Plot</th><th>Location</th><th>Description</th><th>Trade</th><th>Priority</th><th>Assigned</th><th>Due</th><th>Status</th><th></th></tr>`;
+    } else {
+      document.getElementById("tableHead").innerHTML = `<tr><th>#</th><th>Location</th><th>Description</th><th>Trade</th><th>Priority</th><th>Assigned</th><th>Due</th><th>Status</th><th></th></tr>`;
     }
     document.getElementById("emptyState").style.display = allSnags.length ? "none" : "block";
-    document.getElementById("snagRows").innerHTML = allSnags.map((s) => `
+    document.getElementById("snagRows").innerHTML = allSnags.map((s) => {
+      const cats = categoriseSnag(s);
+      const dueBadge = cats.overdue ? '<span class="badge badge-red" style="margin-left:0.4rem;">Overdue</span>'
+        : cats.dueToday ? '<span class="badge badge-amber" style="margin-left:0.4rem;">Due today</span>'
+        : cats.dueSoon ? '<span class="badge badge-amber" style="margin-left:0.4rem;">Due soon</span>' : "";
+      const verified = !!s.verified_at;
+      const actionBadge = s.action_id
+        ? ` <a href="actions.html?project=${snagList.project_id}" class="badge ${ACTION_STATUS_BADGE[actionsById[s.action_id]?.status] || "badge-grey"}" title="Linked Action">📌 Action${actionsById[s.action_id] ? `: ${ACTION_STATUS_LABEL[actionsById[s.action_id].status]}` : ""}</a>`
+        : "";
+      const findingBadge = s.inspection_findings?.inspection_id
+        ? ` <a href="inspection-detail.html?id=${s.inspection_findings.inspection_id}" class="badge badge-grey" title="Raised from an inspection finding">🔍 From Finding</a>`
+        : "";
+      return `
       <tr>
         <td>${s.item_no}</td>
         ${isGeneralList ? `<td>${s.plot_id ? escapeHtml(plotsById[s.plot_id] || "—") : "External / Site-wide"}</td>` : ""}
         <td>${escapeHtml(s.location)}</td>
-        <td>${escapeHtml(s.description)}${s.photo_url ? ' <span title="Has photo">📷</span>' : ""}</td>
+        <td>${escapeHtml(s.description)}${s.photo_url ? ' <span title="Has photo">📷</span>' : ""}${findingBadge}</td>
         <td>${escapeHtml(s.trade) || "—"}</td>
+        <td><span class="badge ${SNAG_PRIORITY_BADGE[s.priority] || "badge-grey"}">${SNAG_PRIORITY_LABEL[s.priority] || s.priority}</span></td>
         <td>
-          <select class="status-select ${statusBadge[s.status]}" style="width:auto;" onchange="setStatus('${s.id}', this.value)">
-            <option value="open" ${s.status === "open" ? "selected" : ""}>Open</option>
-            <option value="closed" ${s.status === "closed" ? "selected" : ""}>Closed</option>
-            <option value="rejected" ${s.status === "rejected" ? "selected" : ""}>Rejected</option>
+          <select style="width:auto;" onchange="quickAssign('${s.id}', this.value)">
+            <option value="">Unassigned</option>
+            ${members.map((m) => `<option value="${m.user_id}" ${s.assigned_to === m.user_id ? "selected" : ""}>${escapeHtml(m.email)}</option>`).join("")}
           </select>
+        </td>
+        <td>${s.due_date ? formatDate(s.due_date) : "—"}${dueBadge}</td>
+        <td>
+          <select class="status-select ${SNAG_STATUS_BADGE[s.status]}" style="width:auto;" onchange="setStatus('${s.id}', this.value)">
+            <option value="open" ${s.status === "open" ? "selected" : ""}>${SNAG_STATUS_LABEL.open}</option>
+            <option value="closed" ${s.status === "closed" ? "selected" : ""}>${SNAG_STATUS_LABEL.closed}</option>
+            <option value="rejected" ${s.status === "rejected" ? "selected" : ""}>${SNAG_STATUS_LABEL.rejected}</option>
+          </select>
+          ${s.status === "closed" ? `<div class="badge ${verified ? "badge-green" : "badge-grey"}" style="margin-top:0.3rem;">${verified ? "✔ Verified" : "Not verified"}</div>` : ""}
           ${s.delay_flag ? `<div class="badge badge-amber" style="margin-top:0.3rem; white-space:normal;" title="Flagged as delaying completion">⚠️ Delayed${s.delay_reason ? `: ${escapeHtml(s.delay_reason)}` : ""}</div>` : ""}
+          ${actionBadge}
         </td>
         <td class="btn-row">
           <button class="btn btn-outline btn-sm" onclick="editSnag('${s.id}')">Edit</button>
+          ${!s.action_id ? `<button class="btn btn-outline btn-sm" onclick="quickCreateAction('${s.id}')">Create Action</button>` : ""}
+          ${isEditor() && s.status === "closed" ? `<button class="btn btn-outline btn-sm" onclick="toggleVerify('${s.id}', ${verified})">${verified ? "Unverify" : "Verify"}</button>` : ""}
           <button class="btn btn-outline btn-sm" onclick="toggleDelayFlag('${s.id}', ${s.delay_flag})">${s.delay_flag ? "Clear Flag" : "Flag Delay"}</button>
           <button class="btn btn-danger btn-sm" onclick="deleteSnag('${s.id}')">Delete</button>
         </td>
       </tr>
-    `).join("");
+    `;
+    }).join("");
   }
 
   async function loadSnags() {
     const { data, error } = await supabase
       .from("snag_items")
-      .select("*")
+      .select("*, inspection_findings(inspection_id)")
       .eq("snag_list_id", listId)
       .order("item_no", { ascending: true });
     if (!error) allSnags = data || [];
+    const actionIds = allSnags.map((s) => s.action_id).filter(Boolean);
+    if (actionIds.length) {
+      const { data: linkedActions } = await supabase.from("actions").select("id, status, due_date").in("id", actionIds);
+      actionsById = {};
+      (linkedActions || []).forEach((a) => { actionsById[a.id] = a; });
+    } else {
+      actionsById = {};
+    }
     render();
   }
 
@@ -269,6 +370,15 @@
       document.getElementById("plotFieldWrap").style.display = "block";
       document.getElementById("deleteListBtn").style.display = "inline-block";
     }
+
+    const [{ data: memberRows }, { data: role }] = await Promise.all([
+      supabase.rpc("get_project_members", { p_project_id: snagList.project_id }),
+      supabase.rpc("get_my_role", { p_project_id: snagList.project_id }),
+    ]);
+    members = memberRows || [];
+    myRole = role;
+    assignedToSelect.innerHTML = `<option value="">Unassigned</option>` +
+      members.map((m) => `<option value="${m.user_id}">${escapeHtml(m.email)}</option>`).join("");
 
     loadSnags();
   }

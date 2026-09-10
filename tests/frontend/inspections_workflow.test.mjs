@@ -33,6 +33,10 @@ const ACTION_PRIORITIES = extractConst("ACTION_PRIORITIES");
 const ACTION_PRIORITY_LABEL = extractConst("ACTION_PRIORITY_LABEL");
 const ACTION_STATUS_LABEL = extractConst("ACTION_STATUS_LABEL");
 const ACTION_STATUS_BADGE = extractConst("ACTION_STATUS_BADGE");
+const SNAG_PRIORITIES = extractConst("SNAG_PRIORITIES");
+const SNAG_PRIORITY_LABEL = extractConst("SNAG_PRIORITY_LABEL");
+const SNAG_STATUS_LABEL = extractConst("SNAG_STATUS_LABEL");
+const SNAG_STATUS_BADGE = extractConst("SNAG_STATUS_BADGE");
 
 const PROJECT_ID = "p1";
 const OWNER = { user_id: "u-owner", email: "owner@example.com", role: "owner" };
@@ -90,6 +94,12 @@ function makeStore() {
       const idx = photos.findIndex((p) => p.id === id);
       if (idx >= 0) photos.splice(idx, 1);
     },
+    async createSnagFromFinding(finding, fields) {
+      const snag = { id: `s${nextFindingId}`, project_id: finding.project_id, snag_list_id: "list1", location: fields.location, trade: fields.trade ?? null, priority: fields.priority ?? "medium", status: "open", inspection_finding_id: finding.id };
+      const f = findings.find((x) => x.id === finding.id);
+      f.status = "action_required";
+      return { snag, finding: { ...f } };
+    },
   };
 }
 
@@ -127,9 +137,11 @@ async function run(store) {
     getFindings: store.getFindings, createFinding: store.createFinding, updateFinding: store.updateFinding,
     resolveFinding: store.resolveFinding, deleteFinding: store.deleteFinding, createActionFromFinding: store.createActionFromFinding,
     getFindingPhotos: store.getFindingPhotos, addFindingPhoto: store.addFindingPhoto, deleteFindingPhoto: store.deleteFindingPhoto,
+    createSnagFromFinding: store.createSnagFromFinding,
     INSPECTION_TYPES, INSPECTION_TYPE_LABEL, INSPECTION_STATUSES, INSPECTION_STATUS_LABEL, INSPECTION_STATUS_BADGE,
     FINDING_SEVERITIES, FINDING_SEVERITY_LABEL, FINDING_SEVERITY_BADGE, FINDING_STATUSES, FINDING_STATUS_LABEL, FINDING_STATUS_BADGE, isFindingOutstanding: isOutstanding,
     ACTION_PRIORITIES, ACTION_PRIORITY_LABEL, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE,
+    SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE,
     alert: () => {}, confirm: () => true,
   });
 }
@@ -182,6 +194,19 @@ test("inspection-detail.html: create inspection details render, add finding -> c
 
   const html = document.getElementById("findingsWrap").innerHTML;
   assert.ok(html.includes("Linked Action"), "the finding card should now show the linked action");
+
+  // Create a Snag from the same finding — independent of the Action just
+  // created above; a finding may have both, one, or neither.
+  window.toggleCreateSnagForm(finding.id);
+  await wait(10);
+  const snagForm = document.getElementById(`snag-form-${finding.id}`);
+  assert.ok(snagForm, "the create-snag form should exist for this finding");
+  snagForm.querySelector(".snag-location").value = "Roof level, north elevation";
+  await window.submitCreateSnag(finding.id, { preventDefault: () => {}, target: snagForm });
+  await wait(30);
+  assert.equal(finding.status, "action_required", "creating a Snag is also a deliberate status change to action_required");
+  const htmlWithSnag = document.getElementById("findingsWrap").innerHTML;
+  assert.ok(htmlWithSnag.includes("Linked Snag"), "the finding card should now show the linked snag");
 
   // Resolve the finding — an explicit, separate step, never automatic.
   window.markFindingResolved(finding.id);

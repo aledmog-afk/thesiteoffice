@@ -31,7 +31,7 @@
       <div class="table-wrap">
         <table>
           <thead>
-            <tr><th>List</th><th>Open</th><th>Closed</th><th>Rejected</th><th>Added</th></tr>
+            <tr><th>List</th><th>Open</th><th>Closed</th><th>Rejected</th><th>Overdue</th><th>Added</th></tr>
           </thead>
           <tbody id="generalListRows"></tbody>
         </table>
@@ -45,7 +45,7 @@
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>Plot</th><th>Open</th><th>Closed</th><th>Rejected</th><th>Added</th></tr>
+          <tr><th>Plot</th><th>Open</th><th>Closed</th><th>Rejected</th><th>Overdue</th><th>Added</th></tr>
         </thead>
         <tbody id="plotRows"></tbody>
       </table>
@@ -60,7 +60,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, comparePlotNumbers } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, comparePlotNumbers, categoriseSnag } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -116,13 +116,14 @@
     const [{ data: plots }, { data: lists }, { data: items }] = await Promise.all([
       supabase.from("plots").select("*").eq("project_id", projectId),
       supabase.from("snag_lists").select("id, plot_id, title, created_at").eq("project_id", projectId),
-      supabase.from("snag_items").select("snag_list_id, status").eq("project_id", projectId),
+      supabase.from("snag_items").select("snag_list_id, status, due_date").eq("project_id", projectId),
     ]);
 
     const counts = {};
     (items || []).forEach((it) => {
-      counts[it.snag_list_id] = counts[it.snag_list_id] || { open: 0, closed: 0, rejected: 0 };
+      counts[it.snag_list_id] = counts[it.snag_list_id] || { open: 0, closed: 0, rejected: 0, overdue: 0 };
       counts[it.snag_list_id][it.status]++;
+      if (categoriseSnag(it).overdue) counts[it.snag_list_id].overdue++;
     });
 
     // ─── General (not-plot-specific) lists ───────────────────────
@@ -130,13 +131,14 @@
     if (generalLists.length) {
       document.getElementById("generalListsSection").style.display = "block";
       document.getElementById("generalListRows").innerHTML = generalLists.map((l) => {
-        const c = counts[l.id] || { open: 0, closed: 0, rejected: 0 };
+        const c = counts[l.id] || { open: 0, closed: 0, rejected: 0, overdue: 0 };
         return `
           <tr class="row-link" onclick="window.location.href='snag-list-edit.html?id=${l.id}'">
             <td><strong>${escapeHtml(l.title)}</strong></td>
             <td><span class="badge badge-red">${c.open}</span></td>
             <td><span class="badge badge-green">${c.closed}</span></td>
             <td><span class="badge badge-grey">${c.rejected}</span></td>
+            <td>${c.overdue ? `<span class="badge badge-red">${c.overdue}</span>` : "—"}</td>
             <td>${formatDate(l.created_at?.slice(0, 10))}</td>
           </tr>
         `;
@@ -157,13 +159,14 @@
 
     document.getElementById("plotRows").innerHTML = plots.map((p) => {
       const listId = listByPlot[p.id];
-      const c = counts[listId] || { open: 0, closed: 0, rejected: 0 };
+      const c = counts[listId] || { open: 0, closed: 0, rejected: 0, overdue: 0 };
       return `
         <tr class="row-link" onclick="goToPlotList('${p.id}')">
           <td><strong>${escapeHtml(p.plot_number)}</strong></td>
           <td><span class="badge badge-red">${c.open}</span></td>
           <td><span class="badge badge-green">${c.closed}</span></td>
           <td><span class="badge badge-grey">${c.rejected}</span></td>
+          <td>${c.overdue ? `<span class="badge badge-red">${c.overdue}</span>` : "—"}</td>
           <td>${formatDate(p.created_at?.slice(0, 10))}</td>
         </tr>
       `;
