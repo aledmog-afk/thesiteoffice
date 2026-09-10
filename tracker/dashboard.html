@@ -68,7 +68,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock } from "./js/app.js";
+  import { requireAuth, renderHeader, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, ensureOrganisation } from "./js/app.js";
 
   await requireAuth();
   renderHeader([{ label: "Dashboard" }]);
@@ -89,16 +89,18 @@
     e.preventDefault();
     clearError(errorBox);
     const { data: { user } } = await supabase.auth.getUser();
-    const payload = {
-      name: document.getElementById("name").value.trim(),
-      contract_ref: document.getElementById("contractRef").value.trim() || null,
-      address: document.getElementById("address").value.trim() || null,
-      main_contractor_name: document.getElementById("contractorName").value.trim() || null,
-      main_contractor_email: document.getElementById("contractorEmail").value.trim() || null,
-      start_date: document.getElementById("startDate").value || null,
-      created_by: user.id,
-    };
     try {
+      const orgId = await ensureOrganisation();
+      const payload = {
+        name: document.getElementById("name").value.trim(),
+        contract_ref: document.getElementById("contractRef").value.trim() || null,
+        address: document.getElementById("address").value.trim() || null,
+        main_contractor_name: document.getElementById("contractorName").value.trim() || null,
+        main_contractor_email: document.getElementById("contractorEmail").value.trim() || null,
+        start_date: document.getElementById("startDate").value || null,
+        org_id: orgId,
+        created_by: user.id,
+      };
       const { data, error } = await supabase.from("projects").insert(payload).select().single();
       if (error) throw error;
       window.location.href = `project.html?id=${data.id}`;

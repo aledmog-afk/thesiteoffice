@@ -233,10 +233,23 @@ export function renderProgressBlock(baselinePct, actualPct, ragStatus) {
   `;
 }
 
-// ─── Org logo ───────────────────────────────────────────────────
-// Returns the company logo URL (from org_settings) or null if none is set.
-export async function getOrgLogoUrl() {
-  const { data } = await supabase.from("org_settings").select("logo_url").eq("id", 1).maybeSingle();
+// ─── Organisation ───────────────────────────────────────────────
+// Returns the signed-in user's organisation id, creating one for them
+// the first time it's needed (e.g. right before their first project is
+// created) — see ensure_organisation() in sql/schema.sql. Safe to call
+// repeatedly; a user who already belongs to an organisation just gets
+// its id back.
+export async function ensureOrganisation() {
+  const { data, error } = await supabase.rpc("ensure_organisation");
+  if (error) throw error;
+  return data;
+}
+
+// Returns the company logo URL for the given organisation (from
+// org_settings) or null if none is set.
+export async function getOrgLogoUrl(orgId) {
+  if (!orgId) return null;
+  const { data } = await supabase.from("org_settings").select("logo_url").eq("org_id", orgId).maybeSingle();
   return data?.logo_url || null;
 }
 

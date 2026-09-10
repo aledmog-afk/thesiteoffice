@@ -201,7 +201,7 @@
     document.getElementById("emailLink").href = `mailto:${project.main_contractor_email || ""}?subject=${subject}&body=${body}`;
 
     const photos = Array.isArray(r.photos) ? r.photos : [];
-    const logoUrl = await getOrgLogoUrl();
+    const logoUrl = await getOrgLogoUrl(project.org_id);
     const ragBadge = r.rag_status ? `<span class="badge badge-${r.rag_status}" style="display:inline-flex; align-items:center; gap:0.4rem;"><span class="rag-dot rag-${r.rag_status}"></span>${RAG_LABEL[r.rag_status] || r.rag_status}</span>` : "—";
 
     document.getElementById("doc").innerHTML = `

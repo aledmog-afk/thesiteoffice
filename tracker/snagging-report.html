@@ -183,7 +183,7 @@
     if (error) { document.getElementById("doc").textContent = "Could not load snags."; return; }
     allItems = items || [];
 
-    logoUrl = await getOrgLogoUrl();
+    logoUrl = await getOrgLogoUrl(project.org_id);
     render();
   }
 

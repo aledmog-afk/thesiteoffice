@@ -2149,3 +2149,350 @@ drop policy if exists "editors update specifications" on public.specifications;
 create policy "editors update specifications" on public.specifications for update using (public.is_project_editor(project_id));
 drop policy if exists "editors delete specifications" on public.specifications;
 create policy "editors delete specifications" on public.specifications for delete using (public.is_project_editor(project_id));
+
+-- ─── v26 ADDITIONS ────────────────────────────────────────────────
+-- Organisations: the tenant boundary above "project." Every project
+-- belongs to exactly one organisation; every organisation has one or
+-- more members (admin/member). Project-level access (project_members:
+-- owner/collaborator/snagging) is unchanged and still governs which of
+-- an organisation's sites a given member can actually see — org
+-- membership answers a different question ("is this person part of
+-- this company at all"), enforced as an ADDITIONAL requirement layered
+-- onto the existing per-project checks below, not a replacement for
+-- them.
+create table if not exists public.organisations (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.organisation_members (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.organisations(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  role text not null default 'member' check (role in ('admin', 'member')),
+  created_at timestamptz not null default now(),
+  unique (org_id, user_id)
+);
+
+alter table public.organisations enable row level security;
+alter table public.organisation_members enable row level security;
+
+-- Same security-definer pattern as is_project_member/is_project_owner
+-- above — lets RLS policies (including the project-level ones rewritten
+-- further down) check org membership without a recursive-policy problem
+-- on organisation_members' own RLS.
+create or replace function public.is_org_member(p_org_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1 from public.organisation_members
+    where org_id = p_org_id and user_id = auth.uid()
+  );
+$$;
+grant execute on function public.is_org_member(uuid) to authenticated;
+
+create or replace function public.is_org_admin(p_org_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1 from public.organisation_members
+    where org_id = p_org_id and user_id = auth.uid() and role = 'admin'
+  );
+$$;
+grant execute on function public.is_org_admin(uuid) to authenticated;
+
+drop policy if exists "members read organisations" on public.organisations;
+create policy "members read organisations" on public.organisations for select using (public.is_org_member(id));
+drop policy if exists "admins update organisations" on public.organisations;
+create policy "admins update organisations" on public.organisations for update using (public.is_org_admin(id));
+-- No insert/delete policy for regular clients — an organisation is only
+-- ever created via ensure_organisation() (security definer) below, and
+-- deleting one (which would orphan every project in it) isn't something
+-- this foundation supports yet.
+
+drop policy if exists "members read organisation_members" on public.organisation_members;
+create policy "members read organisation_members" on public.organisation_members for select using (public.is_org_member(org_id));
+drop policy if exists "admin or self delete organisation_members" on public.organisation_members;
+create policy "admin or self delete organisation_members" on public.organisation_members for delete using (public.is_org_admin(org_id) or user_id = auth.uid());
+-- No insert/update policy for regular clients — same reasoning as
+-- project_members: membership is only ever granted via
+-- ensure_organisation() or join_project_by_invite(), both below.
+
+-- Returns the caller's organisation id, creating a brand-new one (named
+-- after their email) plus an admin membership row the first time they
+-- need one — called from the client right before creating their first
+-- project, so a new sign-up needs no separate "set up your organisation"
+-- step. If the caller already belongs to one or more organisations
+-- (the only current path to that is accepting an invite into someone
+-- else's — see join_project_by_invite() below), this returns the
+-- earliest one rather than creating a second: this app's UI supports a
+-- single "current organisation" per user for now, not a switcher.
+create or replace function public.ensure_organisation()
+returns uuid
+language plpgsql security definer set search_path = public
+as $$
+declare
+  existing_org uuid;
+  new_org uuid;
+  user_email text;
+begin
+  select org_id into existing_org
+  from public.organisation_members
+  where user_id = auth.uid()
+  order by created_at asc
+  limit 1;
+
+  if existing_org is not null then
+    return existing_org;
+  end if;
+
+  select email into user_email from auth.users where id = auth.uid();
+
+  insert into public.organisations (name)
+  values (coalesce(nullif(split_part(user_email, '@', 1), ''), 'My') || '''s Organisation')
+  returning id into new_org;
+
+  insert into public.organisation_members (org_id, user_id, role)
+  values (new_org, auth.uid(), 'admin');
+
+  return new_org;
+end;
+$$;
+grant execute on function public.ensure_organisation() to authenticated;
+
+-- Every project now belongs to an organisation. Nullable for now so the
+-- backfill below can populate it before the not-null constraint (further
+-- down) is enforced.
+alter table public.projects add column if not exists org_id uuid references public.organisations(id);
+
+-- Added here (ahead of the backfill block below, which writes to it) so
+-- org_settings' own org_id exists before anything tries to populate it.
+-- The rest of the org_settings scoping (constraints, RLS) happens in its
+-- own section further down, once organisations definitely exist.
+alter table public.org_settings add column if not exists org_id uuid references public.organisations(id);
+
+-- One-time grandfather: if this database already has real project/
+-- membership/settings data (i.e. this isn't a brand-new install), fold
+-- all of it into a single default organisation, preserving exactly the
+-- access every current user already has — never deletes or orphans
+-- anything. Guarded on organisation_members being empty, so this fires
+-- at most once; every user and project from here on gets an
+-- organisation via ensure_organisation()/project creation/invite
+-- acceptance instead.
+do $$
+declare
+  default_org uuid;
+begin
+  if not exists (select 1 from public.organisation_members limit 1) then
+    if exists (select 1 from public.projects limit 1)
+       or exists (select 1 from public.project_members limit 1)
+       or exists (select 1 from public.org_settings limit 1) then
+
+      insert into public.organisations (name) values ('My Organisation') returning id into default_org;
+
+      -- Every user who currently has access to at least one project
+      -- joins the default org — admin if they own a project, member
+      -- otherwise. This recreates real current access, not more.
+      insert into public.organisation_members (org_id, user_id, role)
+      select default_org, pm.user_id, case when bool_or(pm.role = 'owner') then 'admin' else 'member' end
+      from public.project_members pm
+      group by pm.user_id
+      on conflict (org_id, user_id) do nothing;
+
+      update public.projects set org_id = default_org where org_id is null;
+
+      -- Opportunistic only — never deletes a pre-existing org_settings
+      -- row for the (extremely unlikely) case where one exists with no
+      -- projects/project_members at all.
+      update public.org_settings set org_id = default_org where org_id is null;
+    end if;
+  end if;
+end $$;
+
+-- Belt and braces: any project that still has no org_id (e.g. one
+-- inserted directly, bypassing the app, between deploys) is assigned to
+-- its creator's own organisation, or a fresh one if the creator has
+-- none either. Cheap no-op once every project has an org_id, which is
+-- always true for anything created through the app from here on.
+do $$
+declare
+  proj record;
+  proj_org uuid;
+begin
+  for proj in select id, created_by from public.projects where org_id is null loop
+    proj_org := null;
+    if proj.created_by is not null then
+      select org_id into proj_org from public.organisation_members where user_id = proj.created_by order by created_at asc limit 1;
+    end if;
+    if proj_org is null then
+      insert into public.organisations (name) values ('My Organisation') returning id into proj_org;
+      if proj.created_by is not null then
+        insert into public.organisation_members (org_id, user_id, role) values (proj_org, proj.created_by, 'admin')
+        on conflict (org_id, user_id) do nothing;
+      end if;
+    end if;
+    update public.projects set org_id = proj_org where id = proj.id;
+  end loop;
+end $$;
+
+alter table public.projects alter column org_id set not null;
+
+-- Org-aware counterpart to the pre-existing "every site needs an owner"
+-- repair further up this file (which predates organisations and can't
+-- reference org_id) — if a project's owner isn't a member of that
+-- project's own organisation, or it has no owner at all, fall back to
+-- the earliest member of that SAME organisation, never an unrelated
+-- user from a different one. No-op once every project's owner already
+-- belongs to its org, which is always true going forward.
+do $$
+declare
+  proj record;
+  fallback_user uuid;
+begin
+  for proj in
+    select p.id, p.org_id
+    from public.projects p
+    where not exists (
+      select 1
+      from public.project_members pm
+      join public.organisation_members om on om.org_id = p.org_id and om.user_id = pm.user_id
+      where pm.project_id = p.id and pm.role = 'owner'
+    )
+  loop
+    select user_id into fallback_user from public.organisation_members where org_id = proj.org_id order by created_at asc limit 1;
+    continue when fallback_user is null;
+    insert into public.project_members (project_id, user_id, role) values (proj.id, fallback_user, 'owner')
+    on conflict (project_id, user_id) do update set role = 'owner';
+  end loop;
+end $$;
+
+-- Project creation now requires the creator to already belong to the
+-- organisation they're creating it under — the client resolves this via
+-- ensure_organisation() before inserting (see dashboard.html). Replaces
+-- the old "any signed-in user" check.
+drop policy if exists "authenticated insert projects" on public.projects;
+drop policy if exists "org members insert projects" on public.projects;
+create policy "org members insert projects" on public.projects for insert
+  with check (org_id is not null and public.is_org_member(org_id));
+
+-- ─── The organisation boundary rewrite ───────────────────────────
+-- Every RLS policy on every one of this schema's 17 tables ultimately
+-- calls one of these three functions — quality_gates, handover_documents,
+-- internal_milestones, snag_items, weekly_reports, commercial_items,
+-- drawings, specifications, hs_audits, hs_audit_items, monthly_reports,
+-- blocks and plots all pass their own project_id straight into
+-- is_project_member/is_project_editor, and project_members/projects
+-- themselves use is_project_member/is_project_owner. Adding the
+-- organisation check ONLY here therefore closes the boundary on every
+-- table at once, including every child-of-child case, with no other
+-- policy needing to change: a project_members row is no longer
+-- sufficient on its own — the caller must also currently belong to that
+-- project's organisation.
+create or replace function public.is_project_member(p_project_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.project_members pm
+    join public.projects p on p.id = pm.project_id
+    join public.organisation_members om on om.org_id = p.org_id and om.user_id = pm.user_id
+    where pm.project_id = p_project_id and pm.user_id = auth.uid()
+  );
+$$;
+
+create or replace function public.is_project_owner(p_project_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.project_members pm
+    join public.projects p on p.id = pm.project_id
+    join public.organisation_members om on om.org_id = p.org_id and om.user_id = pm.user_id
+    where pm.project_id = p_project_id and pm.user_id = auth.uid() and pm.role = 'owner'
+  );
+$$;
+
+create or replace function public.is_project_editor(p_project_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.project_members pm
+    join public.projects p on p.id = pm.project_id
+    join public.organisation_members om on om.org_id = p.org_id and om.user_id = pm.user_id
+    where pm.project_id = p_project_id and pm.user_id = auth.uid() and pm.role in ('owner', 'collaborator')
+  );
+$$;
+
+-- Accepting a project invite (either link) now also enrols the joiner
+-- into that project's organisation — org membership is what the
+-- functions above require underneath, and there's no separate "join the
+-- company" step in this app, so folding it into the one invite flow
+-- that already exists keeps the UX identical to before this migration.
+create or replace function public.join_project_by_invite(invite_code_param text)
+returns uuid
+language plpgsql security definer set search_path = public
+as $$
+declare
+  proj_id uuid;
+  proj_org_id uuid;
+  member_role text;
+begin
+  select id, org_id, 'collaborator' into proj_id, proj_org_id, member_role
+  from public.projects where invite_code = invite_code_param;
+
+  if proj_id is null then
+    select id, org_id, 'snagging' into proj_id, proj_org_id, member_role
+    from public.projects where snagging_invite_code = invite_code_param;
+  end if;
+
+  if proj_id is null then
+    return null;
+  end if;
+
+  insert into public.organisation_members (org_id, user_id, role)
+  values (proj_org_id, auth.uid(), 'member')
+  on conflict (org_id, user_id) do nothing;
+
+  insert into public.project_members (project_id, user_id, role)
+  values (proj_id, auth.uid(), member_role)
+  on conflict (project_id, user_id) do nothing;
+  return proj_id;
+end;
+$$;
+grant execute on function public.join_project_by_invite(text) to authenticated;
+
+-- ─── org_settings: scope the company logo to its organisation ───
+-- Was a single global row (id fixed to 1) readable/writable by any
+-- signed-in user regardless of project. `id` is left in place, unused,
+-- same "old column stays" convention as the rest of this schema — org_id
+-- (added earlier above, ahead of the backfill block that populates it)
+-- is the real identity from here on.
+alter table public.org_settings drop constraint if exists org_settings_pkey;
+alter table public.org_settings drop constraint if exists org_settings_id_check;
+
+-- Defensive backfill for any org_settings row the grandfather block
+-- above didn't reach (it only runs once) — opportunistic, never deletes.
+update public.org_settings
+set org_id = (select id from public.organisations order by created_at asc limit 1)
+where org_id is null and exists (select 1 from public.organisations limit 1);
+
+alter table public.org_settings drop constraint if exists org_settings_org_id_key;
+alter table public.org_settings add constraint org_settings_org_id_key unique (org_id);
+
+drop policy if exists "authenticated read org_settings" on public.org_settings;
+drop policy if exists "authenticated insert org_settings" on public.org_settings;
+drop policy if exists "authenticated update org_settings" on public.org_settings;
+drop policy if exists "members read org_settings" on public.org_settings;
+create policy "members read org_settings" on public.org_settings for select using (public.is_org_member(org_id));
+drop policy if exists "members insert org_settings" on public.org_settings;
+create policy "members insert org_settings" on public.org_settings for insert with check (public.is_org_member(org_id));
+drop policy if exists "members update org_settings" on public.org_settings;
+create policy "members update org_settings" on public.org_settings for update using (public.is_org_member(org_id));

@@ -263,7 +263,7 @@
     document.getElementById("emailLink").href = `mailto:${project.main_contractor_email || ""}?subject=${subject}&body=${body}`;
 
     const photos = Array.isArray(r.photos) ? r.photos : [];
-    const logoUrl = await getOrgLogoUrl();
+    const logoUrl = await getOrgLogoUrl(project.org_id);
 
     document.getElementById("doc").innerHTML = `
       <div class="doc-head">
