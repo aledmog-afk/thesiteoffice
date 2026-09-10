@@ -6,7 +6,8 @@ Full schema: [`supabase/migrations/0001_init.sql`](supabase/migrations/0001_init
 against Postgres 16 with the Supabase primitives stubbed (`auth.users`, `auth.uid()`, the
 `authenticated` role, `supabase_realtime`), and the points/RLS behaviour exercised: overdraw
 blocked, un-tick/re-tick nets correctly, cache reconciles to the ledger, cross-household reads
-isolated, direct writes to the ledger tables denied.
+isolated, direct writes to the ledger tables denied, and balances clamped at zero across penalties,
+partial clawbacks and un-ticks of already-spent points.
 
 ## 1. Data Model Overview
 
@@ -24,8 +25,8 @@ auth.users
              │          ├─1:1─ private.oauth_tokens   (encrypted; service_role only)
              │          └─1:N─ calendars (provider_calendar_id, sync_token, watch_expires_at,
              │                            default_member_id → family_members)
-             │                     └─1:N─ events (starts_at, rrule, provider_etag, sync_status)
-             │                                └─M:N─ event_members → family_members (is_primary)
+             │                     └─1:N─ events (starts_at, rrule, provider_etag, sync_status,
+             │                                       member_id → family_members, null = everyone)
              ├─1:N─ sync_outbox → events            (durable push queue, service_role only)
              │
              ├─1:N─ chores (rrule | one-off, points_value, member_id)
@@ -93,8 +94,7 @@ server component and hydrate, so the wall display never flashes uncoloured event
 
 ### 2.2 Calendar view
 
-**Schema** — `calendar_accounts`, `private.oauth_tokens`, `calendars`, `events`, `event_members`,
-`sync_outbox`.
+**Schema** — `calendar_accounts`, `private.oauth_tokens`, `calendars`, `events`, `sync_outbox`.
 
 Recurrence: store the **master** row with an RFC-5545 `rrule` and expand occurrences client-side
 with `rrule.js` over the visible window only. Provider exceptions ("this Tuesday's football moved")
@@ -102,10 +102,17 @@ arrive as separate rows with `recurrence_parent_id` + `recurrence_original_start
 never materialised — a daily chore for five years is 1,825 rows worth having, a daily standup for
 five years is not.
 
-Member attribution uses the `event_members` join table with a partial unique index guaranteeing at
-most one `is_primary` per event. Calendar events genuinely are multi-person ("both kids at the
-dentist"); chores and list items are not, and keep a plain `member_id`. `is_primary` drives the
-colour bar, the rest render as small chips.
+Member attribution is a single `events.member_id`, with `NULL` meaning "everyone" and rendering in
+a neutral household colour. Multi-person events ("both kids at the dentist") are handled by
+duplicating or leaving unassigned — the deliberate trade for keeping the sync push path simple,
+since a join table means reconciling attendee rows against provider attendee lists on every push.
+If it turns out to matter, upgrading is a backfill rather than a rewrite:
+
+```sql
+create table event_members (event_id uuid, member_id uuid, is_primary boolean,
+                            primary key (event_id, member_id));
+insert into event_members select id, member_id, true from events where member_id is not null;
+```
 
 **Components**
 
@@ -117,9 +124,9 @@ colour bar, the rest render as small chips.
 | `useOccurrences(start, end)` | Fetches `events` overlapping the window, expands `rrule`, subtracts cancellations, merges exceptions, sorts. |
 | `SyncStatusBadge` | Surfaces `calendar_accounts.status = 'needs_reauth'` and unresolved `sync_status = 'conflict'` rows. Silent sync failure is the #1 way a wall calendar quietly becomes wrong. |
 
-**Realtime** — subscribe to `events` and `event_members` filtered on `household_id`. Insert/update
-patches the local occurrence set; a change to a row carrying an `rrule` re-expands that master only.
-Both tables are `replica identity full` so DELETE payloads still carry `household_id` for filtering.
+**Realtime** — subscribe to `events` filtered on `household_id`. Insert/update patches the local
+occurrence set; a change to a row carrying an `rrule` re-expands that master only. `events` is
+`replica identity full` so DELETE payloads still carry `household_id` for filtering.
 
 **Integration notes — flagged security steps**
 
@@ -208,8 +215,15 @@ go through `SECURITY DEFINER` RPCs. The enforcement extends one table further th
 `redeem_reward()`, so a client with a blanket write policy there could insert a redemption row and
 take the reward without paying for it. Likewise `chore_instances` has `SELECT`/`INSERT`/`DELETE`
 policies but deliberately **no `UPDATE` policy**, so a tick cannot be written directly in a way
-that skips the matching ledger row; ad-hoc one-off instances can still be added and removed. Mistakes are corrected with a compensating `adjust_down` row, so
-"where did those 20 points go" is always answerable. That is also why un-ticking a chore is
+that skips the matching ledger row; ad-hoc one-off instances can still be added and removed.
+
+Mistakes and penalties are compensating `adjust_down` rows via `adjust_points()`, so "where did
+those 20 points go" is always answerable. **Balances clamp at zero**, enforced in the RPCs rather
+than by a CHECK, because the clamp must be computed against the live ledger sum: taking 10 points
+from a member holding 4 logs an `adjust_down` of 4, not 10, and an `adjust_down` against a zero
+balance logs nothing at all. The same clamp applies to un-ticking, so **un-ticking a chore whose
+points were already spent reclaims nothing** — the honest consequence of clamping, and worth knowing
+before someone reports it as a bug. That is also why un-ticking a chore is
 `adjust_down` rather than a delete — and why idempotency lives in the `pending → done` status
 transition inside `complete_chore_instance()` rather than a unique index on
 `source_chore_instance_id`, since un-tick/re-tick must legitimately produce three rows.
@@ -382,16 +396,30 @@ icons as inline SVG (no icon-font FOUT on a device that reloads rarely).
 
 ### 2.8 Auto dim / brightness
 
-No ambient-light sensor, no hardware brightness API in the browser. Implementation is a
-pointer-events-transparent overlay.
+The wall device is Android running Fully Kiosk Browser, so this has two layers: real backlight
+control on the tablet, and a CSS overlay everywhere else (phones, or any browser without the Fully
+JS interface). No ambient-light sensor is involved either way.
+
+**Primary — Fully Kiosk's injected JS interface.** Still web; nothing native to build:
+
+```ts
+// lib/kiosk/fully.ts — feature-detected, never assumed.
+export const hasFully = () => typeof (globalThis as any).fully !== 'undefined';
+// fully.setScreenBrightness(0..255) — actual backlight, not a dark layer over a lit panel.
+// fully.setScreensaverEnabled / fully.startScreensaver — hand idle mode to the device.
+```
+
+Two things this buys that the overlay cannot: the panel genuinely draws less light (a dimmed white
+background still glows grey in a hallway at night), and Fully restarts the app on boot, so a power
+cut doesn't leave a blank wall tablet until someone notices.
 
 **Schema** — `household_settings.dim_starts_at`, `dim_ends_at` (`time`), `dim_max_opacity`
 (capped at 0.95 by a CHECK so the screen can never be dimmed to fully black and appear dead).
 
-**Component**
+**Fallback — `<DimOverlay/>`**, also the phone path:
 
 ```tsx
-// <DimOverlay/> — mounted once in the kiosk layout.
+// Mounted once in the kiosk layout; inert when hasFully() reports true.
 <div
   aria-hidden
   className="pointer-events-none fixed inset-0 z-50 bg-black transition-opacity duration-[3000ms]"
@@ -404,11 +432,6 @@ minutes at each edge so the change is never a visible step. A tap temporarily li
 0 for 60 seconds (someone checking tomorrow's schedule at 11pm), then ramps back. Recompute on a
 60-second interval **and** on `visibilitychange` — a tablet that slept through the boundary must not
 wake up bright at 3am. `pointer-events-none` is load-bearing: the overlay must never eat taps.
-
-**Progressive enhancement, still web-only:** when the app is running inside Fully Kiosk Browser its
-injected JS interface is available, so real backlight control is one guarded call —
-`if (typeof fully !== 'undefined') fully.setScreenBrightness(...)`. Feature-detected, with the CSS
-overlay as the universal fallback; nothing native is required.
 
 **Kiosk UX** — pair dimming with `color-scheme` switching: the dashboard swaps to a dark, low-blue
 palette inside the dim window rather than only darkening, because a dimmed white background still
@@ -490,6 +513,7 @@ family-hub-calendar/
 │  ├─ crypto/      tokens.ts        # AES-256-GCM seal/open, server-only
 │  ├─ points/      queries.ts       # rpc wrappers: complete, uncomplete, redeem, leaderboard
 │  ├─ shopping/    generate.ts
+│  ├─ kiosk/       fully.ts         # Fully Kiosk JS interface, feature-detected
 │  └─ weather/     openmeteo.ts
 ├─ hooks/          useMembers.ts  useOccurrences.ts  useIdle.ts  useDimLevel.ts  useWeather.ts
 ├─ supabase/
@@ -518,7 +542,7 @@ shipping the service-role key or the encryption key to a browser.
 4. **Lists** — smallest full vertical slice (schema → RLS → optimistic write → Realtime →
    kiosk-sized rows). Proves the whole stack end-to-end in a day, and is immediately useful, which
    matters for getting the household onto the tablet early.
-5. **Local calendar** — `events`, `event_members`, the three grid renderers, `useOccurrences` with
+5. **Local calendar** — `events`, the three grid renderers, `useOccurrences` with
    `rrule` expansion, `EventSheet`. **No provider sync yet**: get the data model and rendering right
    against local rows, because debugging recurrence expansion and delta sync simultaneously is the
    single biggest schedule risk in this project.
@@ -546,36 +570,32 @@ shipping the service-role key or the encryption key to a browser.
 Dependency-critical edges: 2 before 5/6/13 · 3 before 4 · 5 before 11 · 6 before 7 · 8 before 10 ·
 4 before 13 · 11 before 12.
 
-## 5. Open Decisions
+## 5. Decisions
 
-- **Hosting:** Vercel (native App Router, `vercel.json` crons, ~1-line setup) or Cloudflare Pages
-  (cheaper, but Workers runtime constrains the Node crypto and MSAL paths)? This changes how crons
-  and token encryption are implemented, so it's worth settling before step 11.
-- **Cron split:** run all scheduled work as platform cron routes, or move the pure-DB jobs (chore
-  instance generation, points reconciliation) into `pg_cron` inside Supabase so they keep running
-  even if the hosting project is paused or redeployed?
-- **Multi-member events:** is the `event_members` join table worth its complexity for v1, or would
-  a single `events.member_id` (with `NULL` meaning "everyone") cover how your household actually
-  uses the calendar?
-- **Chore assignment:** do chores need rotation ("bins: alternate weekly between two members"), or
-  is a fixed `member_id` per chore enough for v1? Rotation changes the instance generator, not the
-  schema.
-- **Leaderboard default:** rank by points earned this week (rewards recent effort, unaffected by
-  spending) or by current balance (rewards saving)? I've assumed period-earned.
-- **Negative balances:** should `adjust_down` be allowed to take a member below zero (penalties for
-  undone chores), or should the RPC clamp at zero?
-- **Google Photos:** accept uploads-only for v1, or is the Picker API flow (a member picks photos on
-  their phone, one-time, results stored as our own copies) worth building now given the album-link
-  route is closed?
-- **Weather provider:** Open-Meteo keyless, or do you already have an OpenWeather/Met Office key and
-  want its specific forecast fields?
-- **Kiosk device and browser:** Fully Kiosk Browser (real backlight control, auto-restart, remote
-  admin) or plain Chrome PWA? This decides whether the dim overlay is the only mechanism or a
-  fallback.
-- **Timezone handling:** is a single `households.timezone` sufficient, or do you need per-event
-  timezones to survive travel (already stored on `events.event_timezone`, just not surfaced in the
-  UI)?
-- **Offline depth:** should the kiosk keep working read-only through a router reboot (service-worker
-  caching of the last-fetched week), or is a "reconnecting…" banner acceptable for v1?
-- **Household count:** one household forever, or should the schema's `households` table be exercised
-  by a second household (e.g. grandparents) on the same deployment?
+### Settled with input (2026-09-10)
+
+| Decision | Choice | Consequence |
+| --- | --- | --- |
+| Event attribution | Single `events.member_id`, `NULL` = everyone | `event_members` dropped. Multi-person events are duplicated or left unassigned; upgrade path is the backfill in §2.2. |
+| Chore assignment | Fixed assignee per chore | No `chore_members` table. The instance generator copies `chores.member_id`; rotation can be added later without a schema change. |
+| Point penalties | Clamp at zero | `adjust_points()` and `uncomplete_chore_instance()` compute the clamp against the live ledger sum. Un-ticking a chore whose points were already spent reclaims nothing. |
+| Kiosk device | Android + Fully Kiosk Browser | §2.8 is Fully's brightness/screensaver API first, CSS overlay as the phone and no-Fully fallback. Fully's boot-restart also covers power cuts. |
+
+### Defaulted — reversible, revisit at the relevant build step
+
+| Decision | Default | Revisit at |
+| --- | --- | --- |
+| Hosting | Vercel + managed Supabase free tier. Not self-hosted on Home Assistant: HA restarts monthly and would take the family calendar down with it, and you'd own Postgres backups for no saving. | Step 1 |
+| Cron split | `pg_cron` for pure-DB jobs (chore instance generation, points reconciliation) so they survive a paused hosting project; Vercel Cron for provider sync and watch renewal, which need secrets and a Node runtime. | Step 6, 11 |
+| Leaderboard ranking | Period-earned, not balance. `leaderboard()` returns both columns, so this is a UI default rather than a commitment. | Step 7 |
+| Weather provider | Open-Meteo, keyless — no secret to leak to a client component, no per-device quota. Not HA's `weather.*` entity, which would need inbound access to your HA box from Vercel. | Step 9 |
+| Google Photos | Uploads to Supabase Storage only. The album-link route is closed (Google removed broad library-read scopes in March 2025); the Picker API is a post-v1 addition and `photo_sources.kind` already allows it. | Step 10 |
+| Timezone handling | Single `households.timezone`. `events.event_timezone` is stored but not surfaced in the UI. | Step 5 |
+| Offline depth | A "reconnecting…" banner. No service-worker data caching in v1. | Step 14 |
+| Household count | One. The `households` table supports more at no extra cost, so a second household needs no migration. | — |
+
+### Still genuinely open
+
+- Do you want the settings PIN gate from the cross-cutting section (protecting OAuth connect and reward config from a visitor tapping the wall tablet), or is that unnecessary friction in your house?
+- Which meal slots does your household actually use? Hiding breakfast and snack changes the §2.4 grid from 4 rows to 1, which materially changes the kiosk layout.
+- What's the Fully Kiosk licence situation — the free version shows a nag and lacks some JS interface calls, so is the ~€10 one-off Plus licence in scope?

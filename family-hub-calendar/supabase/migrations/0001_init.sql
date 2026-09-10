@@ -99,6 +99,7 @@ create table events (
   id                        uuid primary key default gen_random_uuid(),
   household_id              uuid not null references households(id) on delete cascade,
   calendar_id               uuid references calendars(id) on delete set null,  -- null => local-only event
+  member_id                 uuid references family_members(id) on delete set null,  -- null => everyone
   title                     text not null,
   description               text,
   location                  text,
@@ -124,13 +125,7 @@ create unique index events_provider_key
   where provider_event_id is not null;
 create index events_window on events (household_id, starts_at, ends_at) where is_cancelled = false;
 
-create table event_members (
-  event_id   uuid not null references events(id) on delete cascade,
-  member_id  uuid not null references family_members(id) on delete cascade,
-  is_primary boolean not null default false,   -- drives the colour bar in the grid
-  primary key (event_id, member_id)
-);
-create unique index event_members_one_primary on event_members (event_id) where is_primary;
+create index events_by_member on events (household_id, member_id) where is_cancelled = false;
 
 -- Durable push queue: a wall tablet that loses wifi mid-edit must not lose the push.
 create table sync_outbox (
@@ -288,7 +283,10 @@ end $$;
 
 create or replace function uncomplete_chore_instance(p_instance_id uuid)
 returns chore_instances language plpgsql security definer set search_path = public as $$
-declare v_row chore_instances;
+declare
+  v_row     chore_instances;
+  v_balance int;
+  v_claw    int;
 begin
   update chore_instances
      set status = 'pending', completed_at = null, completed_by_member_id = null
@@ -297,11 +295,54 @@ begin
   if v_row.id is null then return null; end if;
 
   if v_row.points_value > 0 and v_row.member_id is not null then
-    insert into points_ledger (household_id, member_id, direction, amount,
-                               source_chore_instance_id, note)
-    values (v_row.household_id, v_row.member_id, 'adjust_down', v_row.points_value,
-            v_row.id, 'Un-ticked');
+    -- Balances clamp at zero, so claw back only what the member still holds.
+    -- Un-ticking a chore whose points were already spent reclaims nothing.
+    select coalesce(sum(signed_amount), 0) into v_balance
+      from points_ledger where member_id = v_row.member_id;
+    v_claw := least(v_row.points_value, greatest(v_balance, 0));
+
+    if v_claw > 0 then
+      insert into points_ledger (household_id, member_id, direction, amount,
+                                 source_chore_instance_id, note)
+      values (v_row.household_id, v_row.member_id, 'adjust_down', v_claw,
+              v_row.id, 'Un-ticked');
+    end if;
   end if;
+  return v_row;
+end $$;
+
+-- Manual correction / penalty. Same clamp: a balance can never go below zero,
+-- so 'take 10 points off' with 4 in the bank takes 4 and logs 4, not 10.
+create or replace function adjust_points(p_member_id uuid, p_amount int,
+                                         p_direction text, p_note text default null)
+returns points_ledger language plpgsql security definer set search_path = public as $$
+declare
+  v_household uuid := current_household_id();
+  v_balance   int;
+  v_amount    int := p_amount;
+  v_row       points_ledger;
+begin
+  if p_direction not in ('adjust_up','adjust_down') then
+    raise exception 'direction must be adjust_up or adjust_down';
+  end if;
+  if p_amount <= 0 then raise exception 'amount must be positive'; end if;
+  if not exists (select 1 from family_members
+                  where id = p_member_id and household_id = v_household) then
+    raise exception 'member_not_found';
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended(p_member_id::text, 0));
+
+  if p_direction = 'adjust_down' then
+    select coalesce(sum(signed_amount), 0) into v_balance
+      from points_ledger where member_id = p_member_id;
+    v_amount := least(p_amount, greatest(v_balance, 0));
+    if v_amount = 0 then return null; end if;   -- nothing to take
+  end if;
+
+  insert into points_ledger (household_id, member_id, direction, amount, note)
+  values (v_household, p_member_id, p_direction, v_amount, p_note)
+  returning * into v_row;
   return v_row;
 end $$;
 
@@ -502,7 +543,7 @@ declare t text;
 begin
   foreach t in array array[
     'households','household_settings','family_members','calendar_accounts','calendars',
-    'events','event_members','sync_outbox','chores','chore_instances','rewards',
+    'events','sync_outbox','chores','chore_instances','rewards',
     'reward_redemptions','points_ledger','member_points_cache','recipes','recipe_ingredients',
     'meal_plan_entries','lists','list_items','photo_sources','photos','weather_cache'
   ] loop
@@ -534,11 +575,6 @@ begin
 end $$;
 
 -- Children reached through their parent.
-create policy event_members_rw on event_members for all to authenticated
-  using (exists (select 1 from events e
-                  where e.id = event_id and e.household_id = current_household_id()))
-  with check (exists (select 1 from events e
-                  where e.id = event_id and e.household_id = current_household_id()));
 create policy recipe_ingredients_rw on recipe_ingredients for all to authenticated
   using (exists (select 1 from recipes r
                   where r.id = recipe_id and r.household_id = current_household_id()))
@@ -572,13 +608,12 @@ create policy weather_read on weather_cache for select to authenticated
 -- ---------------------------------------------------------------- realtime
 
 alter publication supabase_realtime add table
-  family_members, events, event_members, chore_instances, points_ledger,
+  family_members, events, chore_instances, points_ledger,
   member_points_cache, meal_plan_entries, list_items, photos, weather_cache;
 
 -- DELETE payloads only carry the primary key unless replica identity is full; the client
 -- filters on household_id, so the tables it subscribes to need it.
 alter table events            replica identity full;
-alter table event_members     replica identity full;
 alter table chore_instances   replica identity full;
 alter table list_items        replica identity full;
 alter table meal_plan_entries replica identity full;
