@@ -332,13 +332,42 @@ for a `kind` column's worth of difference. `position` is `numeric` so reordering
 and the second feeds "who's pulling their weight" without a second ledger.
 
 **Components** — `ListView` (done items collapse to a "12 completed" footer rather than scrolling),
-`QuickAddBar` (sticky, submit-and-stay-focused for rapid entry, splits a trailing quantity into
-`quantity_text`), `ItemRow` (56px, swipe-to-delete on phones, long-press to assign).
+`QuickAddBar` (sticky, submit-and-stay-focused for rapid entry, with the assignee persisting across
+submits because "three things for Sam" is one decision, not three), `ItemRow` (56px rows, 44px
+targets).
+
+Quick-add parses quantity out of the typed text — `milk x2`, `eggs 6`, `2 tins beans` — and anything
+it cannot read confidently stays wholly in the title, since a mis-parse that drops a word from a
+shopping item is worse than not parsing at all (`lib/lists/quickAdd.ts`, unit tested).
+
+One deviation from the original sketch: assigning is a **tap** on the row's avatar slot, not a
+long-press. A long-press is undiscoverable on a wall display and fights the browser's own
+text-selection gesture.
 
 **Realtime** — `list_items` filtered on `household_id`. Concurrent editing is the norm here (one
 parent in the supermarket, one at home), so ticks are last-write-wins on `is_done` — acceptable
 because the states are boolean and re-tickable. Optimistic updates reconcile against the Realtime
-payload, keyed on `id`, which prevents the classic "item bounces back" flicker.
+payload, keyed on `id`, which prevents the classic "item bounces back" flicker: the **client
+generates the row's uuid** and passes it on insert, so the optimistic row and its echo collide on
+one key rather than rendering twice.
+
+Two traps here, both now covered by `lib/lists/reconcile.test.ts`:
+
+- On a DELETE payload, `new` is `{}` — an empty object, which is **not** nullish — so the obvious
+  `payload.new ?? payload.old` silently yields `{}` and the delete is dropped. Branch on
+  `eventType` instead.
+- An UPDATE still in flight when a row is deleted locally will resurrect it, so locally-removed ids
+  are held in a set and ignored until the delete is confirmed.
+
+Deliberately not React 19's `useOptimistic`: it layers pending edits over a base React controls,
+but here the base is pushed asynchronously by Realtime, so an echo arriving mid-transition drops
+the optimistic layer and the row visibly flips back. Explicit state keyed on `id` makes the rule
+stateable in one line — last writer wins, and an echo of our own write is a no-op because it
+carries identical values.
+
+Note `lists` itself is **not** in the Realtime publication, only `list_items`: renaming a list is
+rare enough that it can wait for the next navigation, and adding it would mean a second
+subscription for no daily benefit.
 
 **Kiosk UX** — the wall tablet shows the shopping list read-mostly; `QuickAddBar` is present but
 the on-screen keyboard covers half a wall tablet, so the kiosk layout pins the input to the top and
@@ -562,7 +591,8 @@ shipping the service-role key or the encryption key to a browser.
    re-subscribe, on `visibilitychange` and on a 15-minute floor; features refetch when it changes.
 4. **Lists** — smallest full vertical slice (schema → RLS → optimistic write → Realtime →
    kiosk-sized rows). Proves the whole stack end-to-end in a day, and is immediately useful, which
-   matters for getting the household onto the tablet early.
+   matters for getting the household onto the tablet early. **Done** — reconciliation lives in
+   `lib/lists/reconcile.ts` under unit test rather than inline in the hook; see §2.5.
 5. **Local calendar** — `events`, the three grid renderers, `useOccurrences` with
    `rrule` expansion, `EventSheet`. **No provider sync yet**: get the data model and rendering right
    against local rows, because debugging recurrence expansion and delta sync simultaneously is the

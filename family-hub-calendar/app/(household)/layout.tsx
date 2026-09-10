@@ -23,16 +23,24 @@ export default async function HouseholdLayout({ children }: { children: React.Re
     <HouseholdChannelProvider householdId={household.id}>
       <MemberProvider householdId={household.id} initialMembers={members ?? []}>
         <div className="flex min-h-dvh flex-col">
-          <header className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3">
+          <header className="flex items-center gap-2 border-b border-slate-200 bg-white px-4 py-3">
             <Link href="/display" className="text-base font-semibold">
               {household.name}
             </Link>
-            <Link
-              href="/settings/members"
-              className="flex min-h-[44px] items-center rounded-xl px-3 text-sm font-medium text-slate-600"
-            >
-              Settings
-            </Link>
+            <nav className="ml-auto flex items-center gap-1">
+              <Link
+                href="/lists"
+                className="flex min-h-[44px] items-center rounded-xl px-3 text-sm font-medium text-slate-600"
+              >
+                Lists
+              </Link>
+              <Link
+                href="/settings/members"
+                className="flex min-h-[44px] items-center rounded-xl px-3 text-sm font-medium text-slate-600"
+              >
+                Settings
+              </Link>
+            </nav>
           </header>
           <div className="min-h-0 flex-1">{children}</div>
         </div>

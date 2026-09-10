@@ -9,11 +9,19 @@ export default function DisplayPage() {
       <RosterStrip />
 
       <div className="grid min-h-0 flex-1 gap-4 md:grid-cols-2">
+        <Link
+          href="/lists"
+          className="flex flex-col items-start justify-center rounded-2xl bg-white p-6 shadow-sm"
+        >
+          <h2 className="text-lg font-semibold text-slate-800">Lists</h2>
+          <p className="text-sm text-slate-500">Shopping and to-dos, shared live.</p>
+        </Link>
+
         {[
           { title: 'Calendar', note: 'Step 5' },
           { title: 'Chores', note: 'Step 6' },
-          { title: 'Meals', note: 'Step 13' },
           { title: 'Weather', note: 'Step 9' },
+          { title: 'Meals', note: 'Step 13' },
         ].map((panel) => (
           <section
             key={panel.title}

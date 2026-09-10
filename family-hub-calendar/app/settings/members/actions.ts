@@ -2,28 +2,11 @@
 
 import { revalidatePath } from 'next/cache';
 import { createClient } from '@/lib/supabase/server';
+import { currentHouseholdId } from '@/lib/household';
 import { HEX_RE, isPaletteColor } from '@/lib/palette';
 
-// No household_id is passed or filtered anywhere below: RLS scopes every one of
-// these to current_household_id(), and the insert's WITH CHECK rejects any other
-// value. The household id still has to be supplied on insert because the column
-// is NOT NULL, so it is read back from the session rather than trusted from the
-// form.
-async function currentHouseholdId() {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) throw new Error('not signed in');
-
-  const { data, error } = await supabase
-    .from('households')
-    .select('id')
-    .eq('owner_user_id', user.id)
-    .single();
-  if (error) throw error;
-  return data.id;
-}
+// No household_id is filtered anywhere below: RLS scopes every one of these to
+// current_household_id(), so no query needs an explicit household filter to be safe.
 
 function readForm(formData: FormData) {
   const displayName = String(formData.get('display_name') ?? '').trim();

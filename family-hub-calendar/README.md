@@ -8,10 +8,14 @@ Schema: [`supabase/migrations/0001_init.sql`](supabase/migrations/0001_init.sql)
 
 ## Status
 
-Build-order steps 1–3 are scaffolded: foundation, family profiles, Realtime
-plumbing. Calendar, chores, meals, lists, photo frame, weather and dimming are
+Build-order steps 1–4 are done: foundation, family profiles, Realtime plumbing,
+and shared lists. Calendar, chores, meals, photo frame, weather and dimming are
 designed but not built — `/display` shows placeholders naming the step each
 lands in.
+
+Lists are usable now: `/lists` has a Shopping and a To do list from first run,
+with quick add, tick, assign, delete and clear-completed, all syncing live
+across devices.
 
 ## Setup
 
@@ -63,6 +67,8 @@ psql "$DATABASE_URL" -v uid="'<auth-user-uuid>'" -f supabase/seed.sql
 | `lib/household.ts` | `ensureHousehold()` — first-run bootstrap. |
 | `lib/realtime/` | One channel per household, plus the reconnect/staleness epoch. |
 | `components/members/` | `MemberProvider` (the roster every feature reads), avatar, chip, picker. |
+| `components/lists/` | `ListView`, `QuickAddBar`, `ItemRow`, and the `useListItems` hook. |
+| `lib/lists/` | `quickAdd.ts` (quantity parsing) and `reconcile.ts` (Realtime/optimistic merge) — both unit tested. |
 | `app/(household)/` | Signed-in routes; the layout supplies household + Realtime + roster context. |
 | `types/database.ts` | Hand-written for now; regenerate with `supabase gen types` once a project exists. |
 
@@ -70,8 +76,13 @@ psql "$DATABASE_URL" -v uid="'<auth-user-uuid>'" -f supabase/seed.sql
 
 ```bash
 npm run typecheck   # tsc --noEmit
+npm test            # node:test over lib/**/*.test.ts
 npm run build       # includes Next's own type check
 ```
+
+Tests use Node's built-in runner with `--experimental-strip-types`, so there is
+no test framework to install. They cover the pure logic worth pinning down:
+quick-add parsing and the Realtime reconciliation rules.
 
 The schema is exercised separately against a throwaway Postgres — see the
 validation note at the top of `ARCHITECTURE.md` for what is covered.

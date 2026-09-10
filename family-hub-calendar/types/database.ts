@@ -12,6 +12,7 @@
 //     generic is constrained to `{ [key: string]: any }`.
 
 export type MealSlot = 'breakfast' | 'lunch' | 'dinner' | 'snack';
+export type ListKind = 'shopping' | 'todo';
 export type LedgerDirection = 'earn' | 'redeem' | 'adjust_up' | 'adjust_down';
 
 export type Household = {
@@ -60,6 +61,49 @@ export type FamilyMemberInsert = {
   is_active?: boolean;
 };
 
+export type List = {
+  id: string;
+  household_id: string;
+  name: string;
+  kind: ListKind;
+  is_archived: boolean;
+  sort_order: number;
+  created_at: string;
+};
+
+export type ListItem = {
+  id: string;
+  household_id: string;
+  list_id: string;
+  title: string;
+  quantity_text: string | null;
+  aisle: string | null;
+  is_done: boolean;
+  done_at: string | null;
+  done_by_member_id: string | null;
+  assigned_member_id: string | null;
+  source_meal_plan_entry_id: string | null;
+  position: number;
+  created_at: string;
+};
+
+export type ListItemInsert = {
+  // Supplied by the client, not defaulted by the database: an optimistic row
+  // and its Realtime echo must share an id or the item appears twice.
+  id?: string;
+  household_id: string;
+  list_id: string;
+  title: string;
+  quantity_text?: string | null;
+  aisle?: string | null;
+  is_done?: boolean;
+  done_at?: string | null;
+  done_by_member_id?: string | null;
+  assigned_member_id?: string | null;
+  source_meal_plan_entry_id?: string | null;
+  position?: number;
+};
+
 export type Database = {
   public: {
     Tables: {
@@ -85,6 +129,25 @@ export type Database = {
         Row: FamilyMember;
         Insert: FamilyMemberInsert;
         Update: Partial<FamilyMemberInsert>;
+        Relationships: [];
+      };
+      lists: {
+        Row: List;
+        Insert: {
+          id?: string;
+          household_id: string;
+          name: string;
+          kind: ListKind;
+          is_archived?: boolean;
+          sort_order?: number;
+        };
+        Update: Partial<Omit<List, 'id' | 'household_id' | 'created_at'>>;
+        Relationships: [];
+      };
+      list_items: {
+        Row: ListItem;
+        Insert: ListItemInsert;
+        Update: Partial<Omit<ListItemInsert, 'id' | 'household_id' | 'list_id'>>;
         Relationships: [];
       };
     };

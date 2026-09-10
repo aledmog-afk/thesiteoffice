@@ -65,5 +65,47 @@ export async function ensureHousehold(): Promise<{
     settings = created;
   }
 
+  await ensureDefaultLists(household.id);
+
   return { household, settings };
+}
+
+// A shared list app that opens on an empty "no lists" screen has failed before
+// it starts, so the two the household will certainly want exist from first run.
+// Idempotent on the household having any list at all, so deleting one does not
+// make it reappear on the next page load.
+async function ensureDefaultLists(householdId: string) {
+  const supabase = await createClient();
+
+  const { count, error } = await supabase
+    .from('lists')
+    .select('id', { count: 'exact', head: true });
+  if (error) throw error;
+  if ((count ?? 0) > 0) return;
+
+  const { error: insertError } = await supabase.from('lists').insert([
+    { household_id: householdId, name: 'Shopping', kind: 'shopping', sort_order: 0 },
+    { household_id: householdId, name: 'To do', kind: 'todo', sort_order: 1 },
+  ]);
+  if (insertError) throw insertError;
+}
+
+// Needed on insert because household_id is NOT NULL. Read from the session
+// rather than accepted from a form: RLS's WITH CHECK would reject a foreign
+// value anyway, but there is no reason to let one reach the database.
+export async function currentHouseholdId(): Promise<string> {
+  const supabase = await createClient();
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) redirect('/login');
+
+  const { data, error } = await supabase
+    .from('households')
+    .select('id')
+    .eq('owner_user_id', user.id)
+    .single();
+  if (error) throw error;
+  return data.id;
 }
