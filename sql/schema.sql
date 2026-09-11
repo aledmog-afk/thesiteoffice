@@ -4898,3 +4898,135 @@ $$;
 -- it, with zero changes to the audit trigger or write_audit_log()
 -- itself. Proven by test, not re-implemented — see
 -- tests/security/plot_action_finding_linkage.test.mjs.
+
+
+-- ─── v39 ADDITIONS: Handover State Consistency (Priority 15, Phase 1) ──
+--
+-- The JS readiness engine (computePlotHandoverReadiness, tracker/js/
+-- app.js) already treats a plot's Quality Gates, Handover Documents,
+-- high-priority overdue Snags, blocked/overdue-high-critical Actions,
+-- and unresolved critical Inspection Findings as hard BLOCKERS to
+-- handover, while Programme variance and every lesser condition is
+-- only ever a WARNING (at_risk), never a blocker. Until now,
+-- checkAndMarkPlotHandedOver() — the ONLY code path anywhere in this
+-- app that writes plots.handed_over_at — only ever checked Quality
+-- Gates and Handover Documents, so a plot could be silently stamped
+-- "handed over" while readiness would simultaneously report it NOT
+-- READY. Priority 14's operational stress test flagged this as the
+-- one genuine correctness bug it found; this migration fixes it.
+--
+-- The JS readiness function is pure/frontend-only and cannot run
+-- inside a Postgres trigger, so it cannot literally be reused here —
+-- but the real reason a DB-side check is required isn't just
+-- belt-and-suspenders consistency, it's security: plots' own UPDATE
+-- policy ("editors update plots", above) lets any project editor
+-- update ANY column on their project's plots, including
+-- handed_over_at directly, entirely bypassing the JS layer (e.g. a
+-- hand-crafted API call). A client-side check alone is not a real
+-- enforcement boundary in this app's architecture — every other
+-- server-side invariant here (plot_id project-matching on actions/
+-- inspection_findings/programme_activities, action status-transition
+-- validity, etc.) is already enforced in a trigger, not just in the
+-- UI, and this is held to the same standard.
+--
+-- This trigger deliberately mirrors ONLY the five BLOCKER predicates
+-- already established in computePlotHandoverReadiness — never its
+-- warnings (Programme variance, non-blocking Snags/Actions/Findings
+-- explicitly must NOT prevent handover, matching existing semantics
+-- exactly) and never its full precedence/status/label logic (that
+-- stays exactly where it is, in the JS readiness engine, as the
+-- single source of truth for what a user SEES). This is the smallest
+-- safe alternative to literally sharing code across languages: a
+-- narrow, independently-reasoned safety net, not a second UI.
+create or replace function public.plots_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_gate_outstanding boolean;
+  v_doc_outstanding boolean;
+  v_snag_blocking boolean;
+  v_action_blocking boolean;
+  v_finding_blocking boolean;
+begin
+  if TG_OP = 'UPDATE' and new.handed_over_at is distinct from old.handed_over_at then
+    -- A historical handover record must never be silently rewritten or
+    -- cleared — handed_over_at is a one-time, permanent event, not a
+    -- continuously recalculated field (see computePlotHandoverReadiness's
+    -- own status precedence: "handed_over" always wins, regardless of
+    -- current readiness). There is no "un-handover" feature in this
+    -- application, and this is not the phase to add one.
+    if old.handed_over_at is not null then
+      raise exception 'plots.handed_over_at is a historical record and cannot be changed once set';
+    end if;
+
+    -- old.handed_over_at is null here, new.handed_over_at is being set
+    -- for the first time — validate against the same blocker rules
+    -- computePlotHandoverReadiness() already uses. Warnings (Programme
+    -- variance, non-blocking Snags/Actions/Findings) are deliberately
+    -- NOT checked here — they make a plot AT RISK, not NOT READY, and
+    -- must not prevent the historical handover event.
+
+    select count(*) > 0 and bool_or(status not in ('approved', 'not_applicable'))
+      into v_gate_outstanding
+      from public.quality_gates where plot_id = new.id;
+
+    select count(*) > 0 and bool_or(status <> 'approved_final')
+      into v_doc_outstanding
+      from public.handover_documents where plot_id = new.id;
+
+    -- Snags: a plot's own auto-seeded list (snag_lists.plot_id) is the
+    -- normal path; snag_items.plot_id itself is only populated for the
+    -- rare general/site-wide list's optional per-item tag — both are
+    -- checked here, exactly like every other plot-scoped snag query in
+    -- this app (see getPlotSnags()/getProjectPlotReadiness() in
+    -- tracker/js/app.js).
+    select exists (
+      select 1 from public.snag_items si
+      left join public.snag_lists sl on sl.id = si.snag_list_id
+      where coalesce(si.plot_id, sl.plot_id) = new.id
+        and si.status = 'open' and si.priority = 'high'
+        and si.due_date is not null and si.due_date < current_date
+    ) into v_snag_blocking;
+
+    select exists (
+      select 1 from public.actions
+      where plot_id = new.id
+        and status not in ('completed', 'cancelled')
+        and (status = 'blocked' or (due_date is not null and due_date < current_date and priority in ('high', 'critical')))
+    ) into v_action_blocking;
+
+    select exists (
+      select 1 from public.inspection_findings
+      where plot_id = new.id
+        and status not in ('resolved', 'accepted', 'cancelled')
+        and severity = 'critical'
+    ) into v_finding_blocking;
+
+    if coalesce(v_gate_outstanding, false) then
+      raise exception 'Cannot record handover: outstanding Quality Gate(s) for this plot';
+    end if;
+    if coalesce(v_doc_outstanding, false) then
+      raise exception 'Cannot record handover: outstanding Handover Document(s) for this plot';
+    end if;
+    if v_snag_blocking then
+      raise exception 'Cannot record handover: open high-priority overdue Snag(s) for this plot';
+    end if;
+    if v_action_blocking then
+      raise exception 'Cannot record handover: blocked or overdue high/critical-priority Action(s) for this plot';
+    end if;
+    if v_finding_blocking then
+      raise exception 'Cannot record handover: unresolved critical Inspection Finding(s) for this plot';
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_plots_before_write on public.plots;
+create trigger trg_plots_before_write
+  before update on public.plots
+  for each row execute function public.plots_before_write();

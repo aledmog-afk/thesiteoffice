@@ -1250,28 +1250,59 @@ export async function recalculateActualProgress(projectId) {
   return pct;
 }
 
-// Stamps a plot as fully handed over the moment ALL its quality gates
-// are Approved (or N/A — same exclusion rule the gate-approval ratios
-// use elsewhere) and ALL its handover documents are Approved/Final.
+// Stamps a plot as fully handed over the moment System Handover
+// Readiness has ZERO blockers — reusing computePlotHandoverReadiness()
+// (via getPlotHandoverReadiness() below) as the single source of truth
+// for what counts as a blocker, rather than a second, narrower
+// definition of "ready" duplicated here.
+//
+// (Priority 15, Phase 1) Before this, the function only ever checked
+// Quality Gates and Handover Documents, so a plot could be silently
+// stamped "handed over" while readiness simultaneously reported it NOT
+// READY — the one genuine correctness bug Priority 14's operational
+// stress test found. Warnings (Programme variance, and any
+// non-blocking Snag/Action/Finding) deliberately do NOT prevent this —
+// only a hard blocker does, matching computePlotHandoverReadiness's own
+// BLOCKER vs WARNING distinction and its "at_risk plots can still be
+// handed over" semantics exactly. A plot is only eligible while
+// readiness is "ready" or "at_risk" — "restricted" (snagging-only
+// caller) and "not_ready" are both refused here, on top of (not
+// instead of) the RLS/trigger enforcement below.
+//
+// The REAL enforcement boundary is the v39 `trg_plots_before_write`
+// database trigger (sql/schema.sql) — it independently re-validates the
+// same blocker rules server-side against the live data at write time,
+// because plots' own RLS lets any project editor update handed_over_at
+// directly, entirely bypassing this function. This client-side check
+// only avoids attempting a write that would predictably be rejected,
+// giving a fast, silent no-op in the common case; it is not itself the
+// security boundary.
+//
 // Called after any gate/document change on plot-detail.html. Only ever
-// sets handed_over_at once — it's a completion date, not a live status,
-// so it's never cleared if a gate is later reverted — and a plot with
-// no gates or no documents at all can never be "handed over" by this
-// check, since there's nothing to judge completeness from. Returns
-// true if this call is what just completed the plot (false otherwise,
-// including "already complete"), purely for callers that want to react
-// to it — nothing currently does.
+// sets handed_over_at once — it's a permanent historical record, not a
+// live status, so it is never reset or rewritten once set (also now
+// enforced server-side — see the trigger's own immutability check).
+// Returns true if this call is what just completed the plot (false
+// otherwise, including "already complete" or "not currently eligible").
 export async function checkAndMarkPlotHandedOver(plotId) {
-  const [{ data: gates }, { data: docs }, { data: plot }] = await Promise.all([
-    supabase.from("quality_gates").select("status").eq("plot_id", plotId),
-    supabase.from("handover_documents").select("status").eq("plot_id", plotId),
-    supabase.from("plots").select("handed_over_at").eq("id", plotId).single(),
-  ]);
-  if (!gates?.length || !docs?.length || plot?.handed_over_at) return false;
-  const gatesReady = gates.every((g) => g.status === "approved" || g.status === "not_applicable");
-  const docsReady = docs.every((d) => d.status === "approved_final");
-  if (!gatesReady || !docsReady) return false;
-  await supabase.from("plots").update({ handed_over_at: new Date().toISOString() }).eq("id", plotId);
+  let readiness;
+  try {
+    ({ readiness } = await getPlotHandoverReadiness(plotId));
+  } catch {
+    return false;
+  }
+  if (readiness.status !== "ready" && readiness.status !== "at_risk") return false;
+  try {
+    const { error } = await supabase.from("plots").update({ handed_over_at: new Date().toISOString() }).eq("id", plotId);
+    if (error) throw error;
+  } catch {
+    // The database trigger is the real authority — if it rejects this
+    // (e.g. a genuine race where a new blocker appeared between the
+    // read above and this write), there is nothing further to do here;
+    // the caller's own loadPlotControl() refresh already shows the
+    // plot's current, correct readiness and blockers.
+    return false;
+  }
   return true;
 }
 
