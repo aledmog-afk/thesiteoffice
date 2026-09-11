@@ -120,6 +120,11 @@
       <div class="tile-name">Documents</div>
       <div class="tile-stats"><div><strong id="documentsCount">–</strong>documents</div></div>
     </a>
+    <a class="tile" href="programme.html?project=" id="programmeTile">
+      <div class="tile-icon">📅</div>
+      <div class="tile-name">Programme</div>
+      <div class="tile-stats"><div><strong id="programmeActivitiesCount">–</strong>activities</div></div>
+    </a>
   </div>
 
   <div class="card" id="detailsCard">
@@ -231,6 +236,7 @@
   document.getElementById("commercialsTile").href = `commercials.html?project=${projectId}`;
   document.getElementById("drawingsTile").href = `drawings.html?project=${projectId}`;
   document.getElementById("documentsTile").href = `documents.html?project=${projectId}`;
+  document.getElementById("programmeTile").href = `programme.html?project=${projectId}`;
   document.getElementById("actionsTile").href = `actions.html?project=${projectId}`;
   document.getElementById("inspectionsTile").href = `inspections.html?project=${projectId}`;
 
@@ -619,7 +625,7 @@
     document.getElementById("controlCard").style.display = "none";
     document.getElementById("detailsCard").style.display = "none";
     document.getElementById("collaboratorsCard").style.display = "none";
-    ["reportsTile", "monthlyReportsTile", "plotHandoversTile", "hsAuditsTile", "commercialsTile", "drawingsTile", "actionsTile", "inspectionsTile"].forEach((id) => {
+    ["reportsTile", "monthlyReportsTile", "plotHandoversTile", "hsAuditsTile", "commercialsTile", "drawingsTile", "actionsTile", "inspectionsTile", "programmeTile"].forEach((id) => {
       document.getElementById(id).style.display = "none";
     });
   }
@@ -653,7 +659,7 @@
     loadMembers();
     loadControlSummary();
 
-    const [{ count: reportCount }, { count: monthlyReportCount }, { data: snags }, { count: fetchedPlotsCount }, { data: gates }, { data: commercials }, { count: drawingsCount }, { data: hsAudits }, { data: actions }, { data: findings }, { count: documentsCount }] = await Promise.all([
+    const [{ count: reportCount }, { count: monthlyReportCount }, { data: snags }, { count: fetchedPlotsCount }, { data: gates }, { data: commercials }, { count: drawingsCount }, { data: hsAudits }, { data: actions }, { data: findings }, { count: documentsCount }, { count: programmeActivitiesCount }] = await Promise.all([
       supabase.from("weekly_reports").select("id", { count: "exact", head: true }).eq("project_id", projectId),
       supabase.from("monthly_reports").select("id", { count: "exact", head: true }).eq("project_id", projectId),
       supabase.from("snag_items").select("status, due_date, priority").eq("project_id", projectId),
@@ -665,6 +671,7 @@
       supabase.from("actions").select("status").eq("project_id", projectId),
       supabase.from("inspection_findings").select("status").eq("project_id", projectId),
       supabase.from("documents").select("id", { count: "exact", head: true }).eq("project_id", projectId),
+      supabase.from("programme_activities").select("id", { count: "exact", head: true }).eq("project_id", projectId),
     ]);
     document.getElementById("reportCount").textContent = reportCount ?? 0;
     document.getElementById("monthlyReportCount").textContent = monthlyReportCount ?? 0;
@@ -682,6 +689,7 @@
     document.getElementById("actionsOpenCount").textContent = (actions || []).filter(a => ["open", "in_progress", "blocked"].includes(a.status)).length;
     document.getElementById("findingsOpenCount").textContent = (findings || []).filter(isFindingOutstanding).length;
     document.getElementById("documentsCount").textContent = documentsCount ?? 0;
+    document.getElementById("programmeActivitiesCount").textContent = programmeActivitiesCount ?? 0;
     updateGeneratePlotsButton();
   }
 

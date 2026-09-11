@@ -211,6 +211,47 @@ tests/
                              project+type indexes, and
                              document_revisions' document+revision_number
                              index).
+    programme.test.mjs       Programme Control foundation: org_id/
+                             project_id derivation (from the parent
+                             programme, never client-trusted), the
+                             one-active-programme-per-project partial
+                             unique index (a second active row
+                             rejected, multiple drafts allowed),
+                             programme status NOT force-reset on
+                             insert (deliberately unlike
+                             weekly_reports), programme_activities
+                             creation, the plot_id-same-project and
+                             assigned_to-real-member IDOR checks (the
+                             latter proven to accept a snagging-only
+                             member — a legitimate responsible party
+                             even though they can't see Programme
+                             Control at all), forecast defaulting from
+                             planned dates on insert (and never
+                             overwritten if explicitly supplied), the
+                             status/percent_complete/actual_finish
+                             coupling (complete forces 100% + stamps
+                             actual_finish once; not_started forces
+                             0%; reopening preserves actual_finish),
+                             every date-ordering CHECK constraint,
+                             external_id uniqueness scoped per
+                             programme, owner/collaborator/
+                             snagging-only/stranger/cross-org RLS
+                             (editor-only throughout — snagging-only
+                             excluded even from reading, unlike
+                             Documents), the no-delete-policy-on-
+                             programmes vs. editors-can-delete-
+                             activities distinction, and audit
+                             integration (including that a snagging-
+                             only member cannot read programme audit
+                             rows, matching their own SELECT RLS).
+    programme_performance.test.mjs  Seeds 5,000 activities on one
+                             project (plus 15 other projects in the
+                             same org with their own activities) and
+                             proves activity retrieval at 50/500/5,000
+                             rows stays fast and backed by real index
+                             usage (project+status,
+                             project+forecast_finish), unaffected by
+                             the rest of the portfolio.
 
   database/                Real database — migration integrity.
     migrations.test.mjs      Fresh install, required tables/functions/RLS,
@@ -269,7 +310,18 @@ tests/
                              of documents/document_revisions' own
                              tables/indexes/triggers/RLS policies and
                              the controlled-documents storage bucket
-                             across repeated re-application.
+                             across repeated re-application. Also
+                             covers Programme Control (Priority 11):
+                             unlike every migration test above,
+                             programmes/programme_activities have NO
+                             legacy predecessor at all — a fresh
+                             install has zero rows in either table, no
+                             backfill to prove — so this only verifies
+                             idempotency of the schema itself (tables/
+                             indexes/triggers/RLS policies, and the
+                             one-active-programme + external_id
+                             partial unique indexes) across repeated
+                             re-application.
     fixtures/
       pre_organisations_schema.sql   sql/schema.sql as it existed immediately
                                      before Priority 1 (git rev 0b37633) — a
@@ -404,6 +456,58 @@ tests/
                              upload-revision controls), and an already-
                              archived document hides the upload-
                              revision card even for an editor.
+    programme_import_contract.test.mjs  The pure, synchronous import-
+                             contract functions established this
+                             phase (no working importer exists yet) —
+                             parseImportDate() (ISO string/Excel
+                             serial number/JS Date accepted, malformed
+                             shapes rejected rather than guessed at),
+                             validateImportRow() (missing title,
+                             invalid/malformed dates reported
+                             together not just the first, finish-
+                             before-start, invalid percent_complete,
+                             a missing external_id allowed as a soft
+                             fallback case), matchImportRowToActivity()
+                             (the external_id-first, (plot,title)-
+                             fallback identity strategy — proving
+                             title alone is never enough, and an
+                             externally-identified activity is never
+                             matched by the fallback path),
+                             PROGRAMME_IMPORT_OWNED_FIELDS/
+                             PROGRAMME_APP_OWNED_FIELDS (proven
+                             disjoint — an import must never be able
+                             to touch forecast/actual/status), and
+                             planProgrammeImport() (a mixed valid/
+                             invalid batch correctly split into
+                             create/update/invalid, a duplicate
+                             external_id WITHIN one import batch
+                             caught before the database, plot_number
+                             resolved via a caller-supplied lookup).
+    programme_workflow.test.mjs  programme.html's real inline script:
+                             the no-programme-yet empty state and
+                             Create Programme flow, a draft
+                             programme's Activate button (absent once
+                             active), Activate/Archive calling
+                             through and updating the status badge
+                             (Archive gated on confirmation),
+                             activities rendering with the right
+                             columns, creating an activity via the
+                             form, editing an existing activity
+                             (pre-fills the form and calls
+                             updateProgrammeActivity, never
+                             createProgrammeActivity), deleting an
+                             activity, the status filter narrowing
+                             rendered rows, and the empty-activities
+                             state. Row action buttons use an inline
+                             onclick attribute (the same pattern
+                             documents.html/drawings.html already
+                             use) rather than addEventListener —
+                             jsdom's "outside-only" script mode (this
+                             harness's mode) never wires those up into
+                             live listeners, so these tests call the
+                             exposed window.editActivity()/
+                             window.deleteActivity() directly, the
+                             same functions a real click resolves to.
 
   uploads/
     client.test.mjs          uploadPhoto()'s client-side size/MIME

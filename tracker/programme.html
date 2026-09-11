@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Programme – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title">Programme</div>
+      <div class="page-sub" id="projectSub">What was planned, what's currently forecast, and what actually happened — imported/entered activities, not a Gantt chart.</div>
+    </div>
+  </div>
+
+  <div id="pageErrorBox" class="error-box"></div>
+
+  <div class="card" id="noProgrammeCard" style="display:none; margin-bottom:1.5rem;">
+    <p style="margin-bottom:0.8rem;">This site doesn't have a programme yet.</p>
+    <button class="btn btn-amber" id="createProgrammeBtn">Create Programme</button>
+  </div>
+
+  <div class="card" id="programmeCard" style="display:none; margin-bottom:1.5rem;">
+    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.8rem;">
+      <div style="display:flex; align-items:center; gap:0.8rem; flex-wrap:wrap;">
+        <select id="programmeSelect" style="width:auto; display:none;"></select>
+        <span id="programmeName" style="font-family:var(--font-display); font-size:1.1rem; font-weight:700;"></span>
+        <span class="badge" id="programmeStatusBadge"></span>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-outline btn-sm" id="activateProgrammeBtn" style="display:none;">Activate</button>
+        <button class="btn btn-outline btn-sm" id="archiveProgrammeBtn" style="display:none;">Archive</button>
+        <button class="btn btn-outline btn-sm" id="newProgrammeBtn" style="display:none;">+ New Programme</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="activityFormCard" style="display:none; margin-bottom:1.5rem;">
+    <div id="formErrorBox" class="error-box"></div>
+    <form id="activityForm">
+      <input type="hidden" id="editingId">
+      <div class="field"><label for="activityTitle">Activity *</label><input type="text" id="activityTitle" required placeholder="e.g. Roof Covering – Plot 4"></div>
+      <div class="form-grid">
+        <div class="field">
+          <label for="activityPlot">Plot (optional)</label>
+          <select id="activityPlot"><option value="">Not plot-specific</option></select>
+        </div>
+        <div class="field">
+          <label for="activityMilestone">Type</label>
+          <select id="activityMilestone">
+            <option value="false">Task</option>
+            <option value="true">Milestone</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-grid">
+        <div class="field"><label for="plannedStart">Planned start</label><input type="date" id="plannedStart"></div>
+        <div class="field"><label for="plannedFinish">Planned finish</label><input type="date" id="plannedFinish"></div>
+      </div>
+      <div class="form-grid">
+        <div class="field"><label for="forecastStart">Forecast start</label><input type="date" id="forecastStart"></div>
+        <div class="field"><label for="forecastFinish">Forecast finish</label><input type="date" id="forecastFinish"></div>
+      </div>
+      <div class="form-grid">
+        <div class="field"><label for="actualStart">Actual start</label><input type="date" id="actualStart"></div>
+        <div class="field"><label for="actualFinish">Actual finish</label><input type="date" id="actualFinish"></div>
+      </div>
+      <div class="form-grid">
+        <div class="field">
+          <label for="activityStatus">Status</label>
+          <select id="activityStatus"></select>
+        </div>
+        <div class="field"><label for="percentComplete">% Complete</label><input type="number" id="percentComplete" min="0" max="100" step="1" value="0"></div>
+      </div>
+      <div class="field">
+        <label for="activityAssignedTo">Responsible</label>
+        <select id="activityAssignedTo"><option value="">Unassigned</option></select>
+      </div>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-amber" id="saveActivityBtn">Save Activity</button>
+        <button type="button" class="btn btn-outline" id="cancelActivityBtn">Cancel</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card" id="activitiesListCard" style="display:none;">
+    <div class="btn-row" style="margin-bottom:1rem; flex-wrap:wrap;">
+      <button class="btn btn-amber" id="newActivityBtn">+ New Activity</button>
+      <select id="statusFilter" style="width:auto;">
+        <option value="">All statuses</option>
+      </select>
+      <select id="sortBy" style="width:auto; margin-left:auto;">
+        <option value="forecast_finish">Sort: Forecast Finish</option>
+        <option value="planned_finish">Sort: Planned Finish</option>
+        <option value="title">Sort: Activity</option>
+        <option value="status">Sort: Status</option>
+      </select>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Activity</th><th>Type</th><th>Plot</th><th>Planned Start</th><th>Planned Finish</th><th>Forecast Finish</th><th>Actual Finish</th><th>% Complete</th><th>Status</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="activityRows"></tbody>
+      </table>
+    </div>
+    <div id="emptyState" class="empty" style="display:none;">
+      <p>No activities yet for this programme.</p>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, PROGRAMME_STATUS_LABEL, PROGRAMME_STATUS_BADGE, ACTIVITY_STATUSES, ACTIVITY_STATUS_LABEL, ACTIVITY_STATUS_BADGE, listProgrammes, createProgramme, activateProgramme, archiveProgramme, listProgrammeActivities, createProgrammeActivity, updateProgrammeActivity, deleteProgrammeActivity } from "./js/app.js";
+
+  await requireAuth();
+  const projectId = getParam("project");
+  if (!projectId) window.location.href = "dashboard.html";
+
+  const pageErrorBox = document.getElementById("pageErrorBox");
+  const formErrorBox = document.getElementById("formErrorBox");
+  let project = null;
+  let programmes = [];
+  let currentProgramme = null;
+  let activities = [];
+  let plots = [];
+  let members = [];
+  let statusFilter = "";
+  let sortBy = "forecast_finish";
+
+  document.getElementById("activityStatus").innerHTML = ACTIVITY_STATUSES.map((s) => `<option value="${s}">${ACTIVITY_STATUS_LABEL[s]}</option>`).join("");
+  document.getElementById("statusFilter").innerHTML += ACTIVITY_STATUSES.map((s) => `<option value="${s}">${ACTIVITY_STATUS_LABEL[s]}</option>`).join("");
+
+  function renderProgrammeCard() {
+    document.getElementById("noProgrammeCard").style.display = programmes.length ? "none" : "block";
+    document.getElementById("programmeCard").style.display = programmes.length ? "block" : "none";
+    document.getElementById("activityFormCard").style.display = "none";
+    document.getElementById("activitiesListCard").style.display = currentProgramme ? "block" : "none";
+    if (!currentProgramme) return;
+
+    document.getElementById("programmeName").textContent = currentProgramme.name;
+    const badge = document.getElementById("programmeStatusBadge");
+    badge.className = `badge ${PROGRAMME_STATUS_BADGE[currentProgramme.status] || "badge-grey"}`;
+    badge.textContent = PROGRAMME_STATUS_LABEL[currentProgramme.status] || currentProgramme.status;
+
+    document.getElementById("activateProgrammeBtn").style.display = currentProgramme.status === "draft" ? "inline-flex" : "none";
+    document.getElementById("archiveProgrammeBtn").style.display = currentProgramme.status !== "archived" ? "inline-flex" : "none";
+    document.getElementById("newProgrammeBtn").style.display = currentProgramme.status !== "draft" ? "inline-flex" : "none";
+
+    const select = document.getElementById("programmeSelect");
+    if (programmes.length > 1) {
+      select.style.display = "inline-flex";
+      select.innerHTML = programmes.map((p) => `<option value="${p.id}" ${p.id === currentProgramme.id ? "selected" : ""}>${escapeHtml(p.name)} (${PROGRAMME_STATUS_LABEL[p.status]})</option>`).join("");
+    } else {
+      select.style.display = "none";
+    }
+  }
+
+  document.getElementById("programmeSelect").addEventListener("change", async (e) => {
+    currentProgramme = programmes.find((p) => p.id === e.target.value) || null;
+    renderProgrammeCard();
+    await loadActivities();
+  });
+
+  document.getElementById("createProgrammeBtn").addEventListener("click", async () => {
+    clearError(pageErrorBox);
+    try {
+      const p = await createProgramme(projectId, { name: `${project?.name || "Site"} Programme` });
+      programmes.unshift(p);
+      currentProgramme = p;
+      renderProgrammeCard();
+      await loadActivities();
+    } catch (err) {
+      showError(pageErrorBox, err);
+    }
+  });
+
+  document.getElementById("activateProgrammeBtn").addEventListener("click", async () => {
+    clearError(pageErrorBox);
+    try {
+      const updated = await activateProgramme(currentProgramme.id);
+      programmes = programmes.map((p) => (p.id === updated.id ? updated : p));
+      currentProgramme = updated;
+      renderProgrammeCard();
+    } catch (err) {
+      showError(pageErrorBox, err);
+    }
+  });
+
+  document.getElementById("archiveProgrammeBtn").addEventListener("click", async () => {
+    if (!confirm(`Archive "${currentProgramme.name}"? Its activities are preserved — you can view them again by switching back to it.`)) return;
+    clearError(pageErrorBox);
+    try {
+      const updated = await archiveProgramme(currentProgramme.id);
+      programmes = programmes.map((p) => (p.id === updated.id ? updated : p));
+      currentProgramme = updated;
+      renderProgrammeCard();
+    } catch (err) {
+      showError(pageErrorBox, err);
+    }
+  });
+
+  document.getElementById("newProgrammeBtn").addEventListener("click", async () => {
+    clearError(pageErrorBox);
+    try {
+      const p = await createProgramme(projectId, { name: `${project?.name || "Site"} Programme ${programmes.length + 1}` });
+      programmes.unshift(p);
+      currentProgramme = p;
+      renderProgrammeCard();
+      await loadActivities();
+    } catch (err) {
+      showError(pageErrorBox, err);
+    }
+  });
+
+  // ─── Activities ─────────────────────────────────────────────────
+  const activityForm = document.getElementById("activityForm");
+  const activityFormCard = document.getElementById("activityFormCard");
+
+  function openActivityForm(activity = null) {
+    clearError(formErrorBox);
+    activityForm.reset();
+    document.getElementById("editingId").value = activity?.id || "";
+    document.getElementById("activityTitle").value = activity?.title || "";
+    document.getElementById("activityPlot").value = activity?.plot_id || "";
+    document.getElementById("activityMilestone").value = String(activity?.is_milestone || false);
+    document.getElementById("plannedStart").value = activity?.planned_start || "";
+    document.getElementById("plannedFinish").value = activity?.planned_finish || "";
+    document.getElementById("forecastStart").value = activity?.forecast_start || "";
+    document.getElementById("forecastFinish").value = activity?.forecast_finish || "";
+    document.getElementById("actualStart").value = activity?.actual_start || "";
+    document.getElementById("actualFinish").value = activity?.actual_finish || "";
+    document.getElementById("activityStatus").value = activity?.status || "not_started";
+    document.getElementById("percentComplete").value = activity ? activity.percent_complete : 0;
+    document.getElementById("activityAssignedTo").value = activity?.assigned_to || "";
+    document.getElementById("saveActivityBtn").textContent = activity ? "Save Changes" : "Save Activity";
+    activityFormCard.style.display = "block";
+  }
+  document.getElementById("newActivityBtn").addEventListener("click", () => openActivityForm());
+  document.getElementById("cancelActivityBtn").addEventListener("click", () => { activityFormCard.style.display = "none"; });
+
+  activityForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearError(formErrorBox);
+    const editingId = document.getElementById("editingId").value;
+    const fields = {
+      title: document.getElementById("activityTitle").value.trim(),
+      plot_id: document.getElementById("activityPlot").value || null,
+      is_milestone: document.getElementById("activityMilestone").value === "true",
+      planned_start: document.getElementById("plannedStart").value || null,
+      planned_finish: document.getElementById("plannedFinish").value || null,
+      forecast_start: document.getElementById("forecastStart").value || null,
+      forecast_finish: document.getElementById("forecastFinish").value || null,
+      actual_start: document.getElementById("actualStart").value || null,
+      actual_finish: document.getElementById("actualFinish").value || null,
+      status: document.getElementById("activityStatus").value,
+      percent_complete: Number(document.getElementById("percentComplete").value) || 0,
+      assigned_to: document.getElementById("activityAssignedTo").value || null,
+    };
+    const btn = document.getElementById("saveActivityBtn");
+    btn.disabled = true;
+    try {
+      if (editingId) {
+        await updateProgrammeActivity(editingId, fields);
+      } else {
+        await createProgrammeActivity(currentProgramme.id, fields);
+      }
+      activityFormCard.style.display = "none";
+      await loadActivities();
+    } catch (err) {
+      showError(formErrorBox, err);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  async function deleteActivity(id, title) {
+    if (!confirm(`Delete "${title}"? This cannot be undone.`)) return;
+    clearError(pageErrorBox);
+    try {
+      await deleteProgrammeActivity(id);
+      await loadActivities();
+    } catch (err) {
+      showError(pageErrorBox, err);
+    }
+  }
+  window.deleteActivity = deleteActivity;
+  window.editActivity = (id) => openActivityForm(activities.find((a) => a.id === id));
+
+  document.getElementById("statusFilter").addEventListener("change", (e) => { statusFilter = e.target.value; renderActivities(); });
+  document.getElementById("sortBy").addEventListener("change", (e) => { sortBy = e.target.value; renderActivities(); });
+
+  function sortedFilteredActivities() {
+    let list = statusFilter ? activities.filter((a) => a.status === statusFilter) : activities.slice();
+    list.sort((a, b) => {
+      if (sortBy === "title") return (a.title || "").localeCompare(b.title || "");
+      if (sortBy === "status") return (a.status || "").localeCompare(b.status || "");
+      const av = a[sortBy] || "9999-99-99";
+      const bv = b[sortBy] || "9999-99-99";
+      return av.localeCompare(bv);
+    });
+    return list;
+  }
+
+  function renderActivities() {
+    const list = sortedFilteredActivities();
+    const rows = document.getElementById("activityRows");
+    if (!list.length) {
+      rows.innerHTML = "";
+      document.getElementById("emptyState").style.display = "block";
+      return;
+    }
+    document.getElementById("emptyState").style.display = "none";
+    rows.innerHTML = list.map((a) => `
+      <tr>
+        <td><strong>${escapeHtml(a.title)}</strong></td>
+        <td>${a.is_milestone ? "Milestone" : "Task"}</td>
+        <td>${a.plots?.plot_number ? escapeHtml(a.plots.plot_number) : "—"}</td>
+        <td>${a.planned_start ? formatDate(a.planned_start) : "—"}</td>
+        <td>${a.planned_finish ? formatDate(a.planned_finish) : "—"}</td>
+        <td>${a.forecast_finish ? formatDate(a.forecast_finish) : "—"}</td>
+        <td>${a.actual_finish ? formatDate(a.actual_finish) : "—"}</td>
+        <td>${Number(a.percent_complete)}%</td>
+        <td><span class="badge ${ACTIVITY_STATUS_BADGE[a.status] || "badge-grey"}">${ACTIVITY_STATUS_LABEL[a.status] || escapeHtml(a.status)}</span></td>
+        <td>
+          <button class="btn btn-outline btn-sm" onclick="editActivity('${a.id}')">Edit</button>
+          <button class="btn btn-outline btn-sm" onclick="deleteActivity('${a.id}', '${escapeHtml(a.title).replace(/'/g, "\\'")}')">Delete</button>
+        </td>
+      </tr>
+    `).join("");
+  }
+
+  async function loadActivities() {
+    if (!currentProgramme) { activities = []; renderActivities(); return; }
+    clearError(pageErrorBox);
+    try {
+      activities = await listProgrammeActivities(currentProgramme.id);
+      renderActivities();
+    } catch (err) {
+      showError(pageErrorBox, err);
+    }
+  }
+
+  async function loadPlotsAndMembers() {
+    const [{ data: plotRows }, { data: memberRows }] = await Promise.all([
+      supabase.from("plots").select("id, plot_number").eq("project_id", projectId).order("plot_number"),
+      supabase.rpc("get_project_members", { p_project_id: projectId }),
+    ]);
+    plots = plotRows || [];
+    members = memberRows || [];
+    document.getElementById("activityPlot").innerHTML = `<option value="">Not plot-specific</option>` + plots.map((p) => `<option value="${p.id}">${escapeHtml(p.plot_number)}</option>`).join("");
+    document.getElementById("activityAssignedTo").innerHTML = `<option value="">Unassigned</option>` + members.map((m) => `<option value="${m.user_id}">${escapeHtml(m.email)}</option>`).join("");
+  }
+
+  async function init() {
+    const { data: proj, error } = await supabase.from("projects").select("name").eq("id", projectId).single();
+    if (error) { document.getElementById("projectSub").textContent = "Site not found."; return; }
+    project = proj;
+    renderHeader([
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project.name, href: `project.html?id=${projectId}` },
+      { label: "Programme" },
+    ]);
+
+    clearError(pageErrorBox);
+    try {
+      programmes = await listProgrammes(projectId);
+      currentProgramme = programmes.find((p) => p.status === "active") || programmes[0] || null;
+      renderProgrammeCard();
+      await Promise.all([loadActivities(), loadPlotsAndMembers()]);
+    } catch (err) {
+      showError(pageErrorBox, err);
+    }
+  }
+
+  init();
+</script>
+</body>
+</html>

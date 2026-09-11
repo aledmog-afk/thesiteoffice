@@ -222,7 +222,7 @@ test("Audit trail: the v28 migration block (table, triggers, policies) is idempo
     const triggers = await client.query(`
       select count(*)::int as n from pg_trigger where tgname like 'trg_audit_%'
     `);
-    assert.equal(triggers.rows[0].n, 13, "exactly 13 audit triggers must exist after repeated re-application (the original 8 from Priority 4, actions from Priority 5, inspections + inspection_findings from Priority 7, documents + document_revisions from Priority 10), never duplicated");
+    assert.equal(triggers.rows[0].n, 15, "exactly 15 audit triggers must exist after repeated re-application (the original 8 from Priority 4, actions from Priority 5, inspections + inspection_findings from Priority 7, documents + document_revisions from Priority 10, programmes + programme_activities from Priority 11), never duplicated");
     await client.end();
   } finally {
     await dropTestDatabase(db);
@@ -691,6 +691,80 @@ test("Document Management: tables, indexes, triggers, RLS policies and the stora
 
     const storagePolicies = await client.query("select count(*)::int as n from pg_policies where tablename = 'objects' and schemaname = 'storage' and policyname like '%controlled-documents%'");
     assert.equal(storagePolicies.rows[0].n, 2, "exactly 2 storage policies for controlled-documents (read + write), never duplicated");
+
+    await client.end();
+  } finally {
+    await dropTestDatabase(db);
+  }
+});
+
+// ─── Programme Control foundation (Priority 11, Phase 2) ────────────
+// A genuinely new concept with no legacy predecessor to migrate data
+// from (unlike Documents' drawings/specifications backfill) — the
+// only thing to prove here is that the schema itself (tables,
+// indexes, triggers, RLS policies, the one-active-programme partial
+// unique index) is idempotent across repeated re-application.
+
+test("Programme Control: tables, indexes, triggers, RLS policies and the one-active-programme constraint are idempotent across repeated re-application", async () => {
+  const db = "tracker_test_programme_idempotent";
+  await createTestDatabase(db);
+  try {
+    const client = adminClient(db);
+    await client.connect();
+    await runSqlFile(client, MOCK_SETUP);
+    for (let i = 0; i < 3; i++) {
+      await runSqlFile(client, CURRENT_SCHEMA);
+    }
+
+    const tables = await client.query("select count(*)::int as n from information_schema.tables where table_schema = 'public' and table_name in ('programmes', 'programme_activities')");
+    assert.equal(tables.rows[0].n, 2);
+
+    const progTriggers = await client.query("select count(*)::int as n from pg_trigger where tgrelid = 'public.programmes'::regclass and tgname like 'trg_%'");
+    assert.equal(progTriggers.rows[0].n, 2, "exactly 2 triggers on programmes (before-write + audit), never duplicated");
+
+    const actTriggers = await client.query("select count(*)::int as n from pg_trigger where tgrelid = 'public.programme_activities'::regclass and tgname like 'trg_%'");
+    assert.equal(actTriggers.rows[0].n, 2, "exactly 2 triggers on programme_activities (before-write + audit), never duplicated");
+
+    const progPolicies = await client.query("select count(*)::int as n from pg_policies where tablename = 'programmes'");
+    assert.equal(progPolicies.rows[0].n, 3, "programmes has select/insert/update only, no delete policy");
+
+    const actPolicies = await client.query("select count(*)::int as n from pg_policies where tablename = 'programme_activities'");
+    assert.equal(actPolicies.rows[0].n, 4, "programme_activities has select/insert/update/delete — unlike documents, activities have no protected revision history");
+
+    // Note: SQL LIKE's "_" is a single-character WILDCARD, not a literal
+    // underscore — "%_idx" therefore also matches
+    // programme_activities_external_id_uidx (its last 4 characters,
+    // "uidx", satisfy "_idx" with "_" matching "u"). That's 6 genuinely
+    // "*_idx"-named indexes (2 on programmes, 4 on programme_activities)
+    // plus this one incidental match, counted separately below.
+    const indexes = await client.query("select count(*)::int as n from pg_indexes where tablename in ('programmes', 'programme_activities') and indexname like '%_idx'");
+    assert.equal(indexes.rows[0].n, 7, "6 genuinely *_idx-named indexes (2 on programmes + 4 on programme_activities) plus the incidental LIKE-wildcard match on *_uidx, never duplicated");
+
+    const oneActiveIndex = await client.query("select count(*)::int as n from pg_indexes where tablename = 'programmes' and indexname = 'programmes_one_active_per_project'");
+    assert.equal(oneActiveIndex.rows[0].n, 1, "the one-active-programme-per-project partial unique index must exist exactly once");
+
+    const externalIdIndex = await client.query("select count(*)::int as n from pg_indexes where tablename = 'programme_activities' and indexname = 'programme_activities_external_id_uidx'");
+    assert.equal(externalIdIndex.rows[0].n, 1, "the (programme_id, external_id) partial unique index must exist exactly once");
+
+    await client.end();
+  } finally {
+    await dropTestDatabase(db);
+  }
+});
+
+test("Programme Control: a fresh install has zero programmes/activities — there is no legacy predecessor to backfill from, unlike Documents' drawings/specifications", async () => {
+  const db = "tracker_test_programme_no_backfill";
+  await createTestDatabase(db);
+  try {
+    const client = adminClient(db);
+    await client.connect();
+    await runSqlFile(client, MOCK_SETUP);
+    await runSqlFile(client, CURRENT_SCHEMA);
+
+    const programmes = await client.query("select count(*)::int as n from public.programmes");
+    assert.equal(programmes.rows[0].n, 0);
+    const activities = await client.query("select count(*)::int as n from public.programme_activities");
+    assert.equal(activities.rows[0].n, 0);
 
     await client.end();
   } finally {

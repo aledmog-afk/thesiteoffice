@@ -2456,3 +2456,282 @@ export async function exportDocumentsZip(projectName, documents, { includeHistor
   a.remove();
   URL.revokeObjectURL(url);
 }
+
+
+// ─── Programme Control (Priority 11, Phase 2) ────────────────────
+// Project -> Programme -> Programme Activity. Server-side triggers
+// (sql/schema.sql, v35 — programmes_before_write(),
+// programme_activities_before_write()) are the real authority for
+// org_id/project_id derivation, plot/assignee validation, and the
+// percent_complete/actual_finish status coupling; these helpers exist
+// only so every page shares one query shape, the same convention every
+// prior priority's own data-access section already established.
+//
+// Hybrid architecture: this is NOT a scheduling engine. An external
+// programme (MS Project / Asta / Excel) remains the actual planning
+// tool — see tracker/README.md for the full design rationale. This
+// phase deliberately has no dependency graph, no Gantt, no
+// versioning/re-baselining, and no dashboard/weekly-report
+// integration yet (those are explicit future phases).
+export const PROGRAMME_STATUSES = ["draft", "active", "archived"];
+export const PROGRAMME_STATUS_LABEL = { draft: "Draft", active: "Active", archived: "Archived" };
+export const PROGRAMME_STATUS_BADGE = { draft: "badge-grey", active: "badge-green", archived: "badge-grey" };
+
+export const ACTIVITY_STATUSES = ["not_started", "in_progress", "complete", "cancelled"];
+export const ACTIVITY_STATUS_LABEL = { not_started: "Not Started", in_progress: "In Progress", complete: "Complete", cancelled: "Cancelled" };
+export const ACTIVITY_STATUS_BADGE = { not_started: "badge-grey", in_progress: "badge-blue", complete: "badge-green", cancelled: "badge-grey" };
+
+export async function listProgrammes(projectId) {
+  const { data, error } = await supabase.from("programmes").select("*").eq("project_id", projectId).order("created_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+// The one row most pages actually want — a project's current active
+// programme, or null if it doesn't have one yet (still in draft, or
+// never set up). Never assumes there's exactly one; if more than one
+// somehow existed it would be a data anomaly the unique partial index
+// already prevents at the database level.
+export async function getActiveProgramme(projectId) {
+  const { data, error } = await supabase.from("programmes").select("*").eq("project_id", projectId).eq("status", "active").maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
+export async function createProgramme(projectId, { name } = {}) {
+  const { data, error } = await supabase.from("programmes").insert({ project_id: projectId, name: name || "Programme" }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateProgrammeStatus(programmeId, status) {
+  const { data, error } = await supabase.from("programmes").update({ status }).eq("id", programmeId).select().single();
+  if (error) throw error;
+  return data;
+}
+export async function activateProgramme(programmeId) { return updateProgrammeStatus(programmeId, "active"); }
+export async function archiveProgramme(programmeId) { return updateProgrammeStatus(programmeId, "archived"); }
+
+export async function updateProgramme(programmeId, fields) {
+  const { data, error } = await supabase.from("programmes").update(fields).eq("id", programmeId).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function listProgrammeActivities(programmeId, { status } = {}) {
+  let query = supabase.from("programme_activities").select("*, plots(plot_number)").eq("programme_id", programmeId);
+  if (status) query = query.eq("status", status);
+  const { data, error } = await query.order("forecast_finish", { ascending: true, nullsFirst: false });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function createProgrammeActivity(programmeId, fields) {
+  const { data, error } = await supabase.from("programme_activities").insert({ programme_id: programmeId, ...fields }).select("*, plots(plot_number)").single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateProgrammeActivity(activityId, fields) {
+  const { data, error } = await supabase.from("programme_activities").update(fields).eq("id", activityId).select("*, plots(plot_number)").single();
+  if (error) throw error;
+  return data;
+}
+
+export async function deleteProgrammeActivity(activityId) {
+  const { error } = await supabase.from("programme_activities").delete().eq("id", activityId);
+  if (error) throw error;
+}
+
+// ─── XLSX import architecture (contract only — no reader/UI yet) ────
+// This phase deliberately stops short of a working importer (brief
+// section 12: "First establish... the import data contract... do not
+// build the complete import UI yet"). What follows is the CONTRACT a
+// future importer will implement against — the shape of a valid row,
+// how it's validated, and how it's matched against existing activities
+// for create-vs-update — all pure, synchronous, and fully testable
+// without ever touching XLSX.read() or the network. Reading a real
+// workbook (via the xlsx@0.18.5 already used for Export Trackers) and
+// the column-mapping/preview UI are Phase 3 work.
+
+// The columns a future importer will recognise. "external_id" is
+// deliberately the FIRST-CLASS identity field — see
+// matchImportRowToActivity() below for why title alone is never a
+// safe key. Column names here are the CONTRACT's own vocabulary, not
+// tied to any one spreadsheet's literal header text — column mapping
+// (letting a user say "my 'Task Name' column means title") is UI work
+// for the actual importer, not this phase.
+export const PROGRAMME_IMPORT_COLUMNS = ["external_id", "title", "plot_number", "is_milestone", "planned_start", "planned_finish"];
+
+// Accepts a small set of unambiguous shapes a spreadsheet cell might
+// actually contain: an ISO date string, an Excel serial date number
+// (SheetJS can hand these back as raw numbers depending on cell
+// formatting), or a JS Date (SheetJS's own `cellDates: true` option
+// would produce this). Anything else is treated as invalid rather than
+// guessed at — a wrong silent guess is worse than a row the user has
+// to fix by hand.
+const EXCEL_EPOCH_MS = Date.UTC(1899, 11, 30); // day 0 in Excel's (incorrect but universal) date system
+export function parseImportDate(value) {
+  if (value === null || value === undefined || value === "") return { ok: true, value: null };
+  if (value instanceof Date) {
+    if (isNaN(value.getTime())) return { ok: false };
+    return { ok: true, value: toLocalISODate(value) };
+  }
+  if (typeof value === "number" && isFinite(value)) {
+    const ms = EXCEL_EPOCH_MS + value * 86400000;
+    const d = new Date(ms);
+    if (isNaN(d.getTime())) return { ok: false };
+    return { ok: true, value: d.toISOString().slice(0, 10) };
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return { ok: true, value: null };
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return { ok: false };
+    const d = new Date(trimmed + "T00:00:00Z");
+    if (isNaN(d.getTime())) return { ok: false };
+    return { ok: true, value: trimmed };
+  }
+  return { ok: false };
+}
+
+// Validates ONE parsed spreadsheet row against the import contract.
+// Returns { valid: true, activity: {...} } with a clean, ready-to-
+// insert/update field set, or { valid: false, errors: [...] } with
+// every problem found (not just the first) — so a preview UI can show
+// a row's full set of issues in one pass rather than a fix-one-see-
+// the-next loop. Never touches the network or an existing activity
+// list; matching against what already exists is
+// matchImportRowToActivity()'s job, kept separate on purpose (the
+// same "pure planning, separate from I/O" split planDocumentExport()
+// already established for bulk export).
+export function validateImportRow(row) {
+  const errors = [];
+  const title = typeof row.title === "string" ? row.title.trim() : "";
+  if (!title) errors.push("Title is required.");
+
+  const plannedStart = parseImportDate(row.planned_start);
+  if (!plannedStart.ok) errors.push(`Invalid planned_start: "${row.planned_start}".`);
+  const plannedFinish = parseImportDate(row.planned_finish);
+  if (!plannedFinish.ok) errors.push(`Invalid planned_finish: "${row.planned_finish}".`);
+  if (plannedStart.ok && plannedFinish.ok && plannedStart.value && plannedFinish.value && plannedFinish.value < plannedStart.value) {
+    errors.push("planned_finish cannot be before planned_start.");
+  }
+
+  let percentComplete;
+  if (row.percent_complete !== undefined && row.percent_complete !== null && row.percent_complete !== "") {
+    const n = Number(row.percent_complete);
+    if (!isFinite(n) || n < 0 || n > 100) {
+      errors.push(`Invalid percent_complete: "${row.percent_complete}" (must be 0-100).`);
+    } else {
+      percentComplete = n;
+    }
+  }
+
+  const externalId = typeof row.external_id === "string" ? row.external_id.trim() : (row.external_id ? String(row.external_id).trim() : "");
+
+  if (errors.length) return { valid: false, errors };
+
+  return {
+    valid: true,
+    activity: {
+      externalId: externalId || null,
+      title,
+      plotNumber: row.plot_number ? String(row.plot_number).trim() : null,
+      isMilestone: row.is_milestone === true || row.is_milestone === "true" || row.is_milestone === "TRUE" || row.is_milestone === 1,
+      plannedStart: plannedStart.value,
+      plannedFinish: plannedFinish.value,
+      percentComplete,
+    },
+  };
+}
+
+// Stable-identity strategy for "is this the same activity I imported
+// last week?" (brief section 12's central question):
+//   1. external_id, when the source programme provides one (MS
+//      Project/Asta/Primavera exports typically carry a stable
+//      Activity ID/UID column) — matched within the SAME programme
+//      only (document_id-scoped, mirroring how document_revisions'
+//      own numbering is scoped to one document, never global).
+//   2. Falling back to (plot_number, title) when no external_id is
+//      present — the same "match by natural key, case/whitespace-
+//      normalised" idiom already used for the Documents backfill
+//      (project_id+document_type+title) and the general-snag-list
+//      get-or-create in weekly-report-form.html. Title alone is
+//      deliberately NOT enough on its own (the brief's own warning) —
+//      two different plots very plausibly share an identical activity
+//     title ("1st Fix - Electrical"), so plot is required alongside it.
+//   3. No match by either method -> this is a new activity (create).
+// Never mutates anything — returns the matching existing activity (or
+// null), for the caller to decide create vs. update.
+export function matchImportRowToActivity(parsedRow, existingActivities) {
+  if (parsedRow.externalId) {
+    const byExternalId = existingActivities.find((a) => a.external_id === parsedRow.externalId);
+    if (byExternalId) return byExternalId;
+    return null;
+  }
+  const normalisedTitle = parsedRow.title.trim().toLowerCase();
+  return existingActivities.find((a) =>
+    (a.external_id === null || a.external_id === undefined) &&
+    (a.title || "").trim().toLowerCase() === normalisedTitle &&
+    (a.plotNumber || a.plot_number || null) === (parsedRow.plotNumber || null)
+  ) || null;
+}
+
+// Fields an import is allowed to touch vs. fields this application
+// owns once an activity exists (brief section 13 — "do not allow a
+// subsequent import to silently overwrite application-controlled
+// forecast or actual fields"). Imported fields describe what the
+// EXTERNAL programme says should happen; everything else (forecast,
+// actual, status, percent_complete, assigned_to) is this app's own
+// control-layer data and must never be clobbered by a re-import.
+export const PROGRAMME_IMPORT_OWNED_FIELDS = ["title", "planned_start", "planned_finish", "is_milestone", "external_id", "plot_id"];
+export const PROGRAMME_APP_OWNED_FIELDS = ["forecast_start", "forecast_finish", "actual_start", "actual_finish", "status", "percent_complete", "assigned_to"];
+
+// Builds the plan for one import batch: which validated rows become a
+// new activity, which match an existing one (an UPDATE touching only
+// PROGRAMME_IMPORT_OWNED_FIELDS — never forecast/actual/status), and
+// which rows failed validation — all computed with zero network
+// access, exactly like planDocumentExport()'s own "plan first, act
+// later" split. `plotIdByNumber` resolves a row's plot_number to a
+// real plot_id (or null if unmatched/unset) — supplied by the caller,
+// since only it can query the project's real plots.
+export function planProgrammeImport(rows, existingActivities, plotIdByNumber = {}) {
+  const results = rows.map((row, index) => ({ index, row, ...validateImportRow(row) }));
+
+  const seenExternalIds = new Map();
+  for (const r of results) {
+    if (!r.valid || !r.activity.externalId) continue;
+    if (seenExternalIds.has(r.activity.externalId)) {
+      const firstIndex = seenExternalIds.get(r.activity.externalId);
+      r.valid = false;
+      r.errors = [`Duplicate external_id "${r.activity.externalId}" — already used by row ${firstIndex + 1} in this import.`];
+      delete r.activity;
+    } else {
+      seenExternalIds.set(r.activity.externalId, r.index);
+    }
+  }
+
+  const toCreate = [];
+  const toUpdate = [];
+  const invalid = [];
+  for (const r of results) {
+    if (!r.valid) { invalid.push({ index: r.index, errors: r.errors }); continue; }
+    const existing = matchImportRowToActivity(r.activity, existingActivities);
+    const plotId = r.activity.plotNumber ? (plotIdByNumber[r.activity.plotNumber] || null) : null;
+    const fields = {
+      title: r.activity.title,
+      planned_start: r.activity.plannedStart,
+      planned_finish: r.activity.plannedFinish,
+      is_milestone: r.activity.isMilestone,
+      external_id: r.activity.externalId,
+      plot_id: plotId,
+    };
+    if (existing) {
+      toUpdate.push({ index: r.index, activityId: existing.id, fields });
+    } else {
+      toCreate.push({ index: r.index, fields });
+    }
+  }
+
+  return { toCreate, toUpdate, invalid };
+}

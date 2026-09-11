@@ -4066,3 +4066,336 @@ begin
   end loop;
 end;
 $$;
+
+-- ─── v35 ADDITIONS: Programme Control foundation (Phase 2) ──────────
+--
+-- Project -> Programme -> Programme Activity. A deliberately minimal
+-- foundation — see tracker/README.md for the full Phase 1 inspection
+-- and Phase 2 design rationale (why each field was kept/dropped from
+-- the original proposal, the import-identity strategy, and why no
+-- Gantt/dependency/critical-path/versioning engine exists yet).
+--
+-- Hybrid architecture: an external tool (MS Project / Asta / Excel)
+-- remains the actual planning tool. This schema only imports/records
+-- planned dates, then owns forecast/actual/status/progress — it is
+-- NOT a scheduling engine and deliberately has no dependency graph.
+create table if not exists public.programmes (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.organisations(id),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  name text not null default 'Programme',
+  status text not null default 'draft' check (status in ('draft', 'active', 'archived')),
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- "One active programme per project" is enforced here, not in a
+-- trigger — a partial unique index is simpler, always correct under
+-- concurrent writes (the same guarantee unique(document_id,
+-- revision_number) gives document_revisions), and needs no extra
+-- code. draft/archived programmes are deliberately NOT constrained
+-- this way — a project may accumulate several archived programmes
+-- over time (a genuine historical record), and nothing stops more
+-- than one draft existing while it's still being set up.
+create unique index if not exists programmes_one_active_per_project on public.programmes (project_id) where (status = 'active');
+
+create index if not exists programmes_project_idx on public.programmes (project_id);
+-- Bare org_id index purely to avoid this being flagged as an
+-- unindexed foreign key by Supabase's advisor — matches every other
+-- org-scoped child table's own convention (actions_org_id_idx etc.);
+-- real query volume here doesn't need it (a project typically has 0-2
+-- programme rows), it's just consistency + advisor hygiene.
+create index if not exists programmes_org_idx on public.programmes (org_id);
+-- No status index — not justified at this cardinality (see above).
+
+alter table public.programmes enable row level security;
+-- Editor-only throughout, per the brief: "Programme data should
+-- initially be editor-only. Do not widen access to snagging-only
+-- users yet." Matches actions/inspections/hs_audits' own tier exactly
+-- — not documents/snag_items' member-level read exception.
+drop policy if exists "editors read programmes" on public.programmes;
+create policy "editors read programmes" on public.programmes for select using (public.is_project_editor(project_id));
+drop policy if exists "editors insert programmes" on public.programmes;
+create policy "editors insert programmes" on public.programmes for insert with check (public.is_project_editor(project_id));
+drop policy if exists "editors update programmes" on public.programmes;
+create policy "editors update programmes" on public.programmes for update using (public.is_project_editor(project_id)) with check (public.is_project_editor(project_id));
+-- Deliberately NO delete policy — a programme is retired via
+-- status='archived' (that's the entire purpose of the status field),
+-- never removed outright, so its activities' history is never lost
+-- to a stray DELETE.
+
+-- Server-side authority: org_id derivation (never client-trusted,
+-- same principle actions_before_write()/documents_before_write()
+-- already use), created_by/created_at immutability, updated_at.
+-- Status is deliberately left free to move between draft/active/
+-- archived in any direction by an editor — a 3-state field with only
+-- the one-active-per-project rule above to enforce doesn't need a
+-- transition-restriction engine on top (unlike weekly_reports'
+-- genuinely sequential Draft->Reviewed->Approved->Issued lifecycle,
+-- which this brief did not ask for here).
+create or replace function public.programmes_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_org_id uuid;
+begin
+  select org_id into v_org_id from public.projects where id = new.project_id;
+  if v_org_id is null then
+    raise exception 'programmes.project_id must reference an existing project with an organisation';
+  end if;
+  new.org_id := v_org_id;
+
+  if TG_OP = 'INSERT' then
+    new.created_by := auth.uid();
+    new.created_at := now();
+    new.updated_at := now();
+    return new;
+  end if;
+
+  new.created_by := old.created_by;
+  new.created_at := old.created_at;
+  new.updated_at := now();
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_programmes_before_write on public.programmes;
+create trigger trg_programmes_before_write
+  before insert or update on public.programmes
+  for each row execute function public.programmes_before_write();
+
+-- ─── Programme Activities ────────────────────────────────────────
+--
+-- Deviations from the Phase 1 field list (see tracker/README.md for
+-- the full reasoning behind each):
+--   - activity_type DROPPED: would have been a second, competing way
+--     to say "is this a milestone" alongside is_milestone, or else an
+--     unconstrained free label duplicating what title already says —
+--     either way, a field with no real behaviour behind it. Nothing
+--     currently reads or writes it, so it was cut rather than shipped
+--     as decoration.
+--   - sort_order DROPPED: only meaningful once a drag-reorder or
+--     fixed-sequence UI exists (this phase's list view sorts by real
+--     dates instead), unlike quality_gates/internal_milestones' own
+--     sort_order, which orders a genuinely FIXED, auto-seeded list.
+--   - responsible_party (free text) REPLACED with assigned_to (uuid
+--     references auth.users) — see the column comment below.
+--   - external_id ADDED (not in the Phase 1 list) — required by this
+--     phase's own brief (§12): a future re-import must be able to
+--     tell "is this the same activity I imported last week", and
+--     title alone is not a safe key (titles get renamed, duplicated).
+create table if not exists public.programme_activities (
+  id uuid primary key default gen_random_uuid(),
+  -- Denormalised from programmes.project_id (trigger-enforced, never
+  -- client-trusted) — same reasoning document_revisions.project_id
+  -- already established: simpler RLS, and required for this table to
+  -- fall into write_audit_log()'s existing generic project_id-based
+  -- branch with zero code changes.
+  org_id uuid not null references public.organisations(id),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  programme_id uuid not null references public.programmes(id) on delete cascade,
+  -- Nullable by design (brief §7) — an activity may be site-wide,
+  -- block-wide, or otherwise not tied to one plot. Validated
+  -- server-side to belong to the SAME project as the activity itself
+  -- (see programme_activities_before_write() below) — never trusted
+  -- from the client, the same IDOR class already closed for
+  -- inspection_findings.action_id / snag_items.drawing_id.
+  plot_id uuid references public.plots(id) on delete set null,
+  title text not null,
+  -- A stable key for a future importer to recognise "this is the same
+  -- activity as last time", not this phase's UI. Unique per programme
+  -- when present; null when the source programme has no ID of its
+  -- own (see tracker/README.md's import-identity fallback strategy —
+  -- matching on programme_id+plot_id+title is the documented fallback,
+  -- not implemented as code this phase since no importer exists yet).
+  external_id text,
+  is_milestone boolean not null default false,
+  planned_start date,
+  planned_finish date,
+  -- Defaults to the planned dates on creation (trigger, see below) so
+  -- a freshly-created/imported activity always has a sane forecast
+  -- rather than an ambiguous null — never overwritten on a later
+  -- update, only defaulted once at insert time.
+  forecast_start date,
+  forecast_finish date,
+  actual_start date,
+  actual_finish date,
+  status text not null default 'not_started' check (status in ('not_started', 'in_progress', 'complete', 'cancelled')),
+  percent_complete numeric not null default 0 check (percent_complete >= 0 and percent_complete <= 100),
+  -- Who is actually responsible for getting this done — deliberately
+  -- a real project member (references auth.users, validated against
+  -- is_project_member_user() below), not free text. This mirrors
+  -- actions.assigned_to/snag_items.assigned_to exactly rather than
+  -- inventing a parallel identity model, per the brief's own
+  -- instruction to prefer a relational reference where the existing
+  -- architecture already supports it cleanly. Deliberately validated
+  -- at MEMBER level, not editor level (unlike actions.assigned_to) —
+  -- the person responsible for doing site work is very often a
+  -- snagging-only main-contractor contact who has no reason to be
+  -- able to edit the programme itself, the same distinction
+  -- snag_items.assigned_to already draws.
+  assigned_to uuid references auth.users(id) on delete set null,
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  check (planned_start is null or planned_finish is null or planned_finish >= planned_start),
+  check (forecast_start is null or forecast_finish is null or forecast_finish >= forecast_start),
+  check (actual_start is null or actual_finish is null or actual_finish >= actual_start)
+);
+
+create unique index if not exists programme_activities_external_id_uidx on public.programme_activities (programme_id, external_id) where (external_id is not null);
+
+-- Indexes tied to real query shapes only (brief §11 — "explain each
+-- index added", "do not blindly add every possible index"):
+--   - (project_id, status): a project's activity list, optionally
+--     filtered by status — the main query this phase's list page runs.
+--   - (project_id, forecast_finish): "what's coming up / overdue" —
+--     the natural default sort for the list page, and the query a
+--     future dashboard exception check will run most.
+--   - (programme_id): "every activity in this programme" (archiving a
+--     programme, or a future re-import scoped to it).
+--   - org_id: advisor-hygiene convention, same as programmes_org_idx.
+-- Deliberately OMITTED: a planned_start index (the brief listed it as
+-- a candidate, but nothing this phase sorts/filters by start date
+-- alone — planned_finish/forecast_finish answer "when is this due",
+-- which is the actual question this phase's UI and future dashboard
+-- ask) and a plot_id index (no query in this phase looks up
+-- activities by plot — trivial to add once a plot-detail integration
+-- exists to justify it).
+create index if not exists programme_activities_project_status_idx on public.programme_activities (project_id, status);
+create index if not exists programme_activities_project_forecast_finish_idx on public.programme_activities (project_id, forecast_finish);
+create index if not exists programme_activities_programme_idx on public.programme_activities (programme_id);
+create index if not exists programme_activities_org_idx on public.programme_activities (org_id);
+
+alter table public.programme_activities enable row level security;
+drop policy if exists "editors read programme_activities" on public.programme_activities;
+create policy "editors read programme_activities" on public.programme_activities for select using (public.is_project_editor(project_id));
+drop policy if exists "editors insert programme_activities" on public.programme_activities;
+create policy "editors insert programme_activities" on public.programme_activities for insert with check (public.is_project_editor(project_id));
+drop policy if exists "editors update programme_activities" on public.programme_activities;
+create policy "editors update programme_activities" on public.programme_activities for update using (public.is_project_editor(project_id)) with check (public.is_project_editor(project_id));
+-- Unlike documents/document_revisions, activities ARE deletable by an
+-- editor (brief §17 explicitly allows "delete/archive" in the UI) —
+-- there is no revision-history concept here to protect, and removing
+-- a wrongly-imported or duplicate row is normal, expected editing.
+drop policy if exists "editors delete programme_activities" on public.programme_activities;
+create policy "editors delete programme_activities" on public.programme_activities for delete using (public.is_project_editor(project_id));
+
+-- Server-side authority: derives org_id/project_id from the parent
+-- programme (never client-trusted — closes the same "attach a row to
+-- a programme in another project" IDOR class Priority 7/8/10 already
+-- closed for findings/snags/revisions), validates plot_id belongs to
+-- that SAME derived project (closing the equivalent IDOR for a
+-- cross-project plot_id), validates assigned_to is a real member of
+-- the project, forces created_by/created_at immutability, defaults
+-- forecast dates from planned dates on insert, and keeps
+-- percent_complete honest at the two ends of the status scale.
+--
+-- Deliberately NOT a transition-restriction trigger (unlike
+-- actions_before_write()'s valid_action_status_transition() check) —
+-- programme activities are frequently bulk-imported or corrected with
+-- an arbitrary starting status (a mostly-finished programme imported
+-- retroactively, or a reopened "complete" activity after a defect is
+-- found), and restricting that would actively hinder legitimate
+-- import/correction use cases this table exists to support.
+create or replace function public.programme_activities_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_project_id uuid;
+  v_org_id uuid;
+  v_plot_project_id uuid;
+begin
+  select project_id, org_id into v_project_id, v_org_id from public.programmes where id = new.programme_id;
+  if v_project_id is null then
+    raise exception 'programme_activities.programme_id must reference an existing programme';
+  end if;
+  new.project_id := v_project_id;
+  new.org_id := v_org_id;
+
+  if new.plot_id is not null then
+    select project_id into v_plot_project_id from public.plots where id = new.plot_id;
+    if v_plot_project_id is null then
+      raise exception 'programme_activities.plot_id must reference an existing plot';
+    end if;
+    if v_plot_project_id <> new.project_id then
+      raise exception 'plot_id must belong to the same project as the programme activity';
+    end if;
+  end if;
+
+  if new.assigned_to is not null and not public.is_project_member_user(new.project_id, new.assigned_to) then
+    raise exception 'assigned_to must be a member of this project';
+  end if;
+
+  if TG_OP = 'INSERT' then
+    new.created_by := auth.uid();
+    new.created_at := now();
+    new.updated_at := now();
+    if new.forecast_start is null then new.forecast_start := new.planned_start; end if;
+    if new.forecast_finish is null then new.forecast_finish := new.planned_finish; end if;
+  else
+    new.created_by := old.created_by;
+    new.created_at := old.created_at;
+    new.updated_at := now();
+  end if;
+
+  -- "complete should require appropriate completion state": force
+  -- percent_complete to 100 on transition into complete (never trust
+  -- a lower client-supplied value), and stamp actual_finish once, on
+  -- the transition, only if the client didn't already supply a real
+  -- date — never force-overwritten on every subsequent save the way
+  -- actions.completed_at is, since actual_finish is a real-world
+  -- construction date a user may need to correct afterwards while
+  -- status stays 'complete'.
+  if new.status = 'complete' then
+    new.percent_complete := 100;
+    if TG_OP = 'INSERT' or old.status <> 'complete' then
+      if new.actual_finish is null then
+        new.actual_finish := current_date;
+      end if;
+    end if;
+  elsif new.status = 'not_started' then
+    new.percent_complete := 0;
+  end if;
+  -- Reopening a previously-complete activity (status moving away from
+  -- 'complete') deliberately leaves actual_finish untouched — it
+  -- remains a true historical record of when the work was actually
+  -- finished, even if the row is reopened later for correction. This
+  -- is the one deliberate divergence from actions.completed_at, which
+  -- always clears on reopen; construction reality (a real date the
+  -- work stopped) doesn't become untrue just because the record is
+  -- reopened.
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_programme_activities_before_write on public.programme_activities;
+create trigger trg_programme_activities_before_write
+  before insert or update on public.programme_activities
+  for each row execute function public.programme_activities_before_write();
+
+-- Audit integration: reuses the existing generic write_audit_log() —
+-- both tables have a plain id + project_id, so they fall straight
+-- into its default branch with zero code changes. Read access to
+-- their audit rows needs zero changes to can_read_audit_row() either
+-- — its existing default (editor-level) branch already matches these
+-- tables' own editor-only SELECT RLS above, unlike documents/
+-- document_revisions in Priority 10, which needed adding to its
+-- member-level bucket.
+drop trigger if exists trg_audit_programmes on public.programmes;
+create trigger trg_audit_programmes
+  after insert or update or delete on public.programmes
+  for each row execute function public.write_audit_log();
+
+drop trigger if exists trg_audit_programme_activities on public.programme_activities;
+create trigger trg_audit_programme_activities
+  after insert or update or delete on public.programme_activities
+  for each row execute function public.write_audit_log();
