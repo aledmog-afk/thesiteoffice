@@ -81,7 +81,7 @@ function progCounts(overrides = {}) {
   };
 }
 
-async function runProjectPage({ counts }) {
+async function runProjectPage({ counts, plotReadinessRows = [] }) {
   return runPage(PROJECT_HTML, extractScript(PROJECT_HTML), {
     __url: "https://example.com/project.html?id=p1",
     supabase: { from: permissiveFrom, rpc: () => Promise.resolve({ data: [], error: null }), auth: { getUser: async () => ({ data: { user: { id: "u1" } } }) } },
@@ -97,6 +97,7 @@ async function runProjectPage({ counts }) {
     getProjectControlSummary: async () => ({ actions: [], counts, status: { level: "attention", label: "Attention", reason: "test" } }),
     getAttentionActions: async () => [],
     getMemberEmailMap: async () => ({}),
+    getProjectPlotReadiness: async () => plotReadinessRows,
     CONTROL_LEVEL_BADGE: { attention: "badge-red", watch: "badge-amber", on_track: "badge-green" },
     ACTION_PRIORITY_LABEL: {}, ACTION_PRIORITY_BADGE: {}, ACTION_STATUS_LABEL: {}, ACTION_STATUS_BADGE: {}, ACTION_DUE_LABEL: {}, ACTION_DUE_BADGE: {},
     // Unrelated to the control summary card under test, but referenced
@@ -122,4 +123,54 @@ test("project.html: the per-project totals bar shows 'Overdue Programme' and 'Pr
   const text = document.getElementById("controlTotalsBar").textContent.replace(/\s+/g, " ").trim();
   assert.match(text, /Overdue Programme 3/, "1 activity + 2 milestones = 3");
   assert.match(text, /Programme Forecast Late 3/, "0 material activities + 3 milestones = 3");
+});
+
+test("project.html: the totals bar shows 'Plots Not Ready' and 'Plots At Risk', derived from getProjectPlotReadiness() (Priority 12, Phase 1) — informational only, never blocking the rest of the card", async () => {
+  const rows = [
+    { plot: { id: "pl1" }, readiness: { status: "not_ready" } },
+    { plot: { id: "pl2" }, readiness: { status: "not_ready" } },
+    { plot: { id: "pl3" }, readiness: { status: "at_risk" } },
+    { plot: { id: "pl4" }, readiness: { status: "ready" } },
+    { plot: { id: "pl5" }, readiness: { status: "handed_over" } },
+  ];
+  const { document } = await runProjectPage({ counts: progCounts(), plotReadinessRows: rows });
+  await wait(30);
+  const text = document.getElementById("controlTotalsBar").textContent.replace(/\s+/g, " ").trim();
+  assert.match(text, /Plots Not Ready 2/);
+  assert.match(text, /Plots At Risk 1/);
+});
+
+test("project.html: a failed plot-readiness fetch degrades gracefully — the rest of the control card still renders with the two new cards reading 0", async () => {
+  const supabase = { from: permissiveFrom, rpc: () => Promise.resolve({ data: [], error: null }), auth: { getUser: async () => ({ data: { user: { id: "u1" } } }) } };
+  const { document } = await runPage(PROJECT_HTML, extractScript(PROJECT_HTML), {
+    __url: "https://example.com/project.html?id=p1",
+    supabase,
+    getParam: () => "p1",
+    requireAuth: async () => ({ id: "u1" }),
+    renderHeader: () => {},
+    escapeHtml: (s) => String(s ?? ""),
+    formatDate: (d) => d || "",
+    showError: (el, err) => { el.textContent = (err && err.message) || String(err); },
+    clearError: (el) => { el.textContent = ""; },
+    RAG_LABEL: { red: "Red", amber: "Amber", green: "Green" },
+    renderProgressBlock: () => "",
+    getProjectControlSummary: async () => ({ actions: [], counts: progCounts(), status: { level: "on_track", label: "On Track", reason: "test" } }),
+    getAttentionActions: async () => [],
+    getMemberEmailMap: async () => ({}),
+    getProjectPlotReadiness: async () => { throw new Error("down"); },
+    CONTROL_LEVEL_BADGE: { attention: "badge-red", watch: "badge-amber", on_track: "badge-green" },
+    ACTION_PRIORITY_LABEL: {}, ACTION_PRIORITY_BADGE: {}, ACTION_STATUS_LABEL: {}, ACTION_STATUS_BADGE: {}, ACTION_DUE_LABEL: {}, ACTION_DUE_BADGE: {},
+    geocodePostcode: async () => null,
+    recalculateActualProgress: async () => {},
+    generateMissingPlots: async () => {},
+    suggestPlotProgress: () => null,
+    EXTERNAL_WORKS_TAG: "external-works",
+    monthStartISO: () => "2026-06-01",
+    isFindingOutstanding: () => false,
+    categoriseSnag: () => ({ overdue: false, dueToday: false, dueSoon: false, highPriority: false }),
+  });
+  await wait(30);
+  const text = document.getElementById("controlTotalsBar").textContent.replace(/\s+/g, " ").trim();
+  assert.match(text, /Plots Not Ready 0/);
+  assert.match(text, /Plots At Risk 0/);
 });

@@ -222,7 +222,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, geocodePostcode, recalculateActualProgress, generateMissingPlots, suggestPlotProgress, EXTERNAL_WORKS_TAG, monthStartISO, getProjectControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, isFindingOutstanding, categoriseSnag } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, geocodePostcode, recalculateActualProgress, generateMissingPlots, suggestPlotProgress, EXTERNAL_WORKS_TAG, monthStartISO, getProjectControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, isFindingOutstanding, categoriseSnag, getProjectPlotReadiness } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("id");
@@ -556,9 +556,17 @@
   async function loadControlSummary() {
     clearError(pageErrorBox);
     try {
-      const [summary, attention] = await Promise.all([
+      const [summary, attention, plotReadinessRows] = await Promise.all([
         getProjectControlSummary(projectId),
         getAttentionActions({ projectId }),
+        // Plot Control (Priority 12, Phase 1) — informational only,
+        // deliberately NOT folded into computeControlStatus()/summary.status:
+        // this reuses the SAME broad, project_id-scoped query shape
+        // getProjectControlSummary() itself already uses (no N+1), but
+        // is kept separate here rather than risking a change to the
+        // established project-level status calculation. Never lets a
+        // failure here break the rest of the control card.
+        getProjectPlotReadiness(projectId).catch(() => []),
       ]);
       const memberEmails = attention.length
         ? await getMemberEmailMap([projectId])
@@ -573,6 +581,8 @@
       const c = summary.counts;
       const overdueProgramme = c.overdueProgrammeActivities + c.overdueProgrammeMilestones;
       const forecastLateProgramme = c.materialForecastLateProgrammeActivities + c.forecastLateProgrammeMilestones;
+      const plotsNotReady = plotReadinessRows.filter((r) => r.readiness.status === "not_ready").length;
+      const plotsAtRisk = plotReadinessRows.filter((r) => r.readiness.status === "at_risk").length;
       const cards = [
         ["Open Actions", c.openActions, "var(--ink)"],
         ["Overdue", c.overdue, c.overdue > 0 ? "var(--red)" : "var(--ink)"],
@@ -582,6 +592,8 @@
         ["High / Critical Priority", c.highCritical, c.highCritical > 0 ? "var(--amber)" : "var(--ink)"],
         ["Overdue Programme", overdueProgramme, overdueProgramme > 0 ? "var(--red)" : "var(--ink)"],
         ["Programme Forecast Late", forecastLateProgramme, forecastLateProgramme > 0 ? "var(--amber)" : "var(--ink)"],
+        ["Plots Not Ready", plotsNotReady, plotsNotReady > 0 ? "var(--red)" : "var(--ink)"],
+        ["Plots At Risk", plotsAtRisk, plotsAtRisk > 0 ? "var(--amber)" : "var(--ink)"],
       ];
       document.getElementById("controlTotalsBar").innerHTML = cards.map(([label, value, color]) => `
         <div class="totals-box">

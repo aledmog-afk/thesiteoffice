@@ -1243,6 +1243,276 @@ export async function checkAndMarkPlotHandedOver(plotId) {
   return true;
 }
 
+// ─── Plot Control / Handover Readiness (Priority 12, Phase 1) ─────
+//
+// "What is the current control position of this plot, and what known
+// items are preventing or threatening handover?" — answered by
+// CONNECTING data that already exists and is already plot-linked
+// (Quality Gates, Handover Documents, Programme Activities via
+// plot_id, Snags via their plot's own snag list) rather than adding a
+// new module or a new plot lifecycle. Deliberately does NOT add
+// actions.plot_id / inspection_findings.plot_id this phase — see
+// tracker/README.md for why, and the Phase 1 report for the decision.
+//
+// IMPORTANT (confirmed against real production data before writing
+// this): snag_items.plot_id is populated ONLY for the rare project-
+// wide ("general") snag list where a user optionally tags one item to
+// a plot. The normal, everyday case — a snag raised against a plot's
+// own auto-seeded snag list — leaves snag_items.plot_id null and
+// relies entirely on snag_lists.plot_id instead (of 70 real snag items
+// in production, only 4 carried plot_id directly; 60 relied on their
+// list's plot_id). Every plot-scoped snag query below accounts for
+// BOTH paths — querying snag_items.plot_id alone would silently miss
+// the large majority of real plot snags.
+
+// A plot's own snag list (unique per plot, auto-seeded — see
+// seed_plot_defaults() in sql/schema.sql), plus any snag items
+// directly tagged to this plot from a general/site-wide list, merged
+// and deduped by id.
+async function getPlotSnags(plotId) {
+  const { data: list, error: listErr } = await supabase.from("snag_lists").select("id").eq("plot_id", plotId).maybeSingle();
+  if (listErr) throw listErr;
+  const [byList, byDirectTag] = await Promise.all([
+    list ? supabase.from("snag_items").select("*").eq("snag_list_id", list.id) : Promise.resolve({ data: [] }),
+    supabase.from("snag_items").select("*").eq("plot_id", plotId),
+  ]);
+  if (byList.error) throw byList.error;
+  if (byDirectTag.error) throw byDirectTag.error;
+  const byId = new Map();
+  for (const s of [...(byList.data || []), ...(byDirectTag.data || [])]) byId.set(s.id, s);
+  return [...byId.values()];
+}
+
+// Quality Gates: "ready" mirrors checkAndMarkPlotHandedOver()'s own,
+// already-established definition exactly (approved OR not_applicable)
+// — not a new rule. A plot with zero gate rows recorded is neither
+// ready nor outstanding; it's simply excluded from the gate
+// consideration (see computePlotHandoverReadiness's zero-guard below),
+// the same non-alarming posture checkAndMarkPlotHandedOver() already
+// takes for a plot with nothing recorded yet. There is no "required vs
+// not required" flag in this data model beyond not_applicable itself
+// — every gate/document row that exists for a plot is implicitly
+// required, exactly as the existing handover check already assumes.
+export function summarisePlotGates(gates) {
+  const total = gates.length;
+  const approved = gates.filter((g) => g.status === "approved" || g.status === "not_applicable").length;
+  return { total, approved, outstanding: total - approved };
+}
+
+// Handover Documents: "ready" mirrors checkAndMarkPlotHandedOver()'s
+// own definition exactly (approved_final). No not_applicable-equivalent
+// exists for documents in this data model — every row is implicitly
+// required, same as gates.
+export function summarisePlotDocuments(docs) {
+  const total = docs.length;
+  const approved = docs.filter((d) => d.status === "approved_final").length;
+  return { total, approved, outstanding: total - approved };
+}
+
+// The pure, deterministic readiness calculation — no network calls, no
+// Date.now(), an explicit injectable asOfDate exactly like
+// categoriseProgrammeActivity()/categoriseSnag() already use. Reuses
+// countProgrammeSignals()/categoriseSnag() directly rather than
+// reimplementing any date/variance logic — this is NOT a second
+// definition of programme or snag health.
+//
+// "Critical snag" (the brief's own suggested hard-blocker wording)
+// cannot be implemented literally: SNAG_PRIORITIES has no tier above
+// "high" (unlike FINDING_SEVERITIES' low/medium/high/critical) — there
+// is no headroom in this data model for a "critical" tier distinct
+// from "high". The nearest defensible, non-invented equivalent —
+// combining two fields this codebase already uses together elsewhere
+// for exactly this kind of split (see countFindingSignals()'s own
+// highSeverityOverdueLinkedFindings vs highSeverityDueSoonLinkedFindings)
+// — is an OPEN, HIGH-priority snag that is ALSO overdue. A high-priority
+// snag that isn't yet overdue, or an overdue snag that isn't
+// high-priority, is a warning, never a blocker on its own.
+//
+// A historical completed-late programme activity is deliberately never
+// a blocker or warning here (see the report) — completedLate/upcoming
+// counts are exposed for information only, mirroring Phase 4's own
+// computeControlStatus(), which never reads them either.
+//
+// editorDataVisible must reflect the CALLER's real role (owner/
+// collaborator vs snagging-only) — Quality Gates, Handover Documents
+// and Programme are editor-only RLS, so a snagging-only caller's
+// "gates"/"handoverDocuments"/"programmeActivities" arrays will always
+// arrive empty regardless of the real data, and must never be silently
+// read as "all clear". Snags remain member-level and are always
+// evaluated regardless of role.
+export function computePlotHandoverReadiness(plot, {
+  gates = [], handoverDocuments = [], snags = [], programmeActivities = [], editorDataVisible = true,
+} = {}, asOfDate = todayISO()) {
+  const qualityGates = summarisePlotGates(gates);
+  const handoverDocumentsSummary = summarisePlotDocuments(handoverDocuments);
+  const programmeCounts = countProgrammeSignals(programmeActivities, asOfDate);
+
+  const blockers = [];
+  const warnings = [];
+
+  let openSnags = 0, blockingSnags = 0, warningSnags = 0;
+  for (const s of snags) {
+    if (!isSnagOutstanding(s)) continue;
+    openSnags++;
+    const cats = categoriseSnag(s, asOfDate);
+    if (cats.overdue && cats.highPriority) blockingSnags++;
+    else if (cats.overdue || cats.highPriority) warningSnags++;
+  }
+  if (blockingSnags > 0) {
+    blockers.push({ code: "snags_blocking", label: `${blockingSnags} open high-priority snag${blockingSnags === 1 ? "" : "s"} overdue` });
+  }
+  if (warningSnags > 0) {
+    warnings.push({ code: "snags_warning", label: `${warningSnags} open snag${warningSnags === 1 ? "" : "s"} either overdue or high-priority` });
+  }
+
+  if (editorDataVisible) {
+    if (qualityGates.total > 0 && qualityGates.outstanding > 0) {
+      blockers.push({ code: "gates_outstanding", label: `${qualityGates.outstanding} of ${qualityGates.total} Quality Gate${qualityGates.total === 1 ? "" : "s"} not yet approved` });
+    }
+    if (handoverDocumentsSummary.total > 0 && handoverDocumentsSummary.outstanding > 0) {
+      blockers.push({ code: "documents_outstanding", label: `${handoverDocumentsSummary.outstanding} of ${handoverDocumentsSummary.total} Handover Document${handoverDocumentsSummary.total === 1 ? "" : "s"} not yet approved / final` });
+    }
+    if (programmeCounts.overdueProgrammeActivities > 0) {
+      warnings.push({ code: "programme_overdue_activity", label: `${programmeCounts.overdueProgrammeActivities} programme activit${programmeCounts.overdueProgrammeActivities === 1 ? "y is" : "ies are"} overdue` });
+    }
+    if (programmeCounts.overdueProgrammeMilestones > 0) {
+      warnings.push({ code: "programme_overdue_milestone", label: `${programmeCounts.overdueProgrammeMilestones} programme milestone${programmeCounts.overdueProgrammeMilestones === 1 ? "" : "s"} overdue` });
+    }
+    if (programmeCounts.materialForecastLateProgrammeActivities > 0) {
+      warnings.push({ code: "programme_forecast_late_activity", label: `${programmeCounts.materialForecastLateProgrammeActivities} programme activit${programmeCounts.materialForecastLateProgrammeActivities === 1 ? "y" : "ies"} forecast materially late` });
+    }
+    if (programmeCounts.forecastLateProgrammeMilestones > 0) {
+      warnings.push({ code: "programme_forecast_late_milestone", label: `${programmeCounts.forecastLateProgrammeMilestones} programme milestone${programmeCounts.forecastLateProgrammeMilestones === 1 ? "" : "s"} forecast late` });
+    }
+    // "Approaching handover with unresolved items" (brief) — only
+    // meaningful once something is ALREADY outstanding; a plot with
+    // nothing outstanding approaching its finish date is simply on
+    // schedule, not at risk. Deliberately evaluated last, after every
+    // other blocker/warning above has been gathered.
+    if (programmeCounts.upcomingProgrammeActivities > 0 && (blockers.length > 0 || warnings.length > 0)) {
+      warnings.push({ code: "approaching_with_unresolved", label: `A programme activity is due within ${DUE_SOON_DAYS} days with unresolved items still outstanding` });
+    }
+  }
+
+  let status;
+  if (plot.handed_over_at) status = "handed_over";
+  else if (!editorDataVisible) status = "restricted";
+  else if (blockers.length > 0) status = "not_ready";
+  else if (warnings.length > 0) status = "at_risk";
+  else status = "ready";
+
+  return {
+    status, asOfDate, editorDataVisible, handedOverAt: plot.handed_over_at || null,
+    programme: { hasActivities: programmeActivities.length > 0, total: programmeActivities.length, ...programmeCounts },
+    snags: { total: snags.length, open: openSnags, blocking: blockingSnags, warning: warningSnags },
+    qualityGates, handoverDocuments: handoverDocumentsSummary,
+    blockers, warnings,
+  };
+}
+
+export const PLOT_READINESS_LABEL = {
+  handed_over: "Handed Over", restricted: "Restricted", not_ready: "Not Ready", at_risk: "At Risk", ready: "Ready",
+};
+export const PLOT_READINESS_BADGE = {
+  handed_over: "badge-green", restricted: "badge-grey", not_ready: "badge-red", at_risk: "badge-amber", ready: "badge-green",
+};
+export const PLOT_READINESS_ORDER = { not_ready: 0, at_risk: 1, restricted: 2, ready: 3, handed_over: 4 };
+
+// Single-plot fetch for plot-detail.html — one broad query per
+// underlying table, scoped to this one plot, plus the caller's own
+// role (needed so Quality Gates/Handover Documents/Programme, all
+// editor-only RLS, are never silently read as "all clear" for a
+// snagging-only viewer — see computePlotHandoverReadiness's own
+// comment on editorDataVisible).
+export async function getPlotHandoverReadiness(plotId) {
+  const { data: plot, error: plotErr } = await supabase.from("plots").select("*").eq("id", plotId).single();
+  if (plotErr) throw plotErr;
+
+  const [{ data: role }, { data: gates, error: gatesErr }, { data: docs, error: docsErr }, snags, { data: progActivities, error: progErr }] = await Promise.all([
+    supabase.rpc("get_my_role", { p_project_id: plot.project_id }),
+    supabase.from("quality_gates").select("*").eq("plot_id", plotId),
+    supabase.from("handover_documents").select("*").eq("plot_id", plotId),
+    getPlotSnags(plotId),
+    supabase.from("programme_activities").select("*, programmes(status)").eq("plot_id", plotId),
+  ]);
+  if (gatesErr) throw gatesErr;
+  if (docsErr) throw docsErr;
+  if (progErr) throw progErr;
+
+  const editorDataVisible = role === "owner" || role === "collaborator";
+  const activeProgActivities = (progActivities || []).filter((a) => a.programmes?.status === "active");
+  const readiness = computePlotHandoverReadiness(plot, {
+    gates: gates || [], handoverDocuments: docs || [], snags, programmeActivities: activeProgActivities, editorDataVisible,
+  }, todayISO());
+  return { plot, readiness };
+}
+
+// Portfolio (one project's) fetch for plot-handovers.html — a FIXED,
+// small number of broad, project_id-scoped queries (never one per
+// plot), grouped client-side, the exact same shape
+// getPortfolioControlSummary()/getProjectControlSummary() already use.
+// One get_my_role() call for the whole project (this page is already
+// scoped to one project), never one per plot.
+export async function getProjectPlotReadiness(projectId) {
+  const [{ data: role }, { data: plots, error: plotsErr }, { data: gates, error: gatesErr }, { data: docs, error: docsErr }, { data: lists, error: listsErr }, { data: snagRows, error: snagErr }, { data: progActivities, error: progErr }] = await Promise.all([
+    supabase.rpc("get_my_role", { p_project_id: projectId }),
+    supabase.from("plots").select("*").eq("project_id", projectId),
+    supabase.from("quality_gates").select("plot_id, status").eq("project_id", projectId).not("plot_id", "is", null),
+    supabase.from("handover_documents").select("plot_id, status").eq("project_id", projectId).not("plot_id", "is", null),
+    supabase.from("snag_lists").select("id, plot_id").eq("project_id", projectId),
+    supabase.from("snag_items").select("plot_id, snag_list_id, status, priority, due_date").eq("project_id", projectId),
+    supabase.from("programme_activities").select("plot_id, is_milestone, status, planned_start, planned_finish, forecast_start, forecast_finish, actual_finish, programmes(status)").eq("project_id", projectId).not("plot_id", "is", null),
+  ]);
+  if (plotsErr) throw plotsErr;
+  if (gatesErr) throw gatesErr;
+  if (docsErr) throw docsErr;
+  if (listsErr) throw listsErr;
+  if (snagErr) throw snagErr;
+  if (progErr) throw progErr;
+
+  const editorDataVisible = role === "owner" || role === "collaborator";
+  const todayStr = todayISO();
+
+  const groupByPlot = (rows) => {
+    const map = new Map();
+    for (const r of rows || []) {
+      if (!r.plot_id) continue;
+      if (!map.has(r.plot_id)) map.set(r.plot_id, []);
+      map.get(r.plot_id).push(r);
+    }
+    return map;
+  };
+  const gatesByPlot = groupByPlot(gates);
+  const docsByPlot = groupByPlot(docs);
+
+  const listPlotById = new Map((lists || []).map((l) => [l.id, l.plot_id]));
+  const snagsByPlot = new Map();
+  for (const s of snagRows || []) {
+    const effectivePlotId = s.plot_id || listPlotById.get(s.snag_list_id) || null;
+    if (!effectivePlotId) continue;
+    if (!snagsByPlot.has(effectivePlotId)) snagsByPlot.set(effectivePlotId, []);
+    snagsByPlot.get(effectivePlotId).push(s);
+  }
+
+  const progByPlot = new Map();
+  for (const a of progActivities || []) {
+    if (a.programmes?.status !== "active") continue;
+    if (!progByPlot.has(a.plot_id)) progByPlot.set(a.plot_id, []);
+    progByPlot.get(a.plot_id).push(a);
+  }
+
+  return (plots || []).map((plot) => ({
+    plot,
+    readiness: computePlotHandoverReadiness(plot, {
+      gates: gatesByPlot.get(plot.id) || [],
+      handoverDocuments: docsByPlot.get(plot.id) || [],
+      snags: snagsByPlot.get(plot.id) || [],
+      programmeActivities: progByPlot.get(plot.id) || [],
+      editorDataVisible,
+    }, todayStr),
+  }));
+}
+
 // A weekly report's plot tag is freetext ("5", "5,6,7") and a plot's own
 // name is also freetext ("Plot 5", or just "5") — normalise both to
 // their digits where possible so "Plot 5" and "5" are recognised as the

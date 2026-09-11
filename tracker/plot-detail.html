@@ -23,6 +23,9 @@
 
   <div id="errorBox" class="error-box"></div>
 
+  <h3 style="font-family:var(--font-display); font-size:1.1rem; margin-bottom:1rem;">Plot Control</h3>
+  <div id="plotControlWrap" style="margin-bottom:2.5rem;">Loading…</div>
+
   <h3 style="font-family:var(--font-display); font-size:1.1rem; margin-bottom:1rem;">Plot Progress</h3>
   <div class="card" style="margin-bottom:2.5rem;">
     <div class="form-grid" style="align-items:end;">
@@ -38,7 +41,7 @@
     <p class="hint" id="progressSavedHint" style="margin-top:0.5rem;"></p>
   </div>
 
-  <h3 style="font-family:var(--font-display); font-size:1.1rem; margin-bottom:1rem;">Quality Gates</h3>
+  <h3 id="gatesSection" style="font-family:var(--font-display); font-size:1.1rem; margin-bottom:1rem;">Quality Gates</h3>
   <div id="gatesWrap" style="margin-bottom:2.5rem;">Loading…</div>
 
   <h3 style="font-family:var(--font-display); font-size:1.1rem; margin-bottom:1rem;">Internal Works Milestones</h3>
@@ -53,7 +56,7 @@
     </div>
   </div>
 
-  <h3 style="font-family:var(--font-display); font-size:1.1rem; margin-bottom:1rem;">Handover Documents</h3>
+  <h3 id="documentsSection" style="font-family:var(--font-display); font-size:1.1rem; margin-bottom:1rem;">Handover Documents</h3>
   <div class="card">
     <div class="table-wrap">
       <table>
@@ -68,7 +71,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, uploadImage, suggestPlotProgress, recalculateActualProgress, checkAndMarkPlotHandedOver } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, uploadImage, suggestPlotProgress, recalculateActualProgress, checkAndMarkPlotHandedOver, getPlotHandoverReadiness, PLOT_READINESS_LABEL, PLOT_READINESS_BADGE } from "./js/app.js";
 
   await requireAuth();
   const plotId = getParam("id");
@@ -76,6 +79,101 @@
 
   const errorBox = document.getElementById("errorBox");
   let plot = null;
+
+  // ─── Plot Control / Handover Readiness (Priority 12, Phase 1) ───
+  // System Handover Readiness — derived from the configured control
+  // signals below (Quality Gates, Handover Documents, Programme,
+  // Snags). This is NOT a legal or contractual determination of
+  // handover readiness, only a summary of what the app itself knows.
+  const plotControlWrap = document.getElementById("plotControlWrap");
+
+  function reasonHref(code) {
+    if (code === "gates_outstanding") return "#gatesSection";
+    if (code === "documents_outstanding") return "#documentsSection";
+    if (code.startsWith("snags_")) return plot?.snagListId ? `snag-list-edit.html?id=${plot.snagListId}` : null;
+    if (code.startsWith("programme_") || code === "approaching_with_unresolved") return `programme.html?project=${plot.project_id}`;
+    return null;
+  }
+
+  function reasonListHtml(reasons) {
+    if (!reasons.length) return "";
+    return `<ul class="checklist" style="list-style:disc; padding-left:1.4rem; margin:0.4rem 0 0;">
+      ${reasons.map((r) => {
+        const href = reasonHref(r.code);
+        const text = escapeHtml(r.label);
+        return `<li style="display:list-item;">${href ? `<a href="${href}">${text}</a>` : text}</li>`;
+      }).join("")}
+    </ul>`;
+  }
+
+  function renderPlotControl(readiness) {
+    const status = readiness.status;
+    const badge = PLOT_READINESS_BADGE[status];
+    const label = PLOT_READINESS_LABEL[status];
+
+    let headline = `<span class="badge ${badge}" style="font-size:0.95rem; padding:0.3rem 0.7rem;">${label}</span>`;
+    if (status === "not_ready") headline += ` <strong>${readiness.blockers.length} blocker${readiness.blockers.length === 1 ? "" : "s"}</strong>`;
+    else if (status === "at_risk") headline += ` <strong>${readiness.warnings.length} warning${readiness.warnings.length === 1 ? "" : "s"}</strong>`;
+
+    let restrictedNote = "";
+    if (status === "restricted") {
+      restrictedNote = `<p class="hint" style="margin-top:0.5rem;">Quality Gates, Handover Documents and Programme aren't visible at your access level — this position reflects Snagging only.</p>`;
+    }
+    let handedOverNote = "";
+    if (status === "handed_over" && (readiness.blockers.length || readiness.warnings.length)) {
+      handedOverNote = `<p class="hint" style="margin-top:0.5rem;">Note: new item(s) have been raised since this plot was marked handed over — see below.</p>`;
+    }
+
+    plotControlWrap.innerHTML = `
+      <div class="card" style="margin-bottom:1rem;">
+        <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.6rem; margin-bottom:0.3rem;">
+          <strong>System Handover Readiness</strong>
+          <span class="hint">As of ${new Date().toLocaleDateString("en-GB")} — derived from the control signals below, not a legal/contractual determination.</span>
+        </div>
+        <p style="margin:0.4rem 0 0;">${headline}</p>
+        ${restrictedNote}${handedOverNote}
+        ${readiness.blockers.length ? `<div style="margin-top:0.7rem;"><strong style="color:var(--red);">Blockers</strong>${reasonListHtml(readiness.blockers)}</div>` : ""}
+        ${readiness.warnings.length ? `<div style="margin-top:0.7rem;"><strong style="color:var(--amber, #b5860b);">Warnings</strong>${reasonListHtml(readiness.warnings)}</div>` : ""}
+      </div>
+      <div class="grid" style="grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:0.8rem;">
+        <div class="card">
+          <div class="hint">Programme</div>
+          ${readiness.programme.hasActivities
+            ? `<div>${readiness.programme.total} activit${readiness.programme.total === 1 ? "y" : "ies"} tagged to this plot</div>
+               <div class="hint">Overdue: ${readiness.programme.overdueProgrammeActivities + readiness.programme.overdueProgrammeMilestones} · Forecast late: ${readiness.programme.materialForecastLateProgrammeActivities + readiness.programme.forecastLateProgrammeMilestones}</div>`
+            : `<div class="hint">No programme activities tagged to this plot</div>`}
+        </div>
+        <div class="card">
+          <div class="hint">Snags</div>
+          <div>${readiness.snags.open} open of ${readiness.snags.total}</div>
+          <div class="hint">Blocking: ${readiness.snags.blocking} · Warning: ${readiness.snags.warning}</div>
+        </div>
+        <div class="card">
+          <div class="hint">Quality Gates</div>
+          ${readiness.qualityGates.total
+            ? `<div>${readiness.qualityGates.approved} of ${readiness.qualityGates.total} approved / N/A</div>`
+            : `<div class="hint">No quality gates recorded</div>`}
+        </div>
+        <div class="card">
+          <div class="hint">Handover Documents</div>
+          ${readiness.handoverDocuments.total
+            ? `<div>${readiness.handoverDocuments.approved} of ${readiness.handoverDocuments.total} approved / final</div>`
+            : `<div class="hint">No handover documents recorded</div>`}
+        </div>
+      </div>
+    `;
+  }
+
+  async function loadPlotControl() {
+    try {
+      const { readiness } = await getPlotHandoverReadiness(plotId);
+      const { data: list } = await supabase.from("snag_lists").select("id").eq("plot_id", plotId).maybeSingle();
+      plot.snagListId = list?.id || null;
+      renderPlotControl(readiness);
+    } catch (err) {
+      plotControlWrap.innerHTML = `<div class="error-box" style="display:block;">Couldn't load plot control position: ${escapeHtml(err.message || String(err))}</div>`;
+    }
+  }
 
   // ─── Quality Gates ──────────────────────────────────────────────
   const gateStatusBadge = { not_started: "badge-grey", in_progress: "badge-blue", under_review: "badge-amber", approved: "badge-green", not_applicable: "badge-grey" };
@@ -122,6 +220,7 @@
       gate.status = newStatus;
       await checkAndMarkPlotHandedOver(plotId);
       rerenderGateCard(gate);
+      loadPlotControl();
     });
 
     document.querySelectorAll(`input[type="checkbox"][data-gate-id="${gate.id}"]`).forEach((cb) => {
@@ -249,6 +348,7 @@
       if (error) { alert("Couldn't save that status change: " + error.message); select.value = doc.status; return; }
       doc.status = newStatus;
       await checkAndMarkPlotHandedOver(plotId);
+      loadPlotControl();
     });
 
     const fileInput = document.querySelector(`input[type="file"][data-doc-id="${doc.id}"]`);
@@ -363,6 +463,7 @@
     loadGates();
     loadMilestones();
     loadDocs();
+    loadPlotControl();
   }
 
   init();

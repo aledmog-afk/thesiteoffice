@@ -40,11 +40,19 @@
   </div>
 
   <h3 id="plotsHeading" style="font-family:var(--font-display); font-size:1.1rem; margin-bottom:1rem; display:none;">Plots</h3>
+  <div id="readinessFilterWrap" class="btn-row" style="margin-bottom:0.8rem; display:none;">
+    <span class="hint" style="align-self:center; margin-right:0.4rem;">Which plots currently require attention before handover:</span>
+    <button type="button" class="btn btn-outline btn-sm" data-readiness-filter="all">All</button>
+    <button type="button" class="btn btn-outline btn-sm" data-readiness-filter="not_ready">Not Ready</button>
+    <button type="button" class="btn btn-outline btn-sm" data-readiness-filter="at_risk">At Risk</button>
+    <button type="button" class="btn btn-outline btn-sm" data-readiness-filter="ready">Ready</button>
+    <button type="button" class="btn btn-outline btn-sm" data-readiness-filter="handed_over">Handed Over</button>
+  </div>
   <div class="card">
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>Plot</th><th>Progress</th><th>Quality Gates</th><th>Handover Docs</th><th>Added</th><th></th></tr>
+          <tr><th>Plot</th><th>Progress</th><th>Readiness</th><th>Blockers</th><th>Warnings</th><th>Programme</th><th>Quality Gates</th><th>Handover Docs</th><th>Added</th><th></th></tr>
         </thead>
         <tbody id="plotRows"></tbody>
       </table>
@@ -61,7 +69,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, comparePlotNumbers, generateFlatsFromSpec } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, comparePlotNumbers, generateFlatsFromSpec, getProjectPlotReadiness, PLOT_READINESS_LABEL, PLOT_READINESS_BADGE, PLOT_READINESS_ORDER } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -236,6 +244,36 @@
   }
   document.getElementById("exportTrackersBtn").addEventListener("click", exportTrackers);
 
+  // Plot-level readiness (Priority 12, Phase 1) is deliberately scoped
+  // to plots only, not blocks — a block's own shared structural gates/
+  // documents are a genuinely different aggregation (across all its
+  // flats plus its own block-scoped rows) that this phase doesn't
+  // attempt; see the Phase 1 report's "Known Limitations".
+  let readinessByPlotId = new Map();
+  let readinessFilter = "all";
+  let currentPlotsForRender = [];
+
+  async function loadReadiness() {
+    try {
+      const rows = await getProjectPlotReadiness(projectId);
+      readinessByPlotId = new Map(rows.map((r) => [r.plot.id, r.readiness]));
+    } catch (err) {
+      // Non-fatal — the existing gate/document columns still work even
+      // if the readiness call fails; just leave the new columns blank
+      // rather than breaking the whole page.
+      readinessByPlotId = new Map();
+    }
+  }
+
+  document.querySelectorAll('[data-readiness-filter]').forEach((btn) => {
+    btn.addEventListener("click", () => {
+      readinessFilter = btn.dataset.readinessFilter;
+      document.querySelectorAll('[data-readiness-filter]').forEach((b) => b.classList.toggle("btn-amber", b === btn));
+      renderPlotRows(currentPlotsForRender);
+    });
+  });
+  document.querySelector('[data-readiness-filter="all"]')?.classList.add("btn-amber");
+
   async function load() {
     const { data: project } = await supabase.from("projects").select("name").eq("id", projectId).single();
     renderHeader([
@@ -251,6 +289,7 @@
       supabase.from("quality_gates").select("plot_id, block_id, status").eq("project_id", projectId),
       supabase.from("handover_documents").select("plot_id, block_id, status").eq("project_id", projectId),
     ]);
+    await loadReadiness();
 
     const plots = (allPlots || []).filter((p) => !p.block_id);
     const flatsByBlock = {};
@@ -304,21 +343,51 @@
 
     if (plots.length) {
       document.getElementById("plotsHeading").style.display = "block";
-      document.getElementById("plotRows").innerHTML = plots.map((p) => {
-        const g = gatesByScope[p.id] || { approved: 0, total: 0 };
-        const d = docsByScope[p.id] || { ready: 0, total: 0 };
-        return `
-          <tr class="row-link" onclick="window.location.href='plot-detail.html?id=${p.id}'">
-            <td><strong>${escapeHtml(p.plot_number)}</strong></td>
-            <td><span class="badge ${p.progress_pct >= 100 ? "badge-green" : "badge-amber"}">${p.progress_pct || 0}%</span></td>
-            <td><span class="badge ${g.approved === g.total ? "badge-green" : "badge-amber"}">${g.approved} / ${g.total} approved${g.total === 0 ? " (N/A)" : ""}</span></td>
-            <td><span class="badge ${d.ready === d.total && d.total > 0 ? "badge-green" : "badge-amber"}">${d.ready} / ${d.total} ready</span></td>
-            <td>${formatDate(p.created_at?.slice(0, 10))}</td>
-            <td onclick="event.stopPropagation()"><button class="btn btn-outline btn-sm" onclick="deletePlot('${p.id}', '${escapeHtml(p.plot_number).replace(/'/g, "\\'")}')">Delete</button></td>
-          </tr>
-        `;
-      }).join("");
+      document.getElementById("readinessFilterWrap").style.display = "flex";
+      currentPlotsForRender = plots.map((p) => ({ plot: p, g: gatesByScope[p.id] || { approved: 0, total: 0 }, d: docsByScope[p.id] || { ready: 0, total: 0 } }));
+      renderPlotRows(currentPlotsForRender);
     }
+  }
+
+  function renderPlotRows(rows) {
+    // Worst-first by readiness (Not Ready, At Risk, Restricted, Ready,
+    // Handed Over — see PLOT_READINESS_ORDER), then by plot number —
+    // the same "worst-status-wins" convention dashboard.html's own
+    // portfolio control list already uses.
+    const sorted = [...rows].sort((a, b) => {
+      const ra = readinessByPlotId.get(a.plot.id)?.status;
+      const rb = readinessByPlotId.get(b.plot.id)?.status;
+      const oa = ra ? PLOT_READINESS_ORDER[ra] : 5;
+      const ob = rb ? PLOT_READINESS_ORDER[rb] : 5;
+      return oa - ob || comparePlotNumbers(a.plot.plot_number, b.plot.plot_number);
+    });
+    const filtered = readinessFilter === "all" ? sorted : sorted.filter((r) => readinessByPlotId.get(r.plot.id)?.status === readinessFilter);
+
+    document.getElementById("plotRows").innerHTML = filtered.map(({ plot: p, g, d }) => {
+      const readiness = readinessByPlotId.get(p.id);
+      const readinessCell = readiness
+        ? `<span class="badge ${PLOT_READINESS_BADGE[readiness.status]}" title="${escapeHtml((readiness.blockers.concat(readiness.warnings)).map((r) => r.label).join("; ") || "No known blockers or warnings")}">${PLOT_READINESS_LABEL[readiness.status]}</span>`
+        : `<span class="hint">—</span>`;
+      const blockersCell = readiness ? (readiness.blockers.length || "—") : "—";
+      const warningsCell = readiness ? (readiness.warnings.length || "—") : "—";
+      const progCell = readiness?.programme?.hasActivities
+        ? `Overdue ${readiness.programme.overdueProgrammeActivities + readiness.programme.overdueProgrammeMilestones} · Late ${readiness.programme.materialForecastLateProgrammeActivities + readiness.programme.forecastLateProgrammeMilestones}`
+        : `<span class="hint">—</span>`;
+      return `
+        <tr class="row-link" onclick="window.location.href='plot-detail.html?id=${p.id}'">
+          <td><strong>${escapeHtml(p.plot_number)}</strong></td>
+          <td><span class="badge ${p.progress_pct >= 100 ? "badge-green" : "badge-amber"}">${p.progress_pct || 0}%</span></td>
+          <td>${readinessCell}</td>
+          <td>${blockersCell}</td>
+          <td>${warningsCell}</td>
+          <td>${progCell}</td>
+          <td><span class="badge ${g.approved === g.total ? "badge-green" : "badge-amber"}">${g.approved} / ${g.total} approved${g.total === 0 ? " (N/A)" : ""}</span></td>
+          <td><span class="badge ${d.ready === d.total && d.total > 0 ? "badge-green" : "badge-amber"}">${d.ready} / ${d.total} ready</span></td>
+          <td>${formatDate(p.created_at?.slice(0, 10))}</td>
+          <td onclick="event.stopPropagation()"><button class="btn btn-outline btn-sm" onclick="deletePlot('${p.id}', '${escapeHtml(p.plot_number).replace(/'/g, "\\'")}')">Delete</button></td>
+        </tr>
+      `;
+    }).join("");
   }
 
   load();
