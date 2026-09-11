@@ -336,7 +336,13 @@ export async function getAction(actionId) {
   return data;
 }
 
-export async function createAction(projectId, { title, description = null, priority = "medium", assignedTo = null, dueDate = null }) {
+// plotId is deliberately optional and defaults to null — the direct,
+// project-level creation flow (actions.html) never passes one, and
+// that is correct, not a gap (see the v38 schema comment and
+// tracker/README.md). Every "Create Action from X" helper below DOES
+// pass one, inherited automatically from its source entity's own
+// already-known plot — never asked of the user a second time.
+export async function createAction(projectId, { title, description = null, priority = "medium", assignedTo = null, dueDate = null, plotId = null }) {
   const { data, error } = await supabase.from("actions").insert({
     project_id: projectId,
     title,
@@ -344,6 +350,7 @@ export async function createAction(projectId, { title, description = null, prior
     priority,
     assigned_to: assignedTo,
     due_date: dueDate,
+    plot_id: plotId,
   }).select().single();
   if (error) throw error;
   return data;
@@ -461,13 +468,19 @@ export async function getFindings(inspectionId) {
   return data || [];
 }
 
-export async function createFinding(inspectionId, projectId, { title, description = null, severity = "medium" }) {
+// plotId is optional — captured directly on the finding (see the v38
+// schema comment for why it lives here, not on the parent inspection),
+// via a small "Plot" field on the Add Finding form. An inspection
+// spanning several plots (or none) is common; leaving it unset is
+// legitimate, not a data-entry failure.
+export async function createFinding(inspectionId, projectId, { title, description = null, severity = "medium", plotId = null }) {
   const { data, error } = await supabase.from("inspection_findings").insert({
     inspection_id: inspectionId,
     project_id: projectId,
     title,
     description,
     severity,
+    plot_id: plotId,
   }).select().single();
   if (error) throw error;
   return data;
@@ -499,7 +512,7 @@ export async function deleteFinding(findingId) {
 // explicit click, not a background workflow — so resolving it later is
 // still always a separate, explicit step (resolveFinding() above).
 export async function createActionFromFinding(finding, { title, description = null, assignedTo = null, priority = "medium", dueDate = null }) {
-  const action = await createAction(finding.project_id, { title, description, priority, assignedTo, dueDate });
+  const action = await createAction(finding.project_id, { title, description, priority, assignedTo, dueDate, plotId: finding.plot_id || null });
   const updated = await updateFinding(finding.id, { action_id: action.id, status: "action_required" });
   return { action, finding: updated };
 }
@@ -595,8 +608,27 @@ export async function unverifySnag(snagId) {
 // "action_required" status to move it to, and it must stay open/
 // tracked until the defect is actually fixed regardless of whether an
 // Action now exists for it.
+//
+// Plot inheritance: snag_items.plot_id is set directly ONLY for the
+// rare general/site-wide list's optional per-item tag — the normal,
+// everyday snag (raised against a plot's own auto-seeded snag list)
+// leaves it null and carries its real plot on snag_lists.plot_id
+// instead (see getPlotSnags()'s own comment; confirmed against real
+// production data during Priority 12 Phase 1). Resolving the
+// EFFECTIVE plot here, self-contained, means every caller gets correct
+// inheritance automatically without having to remember to look this up
+// itself — a one-row lookup, negligible cost for a user-initiated,
+// one-off action creation.
+async function resolveSnagPlotId(snag) {
+  if (snag.plot_id) return snag.plot_id;
+  if (!snag.snag_list_id) return null;
+  const { data } = await supabase.from("snag_lists").select("plot_id").eq("id", snag.snag_list_id).maybeSingle();
+  return data?.plot_id || null;
+}
+
 export async function createActionFromSnag(snag, { title, description = null, assignedTo = null, priority = "medium", dueDate = null }) {
-  const action = await createAction(snag.project_id, { title, description, priority, assignedTo, dueDate });
+  const plotId = await resolveSnagPlotId(snag);
+  const action = await createAction(snag.project_id, { title, description, priority, assignedTo, dueDate, plotId });
   const updated = await updateSnag(snag.id, { action_id: action.id });
   return { action, snag: updated };
 }
@@ -1334,14 +1366,45 @@ export function summarisePlotDocuments(docs) {
 // computeControlStatus(), which never reads them either.
 //
 // editorDataVisible must reflect the CALLER's real role (owner/
-// collaborator vs snagging-only) — Quality Gates, Handover Documents
-// and Programme are editor-only RLS, so a snagging-only caller's
-// "gates"/"handoverDocuments"/"programmeActivities" arrays will always
-// arrive empty regardless of the real data, and must never be silently
-// read as "all clear". Snags remain member-level and are always
-// evaluated regardless of role.
+// collaborator vs snagging-only) — Quality Gates, Handover Documents,
+// Programme, Actions and Inspection Findings are all editor-only RLS,
+// so a snagging-only caller's arrays for any of them will always arrive
+// empty regardless of the real data, and must never be silently read
+// as "all clear". Snags remain member-level and are always evaluated
+// regardless of role.
+//
+// Actions/Findings rules (Priority 13) mirror EXISTING project-level
+// severity hierarchies exactly, not new inventions:
+//   - a BLOCKED action is already its own unconditional Attention-tier
+//     reason at project level (computeControlStatus()'s own
+//     `counts.blocked` line) — mirrored here unconditionally too.
+//   - an overdue action with high/critical priority mirrors the same
+//     "severity + lateness" blocker combination Phase 1 established
+//     for snags. An overdue low/medium-priority action, or a high/
+//     critical-priority action that isn't yet overdue, is a warning.
+//   - a finding's severity hierarchy already HAS a real "critical"
+//     tier (unlike snags) — countFindingSignals()'s own
+//     `criticalOpenFindings` is already project-level Attention-tier
+//     on its own; mirrored here as a blocker. An outstanding "high"
+//     severity finding (not critical) is a warning, matching that same
+//     function's own "high severity" tier being one notch below
+//     critical.
+//   - completed/cancelled actions and resolved/accepted/cancelled
+//     findings never contribute, matching aggregateActionCounts()'s
+//     and isFindingOutstanding()'s own exclusion rules exactly.
+//
+// FALSE-CERTAINTY PROTECTION (brief Step 10): zero plot-linked
+// Actions/Findings does NOT prove a plot has no issues — it may mean
+// the issue is genuinely project-level, or simply was never tagged to
+// this plot (Actions only inherit a plot automatically from a Snag/
+// Programme Activity/Finding's own "Create Action" flow; direct Action
+// creation and most Finding creation remain optional/manual). This
+// function cannot and does not attempt to distinguish those cases —
+// see the `actions.total`/`findings.total` counts always exposed
+// below, and the UI's own explicit "0 linked, not necessarily clean"
+// wording rather than a bare, falsely-reassuring zero.
 export function computePlotHandoverReadiness(plot, {
-  gates = [], handoverDocuments = [], snags = [], programmeActivities = [], editorDataVisible = true,
+  gates = [], handoverDocuments = [], snags = [], programmeActivities = [], actions = [], findings = [], editorDataVisible = true,
 } = {}, asOfDate = todayISO()) {
   const qualityGates = summarisePlotGates(gates);
   const handoverDocumentsSummary = summarisePlotDocuments(handoverDocuments);
@@ -1363,6 +1426,38 @@ export function computePlotHandoverReadiness(plot, {
   }
   if (warningSnags > 0) {
     warnings.push({ code: "snags_warning", label: `${warningSnags} open snag${warningSnags === 1 ? "" : "s"} either overdue or high-priority` });
+  }
+
+  let openActions = 0, blockingActions = 0, warningActions = 0;
+  let openFindings = 0, blockingFindings = 0, warningFindings = 0;
+
+  if (editorDataVisible) {
+    for (const a of actions) {
+      if (["completed", "cancelled"].includes(a.status)) continue;
+      openActions++;
+      const cats = categoriseAction(a, asOfDate);
+      if (cats.blocked || (cats.overdue && cats.highCritical)) blockingActions++;
+      else if (cats.overdue || cats.highCritical) warningActions++;
+    }
+    if (blockingActions > 0) {
+      blockers.push({ code: "actions_blocking", label: `${blockingActions} blocked or high/critical overdue Action${blockingActions === 1 ? "" : "s"}` });
+    }
+    if (warningActions > 0) {
+      warnings.push({ code: "actions_warning", label: `${warningActions} open Action${warningActions === 1 ? "" : "s"} overdue or high/critical priority` });
+    }
+
+    for (const f of findings) {
+      if (!isFindingOutstanding(f)) continue;
+      openFindings++;
+      if (f.severity === "critical") blockingFindings++;
+      else if (f.severity === "high") warningFindings++;
+    }
+    if (blockingFindings > 0) {
+      blockers.push({ code: "findings_blocking", label: `${blockingFindings} unresolved critical Inspection Finding${blockingFindings === 1 ? "" : "s"}` });
+    }
+    if (warningFindings > 0) {
+      warnings.push({ code: "findings_warning", label: `${warningFindings} unresolved high-severity Inspection Finding${warningFindings === 1 ? "" : "s"}` });
+    }
   }
 
   if (editorDataVisible) {
@@ -1405,6 +1500,8 @@ export function computePlotHandoverReadiness(plot, {
     status, asOfDate, editorDataVisible, handedOverAt: plot.handed_over_at || null,
     programme: { hasActivities: programmeActivities.length > 0, total: programmeActivities.length, ...programmeCounts },
     snags: { total: snags.length, open: openSnags, blocking: blockingSnags, warning: warningSnags },
+    actions: { total: actions.length, open: openActions, blocking: blockingActions, warning: warningActions },
+    findings: { total: findings.length, open: openFindings, blocking: blockingFindings, warning: warningFindings },
     qualityGates, handoverDocuments: handoverDocumentsSummary,
     blockers, warnings,
   };
@@ -1428,21 +1525,26 @@ export async function getPlotHandoverReadiness(plotId) {
   const { data: plot, error: plotErr } = await supabase.from("plots").select("*").eq("id", plotId).single();
   if (plotErr) throw plotErr;
 
-  const [{ data: role }, { data: gates, error: gatesErr }, { data: docs, error: docsErr }, snags, { data: progActivities, error: progErr }] = await Promise.all([
+  const [{ data: role }, { data: gates, error: gatesErr }, { data: docs, error: docsErr }, snags, { data: progActivities, error: progErr }, { data: actions, error: actionsErr }, { data: findings, error: findingsErr }] = await Promise.all([
     supabase.rpc("get_my_role", { p_project_id: plot.project_id }),
     supabase.from("quality_gates").select("*").eq("plot_id", plotId),
     supabase.from("handover_documents").select("*").eq("plot_id", plotId),
     getPlotSnags(plotId),
     supabase.from("programme_activities").select("*, programmes(status)").eq("plot_id", plotId),
+    supabase.from("actions").select("*").eq("plot_id", plotId),
+    supabase.from("inspection_findings").select("*").eq("plot_id", plotId),
   ]);
   if (gatesErr) throw gatesErr;
   if (docsErr) throw docsErr;
   if (progErr) throw progErr;
+  if (actionsErr) throw actionsErr;
+  if (findingsErr) throw findingsErr;
 
   const editorDataVisible = role === "owner" || role === "collaborator";
   const activeProgActivities = (progActivities || []).filter((a) => a.programmes?.status === "active");
   const readiness = computePlotHandoverReadiness(plot, {
-    gates: gates || [], handoverDocuments: docs || [], snags, programmeActivities: activeProgActivities, editorDataVisible,
+    gates: gates || [], handoverDocuments: docs || [], snags, programmeActivities: activeProgActivities,
+    actions: actions || [], findings: findings || [], editorDataVisible,
   }, todayISO());
   return { plot, readiness };
 }
@@ -1454,7 +1556,7 @@ export async function getPlotHandoverReadiness(plotId) {
 // One get_my_role() call for the whole project (this page is already
 // scoped to one project), never one per plot.
 export async function getProjectPlotReadiness(projectId) {
-  const [{ data: role }, { data: plots, error: plotsErr }, { data: gates, error: gatesErr }, { data: docs, error: docsErr }, { data: lists, error: listsErr }, { data: snagRows, error: snagErr }, { data: progActivities, error: progErr }] = await Promise.all([
+  const [{ data: role }, { data: plots, error: plotsErr }, { data: gates, error: gatesErr }, { data: docs, error: docsErr }, { data: lists, error: listsErr }, { data: snagRows, error: snagErr }, { data: progActivities, error: progErr }, { data: actionRows, error: actionErr }, { data: findingRows, error: findingErr }] = await Promise.all([
     supabase.rpc("get_my_role", { p_project_id: projectId }),
     supabase.from("plots").select("*").eq("project_id", projectId),
     supabase.from("quality_gates").select("plot_id, status").eq("project_id", projectId).not("plot_id", "is", null),
@@ -1462,6 +1564,8 @@ export async function getProjectPlotReadiness(projectId) {
     supabase.from("snag_lists").select("id, plot_id").eq("project_id", projectId),
     supabase.from("snag_items").select("plot_id, snag_list_id, status, priority, due_date").eq("project_id", projectId),
     supabase.from("programme_activities").select("plot_id, is_milestone, status, planned_start, planned_finish, forecast_start, forecast_finish, actual_finish, programmes(status)").eq("project_id", projectId).not("plot_id", "is", null),
+    supabase.from("actions").select("plot_id, status, priority, due_date").eq("project_id", projectId).not("plot_id", "is", null),
+    supabase.from("inspection_findings").select("plot_id, severity, status").eq("project_id", projectId).not("plot_id", "is", null),
   ]);
   if (plotsErr) throw plotsErr;
   if (gatesErr) throw gatesErr;
@@ -1469,6 +1573,8 @@ export async function getProjectPlotReadiness(projectId) {
   if (listsErr) throw listsErr;
   if (snagErr) throw snagErr;
   if (progErr) throw progErr;
+  if (actionErr) throw actionErr;
+  if (findingErr) throw findingErr;
 
   const editorDataVisible = role === "owner" || role === "collaborator";
   const todayStr = todayISO();
@@ -1501,6 +1607,9 @@ export async function getProjectPlotReadiness(projectId) {
     progByPlot.get(a.plot_id).push(a);
   }
 
+  const actionsByPlot = groupByPlot(actionRows);
+  const findingsByPlot = groupByPlot(findingRows);
+
   return (plots || []).map((plot) => ({
     plot,
     readiness: computePlotHandoverReadiness(plot, {
@@ -1508,6 +1617,8 @@ export async function getProjectPlotReadiness(projectId) {
       handoverDocuments: docsByPlot.get(plot.id) || [],
       snags: snagsByPlot.get(plot.id) || [],
       programmeActivities: progByPlot.get(plot.id) || [],
+      actions: actionsByPlot.get(plot.id) || [],
+      findings: findingsByPlot.get(plot.id) || [],
       editorDataVisible,
     }, todayStr),
   }));
@@ -3059,7 +3170,7 @@ export async function deleteProgrammeActivity(activityId) {
 // (the action) via action_id — never the reverse, keeping the Actions
 // Engine uncoupled from Programme Control.
 export async function createActionFromProgrammeActivity(activity, { title, description = null, assignedTo = null, priority = "medium", dueDate = null }) {
-  const action = await createAction(activity.project_id, { title, description, priority, assignedTo, dueDate });
+  const action = await createAction(activity.project_id, { title, description, priority, assignedTo, dueDate, plotId: activity.plot_id || null });
   const updated = await updateProgrammeActivity(activity.id, { action_id: action.id });
   return { action, activity: updated };
 }

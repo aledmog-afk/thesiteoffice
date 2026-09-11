@@ -91,6 +91,7 @@
   let allActions = [];
   let editors = []; // { user_id, email } — owner/collaborator only, the only legitimate assignees
   let statusFilter = "active";
+  let plotsById = {}; // plot.id -> plot_number — display only; actions.html never lets a user PICK a plot (see Priority 13 report: direct/project-level Action creation legitimately leaves plot_id null)
 
   const pageErrorBox = document.getElementById("pageErrorBox");
   const formErrorBox = document.getElementById("formErrorBox");
@@ -208,7 +209,7 @@
       const active = !["completed", "cancelled"].includes(a.status);
       return `
         <tr>
-          <td><strong>${escapeHtml(a.title)}</strong>${a.description ? `<div class="hint">${escapeHtml(a.description)}</div>` : ""}</td>
+          <td><strong>${escapeHtml(a.title)}</strong>${a.plot_id ? `<div class="hint">Plot: <a href="plot-detail.html?id=${a.plot_id}">${escapeHtml(plotsById[a.plot_id] || "—")}</a></div>` : ""}${a.description ? `<div class="hint">${escapeHtml(a.description)}</div>` : ""}</td>
           <td><span class="badge ${ACTION_PRIORITY_BADGE[a.priority]}">${ACTION_PRIORITY_LABEL[a.priority]}</span></td>
           <td>${a.assigned_to ? escapeHtml(editorEmail(a.assigned_to)) : "Unassigned"}</td>
           <td>${dueText}${dueBadge}</td>
@@ -256,6 +257,8 @@
       { label: "Actions" },
     ]);
     document.getElementById("projectSub").textContent = project ? `${project.name} — accountable follow-ups.` : "";
+    const { data: plots } = await supabase.from("plots").select("id, plot_number").eq("project_id", projectId);
+    (plots || []).forEach((p) => { plotsById[p.id] = p.plot_number; });
     await loadEditors();
     load();
   }

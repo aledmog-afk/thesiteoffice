@@ -35,6 +35,8 @@ function readiness(overrides = {}) {
     status: "ready", asOfDate: "2026-06-15", editorDataVisible: true, handedOverAt: null,
     programme: { hasActivities: false, total: 0, overdueProgrammeActivities: 0, overdueProgrammeMilestones: 0, forecastLateProgrammeActivities: 0, materialForecastLateProgrammeActivities: 0, forecastLateProgrammeMilestones: 0, completedLateProgrammeActivities: 0, upcomingProgrammeActivities: 0 },
     snags: { total: 0, open: 0, blocking: 0, warning: 0 },
+    actions: { total: 0, open: 0, blocking: 0, warning: 0 },
+    findings: { total: 0, open: 0, blocking: 0, warning: 0 },
     qualityGates: { total: 4, approved: 4, outstanding: 0 },
     handoverDocuments: { total: 5, approved: 5, outstanding: 0 },
     blockers: [], warnings: [],

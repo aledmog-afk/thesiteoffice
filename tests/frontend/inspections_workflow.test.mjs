@@ -58,7 +58,7 @@ function makeStore() {
     async deleteInspection() {},
     async getFindings() { return findings.map((f) => ({ ...f })); },
     async createFinding(inspectionId, projectId, fields) {
-      const f = { id: `f${nextFindingId++}`, inspection_id: inspectionId, project_id: projectId, title: fields.title, description: fields.description ?? null, severity: fields.severity ?? "medium", status: "open", action_id: null };
+      const f = { id: `f${nextFindingId++}`, inspection_id: inspectionId, project_id: projectId, title: fields.title, description: fields.description ?? null, severity: fields.severity ?? "medium", status: "open", action_id: null, plot_id: fields.plotId ?? null };
       findings.push(f);
       return { ...f };
     },
@@ -103,7 +103,7 @@ function makeStore() {
   };
 }
 
-async function run(store) {
+async function run(store, { plots = [] } = {}) {
   const supabase = {
     rpc: async (name) => {
       if (name === "get_project_members") return { data: [OWNER, COLLAB], error: null };
@@ -117,6 +117,7 @@ async function run(store) {
         single: async () => ({ data: null, error: null }),
         then(resolve) {
           if (table === "actions") return resolve({ data: store.actions.map((a) => ({ id: a.id, status: a.status, due_date: a.due_date })), error: null });
+          if (table === "plots") return resolve({ data: plots, error: null });
           resolve({ data: [], error: null });
         },
       };
@@ -142,6 +143,7 @@ async function run(store) {
     FINDING_SEVERITIES, FINDING_SEVERITY_LABEL, FINDING_SEVERITY_BADGE, FINDING_STATUSES, FINDING_STATUS_LABEL, FINDING_STATUS_BADGE, isFindingOutstanding: isOutstanding,
     ACTION_PRIORITIES, ACTION_PRIORITY_LABEL, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE,
     SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE,
+    comparePlotNumbers: (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }),
     alert: () => {}, confirm: () => true,
   });
 }
@@ -214,6 +216,46 @@ test("inspection-detail.html: create inspection details render, add finding -> c
   assert.equal(finding.status, "resolved");
   const finalHtml = document.getElementById("findingsWrap").innerHTML;
   assert.ok(!finalHtml.includes("Mark Resolved"), "a resolved finding should no longer offer Mark Resolved");
+});
+
+test("inspection-detail.html: the optional Plot field on Add Finding populates from the project's real plots and defaults to 'Not plot-specific'", async () => {
+  const store = makeStore();
+  const { document } = await run(store, { plots: [{ id: "plotA", plot_number: "Plot 5" }, { id: "plotB", plot_number: "Plot 12" }] });
+  await wait(30);
+  fireEvent(document.getElementById("newFindingBtn"), "click");
+  const select = document.getElementById("findingPlot");
+  const options = [...select.options].map((o) => o.textContent);
+  assert.deepEqual(options, ["Not plot-specific", "Plot 5", "Plot 12"]);
+  assert.equal(select.value, "", "no plot pre-selected — a finding is project-level by default, per Priority 13's own UX principle");
+});
+
+test("inspection-detail.html: selecting a Plot when adding a Finding passes it through to createFinding(), and the saved finding shows its plot", async () => {
+  const store = makeStore();
+  const { document } = await run(store, { plots: [{ id: "plotA", plot_number: "Plot 5" }] });
+  await wait(30);
+  fireEvent(document.getElementById("newFindingBtn"), "click");
+  document.getElementById("findingTitle").value = "Missing bracing";
+  document.getElementById("findingPlot").value = "plotA";
+  fireEvent(document.getElementById("newFindingForm"), "submit");
+  await wait(30);
+
+  assert.equal(store.findings[0].plot_id, "plotA", "the plot picked on the form must reach createFinding() as plotId");
+  const html = document.getElementById("findingsWrap").innerHTML;
+  assert.match(html, /Plot: <a href="plot-detail\.html\?id=plotA">Plot 5<\/a>/, "the saved finding must show its plot, linking to the real plot page");
+});
+
+test("inspection-detail.html: leaving Plot unset on Add Finding creates a project-level finding (null plot_id), and no 'Plot:' line renders", async () => {
+  const store = makeStore();
+  const { document } = await run(store, { plots: [{ id: "plotA", plot_number: "Plot 5" }] });
+  await wait(30);
+  fireEvent(document.getElementById("newFindingBtn"), "click");
+  document.getElementById("findingTitle").value = "Site-wide housekeeping issue";
+  fireEvent(document.getElementById("newFindingForm"), "submit");
+  await wait(30);
+
+  assert.equal(store.findings[0].plot_id, null);
+  const html = document.getElementById("findingsWrap").innerHTML;
+  assert.doesNotMatch(html, /Plot: <a/);
 });
 
 test("inspection-detail.html: resolving a finding never happens automatically just because its Action was completed elsewhere", async () => {

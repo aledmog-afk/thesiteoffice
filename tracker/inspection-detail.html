@@ -69,9 +69,15 @@
       <form id="newFindingForm">
         <div class="field"><label for="findingTitle">Title *</label><input type="text" id="findingTitle" required placeholder="e.g. Missing fire stopping at floor 2"></div>
         <div class="field"><label for="findingDescription">Description</label><textarea id="findingDescription" rows="2"></textarea></div>
-        <div class="field" style="max-width:200px;">
-          <label for="findingSeverity">Severity</label>
-          <select id="findingSeverity"></select>
+        <div class="form-grid">
+          <div class="field" style="max-width:200px;">
+            <label for="findingSeverity">Severity</label>
+            <select id="findingSeverity"></select>
+          </div>
+          <div class="field" style="max-width:200px;">
+            <label for="findingPlot">Plot <span class="hint">(optional)</span></label>
+            <select id="findingPlot"><option value="">Not plot-specific</option></select>
+          </div>
         </div>
         <div class="btn-row">
           <button type="submit" class="btn btn-amber btn-sm">Add Finding</button>
@@ -87,7 +93,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, getInspection, updateInspection, deleteInspection, getFindings, createFinding, updateFinding, resolveFinding, deleteFinding, createActionFromFinding, createSnagFromFinding, getFindingPhotos, addFindingPhoto, deleteFindingPhoto, INSPECTION_TYPES, INSPECTION_TYPE_LABEL, INSPECTION_STATUSES, INSPECTION_STATUS_LABEL, INSPECTION_STATUS_BADGE, FINDING_SEVERITIES, FINDING_SEVERITY_LABEL, FINDING_SEVERITY_BADGE, FINDING_STATUSES, FINDING_STATUS_LABEL, FINDING_STATUS_BADGE, isFindingOutstanding, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, getInspection, updateInspection, deleteInspection, getFindings, createFinding, updateFinding, resolveFinding, deleteFinding, createActionFromFinding, createSnagFromFinding, getFindingPhotos, addFindingPhoto, deleteFindingPhoto, comparePlotNumbers, INSPECTION_TYPES, INSPECTION_TYPE_LABEL, INSPECTION_STATUSES, INSPECTION_STATUS_LABEL, INSPECTION_STATUS_BADGE, FINDING_SEVERITIES, FINDING_SEVERITY_LABEL, FINDING_SEVERITY_BADGE, FINDING_STATUSES, FINDING_STATUS_LABEL, FINDING_STATUS_BADGE, isFindingOutstanding, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE } from "./js/app.js";
 
   await requireAuth();
   const inspectionId = getParam("id");
@@ -100,6 +106,7 @@
   let actionsById = {};
   let snagByFinding = {}; // finding.id -> its (first) linked snag_items row, for the link box below
   let editors = [];
+  let plotsById = {}; // plot.id -> plot_number, for showing/picking plot context on findings
 
   document.getElementById("inspectionType").innerHTML = INSPECTION_TYPES.map((t) => `<option value="${t}">${INSPECTION_TYPE_LABEL[t]}</option>`).join("");
   document.getElementById("status").innerHTML = INSPECTION_STATUSES.map((s) => `<option value="${s}">${INSPECTION_STATUS_LABEL[s]}</option>`).join("");
@@ -167,6 +174,7 @@
         title: document.getElementById("findingTitle").value.trim(),
         description: document.getElementById("findingDescription").value.trim() || null,
         severity: document.getElementById("findingSeverity").value,
+        plotId: document.getElementById("findingPlot").value || null,
       });
       document.getElementById("newFindingCard").style.display = "none";
       await loadFindings();
@@ -367,6 +375,7 @@
             <select onchange="setFindingStatus('${f.id}', this.value)" style="width:auto;" class="${FINDING_STATUS_BADGE[f.status]}">${statusOptionsHtml(f.status)}</select>
           </div>
         </div>
+        ${f.plot_id ? `<p class="hint" style="margin-top:0.2rem;">Plot: <a href="plot-detail.html?id=${f.plot_id}">${escapeHtml(plotsById[f.plot_id] || "—")}</a></p>` : ""}
         ${f.description ? `<p class="hint" style="margin-top:0.4rem;">${escapeHtml(f.description)}</p>` : ""}
         ${actionBox}
         ${snagBox}
@@ -434,8 +443,21 @@
     renderTitleAndStatus();
     fillDetailsForm();
 
-    const { data: members } = await supabase.rpc("get_project_members", { p_project_id: inspection.project_id });
+    const [{ data: members }, { data: plots }] = await Promise.all([
+      supabase.rpc("get_project_members", { p_project_id: inspection.project_id }),
+      supabase.from("plots").select("id, plot_number").eq("project_id", inspection.project_id),
+    ]);
     editors = (members || []).filter((m) => m.role === "owner" || m.role === "collaborator");
+
+    const sortedPlots = (plots || []).slice().sort((a, b) => comparePlotNumbers(a.plot_number, b.plot_number));
+    sortedPlots.forEach((p) => { plotsById[p.id] = p.plot_number; });
+    const findingPlotSelect = document.getElementById("findingPlot");
+    sortedPlots.forEach((p) => {
+      const opt = document.createElement("option");
+      opt.value = p.id;
+      opt.textContent = p.plot_number;
+      findingPlotSelect.appendChild(opt);
+    });
 
     await loadFindings();
   }

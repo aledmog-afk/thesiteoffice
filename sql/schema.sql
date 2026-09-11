@@ -4720,3 +4720,181 @@ begin
   return new;
 end;
 $$;
+
+
+-- ─── v38 ADDITIONS: Plot Control Data Linkage (Priority 13) ──────────
+--
+-- Priority 12 Phase 1 built a plot-level readiness position from data
+-- that was ALREADY plot-linked (Quality Gates, Handover Documents,
+-- Programme Activities' own plot_id, Snags via their plot's snag
+-- list) and deliberately left Actions and Inspection Findings
+-- project-level, pending a real architectural decision. That decision,
+-- made after re-inspecting every Action/Finding creation path and
+-- finding zero existing production rows of either (a clean slate —
+-- no historical backfill question at all):
+--
+--   actions.plot_id            ADD (nullable) — populated ONLY by
+--     automatic inheritance from the source entity a "Create Action
+--     from X" flow already knows the plot of (a Snag via its list, a
+--     Programme Activity via its own plot_id, an Inspection Finding
+--     via its own new plot_id below). Direct/manual Action creation
+--     (actions.html, always project-scoped) leaves it null — that is
+--     correct, not a gap; see tracker/README.md.
+--
+--   inspection_findings.plot_id ADD (nullable) — captured via a small
+--     optional "Plot" field on the Add Finding form, the same
+--     established convention snag_items' own general-list plot picker
+--     already uses. Deliberately NOT added to `inspections` itself:
+--     an inspection is frequently a walk-round spanning many plots or
+--     none, while an individual finding ("missing bracing") is the
+--     naturally plot-scoped unit — adding plot_id to BOTH parent and
+--     child would create two authoritative sources that could
+--     disagree, which the brief's own "one authoritative relationship"
+--     principle rules out. No current UI path lets a user start an
+--     Inspection FROM a specific plot, so there is nothing to
+--     auto-inherit from at that level; inventing that launch flow
+--     would be a UI redesign this phase does not attempt.
+--
+-- Both columns are validated server-side to belong to the SAME
+-- project as the row itself — the identical IDOR-closing pattern
+-- programme_activities.plot_id already established in v35/v37, not a
+-- new one.
+alter table public.actions add column if not exists plot_id uuid references public.plots(id) on delete set null;
+alter table public.inspection_findings add column if not exists plot_id uuid references public.plots(id) on delete set null;
+
+create or replace function public.actions_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_org_id uuid;
+  v_plot_project_id uuid;
+begin
+  select org_id into v_org_id from public.projects where id = new.project_id;
+  if v_org_id is null then
+    raise exception 'actions.project_id must reference an existing project with an organisation';
+  end if;
+  new.org_id := v_org_id;
+
+  if new.plot_id is not null then
+    select project_id into v_plot_project_id from public.plots where id = new.plot_id;
+    if v_plot_project_id is null then
+      raise exception 'actions.plot_id must reference an existing plot';
+    end if;
+    if v_plot_project_id <> new.project_id then
+      raise exception 'plot_id must belong to the same project as the action';
+    end if;
+  end if;
+
+  if new.assigned_to is not null and not public.is_project_editor_user(new.project_id, new.assigned_to) then
+    raise exception 'assigned_to must be a project editor (owner or collaborator) for this project';
+  end if;
+
+  if TG_OP = 'INSERT' then
+    new.created_by := auth.uid();
+    new.created_at := now();
+    new.updated_at := now();
+  else
+    if new.status <> old.status and not public.valid_action_status_transition(old.status, new.status) then
+      raise exception 'Invalid action status transition: % -> %', old.status, new.status;
+    end if;
+    -- creator/creation time are immutable once set, regardless of what
+    -- an UPDATE payload includes.
+    new.created_by := old.created_by;
+    new.created_at := old.created_at;
+    new.updated_at := now();
+  end if;
+
+  -- completed_at reflects the moment status most recently BECAME
+  -- 'completed' — set on the transition in, left untouched while it
+  -- stays 'completed' (so re-saving other fields doesn't reset it), and
+  -- cleared the moment status moves away from 'completed' (reopening).
+  if new.status = 'completed' and (TG_OP = 'INSERT' or old.status <> 'completed') then
+    new.completed_at := now();
+  elsif new.status <> 'completed' then
+    new.completed_at := null;
+  end if;
+
+  return new;
+end;
+$$;
+
+create or replace function public.inspection_findings_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_org_id uuid;
+  v_inspection_project_id uuid;
+  v_action_project_id uuid;
+  v_plot_project_id uuid;
+begin
+  select org_id into v_org_id from public.projects where id = new.project_id;
+  if v_org_id is null then
+    raise exception 'inspection_findings.project_id must reference an existing project with an organisation';
+  end if;
+  new.org_id := v_org_id;
+
+  select project_id into v_inspection_project_id from public.inspections where id = new.inspection_id;
+  if v_inspection_project_id is null then
+    raise exception 'inspection_findings.inspection_id must reference an existing inspection';
+  end if;
+  if v_inspection_project_id <> new.project_id then
+    raise exception 'a finding''s project_id must match its inspection''s project_id';
+  end if;
+
+  if new.action_id is not null then
+    select project_id into v_action_project_id from public.actions where id = new.action_id;
+    if v_action_project_id is null then
+      raise exception 'inspection_findings.action_id must reference an existing action';
+    end if;
+    if v_action_project_id <> new.project_id then
+      raise exception 'a linked action must belong to the same project as the finding';
+    end if;
+  end if;
+
+  if new.plot_id is not null then
+    select project_id into v_plot_project_id from public.plots where id = new.plot_id;
+    if v_plot_project_id is null then
+      raise exception 'inspection_findings.plot_id must reference an existing plot';
+    end if;
+    if v_plot_project_id <> new.project_id then
+      raise exception 'plot_id must belong to the same project as the finding';
+    end if;
+  end if;
+
+  if TG_OP = 'INSERT' then
+    new.created_by := auth.uid();
+    new.created_at := now();
+    new.updated_at := now();
+    new.resolved_at := case when new.status = 'resolved' then now() else null end;
+    return new;
+  end if;
+
+  new.created_by := old.created_by;
+  new.created_at := old.created_at;
+  new.updated_at := now();
+
+  if new.status = 'resolved' and old.status <> 'resolved' then
+    new.resolved_at := now();
+  elsif new.status <> 'resolved' then
+    new.resolved_at := null;
+  end if;
+
+  return new;
+end;
+$$;
+
+-- Audit integration: actions/inspection_findings have been audited
+-- since v29/v31 respectively (trg_audit_actions/
+-- trg_audit_inspection_findings), via write_audit_log()'s existing
+-- generic project_id-based branch. plot_id is just another column on
+-- an already-audited row — it appears in old_data/new_data
+-- automatically the moment the trigger functions above start setting
+-- it, with zero changes to the audit trigger or write_audit_log()
+-- itself. Proven by test, not re-implemented — see
+-- tests/security/plot_action_finding_linkage.test.mjs.

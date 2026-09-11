@@ -57,7 +57,7 @@
   </div>
 
   <h3 id="documentsSection" style="font-family:var(--font-display); font-size:1.1rem; margin-bottom:1rem;">Handover Documents</h3>
-  <div class="card">
+  <div class="card" style="margin-bottom:2.5rem;">
     <div class="table-wrap">
       <table>
         <thead>
@@ -66,6 +66,12 @@
         <tbody id="docRows"></tbody>
       </table>
     </div>
+  </div>
+
+  <h3 style="font-family:var(--font-display); font-size:1.1rem; margin-bottom:1rem;">Linked Items</h3>
+  <div class="card">
+    <div class="hint" style="margin-bottom:0.6rem;">Actions, Inspection Findings and Snags already tied to this plot — nothing to search for separately.</div>
+    <div id="linkedItemsWrap">Loading…</div>
   </div>
 </div>
 
@@ -160,6 +166,18 @@
             ? `<div>${readiness.handoverDocuments.approved} of ${readiness.handoverDocuments.total} approved / final</div>`
             : `<div class="hint">No handover documents recorded</div>`}
         </div>
+        <div class="card">
+          <div class="hint">Actions</div>
+          ${readiness.actions.total
+            ? `<div>${readiness.actions.open} open of ${readiness.actions.total}</div><div class="hint">Blocking: ${readiness.actions.blocking} · Warning: ${readiness.actions.warning}</div>`
+            : `<div class="hint">0 Actions linked to this plot — not necessarily clean; a project-level Action may exist unlinked</div>`}
+        </div>
+        <div class="card">
+          <div class="hint">Inspection Findings</div>
+          ${readiness.findings.total
+            ? `<div>${readiness.findings.open} open of ${readiness.findings.total}</div><div class="hint">Critical: ${readiness.findings.blocking} · High: ${readiness.findings.warning}</div>`
+            : `<div class="hint">0 Findings linked to this plot — not necessarily clean; a project-level Finding may exist unlinked</div>`}
+        </div>
       </div>
     `;
   }
@@ -172,6 +190,53 @@
       renderPlotControl(readiness);
     } catch (err) {
       plotControlWrap.innerHTML = `<div class="error-box" style="display:block;">Couldn't load plot control position: ${escapeHtml(err.message || String(err))}</div>`;
+    }
+  }
+
+  // ─── Linked Items (Priority 13) ──────────────────────────────────
+  // "Plot -> Finding -> Action" and "Plot -> Snag -> Action" without
+  // manually searching. Actions/Findings are reached via their own new
+  // plot_id (Priority 13); Snags via the plot's own auto-seeded list —
+  // the same effective-plot resolution getPlotSnags()/
+  // getProjectPlotReadiness() already use internally, mirrored here
+  // (kept local rather than exported from app.js purely for display,
+  // since nothing else outside this page needs the raw list).
+  function linkedItemRowHtml(label, href, statusBadge) {
+    return `<div style="display:flex; align-items:center; justify-content:space-between; gap:0.6rem; padding:0.4rem 0; border-bottom:1px solid var(--rule);">
+      <a href="${href}">${escapeHtml(label)}</a>${statusBadge}
+    </div>`;
+  }
+
+  async function loadLinkedItems() {
+    const wrap = document.getElementById("linkedItemsWrap");
+    try {
+      const [{ data: actions }, { data: findings }, { data: list }] = await Promise.all([
+        supabase.from("actions").select("id, title, status, priority").eq("plot_id", plotId),
+        supabase.from("inspection_findings").select("id, title, severity, status, inspection_id").eq("plot_id", plotId),
+        supabase.from("snag_lists").select("id").eq("plot_id", plotId).maybeSingle(),
+      ]);
+      const { data: directTagged } = await supabase.from("snag_items").select("id, description, status, snag_list_id").eq("plot_id", plotId);
+      const { data: byList } = list?.id
+        ? await supabase.from("snag_items").select("id, description, status, snag_list_id").eq("snag_list_id", list.id)
+        : { data: [] };
+      const snagsById = new Map();
+      for (const s of [...(byList || []), ...(directTagged || [])]) snagsById.set(s.id, s);
+      const snags = [...snagsById.values()];
+
+      const sections = [
+        ["Actions", actions || [], (a) => linkedItemRowHtml(a.title, `actions.html?project=${plot.project_id}`, `<span class="badge ${a.status === "completed" ? "badge-green" : a.status === "blocked" ? "badge-red" : "badge-grey"}">${escapeHtml(a.status)}</span>`)],
+        ["Inspection Findings", findings || [], (f) => linkedItemRowHtml(f.title, `inspection-detail.html?id=${f.inspection_id}`, `<span class="badge ${f.severity === "critical" || f.severity === "high" ? "badge-red" : "badge-grey"}">${escapeHtml(f.status)}</span>`)],
+        ["Snags", snags, (s) => linkedItemRowHtml(s.description, `snag-list-edit.html?id=${s.snag_list_id}`, `<span class="badge ${s.status === "open" ? "badge-red" : "badge-green"}">${escapeHtml(s.status)}</span>`)],
+      ];
+
+      wrap.innerHTML = sections.map(([label, rows, rowFn]) => `
+        <div style="margin-bottom:1rem;">
+          <strong>${label}</strong> <span class="hint">(${rows.length})</span>
+          ${rows.length ? rows.map(rowFn).join("") : `<div class="hint" style="padding:0.3rem 0;">None</div>`}
+        </div>
+      `).join("");
+    } catch (err) {
+      wrap.innerHTML = `<div class="error-box" style="display:block;">Couldn't load linked items: ${escapeHtml(err.message || String(err))}</div>`;
     }
   }
 
@@ -464,6 +529,7 @@
     loadMilestones();
     loadDocs();
     loadPlotControl();
+    loadLinkedItems();
   }
 
   init();
