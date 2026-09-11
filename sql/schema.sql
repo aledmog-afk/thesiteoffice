@@ -4612,3 +4612,111 @@ grant execute on function public.import_programme_activities(uuid, jsonb) to aut
 alter table public.documents drop constraint if exists documents_document_type_check;
 alter table public.documents add constraint documents_document_type_check
   check (document_type in ('drawing', 'specification', 'other', 'programme'));
+
+-- ─── v37 ADDITIONS: Programme Variance + Action Link (Phase 4) ──────
+-- Adds ONE nullable column — programme_activities.action_id — so a
+-- programme exception (an overdue/forecast-late activity or
+-- milestone) can be turned into an explicit, trackable Action without
+-- the application inventing a parallel identity model. Mirrors
+-- inspection_findings.action_id / snag_items.action_id EXACTLY: the
+-- origin (a programme activity) references its consequence (an
+-- action), never the reverse, keeping the reusable Actions Engine
+-- (Priority 5) uncoupled from Programme Control. No Action is ever
+-- created automatically by this migration or by any programme-
+-- variance calculation — see createActionFromProgrammeActivity() in
+-- tracker/js/app.js, an explicit, user-initiated "Create Action"
+-- call, the same shape createActionFromFinding()/
+-- createActionFromSnag() already established.
+alter table public.programme_activities add column if not exists action_id uuid references public.actions(id) on delete set null;
+create index if not exists programme_activities_action_idx on public.programme_activities (action_id);
+
+-- Re-declares programme_activities_before_write() with ONE addition —
+-- action_id, if supplied, must reference a real action belonging to
+-- the SAME project as the activity (the same IDOR class every other
+-- action_id/plot_id/assigned_to check in this schema already closes).
+-- Every other line is byte-identical to the v35 original.
+create or replace function public.programme_activities_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_project_id uuid;
+  v_org_id uuid;
+  v_plot_project_id uuid;
+  v_action_project_id uuid;
+begin
+  select project_id, org_id into v_project_id, v_org_id from public.programmes where id = new.programme_id;
+  if v_project_id is null then
+    raise exception 'programme_activities.programme_id must reference an existing programme';
+  end if;
+  new.project_id := v_project_id;
+  new.org_id := v_org_id;
+
+  if new.plot_id is not null then
+    select project_id into v_plot_project_id from public.plots where id = new.plot_id;
+    if v_plot_project_id is null then
+      raise exception 'programme_activities.plot_id must reference an existing plot';
+    end if;
+    if v_plot_project_id <> new.project_id then
+      raise exception 'plot_id must belong to the same project as the programme activity';
+    end if;
+  end if;
+
+  if new.assigned_to is not null and not public.is_project_member_user(new.project_id, new.assigned_to) then
+    raise exception 'assigned_to must be a member of this project';
+  end if;
+
+  if new.action_id is not null then
+    select project_id into v_action_project_id from public.actions where id = new.action_id;
+    if v_action_project_id is null then
+      raise exception 'programme_activities.action_id must reference an existing action';
+    end if;
+    if v_action_project_id <> new.project_id then
+      raise exception 'a linked action must belong to the same project as the programme activity';
+    end if;
+  end if;
+
+  if TG_OP = 'INSERT' then
+    new.created_by := auth.uid();
+    new.created_at := now();
+    new.updated_at := now();
+    if new.forecast_start is null then new.forecast_start := new.planned_start; end if;
+    if new.forecast_finish is null then new.forecast_finish := new.planned_finish; end if;
+  else
+    new.created_by := old.created_by;
+    new.created_at := old.created_at;
+    new.updated_at := now();
+  end if;
+
+  -- "complete should require appropriate completion state": force
+  -- percent_complete to 100 on transition into complete (never trust
+  -- a lower client-supplied value), and stamp actual_finish once, on
+  -- the transition, only if the client didn't already supply a real
+  -- date — never force-overwritten on every subsequent save the way
+  -- actions.completed_at is, since actual_finish is a real-world
+  -- construction date a user may need to correct afterwards while
+  -- status stays 'complete'.
+  if new.status = 'complete' then
+    new.percent_complete := 100;
+    if TG_OP = 'INSERT' or old.status <> 'complete' then
+      if new.actual_finish is null then
+        new.actual_finish := current_date;
+      end if;
+    end if;
+  elsif new.status = 'not_started' then
+    new.percent_complete := 0;
+  end if;
+  -- Reopening a previously-complete activity (status moving away from
+  -- 'complete') deliberately leaves actual_finish untouched — it
+  -- remains a true historical record of when the work was actually
+  -- finished, even if the row is reopened later for correction. This
+  -- is the one deliberate divergence from actions.completed_at, which
+  -- always clears on reopen; construction reality (a real date the
+  -- work stopped) doesn't become untrue just because the record is
+  -- reopened.
+
+  return new;
+end;
+$$;

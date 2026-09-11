@@ -571,6 +571,8 @@
       document.getElementById("controlStatusReason").textContent = summary.status.reason;
 
       const c = summary.counts;
+      const overdueProgramme = c.overdueProgrammeActivities + c.overdueProgrammeMilestones;
+      const forecastLateProgramme = c.materialForecastLateProgrammeActivities + c.forecastLateProgrammeMilestones;
       const cards = [
         ["Open Actions", c.openActions, "var(--ink)"],
         ["Overdue", c.overdue, c.overdue > 0 ? "var(--red)" : "var(--ink)"],
@@ -578,6 +580,8 @@
         ["Due Soon (7 days)", c.dueSoon, c.dueSoon > 0 ? "var(--amber)" : "var(--ink)"],
         ["Blocked", c.blocked, c.blocked > 0 ? "var(--red)" : "var(--ink)"],
         ["High / Critical Priority", c.highCritical, c.highCritical > 0 ? "var(--amber)" : "var(--ink)"],
+        ["Overdue Programme", overdueProgramme, overdueProgramme > 0 ? "var(--red)" : "var(--ink)"],
+        ["Programme Forecast Late", forecastLateProgramme, forecastLateProgramme > 0 ? "var(--amber)" : "var(--ink)"],
       ];
       document.getElementById("controlTotalsBar").innerHTML = cards.map(([label, value, color]) => `
         <div class="totals-box">

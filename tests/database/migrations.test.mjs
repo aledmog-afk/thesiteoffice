@@ -734,17 +734,22 @@ test("Programme Control: tables, indexes, triggers, RLS policies and the one-act
     // Note: SQL LIKE's "_" is a single-character WILDCARD, not a literal
     // underscore — "%_idx" therefore also matches
     // programme_activities_external_id_uidx (its last 4 characters,
-    // "uidx", satisfy "_idx" with "_" matching "u"). That's 6 genuinely
-    // "*_idx"-named indexes (2 on programmes, 4 on programme_activities)
-    // plus this one incidental match, counted separately below.
+    // "uidx", satisfy "_idx" with "_" matching "u"). That's 7 genuinely
+    // "*_idx"-named indexes (2 on programmes, 5 on programme_activities
+    // — the 4 from Phase 2 plus programme_activities_action_idx added
+    // in Phase 4's v37) plus this one incidental match, counted
+    // separately below.
     const indexes = await client.query("select count(*)::int as n from pg_indexes where tablename in ('programmes', 'programme_activities') and indexname like '%_idx'");
-    assert.equal(indexes.rows[0].n, 7, "6 genuinely *_idx-named indexes (2 on programmes + 4 on programme_activities) plus the incidental LIKE-wildcard match on *_uidx, never duplicated");
+    assert.equal(indexes.rows[0].n, 8, "7 genuinely *_idx-named indexes (2 on programmes + 5 on programme_activities) plus the incidental LIKE-wildcard match on *_uidx, never duplicated");
 
     const oneActiveIndex = await client.query("select count(*)::int as n from pg_indexes where tablename = 'programmes' and indexname = 'programmes_one_active_per_project'");
     assert.equal(oneActiveIndex.rows[0].n, 1, "the one-active-programme-per-project partial unique index must exist exactly once");
 
     const externalIdIndex = await client.query("select count(*)::int as n from pg_indexes where tablename = 'programme_activities' and indexname = 'programme_activities_external_id_uidx'");
     assert.equal(externalIdIndex.rows[0].n, 1, "the (programme_id, external_id) partial unique index must exist exactly once");
+
+    const actionIndex = await client.query("select count(*)::int as n from pg_indexes where tablename = 'programme_activities' and indexname = 'programme_activities_action_idx'");
+    assert.equal(actionIndex.rows[0].n, 1, "programme_activities_action_idx (Phase 4, v37) must exist exactly once, never duplicated across re-application");
 
     await client.end();
   } finally {

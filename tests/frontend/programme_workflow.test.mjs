@@ -28,11 +28,49 @@ function extractConst(name) {
   assert.ok(m, `${name} not found in app.js`);
   return new Function(`${m[0].replace(/^export /, "")} return ${name};`)();
 }
+function extractFn(name) {
+  const m = APP_JS.match(new RegExp(`export (?:async )?function ${name}\\([\\s\\S]*?\\n\\}\\n`));
+  assert.ok(m, `${name} not found in app.js`);
+  return m[0].replace(/^export /, "");
+}
+function extractPrivateFn(name) {
+  const m = APP_JS.match(new RegExp(`function ${name}\\([\\s\\S]*?\\n\\}\\n`));
+  assert.ok(m, `${name} not found in app.js`);
+  return m[0];
+}
+// Unlike extractConst() above (which EVALUATES a const and returns its
+// value — fine for a plain value binding like PROGRAMME_STATUS_LABEL),
+// this returns the RAW SOURCE TEXT of a const declaration, for
+// embedding inside another scope (CATEGORISE_SCOPE below) that needs
+// the actual `const NAME = ...;` statement, not its evaluated value.
+function extractConstSrc(name) {
+  const m = APP_JS.match(new RegExp(`export const ${name} = [\\s\\S]*?;\\n`));
+  assert.ok(m, `${name} not found in app.js`);
+  return m[0].replace(/^export /, "");
+}
 const PROGRAMME_STATUS_LABEL = extractConst("PROGRAMME_STATUS_LABEL");
 const PROGRAMME_STATUS_BADGE = extractConst("PROGRAMME_STATUS_BADGE");
 const ACTIVITY_STATUSES = extractConst("ACTIVITY_STATUSES");
 const ACTIVITY_STATUS_LABEL = extractConst("ACTIVITY_STATUS_LABEL");
 const ACTIVITY_STATUS_BADGE = extractConst("ACTIVITY_STATUS_BADGE");
+const PROGRAMME_VARIANCE_LABEL = extractConst("PROGRAMME_VARIANCE_LABEL");
+const PROGRAMME_VARIANCE_BADGE = extractConst("PROGRAMME_VARIANCE_BADGE");
+const ACTION_PRIORITIES = extractConst("ACTION_PRIORITIES");
+const ACTION_PRIORITY_LABEL = extractConst("ACTION_PRIORITY_LABEL");
+
+// categoriseProgrammeActivity() (Phase 4) is the REAL function the
+// page's own Variance column/filter/sort all depend on — extracted
+// (with its own private dependencies) rather than reimplemented, the
+// same convention every other test file in this suite uses.
+const CATEGORISE_SCOPE = `
+  function todayISO() { return "2026-06-15"; }
+  ${extractConstSrc("DUE_SOON_DAYS")}
+  ${extractConstSrc("PROGRAMME_MATERIAL_DELAY_DAYS")}
+  ${extractPrivateFn("diffCalendarDays")}
+  ${extractFn("categoriseProgrammeActivity")}
+  return { categoriseProgrammeActivity };
+`;
+const { categoriseProgrammeActivity } = new Function(CATEGORISE_SCOPE)();
 
 function escapeHtml(str) { return String(str ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 function formatDate(d) { return d || ""; }
@@ -74,6 +112,7 @@ async function runProgrammePage({
   activities = [activity()],
   createProgramme, activateProgramme, archiveProgramme,
   createProgrammeActivity, updateProgrammeActivity, deleteProgrammeActivity,
+  createActionFromProgrammeActivity,
   confirm = () => true,
 } = {}) {
   const supabase = baseSupabaseMock();
@@ -85,6 +124,10 @@ async function runProgrammePage({
     renderHeader: () => {},
     escapeHtml, formatDate, showError, clearError,
     PROGRAMME_STATUS_LABEL, PROGRAMME_STATUS_BADGE, ACTIVITY_STATUSES, ACTIVITY_STATUS_LABEL, ACTIVITY_STATUS_BADGE,
+    categoriseProgrammeActivity, PROGRAMME_VARIANCE_LABEL, PROGRAMME_VARIANCE_BADGE,
+    ACTION_PRIORITIES, ACTION_PRIORITY_LABEL,
+    buildProgrammeActionContext: (act, cats) => `Programme activity: ${act.title}`,
+    createActionFromProgrammeActivity: createActionFromProgrammeActivity || (async (act, fields) => ({ action: { id: "action-new", ...fields }, activity: { ...act, action_id: "action-new" } })),
     listProgrammes: async () => programmes,
     createProgramme: createProgramme || (async () => ({ id: "prog-new", project_id: "p1", name: "New", status: "draft" })),
     activateProgramme: activateProgramme || (async (id) => ({ ...programmes.find((p) => p.id === id), status: "active" })),
@@ -129,7 +172,6 @@ test("programme.html: an active programme's activities render with the right col
   assert.match(document.getElementById("programmeStatusBadge").textContent, /Active/);
   const row = document.querySelector("#activityRows tr");
   assert.match(row.textContent, /Roof Covering/);
-  assert.match(row.textContent, /75%/);
   assert.match(row.textContent, /In Progress/);
 });
 
@@ -278,4 +320,95 @@ test("programme.html: an empty activity list (for the current programme) shows t
   await wait(30);
   assert.equal(document.getElementById("emptyState").style.display, "block");
   assert.equal(document.querySelectorAll("#activityRows tr").length, 0);
+});
+
+// ─── Variance column + filter + Create Action (Priority 11, Phase 4) ──
+// The page's injected categoriseProgrammeActivity() (extracted above,
+// via CATEGORISE_SCOPE) has "today" fixed at 2026-06-15 — every date
+// below is chosen relative to that fixed point, never the real
+// runtime date.
+
+test("programme.html: the Variance column shows Overdue/Late/Ahead correctly, matching categoriseProgrammeActivity()", async () => {
+  const { document } = await runProgrammePage({
+    activities: [
+      activity({ id: "a1", title: "Overdue One", status: "in_progress", planned_finish: "2026-06-01", forecast_finish: "2026-06-10" }),
+      activity({ id: "a2", title: "Late One", status: "in_progress", planned_finish: "2026-07-01", forecast_finish: "2026-07-10" }),
+      activity({ id: "a3", title: "Ahead One", status: "in_progress", planned_finish: "2026-07-10", forecast_finish: "2026-07-05" }),
+    ],
+  });
+  await wait(30);
+  // The table's own default sort (forecast_finish ascending) doesn't
+  // match insertion order, so find each row by its title rather than
+  // assuming a position.
+  const rows = Array.from(document.querySelectorAll("#activityRows tr"));
+  const rowFor = (title) => rows.find((r) => r.textContent.includes(title));
+  assert.match(rowFor("Overdue One").textContent, /Overdue/);
+  assert.match(rowFor("Late One").textContent, /Late/);
+  assert.match(rowFor("Ahead One").textContent, /Ahead/);
+});
+
+test("programme.html: the variance filter narrows to overdue rows only", async () => {
+  const { document } = await runProgrammePage({
+    activities: [
+      activity({ id: "a1", title: "Overdue One", status: "in_progress", planned_finish: "2026-06-01", forecast_finish: "2026-06-10" }),
+      activity({ id: "a2", title: "On Plan One", status: "in_progress", planned_finish: "2026-07-01", forecast_finish: "2026-07-01" }),
+    ],
+  });
+  await wait(30);
+  assert.equal(document.querySelectorAll("#activityRows tr").length, 2);
+
+  document.getElementById("varianceFilter").value = "overdue";
+  fireEvent(document.getElementById("varianceFilter"), "change");
+  await wait(10);
+
+  const rows = document.querySelectorAll("#activityRows tr");
+  assert.equal(rows.length, 1);
+  assert.match(rows[0].textContent, /Overdue One/);
+});
+
+test("programme.html: 'Create Action' only appears for an exception row, never for an on-plan one", async () => {
+  const { document } = await runProgrammePage({
+    activities: [
+      activity({ id: "a1", title: "Overdue One", status: "in_progress", planned_finish: "2026-06-01", forecast_finish: "2026-06-10" }),
+      activity({ id: "a2", title: "On Plan One", status: "in_progress", planned_finish: "2026-07-01", forecast_finish: "2026-07-01" }),
+    ],
+  });
+  await wait(30);
+  const rows = document.querySelectorAll("#activityRows tr");
+  assert.match(rows[0].innerHTML, /Create Action/);
+  assert.doesNotMatch(rows[1].innerHTML, /Create Action/);
+});
+
+test("programme.html: an activity already linked to an action shows 'View Action' instead of 'Create Action'", async () => {
+  const { document } = await runProgrammePage({
+    activities: [activity({ id: "a1", title: "Overdue One", status: "in_progress", planned_finish: "2026-06-01", forecast_finish: "2026-06-10", action_id: "existing-action" })],
+  });
+  await wait(30);
+  const row = document.querySelector("#activityRows tr");
+  assert.match(row.innerHTML, /View Action/);
+  assert.doesNotMatch(row.innerHTML, /Create Action/);
+});
+
+test("programme.html: clicking Create Action opens the modal pre-filled, and submitting calls createActionFromProgrammeActivity then refreshes", async () => {
+  let called = null;
+  const { document, window } = await runProgrammePage({
+    activities: [activity({ id: "a1", title: "Overdue One", status: "in_progress", planned_finish: "2026-06-01", forecast_finish: "2026-06-10" })],
+    createActionFromProgrammeActivity: async (act, fields) => { called = { activityId: act.id, fields }; return { action: { id: "new-action" }, activity: { ...act, action_id: "new-action" } }; },
+  });
+  await wait(30);
+  // Row action buttons use an inline onclick attribute (see the
+  // established comment on the Edit/Delete tests above) — not live in
+  // this harness's jsdom mode, so this calls the same
+  // window.openCreateAction() a real click resolves to.
+  window.openCreateAction("a1");
+  await wait(10);
+  assert.equal(document.getElementById("createActionModal").style.display, "flex");
+  assert.match(document.getElementById("actionTitle").value, /Overdue One/);
+
+  fireEvent(document.getElementById("createActionForm"), "submit");
+  await wait(30);
+
+  assert.ok(called, "createActionFromProgrammeActivity must have been called");
+  assert.equal(called.activityId, "a1");
+  assert.equal(document.getElementById("createActionModal").style.display, "none", "the modal should close after a successful save");
 });

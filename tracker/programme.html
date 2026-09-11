@@ -97,9 +97,17 @@
       <select id="statusFilter" style="width:auto;">
         <option value="">All statuses</option>
       </select>
+      <select id="varianceFilter" style="width:auto;">
+        <option value="">All variance</option>
+        <option value="overdue">Overdue</option>
+        <option value="late">Forecast Late</option>
+        <option value="milestone">Milestones</option>
+        <option value="completed_late">Completed Late</option>
+      </select>
       <select id="sortBy" style="width:auto; margin-left:auto;">
         <option value="forecast_finish">Sort: Forecast Finish</option>
         <option value="planned_finish">Sort: Planned Finish</option>
+        <option value="variance">Sort: Variance</option>
         <option value="title">Sort: Activity</option>
         <option value="status">Sort: Status</option>
       </select>
@@ -108,7 +116,7 @@
       <table>
         <thead>
           <tr>
-            <th>Activity</th><th>Type</th><th>Plot</th><th>Planned Start</th><th>Planned Finish</th><th>Forecast Finish</th><th>Actual Finish</th><th>% Complete</th><th>Status</th><th></th>
+            <th>Activity</th><th>Type</th><th>Plot</th><th>Planned Finish</th><th>Forecast Finish</th><th>Actual Finish</th><th>Variance</th><th>Status</th><th></th>
           </tr>
         </thead>
         <tbody id="activityRows"></tbody>
@@ -120,9 +128,13 @@
   </div>
 </div>
 
+<div class="modal-backdrop" id="createActionModal" style="display:none;">
+  <div class="modal-box" id="createActionModalBody"></div>
+</div>
+
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, PROGRAMME_STATUS_LABEL, PROGRAMME_STATUS_BADGE, ACTIVITY_STATUSES, ACTIVITY_STATUS_LABEL, ACTIVITY_STATUS_BADGE, listProgrammes, createProgramme, activateProgramme, archiveProgramme, listProgrammeActivities, createProgrammeActivity, updateProgrammeActivity, deleteProgrammeActivity } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, PROGRAMME_STATUS_LABEL, PROGRAMME_STATUS_BADGE, ACTIVITY_STATUSES, ACTIVITY_STATUS_LABEL, ACTIVITY_STATUS_BADGE, listProgrammes, createProgramme, activateProgramme, archiveProgramme, listProgrammeActivities, createProgrammeActivity, updateProgrammeActivity, deleteProgrammeActivity, categoriseProgrammeActivity, PROGRAMME_VARIANCE_LABEL, PROGRAMME_VARIANCE_BADGE, createActionFromProgrammeActivity, buildProgrammeActionContext, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -137,6 +149,7 @@
   let plots = [];
   let members = [];
   let statusFilter = "";
+  let varianceFilter = "";
   let sortBy = "forecast_finish";
 
   document.getElementById("activityStatus").innerHTML = ACTIVITY_STATUSES.map((s) => `<option value="${s}">${ACTIVITY_STATUS_LABEL[s]}</option>`).join("");
@@ -299,18 +312,48 @@
   window.editActivity = (id) => openActivityForm(activities.find((a) => a.id === id));
 
   document.getElementById("statusFilter").addEventListener("change", (e) => { statusFilter = e.target.value; renderActivities(); });
+  document.getElementById("varianceFilter").addEventListener("change", (e) => { varianceFilter = e.target.value; renderActivities(); });
   document.getElementById("sortBy").addEventListener("change", (e) => { sortBy = e.target.value; renderActivities(); });
 
+  // The one-word label categoriseProgrammeActivity() derives per row —
+  // computed once per render, reused for the filter, the sort, and the
+  // badge itself, so all three agree with each other by construction.
+  function withVariance(a) {
+    return { activity: a, cats: categoriseProgrammeActivity(a) };
+  }
+
+  function matchesVarianceFilter({ activity, cats }) {
+    if (!varianceFilter) return true;
+    if (varianceFilter === "overdue") return cats.overdue;
+    if (varianceFilter === "late") return cats.forecastLate;
+    if (varianceFilter === "milestone") return Boolean(activity.is_milestone);
+    if (varianceFilter === "completed_late") return cats.completedLate;
+    return true;
+  }
+
   function sortedFilteredActivities() {
-    let list = statusFilter ? activities.filter((a) => a.status === statusFilter) : activities.slice();
+    let list = activities.map(withVariance);
+    if (statusFilter) list = list.filter(({ activity }) => activity.status === statusFilter);
+    list = list.filter(matchesVarianceFilter);
     list.sort((a, b) => {
-      if (sortBy === "title") return (a.title || "").localeCompare(b.title || "");
-      if (sortBy === "status") return (a.status || "").localeCompare(b.status || "");
-      const av = a[sortBy] || "9999-99-99";
-      const bv = b[sortBy] || "9999-99-99";
+      if (sortBy === "title") return (a.activity.title || "").localeCompare(b.activity.title || "");
+      if (sortBy === "status") return (a.activity.status || "").localeCompare(b.activity.status || "");
+      if (sortBy === "variance") {
+        const av = a.cats.forecastVarianceDays ?? a.cats.actualVarianceDays ?? -Infinity;
+        const bv = b.cats.forecastVarianceDays ?? b.cats.actualVarianceDays ?? -Infinity;
+        return bv - av; // most late first
+      }
+      const av = a.activity[sortBy] || "9999-99-99";
+      const bv = b.activity[sortBy] || "9999-99-99";
       return av.localeCompare(bv);
     });
     return list;
+  }
+
+  function varianceCellHtml(cats) {
+    const days = cats.forecastVarianceDays ?? cats.actualVarianceDays;
+    const daysText = days !== null && days !== undefined && days !== 0 ? ` (${days > 0 ? "+" : ""}${days}d)` : "";
+    return `<span class="badge ${PROGRAMME_VARIANCE_BADGE[cats.label] || "badge-grey"}">${PROGRAMME_VARIANCE_LABEL[cats.label] || cats.label}</span>${daysText}`;
   }
 
   function renderActivities() {
@@ -322,24 +365,88 @@
       return;
     }
     document.getElementById("emptyState").style.display = "none";
-    rows.innerHTML = list.map((a) => `
+    rows.innerHTML = list.map(({ activity: a, cats }) => {
+      const isException = cats.overdue || cats.forecastLate;
+      const actionCell = a.action_id
+        ? `<a href="actions.html?project=${projectId}">View Action</a>`
+        : (isException ? `<button class="btn btn-outline btn-sm" onclick="openCreateAction('${a.id}')">Create Action</button>` : "");
+      return `
       <tr>
         <td><strong>${escapeHtml(a.title)}</strong></td>
         <td>${a.is_milestone ? "Milestone" : "Task"}</td>
         <td>${a.plots?.plot_number ? escapeHtml(a.plots.plot_number) : "—"}</td>
-        <td>${a.planned_start ? formatDate(a.planned_start) : "—"}</td>
         <td>${a.planned_finish ? formatDate(a.planned_finish) : "—"}</td>
         <td>${a.forecast_finish ? formatDate(a.forecast_finish) : "—"}</td>
         <td>${a.actual_finish ? formatDate(a.actual_finish) : "—"}</td>
-        <td>${Number(a.percent_complete)}%</td>
+        <td>${varianceCellHtml(cats)}</td>
         <td><span class="badge ${ACTIVITY_STATUS_BADGE[a.status] || "badge-grey"}">${ACTIVITY_STATUS_LABEL[a.status] || escapeHtml(a.status)}</span></td>
         <td>
           <button class="btn btn-outline btn-sm" onclick="editActivity('${a.id}')">Edit</button>
           <button class="btn btn-outline btn-sm" onclick="deleteActivity('${a.id}', '${escapeHtml(a.title).replace(/'/g, "\\'")}')">Delete</button>
+          ${actionCell}
         </td>
       </tr>
-    `).join("");
+    `;
+    }).join("");
   }
+
+  // ─── Create Action from a programme exception ──────────────────
+  const createActionModal = document.getElementById("createActionModal");
+  function openCreateAction(activityId) {
+    const activity = activities.find((a) => a.id === activityId);
+    if (!activity) return;
+    const cats = categoriseProgrammeActivity(activity);
+    const context = buildProgrammeActionContext(activity, cats);
+    document.getElementById("createActionModalBody").innerHTML = `
+      <h3 style="margin-bottom:0.8rem;">Create Action</h3>
+      <div id="createActionErrorBox" class="error-box"></div>
+      <form id="createActionForm">
+        <div class="field"><label for="actionTitle">Title *</label><input type="text" id="actionTitle" required value="${escapeHtml(`Resolve delay: ${activity.title}`)}"></div>
+        <div class="field"><label for="actionDescription">Description</label><textarea id="actionDescription" rows="5">${escapeHtml(context)}</textarea></div>
+        <div class="form-grid">
+          <div class="field">
+            <label for="actionPriority">Priority</label>
+            <select id="actionPriority">${ACTION_PRIORITIES.map((p) => `<option value="${p}" ${p === "high" ? "selected" : ""}>${ACTION_PRIORITY_LABEL[p]}</option>`).join("")}</select>
+          </div>
+          <div class="field"><label for="actionDueDate">Due date</label><input type="date" id="actionDueDate"></div>
+        </div>
+        <div class="field">
+          <label for="actionAssignedTo">Assign to</label>
+          <select id="actionAssignedTo"><option value="">Unassigned</option>${members.map((m) => `<option value="${m.user_id}">${escapeHtml(m.email)}</option>`).join("")}</select>
+        </div>
+        <div class="btn-row">
+          <button type="submit" class="btn btn-amber" id="saveCreateActionBtn">Create Action</button>
+          <button type="button" class="btn btn-outline" id="cancelCreateActionBtn">Cancel</button>
+        </div>
+      </form>
+    `;
+    document.getElementById("cancelCreateActionBtn").addEventListener("click", () => { createActionModal.style.display = "none"; });
+    document.getElementById("createActionForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const errBox = document.getElementById("createActionErrorBox");
+      clearError(errBox);
+      const btn = document.getElementById("saveCreateActionBtn");
+      btn.disabled = true;
+      try {
+        await createActionFromProgrammeActivity(activity, {
+          title: document.getElementById("actionTitle").value.trim(),
+          description: document.getElementById("actionDescription").value.trim() || null,
+          priority: document.getElementById("actionPriority").value,
+          dueDate: document.getElementById("actionDueDate").value || null,
+          assignedTo: document.getElementById("actionAssignedTo").value || null,
+        });
+        createActionModal.style.display = "none";
+        await loadActivities();
+      } catch (err) {
+        showError(errBox, err);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+    createActionModal.style.display = "flex";
+  }
+  window.openCreateAction = openCreateAction;
+  createActionModal.addEventListener("click", (e) => { if (e.target === createActionModal) createActionModal.style.display = "none"; });
 
   async function loadActivities() {
     if (!currentProgramme) { activities = []; renderActivities(); return; }

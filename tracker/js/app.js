@@ -776,6 +776,163 @@ export function countSnagSignals(snags, todayStr = todayISO()) {
   return counts;
 }
 
+// ─── Programme Variance (Priority 11, Phase 4) ───────────────────
+// Plan -> Forecast -> Actual -> Variance -> Exception -> Action. Pure,
+// deterministic, injectable-today functions mirroring
+// categoriseAction()/countSnagSignals() exactly, so programme
+// exceptions plug into the EXISTING Project Control Dashboard rather
+// than becoming a second one. No Gantt, no dependency/critical-path
+// engine, no AI, and no numeric "programme health" score — only what
+// the real planned/forecast/actual dates already say.
+
+// A forecast slipping by a handful of days is routine, actively-
+// managed noise, not something a manager needs alerting on; a slip
+// beyond this many calendar days is treated as material (Attention)
+// rather than routine (Watch). A DELIBERATELY separate constant from
+// DUE_SOON_DAYS (Actions' own "coming up soon" window) — both happen
+// to land near a working week, but forecast slippage and action-due
+// proximity are different concepts, free to diverge independently
+// later. A milestone gets no such allowance at all (see
+// categoriseProgrammeActivity below) — any forecast slip on a
+// milestone is treated as material on its own, since a milestone is
+// typically an externally-significant date (practical completion, a
+// statutory test) where "a few days late" is not routine the way it
+// can be for an ordinary task.
+export const PROGRAMME_MATERIAL_DELAY_DAYS = 5;
+
+// Whole calendar days between two ISO (YYYY-MM-DD) dates, laterStr -
+// earlierStr (positive when laterStr is actually later). Both
+// operands are parsed as a LOCAL midnight the same way
+// categoriseAction()/categoriseSnag() already parse due_date, so the
+// two Date constructions' own timezone offsets cancel out in the
+// subtraction — this is calendar-date arithmetic, not a wall-clock/
+// UTC computation, and deliberately reuses that exact established
+// idiom rather than introducing a second one. A boolean "is this
+// later/earlier" comparison never needs this at all — two ISO date
+// strings already compare correctly with plain </>, since
+// YYYY-MM-DD sorts lexicographically the same as chronologically.
+function diffCalendarDays(laterStr, earlierStr) {
+  const later = new Date(laterStr + "T00:00:00");
+  const earlier = new Date(earlierStr + "T00:00:00");
+  return Math.round((later - earlier) / 86400000);
+}
+
+// Classifies ONE programme activity's variance against `todayStr`
+// (injectable for deterministic testing — never a scattered `new
+// Date()`). Independent, non-exclusive boolean flags (the same shape
+// categoriseAction() already established) plus a single best-fit
+// `label` for a one-word UI badge (Overdue/Late/Ahead/On Plan/
+// Completed Late/Completed Early/Completed On Plan/Cancelled/No Plan
+// Date). A cancelled activity carries no variance judgement at all —
+// it was deliberately stopped, not a programme failure. A completed
+// activity's variance is permanently historical (actual vs planned)
+// and never touches the "still open" fields (overdue/forecastLate) —
+// a completed activity can never be "overdue" no matter how late it
+// finished.
+export function categoriseProgrammeActivity(activity, todayStr = todayISO()) {
+  const cats = {
+    overdue: false, forecastLate: false, materialForecastDelay: false,
+    completedLate: false, completedEarly: false, completedOnPlan: false,
+    upcoming: false, forecastVarianceDays: null, actualVarianceDays: null,
+    label: "on_plan",
+  };
+
+  if (activity.status === "cancelled") { cats.label = "cancelled"; return cats; }
+
+  if (activity.status === "complete") {
+    if (activity.planned_finish && activity.actual_finish) {
+      cats.actualVarianceDays = diffCalendarDays(activity.actual_finish, activity.planned_finish);
+      if (cats.actualVarianceDays > 0) { cats.completedLate = true; cats.label = "completed_late"; }
+      else if (cats.actualVarianceDays < 0) { cats.completedEarly = true; cats.label = "completed_early"; }
+      else { cats.completedOnPlan = true; cats.label = "completed_on_plan"; }
+    } else {
+      cats.label = "completed";
+    }
+    return cats;
+  }
+
+  // not_started / in_progress from here on — the only statuses a
+  // "still open" variance judgement (overdue/forecast-late/upcoming)
+  // can meaningfully apply to.
+  if (!activity.planned_finish) {
+    cats.label = "no_plan_date";
+  } else {
+    if (activity.planned_finish < todayStr) { cats.overdue = true; cats.label = "overdue"; }
+
+    if (activity.forecast_finish) {
+      cats.forecastVarianceDays = diffCalendarDays(activity.forecast_finish, activity.planned_finish);
+      if (activity.forecast_finish > activity.planned_finish) {
+        cats.forecastLate = true;
+        const threshold = activity.is_milestone ? 0 : PROGRAMME_MATERIAL_DELAY_DAYS;
+        if (cats.forecastVarianceDays > threshold) cats.materialForecastDelay = true;
+        if (!cats.overdue) cats.label = "late";
+      } else if (!cats.overdue) {
+        cats.label = activity.forecast_finish < activity.planned_finish ? "ahead" : "on_plan";
+      }
+    }
+  }
+
+  // "Upcoming" is informational only (brief: must not flood the
+  // dashboard) — computed here and exposed via countProgrammeSignals()
+  // for the Programme page, but computeControlStatus() deliberately
+  // never reads it.
+  const startRef = activity.forecast_start || activity.planned_start;
+  if (startRef) {
+    const daysUntilStart = diffCalendarDays(startRef, todayStr);
+    if (daysUntilStart >= 0 && daysUntilStart <= DUE_SOON_DAYS) cats.upcoming = true;
+  }
+
+  return cats;
+}
+
+export const PROGRAMME_VARIANCE_LABEL = {
+  overdue: "Overdue", late: "Late", ahead: "Ahead", on_plan: "On Plan",
+  completed_late: "Completed Late", completed_early: "Completed Early", completed_on_plan: "Completed On Plan",
+  completed: "Completed", cancelled: "Cancelled", no_plan_date: "No Plan Date",
+};
+export const PROGRAMME_VARIANCE_BADGE = {
+  overdue: "badge-red", late: "badge-amber", ahead: "badge-green", on_plan: "badge-grey",
+  completed_late: "badge-amber", completed_early: "badge-green", completed_on_plan: "badge-green",
+  completed: "badge-green", cancelled: "badge-grey", no_plan_date: "badge-grey",
+};
+
+// Rolls a raw programme_activities array (one project's activities, or
+// every visible project's activities for the portfolio view) into the
+// counts computeControlStatus() and the Programme page both need.
+// Mirrors countSnagSignals()'s own shape and "count, don't score"
+// philosophy exactly — completedLateProgrammeActivities and
+// upcomingProgrammeActivities are deliberately NOT fed into
+// computeControlStatus() (see its own comment): a historical late
+// completion is not a CURRENT exception, and upcoming work is not an
+// exception at all, just useful context for the Programme page.
+export function countProgrammeSignals(rows, todayStr = todayISO()) {
+  const counts = {
+    overdueProgrammeActivities: 0,
+    overdueProgrammeMilestones: 0,
+    forecastLateProgrammeActivities: 0,
+    materialForecastLateProgrammeActivities: 0,
+    forecastLateProgrammeMilestones: 0,
+    completedLateProgrammeActivities: 0,
+    upcomingProgrammeActivities: 0,
+  };
+  for (const a of rows || []) {
+    const cats = categoriseProgrammeActivity(a, todayStr);
+    if (cats.overdue) {
+      if (a.is_milestone) counts.overdueProgrammeMilestones++;
+      else counts.overdueProgrammeActivities++;
+    } else if (cats.forecastLate) {
+      if (a.is_milestone) counts.forecastLateProgrammeMilestones++;
+      else {
+        counts.forecastLateProgrammeActivities++;
+        if (cats.materialForecastDelay) counts.materialForecastLateProgrammeActivities++;
+      }
+    }
+    if (cats.completedLate) counts.completedLateProgrammeActivities++;
+    if (cats.upcoming) counts.upcomingProgrammeActivities++;
+  }
+  return counts;
+}
+
 // A transparent, explainable control status — never a numeric score.
 // ATTENTION: overdue actions, blocked actions, overdue snags, or
 // unresolved high-severity H&S issues exist — all unambiguous
@@ -794,6 +951,10 @@ export function computeControlStatus(counts) {
   if (counts.criticalOpenFindings > 0) attentionReasons.push(`${counts.criticalOpenFindings} critical open inspection finding${counts.criticalOpenFindings === 1 ? "" : "s"}`);
   if (counts.highSeverityOverdueLinkedFindings > 0) attentionReasons.push(`${counts.highSeverityOverdueLinkedFindings} high-severity finding${counts.highSeverityOverdueLinkedFindings === 1 ? "" : "s"} with an overdue Action`);
   if (counts.overdueSnags > 0) attentionReasons.push(`${counts.overdueSnags} overdue snag${counts.overdueSnags === 1 ? "" : "s"}`);
+  if (counts.overdueProgrammeActivities > 0) attentionReasons.push(`${counts.overdueProgrammeActivities} programme activit${counts.overdueProgrammeActivities === 1 ? "y is" : "ies are"} overdue`);
+  if (counts.overdueProgrammeMilestones > 0) attentionReasons.push(`${counts.overdueProgrammeMilestones} programme milestone${counts.overdueProgrammeMilestones === 1 ? "" : "s"} overdue`);
+  if (counts.materialForecastLateProgrammeActivities > 0) attentionReasons.push(`${counts.materialForecastLateProgrammeActivities} programme activit${counts.materialForecastLateProgrammeActivities === 1 ? "y" : "ies"} forecast materially late`);
+  if (counts.forecastLateProgrammeMilestones > 0) attentionReasons.push(`${counts.forecastLateProgrammeMilestones} programme milestone${counts.forecastLateProgrammeMilestones === 1 ? "" : "s"} forecast late`);
   if (attentionReasons.length) {
     return { level: "attention", label: "Attention", reason: `Attention — ${attentionReasons.join(", ")}.` };
   }
@@ -806,6 +967,11 @@ export function computeControlStatus(counts) {
   if (counts.dueTodaySnags > 0) watchReasons.push(`${counts.dueTodaySnags} snag${counts.dueTodaySnags === 1 ? "" : "s"} due today`);
   if (counts.dueSoonSnags > 0) watchReasons.push(`${counts.dueSoonSnags} snag${counts.dueSoonSnags === 1 ? "" : "s"} due within ${DUE_SOON_DAYS} days`);
   if (counts.highPrioritySnags > 0) watchReasons.push(`${counts.highPrioritySnags} high-priority snag${counts.highPrioritySnags === 1 ? "" : "s"} open`);
+  // Only the ROUTINE (non-material) share of forecast-late activities
+  // reaches Watch — the material share was already folded into
+  // Attention above, and must never be counted twice.
+  const minorForecastLateProgrammeActivities = (counts.forecastLateProgrammeActivities || 0) - (counts.materialForecastLateProgrammeActivities || 0);
+  if (minorForecastLateProgrammeActivities > 0) watchReasons.push(`${minorForecastLateProgrammeActivities} programme activit${minorForecastLateProgrammeActivities === 1 ? "y" : "ies"} forecast late`);
   if (watchReasons.length) {
     return { level: "watch", label: "Watch", reason: `Watch — ${watchReasons.join(", ")}.` };
   }
@@ -843,17 +1009,19 @@ async function getProjectsWithRole() {
 // not project count, and is the same shape dashboard.html already used
 // for snag_items/weekly_reports before Actions existed.
 export async function getPortfolioControlSummary() {
-  const [projects, { data: actions, error: actErr }, { data: hsItems, error: hsErr }, { data: findings, error: findErr }, { data: snags, error: snagErr }] = await Promise.all([
+  const [projects, { data: actions, error: actErr }, { data: hsItems, error: hsErr }, { data: findings, error: findErr }, { data: snags, error: snagErr }, { data: progActivities, error: progErr }] = await Promise.all([
     getProjectsWithRole(),
     supabase.from("actions").select("id, project_id, status, priority, due_date"),
     supabase.from("hs_audit_items").select("project_id, status, severity"),
     supabase.from("inspection_findings").select("id, project_id, severity, status, action_id"),
     supabase.from("snag_items").select("project_id, status, priority, due_date"),
+    supabase.from("programme_activities").select("project_id, is_milestone, status, planned_start, planned_finish, forecast_start, forecast_finish, actual_finish, programmes(status)"),
   ]);
   if (actErr) throw actErr;
   if (hsErr) throw hsErr;
   if (findErr) throw findErr;
   if (snagErr) throw snagErr;
+  if (progErr) throw progErr;
 
   const todayStr = todayISO();
   const actionsByProject = new Map();
@@ -878,6 +1046,18 @@ export async function getPortfolioControlSummary() {
     if (!snagsByProject.has(s.project_id)) snagsByProject.set(s.project_id, []);
     snagsByProject.get(s.project_id).push(s);
   }
+  // Only the project's ACTIVE programme's activities count toward
+  // control status — a draft programme is still being set up (not yet
+  // being tracked against) and an archived one is retired history;
+  // neither should generate a current exception. Filtered client-side
+  // rather than a second, narrower query, matching this function's own
+  // "one broad select per table" shape.
+  const progActivitiesByProject = new Map();
+  for (const a of progActivities || []) {
+    if (a.programmes?.status !== "active") continue;
+    if (!progActivitiesByProject.has(a.project_id)) progActivitiesByProject.set(a.project_id, []);
+    progActivitiesByProject.get(a.project_id).push(a);
+  }
 
   const rows = projects.map((project) => {
     if (project.myRole !== "owner" && project.myRole !== "collaborator") {
@@ -887,6 +1067,7 @@ export async function getPortfolioControlSummary() {
     counts.highSeverityHs = countHighSeverityHsIssues(hsByProject.get(project.id) || []);
     Object.assign(counts, countFindingSignals(findingsByProject.get(project.id) || [], actionsById, todayStr));
     Object.assign(counts, countSnagSignals(snagsByProject.get(project.id) || [], todayStr));
+    Object.assign(counts, countProgrammeSignals(progActivitiesByProject.get(project.id) || [], todayStr));
     return { project, counts, status: computeControlStatus(counts) };
   });
 
@@ -903,28 +1084,36 @@ export async function getPortfolioControlSummary() {
     acc.dueToday += r.counts.dueToday;
     acc.blocked += r.counts.blocked;
     acc.highCritical += r.counts.highCritical;
+    acc.overdueProgrammeActivities += r.counts.overdueProgrammeActivities;
+    acc.overdueProgrammeMilestones += r.counts.overdueProgrammeMilestones;
+    acc.materialForecastLateProgrammeActivities += r.counts.materialForecastLateProgrammeActivities;
+    acc.forecastLateProgrammeMilestones += r.counts.forecastLateProgrammeMilestones;
     return acc;
-  }, { openActions: 0, overdue: 0, dueToday: 0, blocked: 0, highCritical: 0 });
+  }, { openActions: 0, overdue: 0, dueToday: 0, blocked: 0, highCritical: 0, overdueProgrammeActivities: 0, overdueProgrammeMilestones: 0, materialForecastLateProgrammeActivities: 0, forecastLateProgrammeMilestones: 0 });
 
   return { rows, totals, projectsRequiringAttention: rows.filter((r) => r.status.level === "attention").length };
 }
 
 export async function getProjectControlSummary(projectId) {
-  const [actions, { data: hsItems, error: hsErr }, { data: findings, error: findErr }, { data: snags, error: snagErr }] = await Promise.all([
+  const [actions, { data: hsItems, error: hsErr }, { data: findings, error: findErr }, { data: snags, error: snagErr }, { data: progActivities, error: progErr }] = await Promise.all([
     listActions(projectId),
     supabase.from("hs_audit_items").select("status, severity").eq("project_id", projectId),
     supabase.from("inspection_findings").select("id, severity, status, action_id").eq("project_id", projectId),
     supabase.from("snag_items").select("status, priority, due_date").eq("project_id", projectId),
+    supabase.from("programme_activities").select("is_milestone, status, planned_start, planned_finish, forecast_start, forecast_finish, actual_finish, programmes(status)").eq("project_id", projectId),
   ]);
   if (hsErr) throw hsErr;
   if (findErr) throw findErr;
   if (snagErr) throw snagErr;
+  if (progErr) throw progErr;
   const todayStr = todayISO();
   const counts = aggregateActionCounts(actions, todayStr);
   counts.highSeverityHs = countHighSeverityHsIssues(hsItems || []);
   const actionsById = new Map(actions.map((a) => [a.id, a]));
   Object.assign(counts, countFindingSignals(findings || [], actionsById, todayStr));
   Object.assign(counts, countSnagSignals(snags || [], todayStr));
+  const activeProgActivities = (progActivities || []).filter((a) => a.programmes?.status === "active");
+  Object.assign(counts, countProgrammeSignals(activeProgActivities, todayStr));
   return { actions, counts, status: computeControlStatus(counts) };
 }
 
@@ -2541,6 +2730,43 @@ export async function updateProgrammeActivity(activityId, fields) {
 export async function deleteProgrammeActivity(activityId) {
   const { error } = await supabase.from("programme_activities").delete().eq("id", activityId);
   if (error) throw error;
+}
+
+// "Create Action" from a programme exception (Priority 11, Phase 4) —
+// an explicit, user-initiated call, never automatic. Automatically
+// creating an Action for every overdue/forecast-late activity would
+// generate exactly the noise the brief warns against; a person
+// decides an exception is worth tracking as accountable work, the
+// same judgement createActionFromFinding()/createActionFromSnag()
+// already require. Mirrors them exactly: creates the action, then
+// links the ORIGIN (the programme activity) back to its CONSEQUENCE
+// (the action) via action_id — never the reverse, keeping the Actions
+// Engine uncoupled from Programme Control.
+export async function createActionFromProgrammeActivity(activity, { title, description = null, assignedTo = null, priority = "medium", dueDate = null }) {
+  const action = await createAction(activity.project_id, { title, description, priority, assignedTo, dueDate });
+  const updated = await updateProgrammeActivity(activity.id, { action_id: action.id });
+  return { action, activity: updated };
+}
+
+// Pure — builds a human-readable description pre-fill from an
+// activity's real planned/forecast/variance data (never a database
+// call, never invents a cause). Programme Control can only ever say
+// WHAT is late, never WHY — see tracker/README.md's "do not confuse
+// programme delay with cause" note; a person fills in the actual
+// reason/action required when they create the Action. `cats` is the
+// same categoriseProgrammeActivity() result the caller already has
+// from rendering the row.
+export function buildProgrammeActionContext(activity, cats) {
+  const lines = [`Programme activity: ${activity.title}`];
+  if (activity.plots?.plot_number) lines.push(`Plot: ${activity.plots.plot_number}`);
+  if (activity.planned_finish) lines.push(`Planned finish: ${activity.planned_finish}`);
+  if (activity.forecast_finish) lines.push(`Forecast finish: ${activity.forecast_finish}`);
+  if (cats.forecastVarianceDays !== null && cats.forecastVarianceDays !== undefined) {
+    lines.push(`Forecast variance: ${cats.forecastVarianceDays > 0 ? "+" : ""}${cats.forecastVarianceDays} day${Math.abs(cats.forecastVarianceDays) === 1 ? "" : "s"}`);
+  }
+  if (cats.overdue) lines.push("Status: overdue against planned finish");
+  else if (cats.forecastLate) lines.push("Status: forecast late against planned finish");
+  return lines.join("\n");
 }
 
 // ─── XLSX import architecture (contract only — no reader/UI yet) ────

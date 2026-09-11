@@ -171,6 +171,8 @@
   // ─── Control summary (portfolio) ───────────────────────────────
   function renderTotals() {
     const t = controlSummary.totals;
+    const overdueProgramme = t.overdueProgrammeActivities + t.overdueProgrammeMilestones;
+    const forecastLateProgramme = t.materialForecastLateProgrammeActivities + t.forecastLateProgrammeMilestones;
     const cards = [
       ["Projects Requiring Attention", controlSummary.projectsRequiringAttention, controlSummary.projectsRequiringAttention > 0 ? "var(--red)" : "var(--ink)"],
       ["Open Actions", t.openActions, "var(--ink)"],
@@ -178,6 +180,8 @@
       ["Due Today", t.dueToday, t.dueToday > 0 ? "var(--amber)" : "var(--ink)"],
       ["Blocked", t.blocked, t.blocked > 0 ? "var(--red)" : "var(--ink)"],
       ["High / Critical Priority", t.highCritical, t.highCritical > 0 ? "var(--amber)" : "var(--ink)"],
+      ["Overdue Programme", overdueProgramme, overdueProgramme > 0 ? "var(--red)" : "var(--ink)"],
+      ["Programme Forecast Late", forecastLateProgramme, forecastLateProgramme > 0 ? "var(--amber)" : "var(--ink)"],
     ];
     document.getElementById("totalsBar").innerHTML = cards.map(([label, value, color]) => `
       <div class="totals-box">
