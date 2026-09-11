@@ -2115,4 +2115,344 @@ export async function reviewWeeklyReport(reportId) { return updateWeeklyReportSt
 export async function approveWeeklyReport(reportId) { return updateWeeklyReportStatus(reportId, "approved"); }
 export async function issueWeeklyReport(reportId) { return updateWeeklyReportStatus(reportId, "issued"); }
 export async function reviseWeeklyReport(reportId) { return updateWeeklyReportStatus(reportId, "draft"); }
+
+// ─── Documents (Priority 10) ─────────────────────────────────────
+// Organisation -> Project -> Document -> Revision -> File. Server-side
+// triggers (sql/schema.sql, v34 — documents_before_write(),
+// document_revisions_before_insert/after_insert()) are the real
+// authority for org_id/project_id derivation, revision-number
+// integrity, and current-revision promotion; these helpers exist only
+// so every page shares one query shape, the same convention every
+// prior priority's own data-access section already established.
+//
+// Deliberately separate from every existing file field in this schema
+// — see tracker/README.md for the full "why a new table, why NOT
+// migrating Handover/evidence into it" design note. drawings/
+// specifications are NOT replaced — they keep working exactly as they
+// always have (pinpoint snagging depends on drawings.id); this is an
+// additive, parallel system, backfilled once from their existing rows.
+export const DOCUMENT_TYPES = ["drawing", "specification", "other"];
+export const DOCUMENT_TYPE_LABEL = { drawing: "Drawing", specification: "Specification", other: "Other" };
+
+export const DOCUMENT_STATUSES = ["draft", "current", "superseded", "archived"];
+export const DOCUMENT_STATUS_LABEL = { draft: "Draft", current: "Current", superseded: "Superseded", archived: "Archived" };
+export const DOCUMENT_STATUS_BADGE = { draft: "badge-grey", current: "badge-green", superseded: "badge-amber", archived: "badge-grey" };
+
+const CONTROLLED_DOCUMENT_MIME_TYPES = new Set([
+  "image/jpeg", "image/png", "image/webp", "image/gif", "image/heic", "image/heif",
+  "application/pdf",
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "text/plain", "text/csv",
+]);
+
+// Uploads a controlled document's file to the private
+// "controlled-documents" bucket, unmodified — deliberately NO
+// compression (unlike uploadImage/uploadDrawing), since a controlled
+// document must stay byte-faithful to what was actually issued, the
+// same reasoning the organisation logo upload already established.
+// Returns the raw object PATH, never a public URL — this bucket has no
+// public read policy at all; resolve a path via getDocumentFileUrl()
+// or downloadDocumentFile() below whenever it's actually needed.
+export async function uploadControlledDocument(file, path) {
+  if (file.size > MAX_UPLOAD_BYTES) {
+    throw new Error(`"${file.name}" is ${(file.size / 1024 / 1024).toFixed(1)} MB — the limit is 50 MB.`);
+  }
+  if (file.type && !CONTROLLED_DOCUMENT_MIME_TYPES.has(file.type)) {
+    throw new Error(`"${file.name}" is a ${file.type} file, which isn't a supported type here.`);
+  }
+  const ext = file.name.split(".").pop();
+  const key = `${path}/${crypto.randomUUID()}.${ext}`;
+  const { error } = await supabase.storage.from("controlled-documents").upload(key, file, {
+    cacheControl: "3600",
+    upsert: false,
+  });
+  if (error) throw error;
+  return key;
+}
+
+// Every document for a project, plus its current revision's own
+// metadata — two broad, project-scoped queries (never one per
+// document, and never one per revision), joined client-side by id.
+// Matches the established "small fixed number of broad selects"
+// convention Actions/Snags/Inspections all already use.
+export async function listDocuments(projectId, { documentType, status } = {}) {
+  let query = supabase.from("documents").select("*").eq("project_id", projectId);
+  if (documentType) query = query.eq("document_type", documentType);
+  if (status) query = query.eq("status", status);
+  const { data: docs, error } = await query.order("created_at", { ascending: false });
+  if (error) throw error;
+
+  const revisionIds = (docs || []).map((d) => d.current_revision_id).filter(Boolean);
+  const revisionsById = {};
+  if (revisionIds.length) {
+    const { data: revisions, error: revError } = await supabase.from("document_revisions").select("*").in("id", revisionIds);
+    if (revError) throw revError;
+    (revisions || []).forEach((r) => { revisionsById[r.id] = r; });
+  }
+  return (docs || []).map((d) => ({ ...d, currentRevision: d.current_revision_id ? revisionsById[d.current_revision_id] : null }));
+}
+
+export async function getDocument(documentId) {
+  const { data: doc, error } = await supabase.from("documents").select("*, projects(name)").eq("id", documentId).single();
+  if (error) throw error;
+  const { data: revisions, error: revError } = await supabase.from("document_revisions").select("*").eq("document_id", documentId).order("revision_number", { ascending: false });
+  if (revError) throw revError;
+  const currentRevision = revisions.find((r) => r.id === doc.current_revision_id) || null;
+  return { ...doc, revisions: revisions || [], currentRevision };
+}
+
+// Creates a document AND its first revision as one logical action —
+// there is no "document with zero revisions" state in the normal
+// flow, matching the brief's own "Create document -> Document +
+// Revision 1 + Current Revision = Revision 1" workflow exactly.
+export async function createDocument(projectId, { documentType, title, docNumber = null }, file) {
+  const { data: doc, error } = await supabase.from("documents").insert({
+    project_id: projectId,
+    document_type: documentType,
+    title,
+    doc_number: docNumber,
+  }).select().single();
+  if (error) throw error;
+  const path = await uploadControlledDocument(file, `${projectId}/${doc.id}`);
+  const { error: revError } = await supabase.from("document_revisions").insert({
+    document_id: doc.id,
+    storage_bucket: "controlled-documents",
+    file_url: path,
+    file_name: file.name,
+    file_size: file.size,
+    mime_type: file.type || null,
+  });
+  if (revError) throw revError;
+  return getDocument(doc.id);
+}
+
+// Uploads a new revision for an existing document — the ONLY way its
+// content ever changes; there is no "replace the current file" action
+// anywhere in this app. The server-side trigger does everything else:
+// computes the next revision_number, supersedes the previous current
+// revision, and repoints documents.current_revision_id at this one.
+export async function addDocumentRevision(documentId, projectId, file) {
+  const path = await uploadControlledDocument(file, `${projectId}/${documentId}`);
+  const { error } = await supabase.from("document_revisions").insert({
+    document_id: documentId,
+    storage_bucket: "controlled-documents",
+    file_url: path,
+    file_name: file.name,
+    file_size: file.size,
+    mime_type: file.type || null,
+  });
+  if (error) throw error;
+  return getDocument(documentId);
+}
+
+export async function updateDocumentMetadata(documentId, fields) {
+  const { data, error } = await supabase.from("documents").update(fields).eq("id", documentId).select().single();
+  if (error) throw error;
+  return data;
+}
+
+// The only way a document is ever retired — never a DELETE (see the
+// RLS comment in sql/schema.sql: documents/document_revisions have no
+// delete policy at all, a deliberate choice to avoid ever creating a
+// storage-orphan problem or losing audit history for a controlled
+// document).
+export async function archiveDocument(documentId) {
+  return updateDocumentMetadata(documentId, { status: "archived" });
+}
+
+// Resolves a revision's file to something actually openable. Legacy
+// migrated rows (storage_bucket = 'site-photos') already hold a full,
+// directly-usable public URL, exactly as drawings.drawing_url always
+// was — returned as-is. Everything else lives in the private
+// 'controlled-documents' bucket and is resolved to a short-lived
+// signed URL on demand, never persisted (a stored signed URL would
+// just expire) — this IS the real access-control boundary for
+// controlled documents, not the URL's obscurity.
+export async function getDocumentFileUrl(revision) {
+  if (revision.storage_bucket === "site-photos") return revision.file_url;
+  const { data, error } = await supabase.storage.from("controlled-documents").createSignedUrl(revision.file_url, 300);
+  if (error) throw error;
+  return data.signedUrl;
+}
+
+// Fetches a revision's actual file content as a Blob — used by bulk
+// export, which needs real bytes to zip, not a URL to open in a tab.
+// Goes through the same authenticated client + storage RLS as every
+// other read in this app; there is no service-role path anywhere here
+// — an export can only ever contain a file the signed-in user could
+// already open individually.
+export async function downloadDocumentFile(revision) {
+  if (revision.storage_bucket === "site-photos") {
+    const res = await fetch(revision.file_url);
+    if (!res.ok) throw new Error(`Could not download "${revision.file_name}" (${res.status})`);
+    return res.blob();
+  }
+  const { data, error } = await supabase.storage.from("controlled-documents").download(revision.file_url);
+  if (error) throw error;
+  return data;
+}
+
+// ─── Bulk export (Microsoft 365 / SharePoint-friendly ZIP) ──────────
+// A client-side export, not a server integration — see
+// tracker/README.md for why (no Graph/SharePoint API, no service-role
+// credential anywhere in this app). Every file this reads comes from
+// downloadDocumentFile() above, so export can never surface a document
+// the signed-in user's own RLS-scoped queries didn't already return.
+
+// A client-side ZIP must hold every exported file in browser memory at
+// once (there is no server to stream through) — this cap keeps that
+// bounded and, crucially, FAILS LOUDLY with a clear message rather
+// than silently truncating the export when a selection is too large.
+export const EXPORT_MAX_TOTAL_BYTES = 150 * 1024 * 1024; // 150MB
+
+export const EXPORT_FOLDER_BY_TYPE = { drawing: "01 Drawings", specification: "02 Specifications", other: "03 Other Documents" };
+
+// Strips characters Windows/SharePoint can't have in a filename or
+// folder name, collapses whitespace, and caps length — never trusts a
+// document title, doc_number, or original filename as already safe.
+export function sanitizeExportFilename(name) {
+  const cleaned = String(name || "")
+    .replace(/[<>:"/\\|?*\x00-\x1F]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[. ]+$/, ""); // Windows disallows a trailing dot or space
+  const safe = cleaned || "Untitled";
+  return safe.length > 150 ? safe.slice(0, 150).trim() : safe;
+}
+
+// "[Doc Number] - [Title] - Rev [N].[ext]", or "[Title] - Rev [N].[ext]"
+// with no doc number — never destroys information, just computes a
+// clean, human-meaningful export name; the true original filename
+// stays visible in the app itself (document_revisions.file_name) and
+// in the export manifest.
+export function exportFilenameFor(doc, revision) {
+  const ext = (revision.file_name.split(".").pop() || "").toLowerCase();
+  const base = doc.doc_number ? `${doc.doc_number} - ${doc.title}` : doc.title;
+  const safe = sanitizeExportFilename(`${base} - Rev ${revision.revision_number}`);
+  return ext && ext !== safe.toLowerCase() ? `${safe}.${ext}` : safe;
+}
+
+// Deterministically de-duplicates filenames destined for the SAME
+// folder — never silently overwrites two different files in the ZIP.
+// Appends " (2)", " (3)", ... to the second and later occurrence of an
+// exact name, in stable input order.
+export function dedupeExportFilenames(filenames) {
+  const seen = new Map();
+  return filenames.map((name) => {
+    const count = (seen.get(name) || 0) + 1;
+    seen.set(name, count);
+    if (count === 1) return name;
+    const dot = name.lastIndexOf(".");
+    const base = dot > 0 ? name.slice(0, dot) : name;
+    const ext = dot > 0 ? name.slice(dot) : "";
+    return `${base} (${count})${ext}`;
+  });
+}
+
+export function buildExportManifestCsv(rows) {
+  const header = ["Project", "Document Title", "Document Type", "Document Number", "Revision", "Status", "Original Filename", "Export Filename", "Exported Date"];
+  const escapeCsv = (v) => {
+    const s = String(v ?? "");
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [header.map(escapeCsv).join(",")];
+  rows.forEach((r) => lines.push([r.project, r.title, r.type, r.docNumber || "", r.revision, r.status, r.originalFilename, r.exportFilename, r.exportedDate].map(escapeCsv).join(",")));
+  return lines.join("\r\n");
+}
+
+// Pure planning step — computes every (folder path, filename) entry
+// for the export with NO network calls, so filename de-duplication
+// happens BEFORE any file is actually fetched. folderPath is an array
+// of segment names; joined with "/" it's also this entry's manifest
+// grouping key. Exported separately from exportDocumentsZip() so the
+// planning logic (folder structure, naming, dedup, manifest rows) can
+// be unit-tested without a real ZIP library or network access.
+export function planDocumentExport(documents, { includeHistory = false } = {}) {
+  const groups = new Map(); // folderPath.join("/") -> [{doc, revision, isCurrent}]
+  function addToGroup(folderPath, entry) {
+    const key = folderPath.join("/");
+    if (!groups.has(key)) groups.set(key, { folderPath, entries: [] });
+    groups.get(key).entries.push(entry);
+  }
+
+  for (const doc of documents) {
+    const typeFolder = EXPORT_FOLDER_BY_TYPE[doc.document_type] || EXPORT_FOLDER_BY_TYPE.other;
+    if (!includeHistory) {
+      if (!doc.currentRevision) continue;
+      addToGroup([typeFolder], { doc, revision: doc.currentRevision, isCurrent: true });
+    } else {
+      const revisions = (doc.revisions || []).slice().sort((a, b) => b.revision_number - a.revision_number);
+      if (!revisions.length) continue;
+      const docFolderName = sanitizeExportFilename(doc.doc_number ? `${doc.doc_number} - ${doc.title}` : doc.title);
+      for (const rev of revisions) {
+        const isCurrent = rev.id === doc.current_revision_id;
+        addToGroup([typeFolder, docFolderName, isCurrent ? "Current" : "Revision History"], { doc, revision: rev, isCurrent });
+      }
+    }
+  }
+
+  const plan = [];
+  for (const { folderPath, entries } of groups.values()) {
+    const filenames = dedupeExportFilenames(entries.map((e) => exportFilenameFor(e.doc, e.revision)));
+    entries.forEach((entry, i) => plan.push({ ...entry, folderPath, filename: filenames[i] }));
+  }
+  return plan;
+}
+
+// Builds and downloads a ZIP for the given documents — current
+// revision only by default, or every revision (Current/ +
+// "Revision History"/ subfolders per document) when includeHistory is
+// true. JSZip is loaded on demand from esm.sh only when this runs,
+// the same CDN-import approach this app already uses for SheetJS
+// (tracker/plot-handovers.html's Export Trackers).
+export async function exportDocumentsZip(projectName, documents, { includeHistory = false } = {}) {
+  const plan = planDocumentExport(documents, { includeHistory });
+  const totalBytes = plan.reduce((sum, e) => sum + (e.revision.file_size || 0), 0);
+  if (totalBytes > EXPORT_MAX_TOTAL_BYTES) {
+    throw new Error(`This export is approximately ${(totalBytes / 1024 / 1024).toFixed(0)} MB, over the ${EXPORT_MAX_TOTAL_BYTES / 1024 / 1024} MB export limit. Narrow your selection or filters and try again.`);
+  }
+  if (!plan.length) {
+    throw new Error("None of the selected documents have a file to export.");
+  }
+
+  const { default: JSZip } = await import("https://esm.sh/jszip@3.10.1");
+  const zip = new JSZip();
+  const projectFolder = zip.folder(sanitizeExportFilename(projectName));
+  const exportedDate = todayISO();
+  const manifestRows = [];
+
+  for (const entry of plan) {
+    const blob = await downloadDocumentFile(entry.revision);
+    let folder = projectFolder;
+    entry.folderPath.forEach((seg) => { folder = folder.folder(seg); });
+    folder.file(entry.filename, blob);
+    manifestRows.push({
+      project: projectName,
+      title: entry.doc.title,
+      type: DOCUMENT_TYPE_LABEL[entry.doc.document_type] || entry.doc.document_type,
+      docNumber: entry.doc.doc_number,
+      revision: entry.revision.revision_number,
+      status: entry.isCurrent ? entry.doc.status : "superseded",
+      originalFilename: entry.revision.file_name,
+      exportFilename: entry.filename,
+      exportedDate,
+    });
+  }
+
+  projectFolder.file("Export Manifest.csv", buildExportManifestCsv(manifestRows));
+
+  const blob = await zip.generateAsync({ type: "blob" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${sanitizeExportFilename(projectName)} - Documents Export.zip`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }

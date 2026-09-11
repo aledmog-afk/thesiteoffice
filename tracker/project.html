@@ -115,6 +115,11 @@
       <div class="tile-name">Drawings &amp; Layouts</div>
       <div class="tile-stats"><div><strong id="drawingsCount">–</strong>drawings uploaded</div></div>
     </a>
+    <a class="tile" href="documents.html?project=" id="documentsTile">
+      <div class="tile-icon">🗂️</div>
+      <div class="tile-name">Documents</div>
+      <div class="tile-stats"><div><strong id="documentsCount">–</strong>documents</div></div>
+    </a>
   </div>
 
   <div class="card" id="detailsCard">
@@ -225,6 +230,7 @@
   document.getElementById("hsAuditsTile").href = `hs-audits.html?project=${projectId}`;
   document.getElementById("commercialsTile").href = `commercials.html?project=${projectId}`;
   document.getElementById("drawingsTile").href = `drawings.html?project=${projectId}`;
+  document.getElementById("documentsTile").href = `documents.html?project=${projectId}`;
   document.getElementById("actionsTile").href = `actions.html?project=${projectId}`;
   document.getElementById("inspectionsTile").href = `inspections.html?project=${projectId}`;
 
@@ -633,17 +639,21 @@
 
     if (myRole === "snagging") {
       applySnaggingOnlyView();
-      const { data: snags } = await supabase.from("snag_items").select("status, due_date, priority").eq("project_id", projectId);
+      const [{ data: snags }, { count: documentsCount }] = await Promise.all([
+        supabase.from("snag_items").select("status, due_date, priority").eq("project_id", projectId),
+        supabase.from("documents").select("id", { count: "exact", head: true }).eq("project_id", projectId),
+      ]);
       document.getElementById("openSnagCount").textContent = (snags || []).filter(s => s.status === "open").length;
       document.getElementById("closedSnagCount").textContent = (snags || []).filter(s => s.status === "closed").length;
       document.getElementById("overdueSnagCount").textContent = (snags || []).filter(s => categoriseSnag(s).overdue).length;
+      document.getElementById("documentsCount").textContent = documentsCount ?? 0;
       return;
     }
 
     loadMembers();
     loadControlSummary();
 
-    const [{ count: reportCount }, { count: monthlyReportCount }, { data: snags }, { count: fetchedPlotsCount }, { data: gates }, { data: commercials }, { count: drawingsCount }, { data: hsAudits }, { data: actions }, { data: findings }] = await Promise.all([
+    const [{ count: reportCount }, { count: monthlyReportCount }, { data: snags }, { count: fetchedPlotsCount }, { data: gates }, { data: commercials }, { count: drawingsCount }, { data: hsAudits }, { data: actions }, { data: findings }, { count: documentsCount }] = await Promise.all([
       supabase.from("weekly_reports").select("id", { count: "exact", head: true }).eq("project_id", projectId),
       supabase.from("monthly_reports").select("id", { count: "exact", head: true }).eq("project_id", projectId),
       supabase.from("snag_items").select("status, due_date, priority").eq("project_id", projectId),
@@ -654,6 +664,7 @@
       supabase.from("hs_audits").select("month").eq("project_id", projectId),
       supabase.from("actions").select("status").eq("project_id", projectId),
       supabase.from("inspection_findings").select("status").eq("project_id", projectId),
+      supabase.from("documents").select("id", { count: "exact", head: true }).eq("project_id", projectId),
     ]);
     document.getElementById("reportCount").textContent = reportCount ?? 0;
     document.getElementById("monthlyReportCount").textContent = monthlyReportCount ?? 0;
@@ -670,6 +681,7 @@
     document.getElementById("hsAuditFlag").style.display = (hsAudits || []).some(a => a.month === monthStartISO()) ? "none" : "inline-flex";
     document.getElementById("actionsOpenCount").textContent = (actions || []).filter(a => ["open", "in_progress", "blocked"].includes(a.status)).length;
     document.getElementById("findingsOpenCount").textContent = (findings || []).filter(isFindingOutstanding).length;
+    document.getElementById("documentsCount").textContent = documentsCount ?? 0;
     updateGeneratePlotsButton();
   }
 

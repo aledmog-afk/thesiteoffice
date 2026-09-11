@@ -160,6 +160,57 @@ tests/
                              portfolio, backed by real index usage
                              (including the new weekly_reports
                              project+week_starting index).
+    documents.test.mjs       Document Management foundation: org_id
+                             derivation (never client-trusted),
+                             document_type/status defaults and CHECK
+                             constraints, revision_number server
+                             computation and increment, project_id
+                             derivation for a revision from its parent
+                             document (never client-trusted — the same
+                             IDOR class Priority 7/8 closed), the
+                             unique(document_id, revision_number)
+                             backstop (proven with the before-insert
+                             trigger disabled, to isolate the
+                             constraint itself from the trigger's
+                             happy-path arithmetic), current_revision_id
+                             promotion + supersede-the-previous-
+                             revision on each new upload,
+                             current_revision_id's absolute
+                             client-immutability (even to a real
+                             revision id already belonging to the same
+                             document), document_revisions' total
+                             absence of an UPDATE policy (immutability
+                             enforced by RLS, not app discipline),
+                             owner/collaborator/snagging-only/stranger/
+                             cross-org RLS across read, create, upload,
+                             metadata update and archive (including a
+                             spoofed project_id on a revision insert),
+                             and audit integration (creation, revision
+                             upload, archive, and that a snagging-only
+                             member — who can read the document — can
+                             also read its audit history, plus that the
+                             audit actor can never be forged).
+    documents_storage.test.mjs  The private controlled-documents
+                             bucket: bucket config (private, 50MB, no
+                             SVG/HTML), editor-only upload vs.
+                             member-level read (the inverse of
+                             site-photos/drawings' own snagging-write
+                             access), cross-org upload/read denial by
+                             any path shape, a fabricated or malformed
+                             project-id path segment rejected outright,
+                             and the total absence of an update/delete
+                             policy for anyone.
+    documents_performance.test.mjs  Seeds 150 documents on one project
+                             (plus 20 other projects in the same org
+                             with their own documents) and proves
+                             listDocuments()'s query shape stays
+                             exactly 2 broad, project-scoped queries
+                             regardless of document count (never one
+                             per document), backed by real index usage
+                             (documents' project+status and
+                             project+type indexes, and
+                             document_revisions' document+revision_number
+                             index).
 
   database/                Real database — migration integrity.
     migrations.test.mjs      Fresh install, required tables/functions/RLS,
@@ -197,7 +248,28 @@ tests/
                              historical data — it never retroactively
                              becomes "issued"), plus idempotency of the
                              new columns/indexes/trigger and of
-                             inspection_findings.resolved_at.
+                             inspection_findings.resolved_at. Also
+                             covers Document Management (Priority 10):
+                             unlike every table above, this proves the
+                             migration DOES backfill existing data —
+                             pre-existing drawings/specifications rows
+                             get a correctly-mapped documents +
+                             Revision-1 document_revisions row each
+                             (title, doc_number from plot_number,
+                             storage_bucket='site-photos', the original
+                             file URL preserved byte-for-byte, never
+                             re-hosted), the backfill is idempotent
+                             (re-applying schema.sql 3 times never
+                             duplicates it), the legacy drawings/
+                             specifications tables and rows are
+                             completely untouched, and the old
+                             snag_items.drawing_id/quality_gates.drawing_id
+                             foreign keys still accept the legacy
+                             drawings.id afterwards — plus idempotency
+                             of documents/document_revisions' own
+                             tables/indexes/triggers/RLS policies and
+                             the controlled-documents storage bucket
+                             across repeated re-application.
     fixtures/
       pre_organisations_schema.sql   sql/schema.sql as it existed immediately
                                      before Priority 1 (git rev 0b37633) — a
@@ -291,6 +363,47 @@ tests/
                              and the view page's lifecycle buttons show
                              only the real valid next steps and call
                              the right function.
+    documents_export_helpers.test.mjs  The pure calculation helpers
+                             behind bulk export — sanitizeExportFilename()
+                             (Windows/SharePoint-illegal characters,
+                             trailing dot/space, empty-name fallback,
+                             length cap), exportFilenameFor() (doc
+                             number/title/revision naming, extension
+                             lowercased, the true original filename
+                             never touched), dedupeExportFilenames()
+                             (deterministic (2)/(3).../ suffixes,
+                             stable order, never two identical outputs),
+                             buildExportManifestCsv() (header + escaping),
+                             and planDocumentExport() (current-revision-
+                             only by default, a document with no
+                             current revision skipped rather than
+                             exported empty, includeHistory's Current/
+                             vs. Revision History/ subfolders, and
+                             same-folder filename collisions
+                             de-duplicated) — all against the real
+                             app.js source, no JSZip or network
+                             involved.
+    documents_workflow.test.mjs  documents.html's and
+                             document-detail.html's real inline
+                             scripts: the document list renders title/
+                             type/status/current revision, an editor
+                             sees creation controls a snagging-only
+                             member does not (while still seeing the
+                             read-only list), submitting the New
+                             Document form calls createDocument with
+                             the entered fields and file, selecting
+                             documents and exporting calls
+                             exportDocumentsZip with only the selected
+                             set, the revision history correctly marks
+                             Current vs. Superseded, uploading a new
+                             revision calls addDocumentRevision with
+                             the right ids and file, Archive requires
+                             confirmation and calls through only when
+                             confirmed, a snagging-only member sees the
+                             document read-only (no edit/archive/
+                             upload-revision controls), and an already-
+                             archived document hides the upload-
+                             revision card even for an editor.
 
   uploads/
     client.test.mjs          uploadPhoto()'s client-side size/MIME

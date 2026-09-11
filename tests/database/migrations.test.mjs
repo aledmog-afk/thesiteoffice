@@ -222,7 +222,7 @@ test("Audit trail: the v28 migration block (table, triggers, policies) is idempo
     const triggers = await client.query(`
       select count(*)::int as n from pg_trigger where tgname like 'trg_audit_%'
     `);
-    assert.equal(triggers.rows[0].n, 11, "exactly 11 audit triggers must exist after repeated re-application (the original 8 from Priority 4, actions from Priority 5, inspections + inspection_findings from Priority 7), never duplicated");
+    assert.equal(triggers.rows[0].n, 13, "exactly 13 audit triggers must exist after repeated re-application (the original 8 from Priority 4, actions from Priority 5, inspections + inspection_findings from Priority 7, documents + document_revisions from Priority 10), never duplicated");
     await client.end();
   } finally {
     await dropTestDatabase(db);
@@ -557,6 +557,140 @@ test("Weekly Reporting: new columns, indexes, trigger, and inspection_findings.r
 
     const findingTriggers = await client.query("select count(*)::int as n from pg_trigger where tgrelid = 'public.inspection_findings'::regclass and tgname like 'trg_%'");
     assert.equal(findingTriggers.rows[0].n, 2, "inspection_findings keeps exactly 2 triggers (before-write + audit) — resolved_at reused the existing before-write trigger, no new one added");
+
+    await client.end();
+  } finally {
+    await dropTestDatabase(db);
+  }
+});
+
+// ─── Document Management foundation (Priority 10) ───────────────────
+// drawings/specifications are NOT new — they predate this priority and
+// are NOT replaced by it (see sql/schema.sql v34's own comment: their
+// ids are load-bearing for pinpoint snagging). What's new is an
+// ADDITIVE backfill into documents/document_revisions, run every time
+// schema.sql is applied. The critical things to prove: pre-existing
+// drawings/specifications rows get backfilled correctly exactly once
+// (never duplicated on repeated re-application), the legacy tables and
+// their rows are completely untouched by the backfill, and the old
+// drawing_id foreign keys (snag_items, quality_gates) keep working
+// afterwards.
+
+test("Document Management: pre-existing drawings/specifications rows are backfilled into documents/document_revisions correctly", async () => {
+  const db = "tracker_test_documents_backfill";
+  await createTestDatabase(db);
+  try {
+    const client = adminClient(db);
+    await client.connect();
+    await runSqlFile(client, MOCK_SETUP);
+    await runSqlFile(client, CURRENT_SCHEMA); // creates drawings/specifications/documents tables; backfill no-ops (nothing to migrate yet)
+
+    const orgId = (await client.query("insert into public.organisations (name) values ('Backfill Org') returning id")).rows[0].id;
+    const userId = "11111111-1111-1111-1111-111111111111";
+    await client.query("insert into auth.users (id, email) values ($1, 'legacy@example.com') on conflict (id) do nothing", [userId]);
+    const projectId = (await client.query(
+      "insert into public.projects (name, org_id, created_by) values ('Legacy Site', $1, $2) returning id",
+      [orgId, userId]
+    )).rows[0].id;
+
+    const drawingId = (await client.query(
+      `insert into public.drawings (project_id, plot_number, drawing_name, drawing_url, created_by, created_at)
+       values ($1, 'Plot 4', 'Plot 4 Ground Floor', 'https://example.com/storage/v1/object/public/site-photos/drawings/plot4.pdf', $2, '2025-06-01')
+       returning id`,
+      [projectId, userId]
+    )).rows[0].id;
+    const specId = (await client.query(
+      `insert into public.specifications (project_id, spec_name, spec_url, created_by, created_at)
+       values ($1, 'House Type A Spec', 'https://example.com/storage/v1/object/public/site-photos/specifications/typea.pdf', $2, '2025-06-02')
+       returning id`,
+      [projectId, userId]
+    )).rows[0].id;
+
+    // Re-applying schema.sql (idempotent, additive) is the actual
+    // migration event that discovers and backfills these pre-existing
+    // rows — run it 3 times to prove no duplicates ever appear.
+    for (let i = 0; i < 3; i++) {
+      await runSqlFile(client, CURRENT_SCHEMA);
+    }
+
+    const docs = await client.query("select * from public.documents where project_id = $1 order by document_type", [projectId]);
+    assert.equal(docs.rowCount, 2, "exactly one document per legacy row, never duplicated across 3 re-applications");
+
+    const drawingDoc = docs.rows.find((d) => d.document_type === "drawing");
+    assert.equal(drawingDoc.title, "Plot 4 Ground Floor");
+    assert.equal(drawingDoc.doc_number, "Plot 4", "the drawing's plot_number is carried over as the backfilled document's doc_number");
+    assert.equal(drawingDoc.status, "current");
+    assert.ok(drawingDoc.current_revision_id, "the backfilled document must have a current revision set");
+
+    const specDoc = docs.rows.find((d) => d.document_type === "specification");
+    assert.equal(specDoc.title, "House Type A Spec");
+    assert.equal(specDoc.doc_number, null);
+
+    const drawingRev = (await client.query("select * from public.document_revisions where id = $1", [drawingDoc.current_revision_id])).rows[0];
+    assert.equal(drawingRev.storage_bucket, "site-photos", "a migrated legacy file must keep pointing at its real, already-public site-photos object, never be silently re-hosted");
+    assert.equal(drawingRev.file_url, "https://example.com/storage/v1/object/public/site-photos/drawings/plot4.pdf", "the original drawing_url must be preserved byte-for-byte, unchanged");
+    assert.equal(drawingRev.revision_number, 1);
+
+    // The legacy tables themselves must be completely untouched —
+    // this is an additive backfill, not a cutover.
+    const drawingsCount = await client.query("select count(*)::int as n from public.drawings where project_id = $1", [projectId]);
+    assert.equal(drawingsCount.rows[0].n, 1, "the original drawings row must still exist, untouched");
+    const specsCount = await client.query("select count(*)::int as n from public.specifications where project_id = $1", [projectId]);
+    assert.equal(specsCount.rows[0].n, 1, "the original specifications row must still exist, untouched");
+
+    // The old drawing_id foreign keys (pinpoint snagging) must still
+    // work exactly as before — this priority must not have broken them.
+    const plotId = (await client.query("insert into public.plots (project_id, plot_number) values ($1, 'Plot 4') returning id", [projectId])).rows[0].id;
+    const listId = (await client.query("select id from public.snag_lists where plot_id = $1", [plotId])).rows[0].id;
+    await assert.doesNotReject(
+      client.query("insert into public.snag_items (project_id, snag_list_id, location, description, drawing_id) values ($1,$2,'Loc','Issue',$3)", [projectId, listId, drawingId]),
+      "snag_items.drawing_id must still accept the legacy drawings.id after this migration"
+    );
+    await assert.doesNotReject(
+      client.query("update public.quality_gates set drawing_id = $1 where plot_id = $2", [drawingId, plotId]),
+      "quality_gates.drawing_id must still accept the legacy drawings.id after this migration"
+    );
+
+    await client.end();
+  } finally {
+    await dropTestDatabase(db);
+  }
+});
+
+test("Document Management: tables, indexes, triggers, RLS policies and the storage bucket are idempotent across repeated re-application", async () => {
+  const db = "tracker_test_documents_idempotent";
+  await createTestDatabase(db);
+  try {
+    const client = adminClient(db);
+    await client.connect();
+    await runSqlFile(client, MOCK_SETUP);
+    for (let i = 0; i < 3; i++) {
+      await runSqlFile(client, CURRENT_SCHEMA);
+    }
+
+    const tables = await client.query("select count(*)::int as n from information_schema.tables where table_schema = 'public' and table_name in ('documents', 'document_revisions')");
+    assert.equal(tables.rows[0].n, 2);
+
+    const docTriggers = await client.query("select count(*)::int as n from pg_trigger where tgrelid = 'public.documents'::regclass and tgname like 'trg_%'");
+    assert.equal(docTriggers.rows[0].n, 2, "exactly 2 triggers on documents (before-write + audit), never duplicated");
+
+    const revTriggers = await client.query("select count(*)::int as n from pg_trigger where tgrelid = 'public.document_revisions'::regclass and tgname like 'trg_%'");
+    assert.equal(revTriggers.rows[0].n, 3, "exactly 3 triggers on document_revisions (before-insert + after-insert + audit), never duplicated");
+
+    const docPolicies = await client.query("select count(*)::int as n from pg_policies where tablename = 'documents'");
+    assert.equal(docPolicies.rows[0].n, 3, "documents has select/insert/update only, no delete policy");
+
+    const revPolicies = await client.query("select count(*)::int as n from pg_policies where tablename = 'document_revisions'");
+    assert.equal(revPolicies.rows[0].n, 2, "document_revisions has select/insert only — no update, no delete");
+
+    const indexes = await client.query("select count(*)::int as n from pg_indexes where tablename in ('documents', 'document_revisions') and indexname like '%_idx'");
+    assert.equal(indexes.rows[0].n, 5, "3 on documents + 2 on document_revisions, never duplicated");
+
+    const bucket = await client.query("select count(*)::int as n from storage.buckets where id = 'controlled-documents'");
+    assert.equal(bucket.rows[0].n, 1, "the controlled-documents bucket must exist exactly once, never duplicated");
+
+    const storagePolicies = await client.query("select count(*)::int as n from pg_policies where tablename = 'objects' and schemaname = 'storage' and policyname like '%controlled-documents%'");
+    assert.equal(storagePolicies.rows[0].n, 2, "exactly 2 storage policies for controlled-documents (read + write), never duplicated");
 
     await client.end();
   } finally {

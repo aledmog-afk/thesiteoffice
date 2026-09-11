@@ -3640,3 +3640,429 @@ drop trigger if exists trg_inspection_findings_before_write on public.inspection
 create trigger trg_inspection_findings_before_write
   before insert or update on public.inspection_findings
   for each row execute function public.inspection_findings_before_write();
+
+-- ─── v34 ADDITIONS: Document Management foundation ─────────────────
+--
+-- Organisation -> Project -> Document -> Revision -> File. A controlled
+-- document (drawing, specification, or a general "other" project
+-- record) is a title/type/number/status shell whose actual content is
+-- a sequence of IMMUTABLE revisions — never a mutable file_url on the
+-- document itself, unlike every ad-hoc file field elsewhere in this
+-- schema (snag_items.photo_url, handover_documents.file_url, ...),
+-- which stay exactly as they are; this is a genuinely new concept, not
+-- a replacement for them. See tracker/README.md for the full design
+-- rationale (why this table is justified, why Handover/evidence are
+-- deliberately NOT migrated into it, and the private-bucket decision
+-- below).
+create table if not exists public.documents (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.organisations(id),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  document_type text not null default 'other' check (document_type in ('drawing', 'specification', 'other')),
+  title text not null,
+  doc_number text,
+  status text not null default 'current' check (status in ('draft', 'current', 'superseded', 'archived')),
+  -- Deliberately NOT given a FK constraint yet — added once
+  -- document_revisions exists below (documents and document_revisions
+  -- reference each other, so the FK is added after both tables exist).
+  -- Never client-settable — see documents_before_write() below; the
+  -- only way this ever changes is the internal promotion inside
+  -- document_revisions_after_insert().
+  current_revision_id uuid,
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.document_revisions (
+  id uuid primary key default gen_random_uuid(),
+  document_id uuid not null references public.documents(id) on delete cascade,
+  -- Denormalised from documents.project_id (trigger-enforced below) —
+  -- same reasoning as inspection_findings.project_id: simpler RLS, and
+  -- required for this table to fall into write_audit_log()'s existing
+  -- generic project_id-based branch with zero code changes.
+  project_id uuid not null references public.projects(id) on delete cascade,
+  revision_number integer not null,
+  -- Which bucket this revision's file actually lives in. Every NEW
+  -- revision uploaded through this feature goes into the private
+  -- 'controlled-documents' bucket (file_url below holds the raw
+  -- object PATH for these — never directly usable, always resolved via
+  -- a signed URL or storage.download() at read time). Migrated legacy
+  -- Drawings/Specifications rows (see the backfill below) keep
+  -- pointing at their real, already-public 'site-photos' object
+  -- instead of being silently re-hosted — file_url for THOSE rows is
+  -- the full public URL, exactly as drawings.drawing_url always was.
+  storage_bucket text not null default 'controlled-documents' check (storage_bucket in ('controlled-documents', 'site-photos')),
+  file_url text not null,
+  file_name text not null,
+  file_size bigint,
+  mime_type text,
+  uploaded_by uuid references auth.users(id) on delete set null,
+  uploaded_at timestamptz not null default now(),
+  -- Set once, automatically, the moment a LATER revision is uploaded —
+  -- never client-settable, never cleared once set (a superseded
+  -- revision stays superseded forever; there is no "reopen an old
+  -- revision" concept, unlike a snag or a finding). Null means this
+  -- revision has never been superseded — it may or may not currently
+  -- be the document's current_revision_id (e.g. the document could
+  -- have since been archived without a newer revision existing).
+  superseded_at timestamptz,
+  unique (document_id, revision_number)
+);
+
+alter table public.documents drop constraint if exists documents_current_revision_id_fkey;
+alter table public.documents add constraint documents_current_revision_id_fkey
+  foreign key (current_revision_id) references public.document_revisions(id) on delete set null;
+
+create index if not exists documents_org_idx on public.documents (org_id);
+create index if not exists documents_project_status_idx on public.documents (project_id, status);
+create index if not exists documents_project_type_idx on public.documents (project_id, document_type);
+create index if not exists document_revisions_document_revision_idx on public.document_revisions (document_id, revision_number);
+create index if not exists document_revisions_project_idx on public.document_revisions (project_id);
+
+alter table public.documents enable row level security;
+-- Read is member-level (snagging-only included) — mirrors drawings'
+-- own established SELECT rule exactly, since "drawing" is one of this
+-- table's document_types and a snagging-only member has always been
+-- able to read drawings (they need them to pin snags). Write is
+-- editor-only throughout, same as every other controlled/management
+-- table in this schema — a snagging-only member gets read access to
+-- documents, never the ability to create one or upload a revision.
+drop policy if exists "members read documents" on public.documents;
+create policy "members read documents" on public.documents for select using (public.is_project_member(project_id));
+drop policy if exists "editors insert documents" on public.documents;
+create policy "editors insert documents" on public.documents for insert with check (public.is_project_editor(project_id));
+drop policy if exists "editors update documents" on public.documents;
+create policy "editors update documents" on public.documents for update using (public.is_project_editor(project_id)) with check (public.is_project_editor(project_id));
+-- Deliberately NO delete policy — conservative by design (see brief
+-- section 18). Retiring a document is done via status = 'archived',
+-- never a DELETE; this also means no document (and none of its
+-- revisions) can ever be deleted through the app, closing off an
+-- entire class of storage-orphan risk this table would otherwise add.
+
+alter table public.document_revisions enable row level security;
+drop policy if exists "members read document_revisions" on public.document_revisions;
+create policy "members read document_revisions" on public.document_revisions for select using (public.is_project_member(project_id));
+drop policy if exists "editors insert document_revisions" on public.document_revisions;
+create policy "editors insert document_revisions" on public.document_revisions for insert with check (public.is_project_editor(project_id));
+-- Deliberately NO update, NO delete policy for any client — revisions
+-- are immutable from the moment they're created. RLS enabled + zero
+-- policies for those operations means Postgres default-denies them to
+-- every role except a security-definer function that bypasses RLS
+-- (the same "enabled, unpolicied = denied" idiom audit_log already
+-- uses) — the only way superseded_at is ever set is the internal
+-- promotion inside document_revisions_after_insert() below.
+
+-- Server-side authority for documents: org_id derivation (never
+-- client-trusted), created_by/created_at immutability, updated_at, and
+-- — the one genuinely load-bearing rule — current_revision_id can
+-- NEVER be changed by an ordinary client UPDATE, only by the internal
+-- promotion below. A session-local flag (set only inside that internal
+-- promotion, for the exact duration of its own UPDATE statement) is
+-- the one narrow exception; anything else always gets current_revision_id
+-- silently reset back to its existing value, the same "force back to
+-- OLD" idiom created_by/created_at already use throughout this schema.
+create or replace function public.documents_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_org_id uuid;
+begin
+  select org_id into v_org_id from public.projects where id = new.project_id;
+  if v_org_id is null then
+    raise exception 'documents.project_id must reference an existing project with an organisation';
+  end if;
+  new.org_id := v_org_id;
+
+  if TG_OP = 'INSERT' then
+    new.created_by := auth.uid();
+    new.created_at := now();
+    new.updated_at := now();
+    new.current_revision_id := null; -- always starts empty; set by the first revision's own insert
+    return new;
+  end if;
+
+  new.created_by := old.created_by;
+  new.created_at := old.created_at;
+  new.updated_at := now();
+
+  if coalesce(current_setting('app.allow_current_revision_change', true), '') <> 'on' then
+    new.current_revision_id := old.current_revision_id;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_documents_before_write on public.documents;
+create trigger trg_documents_before_write
+  before insert or update on public.documents
+  for each row execute function public.documents_before_write();
+
+-- Server-side authority for document_revisions: derives project_id
+-- from the parent document (never client-trusted, and closes the
+-- "attach a revision to a document in another project" IDOR the same
+-- way Priority 7/8 closed the equivalent for findings/snags), and —
+-- the part that actually protects integrity — computes revision_number
+-- itself (MAX+1 for this document, same established pattern
+-- set_snag_item_no() already uses), never trusting whatever the client
+-- sends. The unique(document_id, revision_number) constraint is the
+-- real backstop against a genuine concurrent-upload race, exactly the
+-- same residual risk set_snag_item_no() has always had and accepted.
+create or replace function public.document_revisions_before_insert()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_document_project_id uuid;
+  v_next_revision integer;
+begin
+  select project_id into v_document_project_id from public.documents where id = new.document_id;
+  if v_document_project_id is null then
+    raise exception 'document_revisions.document_id must reference an existing document';
+  end if;
+  new.project_id := v_document_project_id;
+
+  select coalesce(max(revision_number), 0) + 1 into v_next_revision
+  from public.document_revisions where document_id = new.document_id;
+  new.revision_number := v_next_revision;
+
+  new.uploaded_by := auth.uid();
+  new.uploaded_at := now();
+  new.superseded_at := null;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_document_revisions_before_insert on public.document_revisions;
+create trigger trg_document_revisions_before_insert
+  before insert on public.document_revisions
+  for each row execute function public.document_revisions_before_insert();
+
+-- The actual promotion: whatever revision was previously current gets
+-- superseded_at stamped (once — "and superseded_at is null" makes this
+-- safe to reason about even though in practice a revision can only
+-- ever be the target of this exactly once), then the document's
+-- current_revision_id is repointed at the brand-new row. Runs as
+-- security definer so both writes bypass RLS the same way
+-- write_audit_log() already does for audit_log — this is the ONLY
+-- code path in the whole application that ever changes
+-- document_revisions.superseded_at or documents.current_revision_id.
+create or replace function public.document_revisions_after_insert()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_old_current_id uuid;
+begin
+  select current_revision_id into v_old_current_id from public.documents where id = new.document_id;
+
+  if v_old_current_id is not null and v_old_current_id <> new.id then
+    update public.document_revisions set superseded_at = now() where id = v_old_current_id and superseded_at is null;
+  end if;
+
+  perform set_config('app.allow_current_revision_change', 'on', true);
+  update public.documents set current_revision_id = new.id where id = new.document_id;
+  perform set_config('app.allow_current_revision_change', 'off', true);
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_document_revisions_after_insert on public.document_revisions;
+create trigger trg_document_revisions_after_insert
+  after insert on public.document_revisions
+  for each row execute function public.document_revisions_after_insert();
+
+-- Audit integration: reuses the existing generic write_audit_log() —
+-- both tables have a plain id + project_id, so they fall straight into
+-- its default branch with zero code changes. documents/document_revisions
+-- are added to can_read_audit_row()'s member-level bucket (alongside
+-- projects/snag_items) to match their own real SELECT RLS above —
+-- editor-level (the function's default) would incorrectly hide
+-- document history from a snagging-only member who CAN read the
+-- documents themselves.
+create or replace function public.can_read_audit_row(p_table_name text, p_project_id uuid, p_org_id uuid)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+begin
+  if p_table_name = 'org_settings' then
+    return p_org_id is not null and public.is_org_member(p_org_id);
+  end if;
+
+  if p_project_id is null then
+    return false;
+  end if;
+
+  if p_table_name in ('projects', 'snag_items', 'documents', 'document_revisions') then
+    return public.is_project_member(p_project_id);
+  end if;
+
+  return public.is_project_editor(p_project_id);
+end;
+$$;
+
+drop trigger if exists trg_audit_documents on public.documents;
+create trigger trg_audit_documents
+  after insert or update or delete on public.documents
+  for each row execute function public.write_audit_log();
+
+drop trigger if exists trg_audit_document_revisions on public.document_revisions;
+create trigger trg_audit_document_revisions
+  after insert or update or delete on public.document_revisions
+  for each row execute function public.write_audit_log();
+
+-- ─── Storage: a SEPARATE, PRIVATE bucket for controlled documents ───
+-- 'site-photos' (public-by-obscurity, unauthenticated read) is correct
+-- and unchanged for every operational-evidence use it already serves
+-- (snag/inspection/H&S/report photos) — those stay exactly as they
+-- are. A controlled Document (a drawing, a spec, a RAMS document) is a
+-- different trust class: genuinely private storage, authenticated
+-- access only, is the right default, and a brand-new bucket is the
+-- cleanest way to get there without touching the working, already-
+-- tested public bucket at all. New revisions store their object PATH
+-- (not a public URL) in document_revisions.file_url and are resolved
+-- via a signed URL / storage.download() at read time — see
+-- getDocumentFileUrl() in tracker/js/app.js.
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values (
+  'controlled-documents', 'controlled-documents', false,
+  52428800, -- 50MB, matching site-photos' own established limit
+  array[
+    'image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/heic', 'image/heif',
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.ms-powerpoint',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'text/plain', 'text/csv'
+  ]
+)
+on conflict (id) do nothing;
+
+-- Every object's own first path segment is the project_id it belongs
+-- to — the same server-side, path-derived authorization principle
+-- site_photos_path_parts()/site_photos_authorized() already established,
+-- just for this bucket's simpler (always project-scoped, no org-logo-
+-- style exception) path shape.
+create or replace function public.controlled_documents_path_project(object_name text)
+returns uuid
+language plpgsql immutable
+as $$
+declare
+  candidate text := (storage.foldername(object_name))[1];
+begin
+  if candidate is null or candidate !~ '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' then
+    return null;
+  end if;
+  return candidate::uuid;
+end;
+$$;
+
+create or replace function public.controlled_documents_read_authorized(object_name text)
+returns boolean
+language sql stable
+as $$
+  select public.is_project_member(public.controlled_documents_path_project(object_name));
+$$;
+
+create or replace function public.controlled_documents_write_authorized(object_name text)
+returns boolean
+language sql stable
+as $$
+  select public.is_project_editor(public.controlled_documents_path_project(object_name));
+$$;
+
+grant execute on function public.controlled_documents_path_project(text) to authenticated;
+grant execute on function public.controlled_documents_read_authorized(text) to authenticated;
+grant execute on function public.controlled_documents_write_authorized(text) to authenticated;
+
+drop policy if exists "project members read controlled-documents" on storage.objects;
+create policy "project members read controlled-documents" on storage.objects
+  for select using (bucket_id = 'controlled-documents' and public.controlled_documents_read_authorized(name));
+
+drop policy if exists "project editors upload controlled-documents" on storage.objects;
+create policy "project editors upload controlled-documents" on storage.objects
+  for insert with check (bucket_id = 'controlled-documents' and public.controlled_documents_write_authorized(name));
+
+-- No update, no delete policy — every upload writes a fresh random
+-- object name (never upsert), and revisions/their files are never
+-- deleted once created, matching documents/document_revisions' own
+-- "no delete policy" decision above.
+
+-- ─── Migrate existing Drawings / Specifications into Documents ──────
+-- drawings/specifications are NOT dropped, NOT emptied, and remain
+-- fully functional exactly as they are today — this is an additive
+-- backfill, not a cutover. Reason: drawings.id is load-bearing for the
+-- existing pinpoint-snagging feature (snag_items.drawing_id,
+-- quality_gates.drawing_id, drawing-view.html's whole pin UI) — moving
+-- or deleting it would break real, working functionality this priority
+-- was explicitly told not to touch. Going forward, NEW documents
+-- (drawings, specifications, or anything else) are created through the
+-- new Documents UI; the old Drawings/Specifications pages keep working
+-- for pinning exactly as before. Idempotent: matches each legacy row
+-- to a document by (project_id, document_type, title) and skips it if
+-- a document already exists for it, so re-running this file never
+-- creates duplicates.
+do $$
+declare
+  d record;
+  v_doc_id uuid;
+begin
+  for d in select * from public.drawings loop
+    select id into v_doc_id from public.documents
+      where project_id = d.project_id and document_type = 'drawing' and title = d.drawing_name
+      limit 1;
+    if v_doc_id is null then
+      insert into public.documents (org_id, project_id, document_type, title, doc_number, status, created_by, created_at, updated_at)
+      values (
+        (select org_id from public.projects where id = d.project_id),
+        d.project_id, 'drawing', d.drawing_name, d.plot_number, 'current', d.created_by, d.created_at, d.created_at
+      )
+      returning id into v_doc_id;
+
+      insert into public.document_revisions (document_id, project_id, revision_number, storage_bucket, file_url, file_name, uploaded_by, uploaded_at)
+      values (v_doc_id, d.project_id, 1, 'site-photos', d.drawing_url, split_part(d.drawing_url, '/', -1), d.created_by, d.created_at);
+
+      update public.documents set current_revision_id = (
+        select id from public.document_revisions where document_id = v_doc_id and revision_number = 1
+      ) where id = v_doc_id;
+    end if;
+  end loop;
+
+  for d in select * from public.specifications loop
+    select id into v_doc_id from public.documents
+      where project_id = d.project_id and document_type = 'specification' and title = d.spec_name
+      limit 1;
+    if v_doc_id is null then
+      insert into public.documents (org_id, project_id, document_type, title, status, created_by, created_at, updated_at)
+      values (
+        (select org_id from public.projects where id = d.project_id),
+        d.project_id, 'specification', d.spec_name, 'current', d.created_by, d.created_at, d.created_at
+      )
+      returning id into v_doc_id;
+
+      insert into public.document_revisions (document_id, project_id, revision_number, storage_bucket, file_url, file_name, uploaded_by, uploaded_at)
+      values (v_doc_id, d.project_id, 1, 'site-photos', d.spec_url, split_part(d.spec_url, '/', -1), d.created_by, d.created_at);
+
+      update public.documents set current_revision_id = (
+        select id from public.document_revisions where document_id = v_doc_id and revision_number = 1
+      ) where id = v_doc_id;
+    end if;
+  end loop;
+end;
+$$;
