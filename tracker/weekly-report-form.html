@@ -46,7 +46,7 @@
       <div class="form-grid">
         <div class="field"><label for="preparedBy">Prepared by</label><input type="text" id="preparedBy" placeholder="Your name"></div>
         <div class="field">
-          <label for="programmeStatus">Programme status *</label>
+          <label for="programmeStatus">Programme status * <span class="hint">(HUMAN WEEKLY ASSESSMENT — your own judgement, not the system signal above)</span></label>
           <select id="programmeStatus" required>
             <option value="on-track">On track</option>
             <option value="ahead">Ahead of programme</option>
@@ -121,7 +121,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, mountTableEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions, comparePlotNumbers, normalisePlotToken, syncGateStatusFromMilestones, EXTERNAL_WORKS_TAG, PHOTO_COMPLIANCE_STATUS, RESOURCE_ADEQUACY, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_LEVELS, RISK_IMPACT_BADGE, RISK_OWNER_SUGGESTIONS, STATUTORY_MILESTONE_TYPES, STATUTORY_OUTCOMES, STATUTORY_OUTCOME_BADGE, getWeeklyReportPosition, isWeeklyReportLocked, reviseWeeklyReport, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, CONTROL_LEVEL_BADGE, FINDING_SEVERITY_LABEL } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, mountTableEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions, comparePlotNumbers, normalisePlotToken, syncGateStatusFromMilestones, EXTERNAL_WORKS_TAG, PHOTO_COMPLIANCE_STATUS, RESOURCE_ADEQUACY, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_LEVELS, RISK_IMPACT_BADGE, RISK_OWNER_SUGGESTIONS, STATUTORY_MILESTONE_TYPES, STATUTORY_OUTCOMES, STATUTORY_OUTCOME_BADGE, getWeeklyReportPosition, isWeeklyReportLocked, reviseWeeklyReport, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, CONTROL_LEVEL_BADGE, FINDING_SEVERITY_LABEL } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -137,9 +137,42 @@
     return { weekStarting: document.getElementById("weekStarting").value, weekEnding: document.getElementById("weekEnding").value };
   }
 
+  function programmeSignalHtml(programmeSummary, period) {
+    if (!programmeSummary) return "";
+    const asOf = period?.weekEnding ? formatDate(period.weekEnding) : "—";
+    if (!programmeSummary.hasActiveProgramme) {
+      return `
+        <div class="programme-signal-box" style="border:1px solid var(--rule); border-radius:6px; padding:0.8rem 1rem; margin-bottom:1rem;">
+          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.3rem;">
+            <strong>PROGRAMME CONTROL SIGNAL <span class="hint" style="font-weight:400;">(system-generated — not editable here)</span></strong>
+          </div>
+          <p class="hint" style="margin:0;">As of week ending: ${asOf}</p>
+          <p style="margin:0.4rem 0 0;">Programme: <span class="badge badge-grey">No Active Programme</span></p>
+        </div>
+      `;
+    }
+    const s = programmeSummary;
+    const stat = (n) => (n > 0 ? `<strong style="color:var(--red);">${n}</strong>` : n);
+    const statAmber = (n) => (n > 0 ? `<strong style="color:var(--amber, #b5860b);">${n}</strong>` : n);
+    return `
+      <div class="programme-signal-box" style="border:1px solid var(--rule); border-radius:6px; padding:0.8rem 1rem; margin-bottom:1rem;">
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.3rem;">
+          <strong>PROGRAMME CONTROL SIGNAL <span class="hint" style="font-weight:400;">(system-generated from ${escapeHtml(s.programmeName)} — not editable here)</span></strong>
+        </div>
+        <p class="hint" style="margin:0 0 0.5rem;">As of week ending: ${asOf}</p>
+        <p style="margin:0;">Programme: <span class="badge badge-green">Active</span> · Activities: ${s.totalActivities}</p>
+        <p style="margin:0.3rem 0 0;">
+          Overdue: ${stat(s.overdueProgrammeActivities)} · Forecast Late: ${statAmber(s.forecastLateProgrammeActivities)} ·
+          Milestones Overdue: ${stat(s.overdueProgrammeMilestones)} · Milestones Forecast Late: ${statAmber(s.forecastLateProgrammeMilestones)}<br>
+          Completed Late: ${s.completedLateProgrammeActivities} · Upcoming (next 7 days): ${s.upcomingProgrammeActivities}
+        </p>
+      </div>
+    `;
+  }
+
   function renderPositionBody(position) {
     if (!position) { document.getElementById("positionBody").innerHTML = `<p class="hint">Set both week dates above, then hit Refresh Position.</p>`; return; }
-    const { exceptions, activity, actionsSummary, snagsSummary, inspectionsSummary, hsSummary } = position;
+    const { exceptions, activity, actionsSummary, snagsSummary, inspectionsSummary, hsSummary, programmeSummary } = position;
 
     const activityLines = [
       ...activity.actionsCreated.map((a) => `<li>Action created: <a href="actions.html?project=${projectId}">${escapeHtml(a.title)}</a></li>`),
@@ -152,6 +185,7 @@
     ];
 
     document.getElementById("positionBody").innerHTML = `
+      ${programmeSignalHtml(programmeSummary, position.period)}
       <div style="margin-bottom:1rem;">
         <span class="badge ${CONTROL_LEVEL_BADGE[exceptions.status.level] || "badge-grey"}">${exceptions.status.label}</span>
         <span style="margin-left:0.5rem;">${escapeHtml(exceptions.status.reason)}</span>

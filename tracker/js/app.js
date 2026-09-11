@@ -2168,6 +2168,45 @@ export function computeReportExceptions({ actions, snags, findings, hsItems }, p
   return { counts, status: computeControlStatus(counts) };
 }
 
+// ─── Programme Control Signal (Priority 11, Phase 5) ──────────────
+// Reuses countProgrammeSignals() (Phase 4) exactly — no second
+// definition of programme health. Deliberately anchored to
+// `asOfDate` (the report's own week_ending), never todayISO(), the
+// same rule computeReportExceptions() above already established for
+// Actions/Snags/Findings/H&S: a historical report must show what the
+// programme position genuinely was as of that week, not today's live
+// figures silently substituted in. Kept as its OWN plain counts
+// object — deliberately NOT folded into computeReportExceptions()'s
+// counts/computeControlStatus() call, since the brief asks for a
+// clearly separate "Programme Control Signal" block, not a blended
+// Attention/Watch judgement; the underlying categorisation logic is
+// still the identical Phase 4 function, only the presentation differs.
+export function computeWeeklyProgrammeSignal(programme, activities, asOfDate) {
+  if (!programme) {
+    return {
+      hasActiveProgramme: false, programmeName: null, asOfDate, totalActivities: 0,
+      overdueProgrammeActivities: 0, forecastLateProgrammeActivities: 0, materialForecastLateProgrammeActivities: 0,
+      overdueProgrammeMilestones: 0, forecastLateProgrammeMilestones: 0,
+      completedLateProgrammeActivities: 0, upcomingProgrammeActivities: 0,
+    };
+  }
+  const counts = countProgrammeSignals(activities, asOfDate);
+  return { hasActiveProgramme: true, programmeName: programme.name, asOfDate, totalActivities: activities.length, ...counts };
+}
+
+// Network wrapper mirroring getWeeklyReportExceptions()'s own shape —
+// fetches the project's active programme and (if one exists) its
+// activities, then hands off to the pure function above. Only ever
+// used where the caller needs the programme signal in isolation (e.g.
+// a focused test); getWeeklyReportPosition() below folds this into
+// its own single Promise.all round rather than calling this wrapper,
+// to avoid fetching the active programme twice on a real page load.
+export async function getWeeklyReportProgrammeSignal(projectId, asOfDate) {
+  const programme = await getActiveProgramme(projectId);
+  const activities = programme ? await listProgrammeActivities(programme.id) : [];
+  return computeWeeklyProgrammeSignal(programme, activities, asOfDate);
+}
+
 export async function getWeeklyReportExceptions(projectId, period) {
   const [{ data: actions, error: actErr }, { data: snags, error: snagErr }, { data: findings, error: findErr }, { data: hsItems, error: hsErr }] = await Promise.all([
     supabase.from("actions").select("id, status, priority, due_date").eq("project_id", projectId),
@@ -2240,6 +2279,7 @@ export async function getWeeklyReportPosition(projectId, period) {
     { data: inspections, error: inspErr },
     { data: hsAudits, error: hsAuditErr },
     { data: hsItems, error: hsItemErr },
+    activeProgramme,
   ] = await Promise.all([
     supabase.from("actions").select("id, title, status, priority, assigned_to, due_date, created_at, completed_at").eq("project_id", projectId),
     supabase.from("snag_items").select("id, item_no, location, description, priority, status, raised_date, closed_date, verified_at, snag_list_id").eq("project_id", projectId),
@@ -2247,6 +2287,7 @@ export async function getWeeklyReportPosition(projectId, period) {
     supabase.from("inspections").select("id, title, status, inspection_date").eq("project_id", projectId),
     supabase.from("hs_audits").select("month").eq("project_id", projectId),
     supabase.from("hs_audit_items").select("status, severity").eq("project_id", projectId),
+    getActiveProgramme(projectId),
   ]);
   if (actErr) throw actErr;
   if (snagErr) throw snagErr;
@@ -2256,6 +2297,10 @@ export async function getWeeklyReportPosition(projectId, period) {
   if (hsItemErr) throw hsItemErr;
 
   const data = { actions: actions || [], snags: snags || [], findings: findings || [], inspections: inspections || [], hsAudits: hsAudits || [], hsItems: hsItems || [] };
+  // A second, DEPENDENT fetch (needs the active programme's id first) —
+  // only issued when a project actually has one, so a project with no
+  // programme yet costs nothing extra beyond the lookup above.
+  const programmeActivities = activeProgramme ? await listProgrammeActivities(activeProgramme.id) : [];
 
   return {
     period,
@@ -2266,6 +2311,7 @@ export async function getWeeklyReportPosition(projectId, period) {
     snagsSummary: summariseSnagsForReport(data.snags, period),
     inspectionsSummary: summariseInspectionsForReport(data.findings, data.inspections, period),
     hsSummary: summariseHsForReport(data.hsAudits, data.hsItems, period),
+    programmeSummary: computeWeeklyProgrammeSignal(activeProgramme, programmeActivities, period.weekEnding),
   };
 }
 

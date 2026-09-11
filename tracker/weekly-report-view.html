@@ -239,6 +239,33 @@
     </div>`;
   }
 
+  // Renders whatever was last SAVED into system_position.programmeSummary
+  // — never a live re-fetch, same rule positionSection() above already
+  // follows and for the same reason: this is the record of what the
+  // programme position genuinely was when the report was prepared, not
+  // whatever today's live programme dates happen to say now. Kept as
+  // its own section, separate from System Position and from the
+  // human-authored "Comments on Programme" narrative below it.
+  function programmeSignalSection(position) {
+    const s = position?.programmeSummary;
+    if (!s) return "";
+    const asOf = position.period?.weekEnding ? formatDate(position.period.weekEnding) : "—";
+    if (!s.hasActiveProgramme) {
+      return `<div class="doc-section">
+        <h3>Programme Control Signal</h3>
+        <p class="hint">As of week ending: ${asOf}</p>
+        <p>Programme: No Active Programme</p>
+      </div>`;
+    }
+    return `<div class="doc-section">
+      <h3>Programme Control Signal</h3>
+      <p class="hint">As of week ending: ${asOf} · ${escapeHtml(s.programmeName)}</p>
+      <p>Activities: ${s.totalActivities} · Overdue: ${s.overdueProgrammeActivities} · Forecast Late: ${s.forecastLateProgrammeActivities} ·
+      Milestones Overdue: ${s.overdueProgrammeMilestones} · Milestones Forecast Late: ${s.forecastLateProgrammeMilestones} ·
+      Completed Late: ${s.completedLateProgrammeActivities} · Upcoming (next 7 days): ${s.upcomingProgrammeActivities}</p>
+    </div>`;
+  }
+
   function renderLifecycleControls(r) {
     const badge = document.getElementById("statusBadge");
     badge.className = `badge ${WEEKLY_REPORT_STATUS_BADGE[r.status] || "badge-grey"}`;
@@ -356,6 +383,7 @@
       </dl>
 
       ${positionSection(r.system_position)}
+      ${programmeSignalSection(r.system_position)}
       ${weatherSection(r.weather_days)}
       ${section("Weather Notes", r.weather)}
       ${verifiedProgressSection(r.progress_items, r.progress_summary)}
