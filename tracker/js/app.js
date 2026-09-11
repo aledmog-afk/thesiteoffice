@@ -1798,6 +1798,227 @@ export function summarisePortfolioPlotReadiness(rows) {
   return counts;
 }
 
+// ─── Accountability & Work Queue (Priority 16) ─────────────────────
+//
+// "What do I need to deal with? Who am I waiting on? What's overdue?
+// How long has it been outstanding? What has no owner?" — answered by
+// CONNECTING ownership/due-date data that already exists (actions.
+// assigned_to, snag_items.assigned_to, programme_activities.assigned_to,
+// their existing due_date/planned_finish/raised_date/created_at fields)
+// rather than inventing a new task/people system. Reuses the exact
+// broad-query-then-group-in-memory pattern getPortfolioControlSummary()/
+// getPortfolioPlotReadiness() already established — RLS on each table
+// (editor-only for actions/programme_activities, member-level for
+// snag_items — unchanged, re-verified this phase) is what actually
+// scopes the rows returned, never a client-side filter standing in
+// for security.
+//
+// Deliberately excludes Inspection Findings: they have no owner field
+// of their own (no inspection_findings.assigned_to — confirmed absent
+// on re-inspection), and this phase's own brief is explicit that the
+// default assumption is NOT to add one. The existing
+// Finding -> Action -> Owner model already gives a Finding an owner
+// the moment a human decides it needs one; that Action already
+// appears in this work queue in its own right, exactly like every
+// other Action does regardless of its origin.
+
+// Ageing — ONE reusable numeric signal layered on top of (never
+// replacing) the existing overdue/dueToday/dueSoon booleans
+// categoriseAction()/categoriseSnag()/categoriseProgrammeActivity()
+// already compute. Per-type due-date and since-date fields are chosen
+// to match each type's OWN already-established overdue definition
+// exactly, never invented fresh:
+//   - Actions: due_date (categoriseAction's own overdue field); when
+//     absent, ages from created_at (always present).
+//   - Snags: due_date (categoriseSnag's own overdue field); when
+//     absent, ages from raised_date (always present — already the
+//     "when this became a live issue" concept summariseSnagsForReport()
+//     etc. already use, not created_at).
+//   - Programme Activities: planned_finish (categoriseProgrammeActivity's
+//     own overdue field — deliberately NOT forecast_finish, which
+//     drives the separate forecastLate/materialForecastDelay signal);
+//     when absent, ages from created_at.
+// Never a live Date.now() — asOfDate is always injectable, matching
+// every other date-aware function in this file.
+export function computeAgeing(dueDate, sinceDate, asOfDate = todayISO()) {
+  if (dueDate) {
+    if (dueDate < asOfDate) return { state: "overdue", days: diffCalendarDays(asOfDate, dueDate) };
+    if (dueDate === asOfDate) return { state: "due_today", days: 0 };
+    return { state: "due_future", days: diffCalendarDays(dueDate, asOfDate) };
+  }
+  if (sinceDate) {
+    return { state: "outstanding", days: diffCalendarDays(asOfDate, sinceDate) };
+  }
+  return { state: "unknown", days: null };
+}
+export const AGEING_LABEL = {
+  overdue: (days) => `${days} day${days === 1 ? "" : "s"} overdue`,
+  due_today: () => "Due today",
+  due_future: (days) => `Due in ${days} day${days === 1 ? "" : "s"}`,
+  outstanding: (days) => `${days} day${days === 1 ? "" : "s"} outstanding`,
+  unknown: () => "No due date",
+};
+export function ageingLabel(ageing) {
+  return AGEING_LABEL[ageing.state](ageing.days);
+}
+
+const WORK_ITEM_EXCLUDED_ACTION_STATUSES = ["completed", "cancelled"];
+const WORK_ITEM_EXCLUDED_PROGRAMME_STATUSES = ["complete", "cancelled"];
+
+// Every genuinely outstanding Action/Snag/Programme Activity the
+// caller can see, across every project — a FIXED, small number of
+// broad queries (never one per project, one per plot, or one per
+// item), exactly the shape §12 of the brief requires. Only the
+// project's ACTIVE programme's activities count (matching every other
+// programme aggregator in this codebase — a draft programme isn't yet
+// being tracked against, an archived one is retired history).
+export async function getPortfolioWorkItems() {
+  const [projects, { data: plots, error: plotsErr }, { data: actionRows, error: actionErr }, { data: snagRows, error: snagErr }, { data: lists, error: listsErr }, { data: progActivities, error: progErr }] = await Promise.all([
+    getProjectsWithRole(),
+    supabase.from("plots").select("id, project_id, plot_number"),
+    supabase.from("actions").select("id, project_id, plot_id, title, status, priority, assigned_to, due_date, created_at"),
+    supabase.from("snag_items").select("id, project_id, plot_id, snag_list_id, description, status, priority, assigned_to, due_date, raised_date"),
+    supabase.from("snag_lists").select("id, plot_id"),
+    supabase.from("programme_activities").select("id, project_id, plot_id, title, is_milestone, status, assigned_to, planned_start, planned_finish, forecast_start, forecast_finish, actual_finish, created_at, programmes(status)"),
+  ]);
+  if (plotsErr) throw plotsErr;
+  if (actionErr) throw actionErr;
+  if (snagErr) throw snagErr;
+  if (listsErr) throw listsErr;
+  if (progErr) throw progErr;
+
+  const todayStr = todayISO();
+  const projectById = new Map(projects.map((p) => [p.id, p]));
+  const plotById = new Map((plots || []).map((p) => [p.id, p]));
+  const listPlotById = new Map((lists || []).map((l) => [l.id, l.plot_id]));
+
+  // Date-based flags (overdue/dueToday/dueSoon) come from ageing — one
+  // consistent, injectable calculation shared by all three types
+  // (Programme's own categoriseProgrammeActivity() has no dueToday/
+  // dueSoon concept at all, so ageing is the only uniform source for
+  // these across every item type). Status-based flags (blocked, high/
+  // critical priority, material forecast delay) are taken directly
+  // from each type's own EXISTING categorise function — reused, never
+  // recomputed by hand.
+  const items = [];
+
+  for (const a of actionRows || []) {
+    if (WORK_ITEM_EXCLUDED_ACTION_STATUSES.includes(a.status)) continue;
+    const project = projectById.get(a.project_id);
+    if (!project) continue;
+    const plot = a.plot_id ? plotById.get(a.plot_id) : null;
+    const cats = categoriseAction(a, todayStr);
+    const ageing = computeAgeing(a.due_date, a.created_at ? a.created_at.slice(0, 10) : null, todayStr);
+    items.push({
+      type: "action", id: a.id, title: a.title, status: a.status, priority: a.priority,
+      project_id: a.project_id, project_name: project.name, plot_id: a.plot_id || null, plot_number: plot?.plot_number || null,
+      assigned_to: a.assigned_to || null,
+      dueDate: a.due_date || null,
+      ageing,
+      flags: { overdue: ageing.state === "overdue", dueToday: ageing.state === "due_today", dueSoon: ageing.state === "due_future" && ageing.days <= DUE_SOON_DAYS, blocked: cats.blocked, highCritical: cats.highCritical },
+      href: `actions.html?project=${a.project_id}`,
+    });
+  }
+
+  for (const s of snagRows || []) {
+    if (!isSnagOutstanding(s)) continue;
+    const project = projectById.get(s.project_id);
+    if (!project) continue;
+    const effectivePlotId = s.plot_id || listPlotById.get(s.snag_list_id) || null;
+    const plot = effectivePlotId ? plotById.get(effectivePlotId) : null;
+    const cats = categoriseSnag(s, todayStr);
+    const ageing = computeAgeing(s.due_date, s.raised_date, todayStr);
+    items.push({
+      type: "snag", id: s.id, title: s.description, status: s.status, priority: s.priority,
+      project_id: s.project_id, project_name: project.name, plot_id: effectivePlotId, plot_number: plot?.plot_number || null,
+      assigned_to: s.assigned_to || null,
+      dueDate: s.due_date || null,
+      ageing,
+      flags: { overdue: ageing.state === "overdue", dueToday: ageing.state === "due_today", dueSoon: ageing.state === "due_future" && ageing.days <= DUE_SOON_DAYS, blocked: false, highCritical: cats.highPriority },
+      href: `snag-list-edit.html?id=${s.snag_list_id}`,
+    });
+  }
+
+  for (const p of progActivities || []) {
+    if (p.programmes?.status !== "active") continue;
+    if (WORK_ITEM_EXCLUDED_PROGRAMME_STATUSES.includes(p.status)) continue;
+    const project = projectById.get(p.project_id);
+    if (!project) continue;
+    const plot = p.plot_id ? plotById.get(p.plot_id) : null;
+    const cats = categoriseProgrammeActivity(p, todayStr);
+    const ageing = computeAgeing(p.planned_finish, p.created_at ? p.created_at.slice(0, 10) : null, todayStr);
+    items.push({
+      type: "programme_activity", id: p.id, title: p.title, status: p.status, priority: null,
+      project_id: p.project_id, project_name: project.name, plot_id: p.plot_id || null, plot_number: plot?.plot_number || null,
+      assigned_to: p.assigned_to || null,
+      dueDate: p.planned_finish || null,
+      ageing,
+      flags: { overdue: ageing.state === "overdue", dueToday: ageing.state === "due_today", dueSoon: ageing.state === "due_future" && ageing.days <= DUE_SOON_DAYS, blocked: false, highCritical: false, materialForecastDelay: cats.materialForecastDelay },
+      href: `programme.html?project=${p.project_id}`,
+    });
+  }
+
+  return items;
+}
+
+export const WORK_ITEM_TYPE_LABEL = { action: "Action", snag: "Snag", programme_activity: "Programme" };
+
+// My Work — everything genuinely outstanding assigned to ONE specific
+// user, across every project they can see. A pure filter over the
+// same items every other view here shares — no separate query.
+export function filterMyWorkItems(items, userId) {
+  return items.filter((i) => i.assigned_to === userId);
+}
+
+// Unassigned Work — "genuinely actionable work with no owner", not
+// every unowned row merely because the column allows it. An Action or
+// an open Snag is inherently task-shaped — created because something
+// specific needs doing — so EVERY outstanding one without an owner is
+// an accountability gap. A Programme Activity is different: most
+// activities are simply the plan, not yet a problem, and forcing an
+// owner onto every planned task would be noise, not signal — so an
+// unassigned activity is only surfaced here once it is ALREADY a real
+// exception (overdue against its planned_finish, or materially late
+// on forecast — both existing, already-established thresholds, never
+// invented fresh for this phase).
+export function filterUnassignedWorkItems(items) {
+  return items.filter((i) => {
+    if (i.assigned_to) return false;
+    if (i.type === "programme_activity") return i.flags.overdue || i.flags.materialForecastDelay;
+    return true;
+  });
+}
+
+// Who Needs Chasing — one row per owner, counts only (open/overdue/
+// due today/high-critical), the single oldest outstanding item's age,
+// and which projects their work spans. Sorted worst-first (most
+// overdue, then most open) — the same "worst first" convention this
+// codebase already uses everywhere else (dashboard project list, plot
+// rollup). Unassigned items never appear here — see
+// filterUnassignedWorkItems() above for that, deliberately kept as a
+// separate, distinct accountability signal rather than an "owner".
+export function summariseOwnerAccountability(items) {
+  const byOwner = new Map();
+  for (const i of items) {
+    if (!i.assigned_to) continue;
+    if (!byOwner.has(i.assigned_to)) {
+      byOwner.set(i.assigned_to, { userId: i.assigned_to, open: 0, overdue: 0, dueToday: 0, highCritical: 0, oldestDays: 0, projectIds: new Set() });
+    }
+    const bucket = byOwner.get(i.assigned_to);
+    bucket.open++;
+    if (i.flags.overdue) bucket.overdue++;
+    if (i.flags.dueToday) bucket.dueToday++;
+    if (i.flags.highCritical) bucket.highCritical++;
+    if (i.ageing.state === "overdue" || i.ageing.state === "outstanding") {
+      bucket.oldestDays = Math.max(bucket.oldestDays, i.ageing.days);
+    }
+    bucket.projectIds.add(i.project_id);
+  }
+  return [...byOwner.values()]
+    .map((b) => ({ ...b, projectIds: [...b.projectIds] }))
+    .sort((a, b) => b.overdue - a.overdue || b.open - a.open);
+}
+
 // A weekly report's plot tag is freetext ("5", "5,6,7") and a plot's own
 // name is also freetext ("Plot 5", or just "5") — normalise both to
 // their digits where possible so "Plot 5" and "5" are recognised as the

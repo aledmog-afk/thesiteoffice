@@ -116,7 +116,7 @@
       <table>
         <thead>
           <tr>
-            <th>Activity</th><th>Type</th><th>Plot</th><th>Planned Finish</th><th>Forecast Finish</th><th>Actual Finish</th><th>Variance</th><th>Status</th><th></th>
+            <th>Activity</th><th>Type</th><th>Plot</th><th>Owner</th><th>Planned Finish</th><th>Forecast Finish</th><th>Actual Finish</th><th>Variance</th><th>Status</th><th></th>
           </tr>
         </thead>
         <tbody id="activityRows"></tbody>
@@ -365,16 +365,25 @@
       return;
     }
     document.getElementById("emptyState").style.display = "none";
+    // Owner (Priority 16) — programme_activities.assigned_to already
+    // existed before this phase but was only ever visible by opening
+    // each activity's own edit form one at a time; surfaced here so a
+    // coordinator scanning the list can see it directly, reusing the
+    // same `members` lookup the Edit form's own assignee dropdown
+    // already loads — no new query.
+    const emailByUserId = new Map(members.map((m) => [m.user_id, m.email]));
     rows.innerHTML = list.map(({ activity: a, cats }) => {
       const isException = cats.overdue || cats.forecastLate;
       const actionCell = a.action_id
         ? `<a href="actions.html?project=${projectId}">View Action</a>`
         : (isException ? `<button class="btn btn-outline btn-sm" onclick="openCreateAction('${a.id}')">Create Action</button>` : "");
+      const ownerCell = a.assigned_to ? escapeHtml(emailByUserId.get(a.assigned_to) || "—") : `<span class="hint">Unassigned</span>`;
       return `
       <tr>
         <td><strong>${escapeHtml(a.title)}</strong></td>
         <td>${a.is_milestone ? "Milestone" : "Task"}</td>
         <td>${a.plots?.plot_number ? escapeHtml(a.plots.plot_number) : "—"}</td>
+        <td>${ownerCell}</td>
         <td>${a.planned_finish ? formatDate(a.planned_finish) : "—"}</td>
         <td>${a.forecast_finish ? formatDate(a.forecast_finish) : "—"}</td>
         <td>${a.actual_finish ? formatDate(a.actual_finish) : "—"}</td>
