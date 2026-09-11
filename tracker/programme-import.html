@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Import Programme – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+<style>
+  .step-track { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 1.5rem; }
+  .step-node { display: flex; align-items: center; gap: 0.5rem; font-size: 0.82rem; color: var(--ink-soft); }
+  .step-node .dot {
+    width: 24px; height: 24px; border-radius: 50%; background: var(--rule); color: var(--ink-soft);
+    display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.78rem; flex-shrink: 0;
+  }
+  .step-node.done .dot { background: var(--green); color: var(--white); }
+  .step-node.active .dot { background: var(--amber); color: var(--white); }
+  .step-node.active span.label { color: var(--ink); font-weight: 700; }
+  .step-sep { width: 24px; height: 1px; background: var(--rule); flex-shrink: 0; }
+  .recon-badge-create { background: var(--blue-light); color: var(--blue); }
+  .recon-badge-update { background: var(--amber-light); color: #8a5500; }
+  .recon-badge-unchanged { background: var(--rule); color: var(--ink-soft); }
+  .recon-badge-invalid { background: var(--red-light); color: var(--red); }
+  .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 0.8rem; margin-bottom: 1.2rem; }
+  .summary-stat { border: 1px solid var(--rule); border-radius: 6px; padding: 0.7rem 0.9rem; text-align: center; }
+  .summary-stat .n { font-family: var(--font-display); font-size: 1.6rem; font-weight: 800; line-height: 1; }
+  .summary-stat .l { font-size: 0.75rem; color: var(--ink-soft); margin-top: 0.3rem; }
+  .mapping-row { display: grid; grid-template-columns: 200px 1fr; gap: 1rem; align-items: center; padding: 0.5rem 0; border-bottom: 1px solid var(--rule); }
+  .mapping-row:last-child { border-bottom: none; }
+  .mapping-row label { font-weight: 600; font-size: 0.85rem; }
+  .mapping-row .req { color: var(--red); }
+</style>
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title">Import Programme</div>
+      <div class="page-sub" id="projectSub">Bring an Excel programme into Site Tracker — new activities are created, matching ones are updated, and nothing is ever deleted by an import.</div>
+    </div>
+  </div>
+
+  <div id="pageErrorBox" class="error-box"></div>
+
+  <div class="card" id="noProgrammeGate" style="display:none;">
+    <p style="margin-bottom:0.8rem;">This site doesn't have an active or draft programme to import into yet. Create or activate one first.</p>
+    <a class="btn btn-amber" id="goToProgrammeLink" href="#">Go to Programme</a>
+  </div>
+
+  <div id="wizard" style="display:none;">
+    <div class="step-track" id="stepTrack"></div>
+
+    <!-- Step 1: Upload -->
+    <div class="card" id="step1Card">
+      <h3 style="margin-bottom:0.3rem;">1. Upload workbook</h3>
+      <p class="page-sub" style="margin-bottom:1rem;">Importing into <strong id="targetProgrammeName"></strong> (<span id="targetProgrammeStatus"></span>). The file is read entirely in your browser — it is never sent anywhere except this Site Tracker.</p>
+      <div class="field">
+        <label for="workbookFile">Excel workbook (.xlsx)</label>
+        <input type="file" id="workbookFile" accept=".xlsx">
+        <div class="hint">Maximum 10 MB. Password-protected or corrupted files will be rejected.</div>
+      </div>
+      <div class="field" style="margin-bottom:0.6rem;">
+        <label style="display:flex; align-items:center; gap:0.5rem; font-weight:500;">
+          <input type="checkbox" id="retainCopyCheckbox" checked style="width:auto;">
+          Save a copy of this file to Documents (type: Programme) for audit trail
+        </label>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-amber" id="step1NextBtn">Read Workbook</button>
+      </div>
+    </div>
+
+    <!-- Step 2: Select worksheet -->
+    <div class="card" id="step2Card" style="display:none;">
+      <h3 style="margin-bottom:0.3rem;">2. Select worksheet</h3>
+      <p class="page-sub" style="margin-bottom:1rem;">This workbook has <span id="sheetCount"></span>. Choose the one that holds the programme activities.</p>
+      <div class="field">
+        <label for="sheetSelect">Worksheet</label>
+        <select id="sheetSelect"><option value="">-- Choose a worksheet --</option></select>
+      </div>
+      <div id="sheetPreview" style="display:none; margin-bottom:1rem;">
+        <div class="hint" style="margin-bottom:0.4rem;"><span id="sheetRowCount"></span> · columns: <span id="sheetHeaderPreview"></span></div>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-outline" id="step2BackBtn">Back</button>
+        <button class="btn btn-amber" id="step2NextBtn" disabled>Next: Map Columns</button>
+      </div>
+    </div>
+
+    <!-- Step 3: Map columns -->
+    <div class="card" id="step3Card" style="display:none;">
+      <h3 style="margin-bottom:0.3rem;">3. Map columns</h3>
+      <p class="page-sub" style="margin-bottom:1rem;">Match each worksheet column to what Site Tracker expects. Mappings were guessed from your headers — check and correct them.</p>
+      <div id="mappingRows"></div>
+      <div class="btn-row" style="margin-top:1rem;">
+        <button class="btn btn-outline" id="step3BackBtn">Back</button>
+        <button class="btn btn-amber" id="step3NextBtn" disabled>Next: Validate &amp; Preview</button>
+      </div>
+    </div>
+
+    <!-- Step 4: Validate & Preview -->
+    <div class="card" id="step4Card" style="display:none;">
+      <h3 style="margin-bottom:0.3rem;">4. Validate &amp; preview</h3>
+      <p class="page-sub" style="margin-bottom:1rem;">Nothing has been written yet. Review what this import will do, then confirm.</p>
+      <div class="summary-grid" id="summaryGrid"></div>
+
+      <div id="invalidSection" style="display:none; margin-bottom:1.2rem;">
+        <strong style="color:var(--red);">Rows that will be skipped</strong>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Row</th><th>Problem</th></tr></thead>
+          <tbody id="invalidRows"></tbody>
+        </table></div>
+      </div>
+
+      <div style="margin-bottom:1.2rem;">
+        <strong>Preview</strong>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Row</th><th>Change</th><th>Activity</th><th>Plot</th><th>Planned Start</th><th>Planned Finish</th></tr></thead>
+          <tbody id="previewRows"></tbody>
+        </table></div>
+        <div id="previewMoreNote" class="hint" style="display:none; margin-top:0.4rem;"></div>
+      </div>
+
+      <div id="missingSection" style="display:none; margin-bottom:1.2rem;">
+        <strong>Not present in this import (will be left untouched)</strong>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Activity</th><th>External ID</th></tr></thead>
+          <tbody id="missingRows"></tbody>
+        </table></div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-outline" id="step4BackBtn">Back</button>
+        <button class="btn btn-amber" id="confirmImportBtn">Confirm Import</button>
+      </div>
+    </div>
+
+    <!-- Step 5: Result -->
+    <div class="card" id="resultCard" style="display:none;">
+      <h3 style="margin-bottom:0.3rem;" id="resultHeading"></h3>
+      <p class="page-sub" style="margin-bottom:1rem;" id="resultSub"></p>
+      <div class="summary-grid" id="resultSummaryGrid"></div>
+
+      <div id="rejectedSection" style="display:none; margin-bottom:1.2rem;">
+        <strong style="color:var(--red);">Rejected rows</strong>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Row</th><th>Reason</th></tr></thead>
+          <tbody id="rejectedRows"></tbody>
+        </table></div>
+      </div>
+
+      <div id="retainCopyStatus" class="hint" style="margin-bottom:1rem;"></div>
+
+      <div class="btn-row">
+        <a class="btn btn-amber" id="viewProgrammeLink" href="#">View Programme</a>
+        <button class="btn btn-outline" id="importAnotherBtn">Import Another File</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, PROGRAMME_STATUS_LABEL, listProgrammes, listProgrammeActivities, validateImportFile, readWorkbookFile, splitSheetHeaderAndRows, suggestColumnMapping, mapRowsToImportRows, buildImportReconciliation, importProgrammeActivities, createDocument } from "./js/app.js";
+
+  await requireAuth();
+  const projectId = getParam("project");
+  if (!projectId) window.location.href = "dashboard.html";
+
+  const pageErrorBox = document.getElementById("pageErrorBox");
+  let project = null;
+  let currentProgramme = null;
+  let plots = [];
+
+  // Wizard state, rebuilt fresh on every "Import Another File".
+  let state = {
+    file: null,
+    workbook: null,        // { sheetNames, sheets }
+    sheetName: null,
+    headers: [],
+    rows: [],
+    mapping: {},
+    importRows: [],
+    existingActivities: [],
+    recon: null,            // { toCreate, toUpdate, unchanged, missing, invalid }
+    importResult: null,
+  };
+
+  const STEPS = [
+    { id: "step1Card", label: "Upload" },
+    { id: "step2Card", label: "Worksheet" },
+    { id: "step3Card", label: "Mapping" },
+    { id: "step4Card", label: "Preview" },
+    { id: "resultCard", label: "Result" },
+  ];
+  let currentStepIndex = 0;
+
+  function renderStepTrack() {
+    const track = document.getElementById("stepTrack");
+    track.innerHTML = STEPS.map((s, i) => {
+      const cls = i < currentStepIndex ? "done" : (i === currentStepIndex ? "active" : "");
+      const sep = i < STEPS.length - 1 ? `<div class="step-sep"></div>` : "";
+      return `<div class="step-node ${cls}"><div class="dot">${i < currentStepIndex ? "&#10003;" : i + 1}</div><span class="label">${s.label}</span></div>${sep}`;
+    }).join("");
+  }
+
+  function goToStep(index) {
+    currentStepIndex = index;
+    STEPS.forEach((s, i) => { document.getElementById(s.id).style.display = i === index ? "block" : "none"; });
+    renderStepTrack();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  // ─── Step 1: Upload ─────────────────────────────────────────────
+  document.getElementById("step1NextBtn").addEventListener("click", async () => {
+    clearError(pageErrorBox);
+    const fileInput = document.getElementById("workbookFile");
+    const file = fileInput.files[0];
+    const check = validateImportFile(file);
+    if (!check.ok) { showError(pageErrorBox, new Error(check.error)); return; }
+
+    const btn = document.getElementById("step1NextBtn");
+    btn.disabled = true;
+    btn.textContent = "Reading…";
+    try {
+      state.file = file;
+      state.workbook = await readWorkbookFile(file);
+      populateStep2();
+      goToStep(1);
+    } catch (err) {
+      showError(pageErrorBox, err);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Read Workbook";
+    }
+  });
+
+  // ─── Step 2: Select worksheet ───────────────────────────────────
+  function populateStep2() {
+    const names = state.workbook.sheetNames;
+    document.getElementById("sheetCount").textContent = `${names.length} worksheet${names.length === 1 ? "" : "s"}`;
+    const select = document.getElementById("sheetSelect");
+    select.innerHTML = `<option value="">-- Choose a worksheet --</option>` + names.map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)} (${Math.max(state.workbook.sheets[n].length - 1, 0)} rows)</option>`).join("");
+    document.getElementById("sheetPreview").style.display = "none";
+    document.getElementById("step2NextBtn").disabled = true;
+    state.sheetName = null;
+  }
+
+  document.getElementById("sheetSelect").addEventListener("change", (e) => {
+    const name = e.target.value;
+    state.sheetName = name || null;
+    const nextBtn = document.getElementById("step2NextBtn");
+    if (!name) {
+      document.getElementById("sheetPreview").style.display = "none";
+      nextBtn.disabled = true;
+      return;
+    }
+    const { headers, rows } = splitSheetHeaderAndRows(state.workbook.sheets[name]);
+    state.headers = headers;
+    state.rows = rows;
+    document.getElementById("sheetRowCount").textContent = `${rows.length} data row${rows.length === 1 ? "" : "s"}`;
+    document.getElementById("sheetHeaderPreview").textContent = headers.filter(Boolean).join(", ") || "(no header row found)";
+    document.getElementById("sheetPreview").style.display = "block";
+    nextBtn.disabled = rows.length === 0;
+  });
+
+  document.getElementById("step2BackBtn").addEventListener("click", () => goToStep(0));
+  document.getElementById("step2NextBtn").addEventListener("click", () => {
+    populateStep3();
+    goToStep(2);
+  });
+
+  // ─── Step 3: Map columns ────────────────────────────────────────
+  const MAPPING_FIELDS = [
+    { key: "title", label: "Activity Title", required: true },
+    { key: "external_id", label: "External / Activity ID", required: false },
+    { key: "planned_start", label: "Planned Start", required: true },
+    { key: "planned_finish", label: "Planned Finish", required: true },
+    { key: "plot_number", label: "Plot Number", required: false },
+    { key: "is_milestone", label: "Milestone", required: false },
+  ];
+
+  function populateStep3() {
+    state.mapping = suggestColumnMapping(state.headers);
+    renderMappingRows();
+  }
+
+  function renderMappingRows() {
+    const container = document.getElementById("mappingRows");
+    container.innerHTML = MAPPING_FIELDS.map((f) => {
+      const options = [`<option value="">-- Not mapped --</option>`]
+        .concat(state.headers.map((h, i) => `<option value="${i}" ${state.mapping[f.key] === i ? "selected" : ""}>${escapeHtml(h || `(column ${i + 1})`)}</option>`));
+      return `
+        <div class="mapping-row">
+          <label>${f.label}${f.required ? ' <span class="req">*</span>' : ""}</label>
+          <select data-field="${f.key}">${options.join("")}</select>
+        </div>
+      `;
+    }).join("");
+    container.querySelectorAll("select[data-field]").forEach((sel) => {
+      sel.addEventListener("change", (e) => {
+        const field = e.target.dataset.field;
+        const v = e.target.value;
+        if (v === "") delete state.mapping[field];
+        else state.mapping[field] = Number(v);
+        updateStep3NextState();
+      });
+    });
+    updateStep3NextState();
+  }
+
+  function updateStep3NextState() {
+    const requiredOk = MAPPING_FIELDS.filter((f) => f.required).every((f) => state.mapping[f.key] !== undefined);
+    document.getElementById("step3NextBtn").disabled = !requiredOk;
+  }
+
+  document.getElementById("step3BackBtn").addEventListener("click", () => goToStep(1));
+  document.getElementById("step3NextBtn").addEventListener("click", async () => {
+    clearError(pageErrorBox);
+    const btn = document.getElementById("step3NextBtn");
+    btn.disabled = true;
+    try {
+      await populateStep4();
+      goToStep(3);
+    } catch (err) {
+      showError(pageErrorBox, err);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // ─── Step 4: Validate & Preview ─────────────────────────────────
+  async function populateStep4() {
+    state.importRows = mapRowsToImportRows(state.rows, state.mapping);
+
+    const [{ data: plotRows, error: plotErr }, activities] = await Promise.all([
+      supabase.from("plots").select("id, plot_number").eq("project_id", projectId).order("plot_number"),
+      listProgrammeActivities(currentProgramme.id),
+    ]);
+    if (plotErr) throw plotErr;
+    plots = plotRows || [];
+    state.existingActivities = activities;
+    const plotIdByNumber = {};
+    plots.forEach((p) => { plotIdByNumber[p.plot_number] = p.id; });
+
+    state.recon = buildImportReconciliation(state.importRows, state.existingActivities, plotIdByNumber);
+    renderStep4();
+  }
+
+  function sheetRowLabel(index) {
+    // index is the 0-based position among data rows; row 1 of the sheet
+    // is the header, so the first data row is sheet row 2.
+    return `Row ${index + 2}`;
+  }
+
+  function renderStep4() {
+    const r = state.recon;
+    const totalRows = state.importRows.length;
+    const validCount = r.toCreate.length + r.toUpdate.length + r.unchanged.length;
+    const stats = [
+      { n: totalRows, l: "Total rows" },
+      { n: validCount, l: "Valid" },
+      { n: r.invalid.length, l: "Invalid" },
+      { n: r.toCreate.length, l: "New" },
+      { n: r.toUpdate.length, l: "Existing (changed)" },
+      { n: r.unchanged.length, l: "Unchanged" },
+      { n: r.missing.length, l: "Not in import" },
+    ];
+    document.getElementById("summaryGrid").innerHTML = stats.map((s) => `<div class="summary-stat"><div class="n">${s.n}</div><div class="l">${s.l}</div></div>`).join("");
+
+    const invalidSection = document.getElementById("invalidSection");
+    if (r.invalid.length) {
+      invalidSection.style.display = "block";
+      document.getElementById("invalidRows").innerHTML = r.invalid.map((inv) => `
+        <tr><td>${sheetRowLabel(inv.index)}</td><td>${inv.errors.map((e) => escapeHtml(e)).join("<br>")}</td></tr>
+      `).join("");
+    } else {
+      invalidSection.style.display = "none";
+    }
+
+    const previewEntries = [
+      ...r.toCreate.map((e) => ({ ...e, kind: "create" })),
+      ...r.toUpdate.map((e) => ({ ...e, kind: "update" })),
+      ...r.unchanged.map((e) => ({ ...e, kind: "unchanged", fields: (state.existingActivities.find((a) => a.id === e.activityId)) || {} })),
+    ].sort((a, b) => a.index - b.index);
+    const PREVIEW_LIMIT = 200;
+    const shown = previewEntries.slice(0, PREVIEW_LIMIT);
+    const badgeClass = { create: "recon-badge-create", update: "recon-badge-update", unchanged: "recon-badge-unchanged" };
+    const badgeLabel = { create: "New", update: "Update", unchanged: "Unchanged" };
+    document.getElementById("previewRows").innerHTML = shown.map((e) => {
+      const f = e.fields;
+      const plotNote = e.plotUnmatched ? ` <span class="badge recon-badge-invalid" title="No matching plot found in this project">plot not matched</span>` : "";
+      return `
+        <tr>
+          <td>${sheetRowLabel(e.index)}</td>
+          <td><span class="badge ${badgeClass[e.kind]}">${badgeLabel[e.kind]}</span></td>
+          <td>${escapeHtml(f.title || "")}${plotNote}</td>
+          <td>${f.plot_id ? escapeHtml(plots.find((p) => p.id === f.plot_id)?.plot_number || "") : "—"}</td>
+          <td>${f.planned_start ? formatDate(f.planned_start) : "—"}</td>
+          <td>${f.planned_finish ? formatDate(f.planned_finish) : "—"}</td>
+        </tr>
+      `;
+    }).join("");
+    const moreNote = document.getElementById("previewMoreNote");
+    if (previewEntries.length > PREVIEW_LIMIT) {
+      moreNote.style.display = "block";
+      moreNote.textContent = `Showing the first ${PREVIEW_LIMIT} of ${previewEntries.length} rows. All valid rows will still be imported.`;
+    } else {
+      moreNote.style.display = "none";
+    }
+
+    const missingSection = document.getElementById("missingSection");
+    if (r.missing.length) {
+      missingSection.style.display = "block";
+      document.getElementById("missingRows").innerHTML = r.missing.map((a) => `
+        <tr><td>${escapeHtml(a.title)}</td><td>${a.external_id ? escapeHtml(a.external_id) : "—"}</td></tr>
+      `).join("");
+    } else {
+      missingSection.style.display = "none";
+    }
+  }
+
+  document.getElementById("step4BackBtn").addEventListener("click", () => goToStep(2));
+
+  document.getElementById("confirmImportBtn").addEventListener("click", async () => {
+    clearError(pageErrorBox);
+    const btn = document.getElementById("confirmImportBtn");
+    btn.disabled = true;
+    btn.textContent = "Importing…";
+    try {
+      const payloadRows = [...state.recon.toCreate, ...state.recon.toUpdate].map((e) => ({ client_row_index: e.index, ...e.fields }));
+      state.importResult = await importProgrammeActivities(currentProgramme.id, payloadRows);
+      await renderResult();
+      goToStep(4);
+    } catch (err) {
+      showError(pageErrorBox, err);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Confirm Import";
+    }
+  });
+
+  // ─── Step 5: Result ─────────────────────────────────────────────
+  async function renderResult() {
+    const res = state.importResult;
+    const heading = document.getElementById("resultHeading");
+    const sub = document.getElementById("resultSub");
+    if (res.rejected.length) {
+      heading.textContent = "Import completed with some rows rejected";
+      sub.textContent = `${res.created + res.updated + res.unchanged} row(s) were processed successfully; ${res.rejected.length} row(s) were not imported — see below.`;
+    } else {
+      heading.textContent = "Import completed successfully";
+      sub.textContent = `All ${res.created + res.updated + res.unchanged} row(s) in this import were processed.`;
+    }
+
+    const stats = [
+      { n: res.created, l: "Created" },
+      { n: res.updated, l: "Updated" },
+      { n: res.unchanged, l: "Unchanged" },
+      { n: res.rejected.length, l: "Rejected" },
+      { n: state.recon.missing.length, l: "Not present in import" },
+    ];
+    document.getElementById("resultSummaryGrid").innerHTML = stats.map((s) => `<div class="summary-stat"><div class="n">${s.n}</div><div class="l">${s.l}</div></div>`).join("");
+
+    const rejectedSection = document.getElementById("rejectedSection");
+    if (res.rejected.length) {
+      rejectedSection.style.display = "block";
+      document.getElementById("rejectedRows").innerHTML = res.rejected.map((rej) => `
+        <tr><td>${sheetRowLabel(rej.index)}</td><td>${escapeHtml(rej.reason)}</td></tr>
+      `).join("");
+    } else {
+      rejectedSection.style.display = "none";
+    }
+
+    const retainStatus = document.getElementById("retainCopyStatus");
+    if (document.getElementById("retainCopyCheckbox").checked && state.file) {
+      try {
+        await createDocument(projectId, {
+          documentType: "programme",
+          title: `Programme Import – ${currentProgramme.name} – ${new Date().toISOString().slice(0, 10)}`,
+        }, state.file);
+        retainStatus.textContent = "A copy of this file was saved to Documents.";
+      } catch (err) {
+        retainStatus.textContent = `The import itself succeeded, but saving a copy to Documents failed: ${err.message || err}`;
+      }
+    } else {
+      retainStatus.textContent = "";
+    }
+
+    document.getElementById("viewProgrammeLink").href = `programme.html?project=${projectId}`;
+  }
+
+  document.getElementById("importAnotherBtn").addEventListener("click", () => {
+    state = { file: null, workbook: null, sheetName: null, headers: [], rows: [], mapping: {}, importRows: [], existingActivities: [], recon: null, importResult: null };
+    document.getElementById("workbookFile").value = "";
+    document.getElementById("retainCopyCheckbox").checked = true;
+    clearError(pageErrorBox);
+    goToStep(0);
+  });
+
+  // ─── Init ────────────────────────────────────────────────────────
+  async function init() {
+    const { data: proj, error } = await supabase.from("projects").select("name").eq("id", projectId).single();
+    if (error) { document.getElementById("projectSub").textContent = "Site not found."; return; }
+    project = proj;
+    renderHeader([
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project.name, href: `project.html?id=${projectId}` },
+      { label: "Programme", href: `programme.html?project=${projectId}` },
+      { label: "Import" },
+    ]);
+    document.getElementById("goToProgrammeLink").href = `programme.html?project=${projectId}`;
+
+    clearError(pageErrorBox);
+    try {
+      const programmes = await listProgrammes(projectId);
+      currentProgramme = programmes.find((p) => p.status === "active") || programmes.find((p) => p.status === "draft") || null;
+      if (!currentProgramme) {
+        document.getElementById("noProgrammeGate").style.display = "block";
+        return;
+      }
+      document.getElementById("targetProgrammeName").textContent = currentProgramme.name;
+      document.getElementById("targetProgrammeStatus").textContent = PROGRAMME_STATUS_LABEL[currentProgramme.status] || currentProgramme.status;
+      document.getElementById("wizard").style.display = "block";
+      renderStepTrack();
+    } catch (err) {
+      showError(pageErrorBox, err);
+    }
+  }
+
+  init();
+</script>
+</body>
+</html>

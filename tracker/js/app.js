@@ -2132,7 +2132,7 @@ export async function reviseWeeklyReport(reportId) { return updateWeeklyReportSt
 // always have (pinpoint snagging depends on drawings.id); this is an
 // additive, parallel system, backfilled once from their existing rows.
 export const DOCUMENT_TYPES = ["drawing", "specification", "other"];
-export const DOCUMENT_TYPE_LABEL = { drawing: "Drawing", specification: "Specification", other: "Other" };
+export const DOCUMENT_TYPE_LABEL = { drawing: "Drawing", specification: "Specification", other: "Other", programme: "Programme" };
 
 export const DOCUMENT_STATUSES = ["draft", "current", "superseded", "archived"];
 export const DOCUMENT_STATUS_LABEL = { draft: "Draft", current: "Current", superseded: "Superseded", archived: "Archived" };
@@ -2571,14 +2571,51 @@ export const PROGRAMME_IMPORT_COLUMNS = ["external_id", "title", "plot_number", 
 // guessed at — a wrong silent guess is worse than a row the user has
 // to fix by hand.
 const EXCEL_EPOCH_MS = Date.UTC(1899, 11, 30); // day 0 in Excel's (incorrect but universal) date system
+
+// Validates a real calendar date (rejects e.g. "2026-02-30", which
+// plain `new Date()` would silently roll forward into March) and
+// formats it as YYYY-MM-DD, entirely via UTC fields — never local
+// ones. y/m/d are calendar numbers, not zero-indexed.
+function formatCalendarDateUTC(y, m, d) {
+  const check = new Date(Date.UTC(y, m - 1, d));
+  if (check.getUTCFullYear() !== y || check.getUTCMonth() !== m - 1 || check.getUTCDate() !== d) return null;
+  return `${String(y).padStart(4, "0")}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
+// Accepts the shapes a real construction-programme spreadsheet cell
+// can actually contain: a genuine Excel date cell (arrives as a JS
+// Date when the workbook was read with cellDates:true — see
+// readWorkbookFile() below), an Excel serial date NUMBER (a cell
+// that's a date but wasn't formatted as one, so SheetJS hands back
+// the raw serial instead), an ISO date string (optionally with a time
+// component, which is truncated — never shifted through a timezone
+// conversion), or a UK-style DD/MM/YYYY or DD-MM-YYYY string
+// (optionally with a time suffix too). Anything else is treated as
+// invalid rather than guessed at — a wrong silent guess is worse than
+// a row the user has to fix by hand.
+//
+// Timezone correctness (the one thing this function has to get
+// exactly right): Excel date serials — and therefore the Date objects
+// SheetJS builds from them — have no timezone concept at all; SheetJS
+// encodes the intended calendar date using UTC fields regardless of
+// where the code runs. Reading such a Date back with LOCAL getters
+// (as this app's own toLocalISODate() deliberately does for
+// wall-clock Dates elsewhere) would silently shift the date by a day
+// for anyone running in a timezone behind UTC — so a Date that came
+// from a spreadsheet cell is ALWAYS read back via UTC fields here,
+// deliberately not toLocalISODate().
 export function parseImportDate(value) {
   if (value === null || value === undefined || value === "") return { ok: true, value: null };
   if (value instanceof Date) {
     if (isNaN(value.getTime())) return { ok: false };
-    return { ok: true, value: toLocalISODate(value) };
+    const formatted = formatCalendarDateUTC(value.getUTCFullYear(), value.getUTCMonth() + 1, value.getUTCDate());
+    return formatted ? { ok: true, value: formatted } : { ok: false };
   }
   if (typeof value === "number" && isFinite(value)) {
-    const ms = EXCEL_EPOCH_MS + value * 86400000;
+    // Floor, not round — a serial's fractional part is a time-of-day
+    // within that calendar day (e.g. 46096.75 = 6pm on day 46096);
+    // rounding could bump a late-afternoon time into the next day.
+    const ms = EXCEL_EPOCH_MS + Math.floor(value) * 86400000;
     const d = new Date(ms);
     if (isNaN(d.getTime())) return { ok: false };
     return { ok: true, value: d.toISOString().slice(0, 10) };
@@ -2586,10 +2623,17 @@ export function parseImportDate(value) {
   if (typeof value === "string") {
     const trimmed = value.trim();
     if (!trimmed) return { ok: true, value: null };
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return { ok: false };
-    const d = new Date(trimmed + "T00:00:00Z");
-    if (isNaN(d.getTime())) return { ok: false };
-    return { ok: true, value: trimmed };
+    const iso = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ].*)?$/);
+    if (iso) {
+      const formatted = formatCalendarDateUTC(Number(iso[1]), Number(iso[2]), Number(iso[3]));
+      return formatted ? { ok: true, value: formatted } : { ok: false };
+    }
+    const uk = trimmed.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})(?:[T ].*)?$/);
+    if (uk) {
+      const formatted = formatCalendarDateUTC(Number(uk[3]), Number(uk[2]), Number(uk[1]));
+      return formatted ? { ok: true, value: formatted } : { ok: false };
+    }
+    return { ok: false };
   }
   return { ok: false };
 }
@@ -2734,4 +2778,251 @@ export function planProgrammeImport(rows, existingActivities, plotIdByNumber = {
   }
 
   return { toCreate, toUpdate, invalid };
+}
+
+// ─── XLSX Programme Import — workflow (Phase 3) ──────────────────
+// A CONTROLLED construction-programme ingestion workflow, not a
+// generic spreadsheet importer — see tracker/README.md for the full
+// design. Reads the workbook entirely client-side (never sent to any
+// external service), reusing the exact xlsx@0.18.5 already loaded
+// on-demand for Export Trackers (plot-handovers.html) — no second
+// spreadsheet library introduced. The actual write is
+// importProgrammeActivities() below, a thin wrapper around the
+// confirmed-import transaction (sql/schema.sql v36,
+// import_programme_activities()) — that RPC is the real authority;
+// everything else here exists to build an accurate PREVIEW of what it
+// will do, and to get a real workbook into the plain row-object shape
+// validateImportRow()/matchImportRowToActivity() (Phase 2) already
+// understand.
+
+// 10MB is generous for a programme workbook; this is a client-side UX
+// safeguard for the parsing step (avoid hanging the browser on a huge
+// file), not a security boundary — the file is never stored anywhere
+// unless the user separately opts to retain it as a controlled
+// document (see the optional retention note near the bottom), which
+// THEN goes through uploadControlledDocument()'s own real size/MIME
+// enforcement.
+export const IMPORT_MAX_FILE_BYTES = 10 * 1024 * 1024;
+
+// Pre-network validation of the selected file itself — UX only,
+// matching uploadPhoto()'s own "fast, friendly rejection" precedent;
+// nothing downstream trusts this alone. readWorkbookFile() below is
+// the real check (a file can have a ".xlsx" name and still not
+// actually be a workbook).
+export function validateImportFile(file) {
+  if (!file) return { ok: false, error: "No file selected." };
+  if (!/\.xlsx$/i.test(file.name || "")) return { ok: false, error: `"${file.name}" is not an .xlsx file.` };
+  if (file.size === 0) return { ok: false, error: `"${file.name}" is empty.` };
+  if (file.size > IMPORT_MAX_FILE_BYTES) return { ok: false, error: `"${file.name}" is ${(file.size / 1024 / 1024).toFixed(1)} MB — the limit is ${IMPORT_MAX_FILE_BYTES / 1024 / 1024} MB.` };
+  return { ok: true };
+}
+
+// Reads a workbook entirely client-side and returns every worksheet's
+// data as a plain array-of-arrays (row 0 = header row) — no XLSX
+// object survives past this call, so everything downstream is plain,
+// testable data. cellDates:true means a real Excel date cell arrives
+// as a JS Date rather than a raw serial number, letting
+// parseImportDate() handle both shapes uniformly. Throws a clear,
+// specific error for a corrupted/non-workbook file or one with no
+// worksheets at all — never returns a half-broken result.
+export async function readWorkbookFile(file) {
+  const XLSX = await import("https://esm.sh/xlsx@0.18.5");
+  const buffer = await file.arrayBuffer();
+  let workbook;
+  try {
+    workbook = XLSX.read(buffer, { type: "array", cellDates: true });
+  } catch {
+    throw new Error(`"${file.name}" could not be read as an Excel workbook — it may be corrupted, password-protected, or not a real .xlsx file.`);
+  }
+  const sheetNames = workbook.SheetNames || [];
+  if (!sheetNames.length) {
+    throw new Error(`"${file.name}" has no worksheets.`);
+  }
+  const sheets = {};
+  for (const name of sheetNames) {
+    sheets[name] = XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1, raw: true, defval: null });
+  }
+  return { sheetNames, sheets };
+}
+
+// Splits a worksheet's raw array-of-arrays into its header row and
+// data rows, dropping fully-blank trailing rows (routine in real
+// spreadsheets) and normalising every row to the header's own width
+// so a downstream lookup by column index is always safe, even for a
+// row with trailing blank cells Excel simply omitted.
+export function splitSheetHeaderAndRows(sheetAOA) {
+  if (!sheetAOA || !sheetAOA.length) return { headers: [], rows: [] };
+  const headers = (sheetAOA[0] || []).map((h) => (h === null || h === undefined ? "" : String(h).trim()));
+  const rows = sheetAOA.slice(1)
+    .filter((row) => (row || []).some((cell) => cell !== null && cell !== undefined && cell !== ""))
+    .map((row) => headers.map((_, i) => (row[i] === undefined ? null : row[i])));
+  return { headers, rows };
+}
+
+// Best-guess column mapping from a worksheet's real header text to
+// this app's logical fields — a convenience the user must be able to
+// override (brief §5: "Do not build AI-assisted column mapping"; this
+// is plain keyword matching, nothing more). Checked in a deliberate
+// field order (external_id before title, etc.) so a more specific
+// header ("Activity ID") is claimed before a looser one ("Activity")
+// can be miscategorised; a header already claimed by one field is
+// never offered to another.
+const COLUMN_MAPPING_HINTS = {
+  external_id: ["activity id", "task id", "id", "ref", "reference", "uid", "unique id"],
+  title: ["title", "activity name", "task name", "activity", "task", "description", "name"],
+  plot_number: ["plot number", "plot no", "plot", "unit"],
+  planned_start: ["planned start", "start date", "start"],
+  planned_finish: ["planned finish", "finish date", "completion date", "end date", "finish", "completion", "end"],
+  is_milestone: ["milestone"],
+};
+const COLUMN_MAPPING_FIELD_ORDER = ["external_id", "title", "plot_number", "planned_start", "planned_finish", "is_milestone"];
+
+export function suggestColumnMapping(headers) {
+  const mapping = {};
+  const used = new Set();
+  const normalised = (headers || []).map((h) => (h || "").toString().trim().toLowerCase());
+
+  for (const field of COLUMN_MAPPING_FIELD_ORDER) {
+    const hints = COLUMN_MAPPING_HINTS[field];
+    let bestIndex = null;
+    for (let i = 0; i < normalised.length; i++) {
+      if (used.has(i)) continue;
+      if (hints.includes(normalised[i])) { bestIndex = i; break; }
+    }
+    if (bestIndex === null) {
+      for (let i = 0; i < normalised.length; i++) {
+        if (used.has(i)) continue;
+        if (hints.some((h) => normalised[i].includes(h))) { bestIndex = i; break; }
+      }
+    }
+    if (bestIndex !== null) { mapping[field] = bestIndex; used.add(bestIndex); }
+  }
+  return mapping;
+}
+
+// Reshapes raw (header-indexed) worksheet rows into the plain,
+// field-named objects validateImportRow() already understands, using
+// the user-confirmed column mapping (a header index per logical
+// field, or absent for an unmapped optional field). Purely a reshape
+// — no validation happens here.
+export function mapRowsToImportRows(rows, mapping) {
+  return (rows || []).map((row, i) => ({
+    client_row_index: i,
+    external_id: mapping.external_id != null ? row[mapping.external_id] : null,
+    title: mapping.title != null ? row[mapping.title] : null,
+    plot_number: mapping.plot_number != null ? row[mapping.plot_number] : null,
+    is_milestone: mapping.is_milestone != null ? row[mapping.is_milestone] : null,
+    planned_start: mapping.planned_start != null ? row[mapping.planned_start] : null,
+    planned_finish: mapping.planned_finish != null ? row[mapping.planned_finish] : null,
+  }));
+}
+
+// Builds the full reconciliation PREVIEW — a client-side MIRROR of
+// import_programme_activities()'s own matching logic (sql/schema.sql
+// v36), for immediate feedback only, the same "client-side mirror,
+// server stays the real authority" convention
+// validActionStatusTransitions() already established for actions. The
+// RPC re-validates everything shown here against the real database
+// state at confirmation time (which may have changed since this
+// preview was built — e.g. someone else imported in the meantime) and
+// is the only actual source of truth for what gets written.
+//
+// Deliberately separate from Phase 2's planProgrammeImport() (left
+// completely untouched, still exactly what its own tests exercise) —
+// this adds three things that function doesn't do: ambiguous-
+// fallback-match detection (never silently picks one), an
+// updated-vs-unchanged split (comparing against the real existing
+// row, not just "matched -> update"), and "missing from import"
+// (existing activities this batch never touched at all — never
+// deleted or archived, only flagged).
+export function buildImportReconciliation(rows, existingActivities, plotIdByNumber = {}) {
+  const results = rows.map((row, index) => ({ index, row, ...validateImportRow(row) }));
+
+  const externalIdCounts = new Map();
+  results.forEach((r) => {
+    if (r.valid && r.activity.externalId) {
+      externalIdCounts.set(r.activity.externalId, (externalIdCounts.get(r.activity.externalId) || 0) + 1);
+    }
+  });
+
+  const toCreate = [];
+  const toUpdate = [];
+  const unchanged = [];
+  const invalid = [];
+  const matchedActivityIds = new Set();
+
+  for (const r of results) {
+    if (!r.valid) { invalid.push({ index: r.index, errors: r.errors }); continue; }
+
+    if (r.activity.externalId && externalIdCounts.get(r.activity.externalId) > 1) {
+      invalid.push({ index: r.index, errors: [`Duplicate external_id "${r.activity.externalId}" appears more than once in this import.`] });
+      continue;
+    }
+
+    // A plot_number was supplied but couldn't be confidently resolved
+    // to a real plot in this project — never guess (brief §9): the
+    // activity is still created/updated, just left unattached, with
+    // the ambiguity surfaced via plotUnmatched for the preview to show.
+    const plotUnmatched = Boolean(r.activity.plotNumber) && !plotIdByNumber[r.activity.plotNumber];
+    const plotId = r.activity.plotNumber ? (plotIdByNumber[r.activity.plotNumber] || null) : null;
+
+    let existing = null;
+    if (r.activity.externalId) {
+      existing = existingActivities.find((a) => a.external_id === r.activity.externalId) || null;
+    } else {
+      const candidates = existingActivities.filter((a) =>
+        (a.external_id === null || a.external_id === undefined) &&
+        (a.title || "").trim().toLowerCase() === r.activity.title.trim().toLowerCase() &&
+        (a.plot_id || null) === (plotId || null)
+      );
+      if (candidates.length > 1) {
+        invalid.push({ index: r.index, errors: ["Ambiguous match — more than one existing activity matches this title/plot with no external_id. Add an external_id to disambiguate, or resolve the duplicates manually first."] });
+        continue;
+      }
+      existing = candidates[0] || null;
+    }
+
+    const fields = {
+      title: r.activity.title,
+      planned_start: r.activity.plannedStart,
+      planned_finish: r.activity.plannedFinish,
+      is_milestone: r.activity.isMilestone,
+      external_id: r.activity.externalId,
+      plot_id: plotId,
+    };
+
+    if (!existing) {
+      toCreate.push({ index: r.index, fields, plotUnmatched });
+      continue;
+    }
+
+    matchedActivityIds.add(existing.id);
+    const changed = PROGRAMME_IMPORT_OWNED_FIELDS.some((key) => (existing[key] ?? null) !== (fields[key] ?? null));
+    if (changed) {
+      toUpdate.push({ index: r.index, activityId: existing.id, existing, fields, plotUnmatched });
+    } else {
+      unchanged.push({ index: r.index, activityId: existing.id });
+    }
+  }
+
+  const missing = existingActivities.filter((a) => !matchedActivityIds.has(a.id));
+
+  return { toCreate, toUpdate, unchanged, missing, invalid };
+}
+
+// The confirmed-import transaction (sql/schema.sql v36,
+// import_programme_activities()) — the ONLY code path that actually
+// writes an import's rows. Re-validates authorization, duplicate/
+// ambiguous matches, and field ownership entirely server-side; this
+// wrapper is a thin pass-through, not a second source of truth. Runs
+// as one atomic operation (a single plpgsql function body/
+// transaction) — a genuinely unexpected failure rolls back everything
+// this call attempted; an anticipated per-row problem (duplicate
+// external_id, ambiguous match, cross-project plot) is reported back
+// in the result's `rejected` array instead, and does not block the
+// other rows in the same batch from committing.
+export async function importProgrammeActivities(programmeId, rows) {
+  const { data, error } = await supabase.rpc("import_programme_activities", { p_programme_id: programmeId, p_rows: rows });
+  if (error) throw error;
+  return data;
 }

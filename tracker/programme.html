@@ -93,6 +93,7 @@
   <div class="card" id="activitiesListCard" style="display:none;">
     <div class="btn-row" style="margin-bottom:1rem; flex-wrap:wrap;">
       <button class="btn btn-amber" id="newActivityBtn">+ New Activity</button>
+      <a class="btn btn-outline" id="importProgrammeLink" href="#">Import from Excel</a>
       <select id="statusFilter" style="width:auto;">
         <option value="">All statuses</option>
       </select>
@@ -371,6 +372,7 @@
       { label: project.name, href: `project.html?id=${projectId}` },
       { label: "Programme" },
     ]);
+    document.getElementById("importProgrammeLink").href = `programme-import.html?project=${projectId}`;
 
     clearError(pageErrorBox);
     try {

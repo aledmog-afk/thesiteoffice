@@ -4399,3 +4399,216 @@ drop trigger if exists trg_audit_programme_activities on public.programme_activi
 create trigger trg_audit_programme_activities
   after insert or update or delete on public.programme_activities
   for each row execute function public.write_audit_log();
+
+-- ─── v36 ADDITIONS: Controlled XLSX Programme Import (Phase 3) ──────
+--
+-- Adds ONE new security-definer RPC — import_programme_activities() —
+-- the confirmed-import transaction the Phase 3 brief asked for, plus a
+-- trivial, additive widening of documents.document_type to optionally
+-- retain the raw uploaded workbook through the existing Priority 10
+-- Documents architecture (no new storage, no new document system).
+--
+-- What this migration deliberately does NOT add: any new table. The
+-- entire reconciliation/matching/validation contract (external_id
+-- identity, plot+title fallback, import-owned vs. app-owned fields)
+-- already exists from Phase 2 (v35) and needed no schema change to
+-- reuse here — this RPC is the server-side, re-validated enforcement
+-- of that same contract, not a new one.
+
+-- Every worksheet cell the client parses arrives here as plain jsonb
+-- — no trust is placed in client-side validation having actually run.
+-- Re-derives project_id/org_id from the programme (never client-
+-- trusted), re-checks editor authorization explicitly (this function
+-- is security definer, so its own internal writes bypass
+-- programme_activities' table RLS — this check IS the real boundary,
+-- the same reasoning documents_before_write()/actions_before_write()
+-- already rely on for their own internal writes), re-validates
+-- plot_id belongs to the same project (IDOR), re-detects duplicate
+-- external_ids WITHIN the payload and ambiguous (plot,title) fallback
+-- matches SERVER-SIDE (never trusts the client's own pre-check alone,
+-- since the real database state may have changed since the preview
+-- was generated), and only ever writes PROGRAMME_IMPORT_OWNED_FIELDS
+-- (title/planned dates/is_milestone/external_id/plot_id) — it has no
+-- knowledge of forecast/actual/status/percent_complete/assigned_to at
+-- all, so there is no code path by which it could touch them, not
+-- merely a convention it happens to follow.
+--
+-- Row-level problems (missing title, duplicate external_id in this
+-- batch, an ambiguous fallback match, a cross-project plot_id) are
+-- collected and that row is skipped — they are expected, anticipated
+-- outcomes of importing real-world data, not failures of the
+-- operation itself. A genuinely UNEXPECTED error (anything not
+-- explicitly anticipated above) is left to propagate and roll back
+-- the ENTIRE function's transaction — plpgsql's normal behaviour for
+-- an uncaught exception — so the programme is never left in a
+-- half-imported state; "500 valid rows, 3 rejected" commits the 500
+-- and reports the 3, but "the database itself failed halfway through"
+-- commits nothing at all.
+create or replace function public.import_programme_activities(p_programme_id uuid, p_rows jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_project_id uuid;
+  v_org_id uuid;
+  v_row jsonb;
+  v_index int;
+  v_external_id text;
+  v_title text;
+  v_planned_start date;
+  v_planned_finish date;
+  v_is_milestone boolean;
+  v_plot_id uuid;
+  v_plot_project_id uuid;
+  v_existing_id uuid;
+  v_match_count int;
+  v_match_ids uuid[];
+  v_created int := 0;
+  v_updated int := 0;
+  v_unchanged int := 0;
+  v_rejected jsonb := '[]'::jsonb;
+  v_created_ids uuid[] := '{}';
+  v_updated_ids uuid[] := '{}';
+  v_dup_external_ids text[];
+  v_old record;
+begin
+  select project_id, org_id into v_project_id, v_org_id from public.programmes where id = p_programme_id;
+  if v_project_id is null then
+    raise exception 'import_programme_activities: programme not found';
+  end if;
+  if not public.is_project_editor(v_project_id) then
+    raise exception 'import_programme_activities: not authorized for this project';
+  end if;
+
+  if jsonb_typeof(p_rows) <> 'array' then
+    raise exception 'import_programme_activities: p_rows must be a JSON array';
+  end if;
+  -- A hard cap, matching what this phase's own performance testing
+  -- actually covers (up to 5,000 rows) — re-checked here, not only in
+  -- the UI, since this RPC could in principle be called directly.
+  if jsonb_array_length(p_rows) > 5000 then
+    raise exception 'import_programme_activities: an import batch is limited to 5000 rows (received %); split it into smaller imports', jsonb_array_length(p_rows);
+  end if;
+
+  -- Duplicate external_ids WITHIN this payload — re-validated here,
+  -- server-side, against the payload actually received (never trusts
+  -- the client's own pre-check alone).
+  select array_agg(external_id) into v_dup_external_ids
+  from (
+    select (r->>'external_id') as external_id, count(*)
+    from jsonb_array_elements(p_rows) as r
+    where r->>'external_id' is not null and trim(r->>'external_id') <> ''
+    group by 1
+    having count(*) > 1
+  ) d;
+
+  for v_row in select * from jsonb_array_elements(p_rows)
+  loop
+    v_index := coalesce((v_row->>'client_row_index')::int, -1);
+    v_external_id := nullif(trim(v_row->>'external_id'), '');
+    v_title := trim(coalesce(v_row->>'title', ''));
+    v_planned_start := nullif(v_row->>'planned_start', '')::date;
+    v_planned_finish := nullif(v_row->>'planned_finish', '')::date;
+    v_is_milestone := coalesce((v_row->>'is_milestone')::boolean, false);
+    v_plot_id := nullif(v_row->>'plot_id', '')::uuid;
+
+    if v_title = '' then
+      v_rejected := v_rejected || jsonb_build_object('index', v_index, 'reason', 'Title is required.');
+      continue;
+    end if;
+
+    if v_external_id is not null and v_dup_external_ids is not null and v_external_id = any(v_dup_external_ids) then
+      v_rejected := v_rejected || jsonb_build_object('index', v_index, 'reason', format('Duplicate external_id "%s" appears more than once in this import.', v_external_id));
+      continue;
+    end if;
+
+    if v_plot_id is not null then
+      select project_id into v_plot_project_id from public.plots where id = v_plot_id;
+      if v_plot_project_id is null or v_plot_project_id <> v_project_id then
+        v_rejected := v_rejected || jsonb_build_object('index', v_index, 'reason', 'plot_id does not belong to this project.');
+        continue;
+      end if;
+    end if;
+
+    v_existing_id := null;
+    if v_external_id is not null then
+      select id into v_existing_id from public.programme_activities
+        where programme_id = p_programme_id and external_id = v_external_id;
+    else
+      -- Fallback: (plot_id, lower(trim(title))) among existing rows
+      -- that themselves have no external_id — an externally-identified
+      -- activity is only ever matched by its own external_id, never
+      -- coincidentally by title (the Phase 2 rule, re-enforced here).
+      -- array_agg rather than min(id): Postgres has no MIN() aggregate
+      -- for uuid.
+      select array_agg(id) into v_match_ids
+      from public.programme_activities
+      where programme_id = p_programme_id
+        and external_id is null
+        and lower(trim(title)) = lower(v_title)
+        and coalesce(plot_id::text, '') = coalesce(v_plot_id::text, '');
+      v_match_count := coalesce(array_length(v_match_ids, 1), 0);
+      if v_match_count > 1 then
+        v_rejected := v_rejected || jsonb_build_object('index', v_index, 'reason', 'Ambiguous match — more than one existing activity matches this title/plot with no external_id. Add an external_id to disambiguate, or resolve the duplicates manually first.');
+        continue;
+      end if;
+      v_existing_id := case when v_match_count = 1 then v_match_ids[1] else null end;
+    end if;
+
+    if v_existing_id is null then
+      insert into public.programme_activities (programme_id, plot_id, title, external_id, is_milestone, planned_start, planned_finish)
+      values (p_programme_id, v_plot_id, v_title, v_external_id, v_is_milestone, v_planned_start, v_planned_finish)
+      returning id into v_existing_id;
+      v_created := v_created + 1;
+      v_created_ids := v_created_ids || v_existing_id;
+    else
+      select plot_id, title, external_id, is_milestone, planned_start, planned_finish
+        into v_old
+        from public.programme_activities where id = v_existing_id;
+
+      if v_old.plot_id is distinct from v_plot_id
+         or v_old.title is distinct from v_title
+         or v_old.external_id is distinct from v_external_id
+         or v_old.is_milestone is distinct from v_is_milestone
+         or v_old.planned_start is distinct from v_planned_start
+         or v_old.planned_finish is distinct from v_planned_finish
+      then
+        update public.programme_activities
+          set plot_id = v_plot_id, title = v_title, external_id = v_external_id,
+              is_milestone = v_is_milestone, planned_start = v_planned_start, planned_finish = v_planned_finish
+          where id = v_existing_id;
+        v_updated := v_updated + 1;
+        v_updated_ids := v_updated_ids || v_existing_id;
+      else
+        v_unchanged := v_unchanged + 1;
+      end if;
+    end if;
+  end loop;
+
+  return jsonb_build_object(
+    'created', v_created,
+    'updated', v_updated,
+    'unchanged', v_unchanged,
+    'rejected', v_rejected,
+    'created_ids', to_jsonb(v_created_ids),
+    'updated_ids', to_jsonb(v_updated_ids)
+  );
+end;
+$$;
+
+grant execute on function public.import_programme_activities(uuid, jsonb) to authenticated;
+
+-- ─── Optional raw workbook retention (Documents integration) ────────
+-- Priority 10 deliberately designed documents.document_type so
+-- "additional document types can be added later without schema
+-- redesign" — this is exactly that: one additive value, no new table,
+-- no new storage bucket, no new upload path. The importer MAY offer
+-- to retain the uploaded workbook as a controlled document afterwards
+-- (createDocument(projectId, {documentType:'programme', ...}, file) —
+-- already-existing, unmodified Priority 10 code); this migration only
+-- makes that document_type value legal to store.
+alter table public.documents drop constraint if exists documents_document_type_check;
+alter table public.documents add constraint documents_document_type_check
+  check (document_type in ('drawing', 'specification', 'other', 'programme'));

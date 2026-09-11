@@ -2,8 +2,11 @@
 
 The application itself (`tracker/`) ships with zero build step and zero
 runtime dependencies — that doesn't change. `package.json` at the repo
-root exists only to pin the two tools this test suite needs (`jsdom`,
-`pg`) so they install the same way locally and in CI.
+root exists only to pin the tools this test suite needs (`jsdom`, `pg`,
+and `xlsx` — the last one purely for building real in-memory workbook
+fixtures in `tests/frontend/programme_import_workflow.test.mjs`; the
+app itself still loads `xlsx` from esm.sh at runtime, never from
+`node_modules`) so they install the same way locally and in CI.
 
 ## Running the tests
 
@@ -252,6 +255,59 @@ tests/
                              usage (project+status,
                              project+forecast_finish), unaffected by
                              the rest of the portfolio.
+    programme_import.test.mjs  import_programme_activities() — the ONE
+                             code path that actually writes an
+                             import's rows (Priority 11, Phase 3, "v36
+                             ADDITIONS") — against a real database.
+                             Create/update/unchanged reconciliation at
+                             the database level; the central data-
+                             ownership proof (seeding an activity with
+                             all seven app-owned fields — forecast/
+                             actual/status/percent_complete/
+                             assigned_to — set, re-importing a changed
+                             title, and asserting every one of those
+                             seven fields is byte-identical
+                             afterwards); an activity absent from the
+                             payload left completely untouched
+                             (unchanged updated_at, never deleted);
+                             external_id matching scoped to one
+                             programme (an identical external_id in a
+                             different programme untouched); the
+                             (plot_id,title) fallback match; a
+                             duplicate external_id WITHIN one payload
+                             rejecting every row that shares it,
+                             server-side; an ambiguous fallback match
+                             (two existing candidates, no external_id)
+                             rejected rather than guessed, neither
+                             candidate touched; a cross-project
+                             plot_id (IDOR) rejected as a row-level
+                             problem without failing the rest of the
+                             batch; the anticipated-problem-vs-
+                             genuinely-unexpected-failure transaction
+                             distinction (a malformed date string
+                             rolls back the ENTIRE batch, even rows
+                             that would otherwise have succeeded; a
+                             missing title does not); the p_rows-must-
+                             be-an-array and 5,000-row hard-cap checks;
+                             and the full editor-only/cross-org/
+                             stranger/forged-programme_id RLS
+                             adversarial suite re-run directly against
+                             this RPC (proving its security-definer
+                             internal reads never become an
+                             authorization hole — the explicit
+                             is_project_editor() check inside the
+                             function is the real boundary).
+    programme_import_performance.test.mjs  Imports 50/500/5,000-row
+                             batches directly through
+                             import_programme_activities() (distinct
+                             from programme_performance.test.mjs's own
+                             read-path test) and stays comfortably
+                             fast; a 5,000-row re-import of the exact
+                             same data confirms every row is correctly
+                             detected as unchanged and nothing is
+                             rewritten; a mixed re-import (1-in-10 rows
+                             changed) confirms only the changed rows
+                             are counted/written.
 
   database/                Real database — migration integrity.
     migrations.test.mjs      Fresh install, required tables/functions/RLS,
@@ -508,6 +564,66 @@ tests/
                              exposed window.editActivity()/
                              window.deleteActivity() directly, the
                              same functions a real click resolves to.
+    programme_import_workflow.test.mjs  Every app.js function Priority
+                             11 Phase 3 added on top of the Phase 2
+                             contract above (left completely
+                             untouched) — readWorkbookFile() against a
+                             REAL in-memory workbook built with the
+                             local `xlsx` devDependency (multi-sheet,
+                             a genuine Date cell round-tripping via
+                             cellDates:true, a truncated/corrupted
+                             file rejected with a clear error, zero
+                             worksheets); splitSheetHeaderAndRows()
+                             (blank trailing rows dropped, short rows
+                             padded to header width); suggestColumnMapping()
+                             (exact-then-substring matching, a more
+                             specific header claiming its column
+                             before a looser one can steal it, never
+                             double-mapping one column); mapRowsToImportRows()'s
+                             reshape; buildImportReconciliation()'s
+                             full create/update/unchanged/missing/
+                             ambiguous-rejected/plot-unmatched
+                             classification in one pass; and a
+                             dedicated, deterministic re-test of the
+                             Phase 3 timezone fix to parseImportDate()
+                             (a Date built the way SheetJS encodes a
+                             real Excel cell reads back the same
+                             calendar date at UTC+14 and UTC-12),
+                             alongside the newly-supported UK-style/
+                             ISO-with-time/Excel-serial-with-fraction
+                             date shapes and impossible-calendar-date
+                             rejection (2026-02-30).
+    programme_import_ui.test.mjs  programme-import.html's real inline
+                             script under jsdom: the no-active/draft-
+                             programme gate (and that a draft
+                             programme is used when no active one
+                             exists); every step's rejection path
+                             (client-side file validation, a workbook
+                             that fails to read) leaving the wizard on
+                             its current step rather than silently
+                             advancing; a worksheet is never
+                             preselected and Next stays disabled until
+                             one is actively chosen; required-mapping
+                             gating (title/planned_start/
+                             planned_finish block Next when unmapped;
+                             external_id is deliberately NOT required,
+                             matching Phase 2's own supported
+                             (plot,title) fallback); the preview step
+                             never writes anything before Confirm is
+                             clicked, and calls the import RPC wrapper
+                             with only the create/update rows, never
+                             the unchanged ones; a failed confirm
+                             shows the error and stays on the preview
+                             step; the exact "never claims full
+                             success when rows were rejected" wording
+                             rule; the optional "save a copy to
+                             Documents" checkbox calling createDocument()
+                             with document_type 'programme' and the
+                             original file — and that its own failure
+                             never undoes or hides an otherwise-
+                             successful import; "Import Another File"
+                             resetting to a clean step 1; and Back
+                             navigation preserving earlier choices.
 
   uploads/
     client.test.mjs          uploadPhoto()'s client-side size/MIME

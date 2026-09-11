@@ -25,24 +25,24 @@ function extractFn(name) {
   assert.ok(m, `${name} not found in app.js`);
   return m[0].replace(/^export /, "");
 }
-// toLocalISODate is a dependency of parseImportDate — extracted from
-// its own real source (not reimplemented) the same way client.test.mjs
-// already pulls in uploadPhoto()'s own dependencies.
-function extractHelperFn(name) {
-  const m = APP_JS.match(new RegExp(`export function ${name}\\([\\s\\S]*?\\n\\}\\n`));
+// formatCalendarDateUTC is a private (non-exported) helper
+// parseImportDate() closes over — extracted the same way
+// client.test.mjs already pulls in uploadPhoto()'s own private
+// ALLOWED_UPLOAD_MIME_TYPES dependency.
+function extractPrivateFn(name) {
+  const m = APP_JS.match(new RegExp(`function ${name}\\([\\s\\S]*?\\n\\}\\n`));
   assert.ok(m, `${name} not found in app.js`);
-  return m[0].replace(/^export /, "");
+  return m[0];
 }
 
 // EXCEL_EPOCH_MS is a private (non-exported) const parseImportDate()
-// closes over — extracted the same way client.test.mjs already pulls
-// in uploadPhoto()'s own private ALLOWED_UPLOAD_MIME_TYPES dependency.
+// closes over — extracted the same way as formatCalendarDateUTC above.
 const excelEpochMatch = APP_JS.match(/const EXCEL_EPOCH_MS = .*\n/);
 assert.ok(excelEpochMatch, "EXCEL_EPOCH_MS not found in app.js");
 
 const scopeSrc = `
   ${excelEpochMatch[0]}
-  ${extractHelperFn("toLocalISODate")}
+  ${extractPrivateFn("formatCalendarDateUTC")}
   ${extractFn("parseImportDate")}
   ${extractFn("validateImportRow")}
   ${extractFn("matchImportRowToActivity")}
@@ -79,10 +79,15 @@ test("parseImportDate: accepts a real JS Date object", () => {
   assert.equal(result.value, "2026-03-15");
 });
 
-test("parseImportDate: rejects a non-ISO-shaped string rather than guessing", () => {
-  assert.equal(parseImportDate("15/03/2026").ok, false);
+// "15/03/2026" is no longer in this list — Phase 3 (brief §10)
+// explicitly requires UK-style DD/MM/YYYY support, added in
+// sql/schema.sql v36's companion app.js change; see the dedicated
+// UK-date tests below. This test keeps only the shapes that remain
+// genuinely unsupported.
+test("parseImportDate: rejects a non-date-shaped string rather than guessing", () => {
   assert.equal(parseImportDate("March 15 2026").ok, false);
   assert.equal(parseImportDate("not a date").ok, false);
+  assert.equal(parseImportDate("2026/03/15").ok, false, "slash-separated is only accepted in UK DD/MM/YYYY order, not YYYY/MM/DD");
 });
 
 test("parseImportDate: rejects other malformed shapes", () => {
