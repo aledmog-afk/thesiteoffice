@@ -1655,6 +1655,149 @@ export async function getProjectPlotReadiness(projectId) {
   }));
 }
 
+// ─── Portfolio Plot Control Rollup (Priority 15, Phase 2) ─────────
+//
+// "Which plots require my attention, and why?" across EVERY project
+// the caller can see — the exact gap Priority 14's stress test named
+// as the single biggest Monday-morning weakness. This is deliberately
+// NOT a new control system: it is getProjectPlotReadiness() (above)
+// generalised from one project to every project the caller is a
+// member of, calling the SAME computePlotHandoverReadiness() per plot
+// (a pure, zero-network computation) rather than a second definition
+// of readiness. No new table, no new score, no new status.
+//
+// Query shape: one bulk get_my_project_roles() call (via
+// getProjectsWithRole(), already used by getPortfolioControlSummary())
+// plus ONE broad, UNFILTERED select per underlying table — plots,
+// quality_gates, handover_documents, snag_lists, snag_items,
+// programme_activities, actions, inspection_findings — exactly 9
+// queries total, regardless of whether the caller has 1 project and
+// 5 plots or 50 projects and 1,000 plots. Each table's own RLS policy
+// (already proven in Phase 1's security suite and every prior phase)
+// is what actually scopes the rows returned — the same "let RLS do
+// the filtering, group client-side" pattern getPortfolioControlSummary()
+// already established, not a new one invented for this phase. Editor-
+// only tables (Quality Gates, Handover Documents, Programme, Actions,
+// Inspection Findings) therefore naturally arrive empty for any
+// project where the caller is snagging-only, while Snags — member-
+// level — still arrive for every project, matching
+// computePlotHandoverReadiness()'s own editorDataVisible contract
+// exactly. editorDataVisible is resolved PER PLOT from that plot's
+// OWN project's role (a single user can be an editor on one project
+// and snagging-only on another at the same time), never assumed
+// uniform across the whole portfolio.
+export async function getPortfolioPlotReadiness() {
+  const [projects, { data: plots, error: plotsErr }, { data: gates, error: gatesErr }, { data: docs, error: docsErr }, { data: lists, error: listsErr }, { data: snagRows, error: snagErr }, { data: progActivities, error: progErr }, { data: actionRows, error: actionErr }, { data: findingRows, error: findingErr }] = await Promise.all([
+    getProjectsWithRole(),
+    supabase.from("plots").select("*"),
+    supabase.from("quality_gates").select("project_id, plot_id, status").not("plot_id", "is", null),
+    supabase.from("handover_documents").select("project_id, plot_id, status").not("plot_id", "is", null),
+    supabase.from("snag_lists").select("id, plot_id"),
+    supabase.from("snag_items").select("plot_id, snag_list_id, status, priority, due_date"),
+    supabase.from("programme_activities").select("project_id, plot_id, is_milestone, status, planned_start, planned_finish, forecast_start, forecast_finish, actual_finish, programmes(status)").not("plot_id", "is", null),
+    supabase.from("actions").select("project_id, plot_id, status, priority, due_date").not("plot_id", "is", null),
+    supabase.from("inspection_findings").select("project_id, plot_id, severity, status").not("plot_id", "is", null),
+  ]);
+  if (plotsErr) throw plotsErr;
+  if (gatesErr) throw gatesErr;
+  if (docsErr) throw docsErr;
+  if (listsErr) throw listsErr;
+  if (snagErr) throw snagErr;
+  if (progErr) throw progErr;
+  if (actionErr) throw actionErr;
+  if (findingErr) throw findingErr;
+
+  const todayStr = todayISO();
+  const projectById = new Map(projects.map((p) => [p.id, p]));
+
+  const groupByPlot = (rows) => {
+    const map = new Map();
+    for (const r of rows || []) {
+      if (!r.plot_id) continue;
+      if (!map.has(r.plot_id)) map.set(r.plot_id, []);
+      map.get(r.plot_id).push(r);
+    }
+    return map;
+  };
+  const gatesByPlot = groupByPlot(gates);
+  const docsByPlot = groupByPlot(docs);
+
+  const listPlotById = new Map((lists || []).map((l) => [l.id, l.plot_id]));
+  const snagsByPlot = new Map();
+  for (const s of snagRows || []) {
+    const effectivePlotId = s.plot_id || listPlotById.get(s.snag_list_id) || null;
+    if (!effectivePlotId) continue;
+    if (!snagsByPlot.has(effectivePlotId)) snagsByPlot.set(effectivePlotId, []);
+    snagsByPlot.get(effectivePlotId).push(s);
+  }
+
+  const progByPlot = new Map();
+  for (const a of progActivities || []) {
+    if (a.programmes?.status !== "active") continue;
+    if (!progByPlot.has(a.plot_id)) progByPlot.set(a.plot_id, []);
+    progByPlot.get(a.plot_id).push(a);
+  }
+
+  const actionsByPlot = groupByPlot(actionRows);
+  const findingsByPlot = groupByPlot(findingRows);
+
+  const rows = (plots || [])
+    .filter((plot) => projectById.has(plot.project_id)) // defence-in-depth: only plots whose project is itself in the caller's visible set
+    .map((plot) => {
+      const project = projectById.get(plot.project_id);
+      const editorDataVisible = project.myRole === "owner" || project.myRole === "collaborator";
+      return {
+        plot,
+        project,
+        readiness: computePlotHandoverReadiness(plot, {
+          gates: gatesByPlot.get(plot.id) || [],
+          handoverDocuments: docsByPlot.get(plot.id) || [],
+          snags: snagsByPlot.get(plot.id) || [],
+          programmeActivities: progByPlot.get(plot.id) || [],
+          actions: actionsByPlot.get(plot.id) || [],
+          findings: findingsByPlot.get(plot.id) || [],
+          editorDataVisible,
+        }, todayStr),
+      };
+    });
+
+  return sortPortfolioPlotRows(rows);
+}
+
+// Worst-first, exactly mirroring plot-handovers.html's own established
+// rule (PLOT_READINESS_ORDER, then a tiebreak) — generalised with two
+// EXISTING readiness fields (blockers.length, warnings.length) as a
+// secondary/tertiary tiebreak, never an invented score: a Not Ready
+// plot with 3 blockers is more urgent than one with 1, using data the
+// readiness engine already produces. Final tiebreak is project name
+// then plot number, for a fully deterministic order across reloads.
+export function sortPortfolioPlotRows(rows) {
+  return [...rows].sort((a, b) => {
+    const oa = PLOT_READINESS_ORDER[a.readiness.status] ?? 5;
+    const ob = PLOT_READINESS_ORDER[b.readiness.status] ?? 5;
+    return oa - ob
+      || b.readiness.blockers.length - a.readiness.blockers.length
+      || b.readiness.warnings.length - a.readiness.warnings.length
+      || a.project.name.localeCompare(b.project.name)
+      || comparePlotNumbers(a.plot.plot_number, b.plot.plot_number);
+  });
+}
+
+// Portfolio totals — counts only, straight from the same readiness
+// statuses already computed above; no percentages, no weighting.
+// "restricted" plots are counted separately, never folded into
+// "ready" (that would misrepresent data the caller isn't entitled to
+// see as confirmed-clean — the same rule getPortfolioControlSummary()
+// already applies to snagging-only PROJECTS, here applied per plot).
+export function summarisePortfolioPlotReadiness(rows) {
+  const counts = { not_ready: 0, at_risk: 0, ready: 0, handed_over: 0, restricted: 0 };
+  for (const r of rows) {
+    const status = r.readiness.status;
+    if (status in counts) counts[status]++;
+  }
+  return counts;
+}
+
 // A weekly report's plot tag is freetext ("5", "5,6,7") and a plot's own
 // name is also freetext ("Plot 5", or just "5") — normalise both to
 // their digits where possible so "Plot 5" and "5" are recognised as the
