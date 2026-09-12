@@ -49,6 +49,10 @@
     </div>
     <p class="hint" id="controlStatusReason" style="margin-bottom:1rem;"></p>
     <div class="totals-bar" id="controlTotalsBar"></div>
+    <div id="plotSummaryWrap" style="display:none; margin-top:1rem;">
+      <h4 style="font-family:var(--font-display); font-size:0.8rem; margin:0 0 0.4rem; color:var(--ink-soft);">Plot Summary — normal lifecycle state, not an exception (see Plot Handovers for detail)</h4>
+      <div class="totals-bar" id="plotSummaryTotalsBar"></div>
+    </div>
     <div id="controlAttentionWrap">
       <h4 style="font-family:var(--font-display); font-size:0.85rem; margin:0.6rem 0;">Actions Requiring Attention</h4>
       <div class="table-wrap">
@@ -581,8 +585,6 @@
       const c = summary.counts;
       const overdueProgramme = c.overdueProgrammeActivities + c.overdueProgrammeMilestones;
       const forecastLateProgramme = c.materialForecastLateProgrammeActivities + c.forecastLateProgrammeMilestones;
-      const plotsNotReady = plotReadinessRows.filter((r) => r.readiness.status === "not_ready").length;
-      const plotsAtRisk = plotReadinessRows.filter((r) => r.readiness.status === "at_risk").length;
       const cards = [
         ["Open Actions", c.openActions, "var(--ink)"],
         ["Overdue", c.overdue, c.overdue > 0 ? "var(--red)" : "var(--ink)"],
@@ -592,8 +594,6 @@
         ["High / Critical Priority", c.highCritical, c.highCritical > 0 ? "var(--amber)" : "var(--ink)"],
         ["Overdue Programme", overdueProgramme, overdueProgramme > 0 ? "var(--red)" : "var(--ink)"],
         ["Programme Forecast Late", forecastLateProgramme, forecastLateProgramme > 0 ? "var(--amber)" : "var(--ink)"],
-        ["Plots Not Ready", plotsNotReady, plotsNotReady > 0 ? "var(--red)" : "var(--ink)"],
-        ["Plots At Risk", plotsAtRisk, plotsAtRisk > 0 ? "var(--amber)" : "var(--ink)"],
       ];
       document.getElementById("controlTotalsBar").innerHTML = cards.map(([label, value, color]) => `
         <div class="totals-box">
@@ -601,6 +601,35 @@
           <div class="totals-value" style="color:${color};">${value}</div>
         </div>
       `).join("");
+
+      // Plot Summary (P16 refinement) — a plot being NOT READY is normal
+      // lifecycle state, not an exception (a plot can genuinely take
+      // months to progress toward handover). Deliberately rendered as
+      // its own neutral-toned, separately-labelled row — never red/
+      // amber like the true exception cards above — and shown alongside
+      // Ready/Handed Over for a genuine, balanced picture rather than
+      // cherry-picking only the "bad" numbers. Plot Handovers remains
+      // the authoritative place to actually inspect any of these.
+      if (plotReadinessRows.length) {
+        const plotCounts = { not_ready: 0, at_risk: 0, ready: 0, handed_over: 0, restricted: 0 };
+        plotReadinessRows.forEach((r) => { if (r.readiness.status in plotCounts) plotCounts[r.readiness.status]++; });
+        const plotCards = [
+          ["Not Ready", plotCounts.not_ready],
+          ["At Risk", plotCounts.at_risk],
+          ["Ready", plotCounts.ready],
+          ["Handed Over", plotCounts.handed_over],
+        ];
+        if (plotCounts.restricted > 0) plotCards.push(["Restricted", plotCounts.restricted]);
+        document.getElementById("plotSummaryWrap").style.display = "block";
+        document.getElementById("plotSummaryTotalsBar").innerHTML = plotCards.map(([label, value]) => `
+          <div class="totals-box">
+            <div class="totals-label">${escapeHtml(label)}</div>
+            <div class="totals-value" style="color:var(--ink);">${value}</div>
+          </div>
+        `).join("");
+      } else {
+        document.getElementById("plotSummaryWrap").style.display = "none";
+      }
 
       document.getElementById("controlAttentionEmpty").style.display = attention.length ? "none" : "block";
       document.getElementById("controlAttentionRows").innerHTML = attention.map((a) => {

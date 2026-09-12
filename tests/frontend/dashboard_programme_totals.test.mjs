@@ -125,7 +125,13 @@ test("project.html: the per-project totals bar shows 'Overdue Programme' and 'Pr
   assert.match(text, /Programme Forecast Late 3/, "0 material activities + 3 milestones = 3");
 });
 
-test("project.html: the totals bar shows 'Plots Not Ready' and 'Plots At Risk', derived from getProjectPlotReadiness() (Priority 12, Phase 1) — informational only, never blocking the rest of the card", async () => {
+// P16 refinement: "Plots Not Ready"/"Plots At Risk" no longer live in
+// controlTotalsBar (the true-exception bar, red/amber-tinted) — a plot
+// being NOT READY is normal lifecycle state, not a portfolio exception.
+// They now render in a SEPARATE, neutrally-toned "Plot Summary" row
+// (plotSummaryTotalsBar), showing all four statuses for genuine
+// context, and controlTotalsBar must never mention plots at all.
+test("project.html: plot status renders in the separate, neutral Plot Summary row (not the exception totals bar), showing all four statuses for context", async () => {
   const rows = [
     { plot: { id: "pl1" }, readiness: { status: "not_ready" } },
     { plot: { id: "pl2" }, readiness: { status: "not_ready" } },
@@ -135,12 +141,26 @@ test("project.html: the totals bar shows 'Plots Not Ready' and 'Plots At Risk', 
   ];
   const { document } = await runProjectPage({ counts: progCounts(), plotReadinessRows: rows });
   await wait(30);
-  const text = document.getElementById("controlTotalsBar").textContent.replace(/\s+/g, " ").trim();
-  assert.match(text, /Plots Not Ready 2/);
-  assert.match(text, /Plots At Risk 1/);
+  const exceptionText = document.getElementById("controlTotalsBar").textContent.replace(/\s+/g, " ").trim();
+  assert.doesNotMatch(exceptionText, /Not Ready/, "a normal plot lifecycle state must never appear in the exception totals bar");
+  assert.doesNotMatch(exceptionText, /At Risk/);
+
+  const plotSummaryWrap = document.getElementById("plotSummaryWrap");
+  assert.equal(plotSummaryWrap.style.display, "block");
+  const plotText = document.getElementById("plotSummaryTotalsBar").textContent.replace(/\s+/g, " ").trim();
+  assert.match(plotText, /Not Ready 2/);
+  assert.match(plotText, /At Risk 1/);
+  assert.match(plotText, /Ready 1/);
+  assert.match(plotText, /Handed Over 1/);
 });
 
-test("project.html: a failed plot-readiness fetch degrades gracefully — the rest of the control card still renders with the two new cards reading 0", async () => {
+test("project.html: a project with no plots at all shows no Plot Summary row — never a misleading zeroed-out context block", async () => {
+  const { document } = await runProjectPage({ counts: progCounts(), plotReadinessRows: [] });
+  await wait(30);
+  assert.equal(document.getElementById("plotSummaryWrap").style.display, "none");
+});
+
+test("project.html: a failed plot-readiness fetch degrades gracefully — the rest of the control card still renders, and the Plot Summary row is simply omitted rather than showing misleading zeros", async () => {
   const supabase = { from: permissiveFrom, rpc: () => Promise.resolve({ data: [], error: null }), auth: { getUser: async () => ({ data: { user: { id: "u1" } } }) } };
   const { document } = await runPage(PROJECT_HTML, extractScript(PROJECT_HTML), {
     __url: "https://example.com/project.html?id=p1",
@@ -171,6 +191,7 @@ test("project.html: a failed plot-readiness fetch degrades gracefully — the re
   });
   await wait(30);
   const text = document.getElementById("controlTotalsBar").textContent.replace(/\s+/g, " ").trim();
-  assert.match(text, /Plots Not Ready 0/);
-  assert.match(text, /Plots At Risk 0/);
+  assert.doesNotMatch(text, /Plots Not Ready/);
+  assert.doesNotMatch(text, /Plots At Risk/);
+  assert.equal(document.getElementById("plotSummaryWrap").style.display, "none", "a failed fetch must omit the Plot Summary row, not show misleading zeros");
 });

@@ -109,41 +109,6 @@
         </table>
       </div>
     </div>
-
-    <div class="card" style="margin-bottom:1.5rem;">
-      <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.6rem; margin-bottom:1rem;">
-        <h3 style="font-family:var(--font-display); font-size:1rem; margin:0;">Plot Control — Handover Readiness</h3>
-        <div class="btn-row" id="plotReadinessFilterGroup">
-          <button type="button" class="btn btn-outline btn-sm" data-plot-filter="all">All</button>
-          <button type="button" class="btn btn-outline btn-sm" data-plot-filter="not_ready">Not Ready</button>
-          <button type="button" class="btn btn-outline btn-sm" data-plot-filter="at_risk">At Risk</button>
-          <button type="button" class="btn btn-outline btn-sm" data-plot-filter="ready">Ready</button>
-          <button type="button" class="btn btn-outline btn-sm" data-plot-filter="handed_over">Handed Over</button>
-        </div>
-      </div>
-      <p class="hint" style="margin:-0.4rem 0 1rem;">Every plot across every site you can access, using the same System Handover Readiness shown on each plot's own page — not a separate system.</p>
-      <div id="plotReadinessErrorBox" class="error-box"></div>
-      <div id="plotReadinessRetryWrap" style="display:none; margin-bottom:1rem;">
-        <button class="btn btn-outline btn-sm" id="plotReadinessRetryBtn">Retry loading plot control</button>
-      </div>
-      <div id="plotReadinessBody" style="display:none;">
-        <div class="totals-bar" id="plotTotalsBar" style="margin-bottom:1rem;"></div>
-        <div class="btn-row" style="margin-bottom:0.8rem;">
-          <label for="plotProjectFilter" class="hint" style="align-self:center;">Project:</label>
-          <select id="plotProjectFilter" style="width:auto;">
-            <option value="all">All projects</option>
-          </select>
-        </div>
-        <div class="table-wrap">
-          <table>
-            <thead><tr><th>Project</th><th>Plot</th><th>Readiness</th><th>Blockers</th><th>Warnings</th><th>Programme</th><th>Handover</th></tr></thead>
-            <tbody id="plotReadinessRows"></tbody>
-          </table>
-        </div>
-        <div id="plotReadinessEmpty" class="empty" style="display:none;"><p>No plots currently require attention.</p></div>
-        <div id="plotReadinessNoPlots" class="empty" style="display:none;"><p>No plots exist yet on any site you can access.</p></div>
-      </div>
-    </div>
   </div>
 
   <div id="grid" class="grid" style="margin-top:1.5rem;"></div>
@@ -155,7 +120,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, ensureOrganisation, getPortfolioControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, getPortfolioPlotReadiness, summarisePortfolioPlotReadiness, PLOT_READINESS_LABEL, PLOT_READINESS_BADGE } from "./js/app.js";
+  import { requireAuth, renderHeader, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, ensureOrganisation, getPortfolioControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE } from "./js/app.js";
 
   await requireAuth();
   renderHeader([{ label: "Dashboard" }]);
@@ -298,104 +263,7 @@
     }
   }
   document.getElementById("controlRetryBtn").addEventListener("click", loadControlSummary);
-  document.getElementById("refreshBtn").addEventListener("click", () => { loadControlSummary(); loadPlotReadiness(); loadSites(); });
-
-  // ─── Portfolio Plot Control Rollup (Priority 15, Phase 2) ────────
-  // Presents getPortfolioPlotReadiness() exactly as computed — the
-  // same status/blockers/warnings/programme fields plot-detail.html
-  // and plot-handovers.html already show, just rolled up across every
-  // site. No new statuses, no score: see tracker/js/app.js.
-  const plotReadinessErrorBox = document.getElementById("plotReadinessErrorBox");
-  let plotReadinessRowsData = [];
-  let plotReadinessFilter = "all";
-  let plotProjectFilter = "all";
-
-  function renderPlotTotals(counts) {
-    const cards = [
-      ["Plots Not Ready", counts.not_ready, counts.not_ready > 0 ? "var(--red)" : "var(--ink)"],
-      ["Plots At Risk", counts.at_risk, counts.at_risk > 0 ? "var(--amber)" : "var(--ink)"],
-      ["Plots Ready", counts.ready, "var(--ink)"],
-      ["Plots Handed Over", counts.handed_over, "var(--ink)"],
-    ];
-    // Restricted (snagging-only access) plots exist in this portfolio —
-    // shown as their own honest count rather than folded into "Ready",
-    // which would misrepresent data this caller isn't entitled to see
-    // as confirmed-clean (same rule getPortfolioControlSummary() already
-    // applies to a snagging-only PROJECT's status).
-    if (counts.restricted > 0) cards.push(["Restricted (Snagging Only)", counts.restricted, "var(--ink)"]);
-    document.getElementById("plotTotalsBar").innerHTML = cards.map(([label, value, color]) => `
-      <div class="totals-box">
-        <div class="totals-label">${escapeHtml(label)}</div>
-        <div class="totals-value" style="color:${color};">${value}</div>
-      </div>
-    `).join("");
-  }
-
-  function renderPlotReadinessRows() {
-    let filtered = plotReadinessFilter === "all" ? plotReadinessRowsData : plotReadinessRowsData.filter((r) => r.readiness.status === plotReadinessFilter);
-    if (plotProjectFilter !== "all") filtered = filtered.filter((r) => r.project.id === plotProjectFilter);
-
-    document.getElementById("plotReadinessEmpty").style.display = filtered.length ? "none" : "block";
-    document.getElementById("plotReadinessRows").innerHTML = filtered.map((r) => {
-      const readiness = r.readiness;
-      const reasonTitle = readiness.blockers.concat(readiness.warnings).map((x) => x.label).join("; ") || "No known blockers or warnings";
-      const progCell = readiness.programme?.hasActivities
-        ? `Overdue ${readiness.programme.overdueProgrammeActivities + readiness.programme.overdueProgrammeMilestones} · Late ${readiness.programme.materialForecastLateProgrammeActivities + readiness.programme.forecastLateProgrammeMilestones}`
-        : `<span class="hint">—</span>`;
-      const handoverCell = readiness.handedOverAt ? formatDate(readiness.handedOverAt.slice(0, 10)) : `<span class="hint">—</span>`;
-      return `
-        <tr class="row-link" onclick="window.location.href='plot-detail.html?id=${r.plot.id}'">
-          <td><a href="project.html?id=${r.project.id}" onclick="event.stopPropagation()">${escapeHtml(r.project.name)}</a></td>
-          <td><strong>${escapeHtml(r.plot.plot_number)}</strong></td>
-          <td><span class="badge ${PLOT_READINESS_BADGE[readiness.status]}" title="${escapeHtml(reasonTitle)}">${PLOT_READINESS_LABEL[readiness.status]}</span></td>
-          <td>${readiness.blockers.length || "—"}</td>
-          <td>${readiness.warnings.length || "—"}</td>
-          <td>${progCell}</td>
-          <td>${handoverCell}</td>
-        </tr>
-      `;
-    }).join("");
-  }
-
-  document.querySelectorAll("#plotReadinessFilterGroup button").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      plotReadinessFilter = btn.dataset.plotFilter;
-      document.querySelectorAll("#plotReadinessFilterGroup button").forEach((b) => b.classList.toggle("btn-amber", b === btn));
-      renderPlotReadinessRows();
-    });
-  });
-  document.querySelector('#plotReadinessFilterGroup button[data-plot-filter="all"]').classList.add("btn-amber");
-
-  document.getElementById("plotProjectFilter").addEventListener("change", (e) => {
-    plotProjectFilter = e.target.value;
-    renderPlotReadinessRows();
-  });
-
-  async function loadPlotReadiness() {
-    clearError(plotReadinessErrorBox);
-    document.getElementById("plotReadinessRetryWrap").style.display = "none";
-    try {
-      plotReadinessRowsData = await getPortfolioPlotReadiness();
-      const counts = summarisePortfolioPlotReadiness(plotReadinessRowsData);
-      document.getElementById("plotReadinessBody").style.display = "block";
-      renderPlotTotals(counts);
-
-      const projectSelect = document.getElementById("plotProjectFilter");
-      const uniqueProjects = [...new Map(plotReadinessRowsData.map((r) => [r.project.id, r.project])).values()].sort((a, b) => a.name.localeCompare(b.name));
-      projectSelect.innerHTML = `<option value="all">All projects</option>` + uniqueProjects.map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("");
-      projectSelect.value = plotProjectFilter;
-
-      document.getElementById("plotReadinessNoPlots").style.display = plotReadinessRowsData.length ? "none" : "block";
-      renderPlotReadinessRows();
-    } catch (err) {
-      // Same rule as loadControlSummary() above — never silently show
-      // an empty plot control section for a failed query.
-      document.getElementById("plotReadinessBody").style.display = "none";
-      showError(plotReadinessErrorBox, err);
-      document.getElementById("plotReadinessRetryWrap").style.display = "block";
-    }
-  }
-  document.getElementById("plotReadinessRetryBtn").addEventListener("click", loadPlotReadiness);
+  document.getElementById("refreshBtn").addEventListener("click", () => { loadControlSummary(); loadSites(); });
 
   // ─── Site tiles (existing) ──────────────────────────────────────
   async function loadSites() {
@@ -444,7 +312,6 @@
   }
 
   loadControlSummary();
-  loadPlotReadiness();
   loadSites();
 </script>
 </body>
