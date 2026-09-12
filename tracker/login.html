@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Sign In – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div class="auth-wrap">
+  <div class="auth-card">
+    <div class="auth-brand">SITE <span>TRACKER</span></div>
+    <p class="auth-sub">Weekly reports &amp; snagging sheets</p>
+
+    <div id="errorBox" class="error-box"></div>
+    <div id="infoBox" class="error-box" style="background:var(--green-light); color:var(--green);"></div>
+
+    <form id="authForm">
+      <div class="field">
+        <label for="email">Email</label>
+        <input type="email" id="email" required autocomplete="email">
+      </div>
+      <div class="field" id="passwordField">
+        <label for="password">Password</label>
+        <input type="password" id="password" autocomplete="current-password" minlength="6">
+      </div>
+      <p class="hint" id="forgotHint" style="display:none; margin:-0.4rem 0 0.8rem;">We'll email a link to set a new password.</p>
+      <button type="submit" class="btn btn-amber" style="width:100%;" id="submitBtn">Sign In</button>
+    </form>
+
+    <div class="auth-toggle" id="forgotRow">
+      <button type="button" id="forgotBtn">Forgot password?</button>
+    </div>
+    <div class="auth-toggle" id="signupToggleRow">
+      <span id="toggleText">Need an account?</span>
+      <button type="button" id="toggleBtn">Create one</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { showError, clearError, getParam } from "./js/app.js";
+
+  const next = getParam("next") || "dashboard.html";
+
+  const form = document.getElementById("authForm");
+  const errorBox = document.getElementById("errorBox");
+  const infoBox = document.getElementById("infoBox");
+  const submitBtn = document.getElementById("submitBtn");
+  const toggleBtn = document.getElementById("toggleBtn");
+  const toggleText = document.getElementById("toggleText");
+  const forgotBtn = document.getElementById("forgotBtn");
+  const forgotRow = document.getElementById("forgotRow");
+  const passwordField = document.getElementById("passwordField");
+  const passwordInput = document.getElementById("password");
+  const forgotHint = document.getElementById("forgotHint");
+  const signupToggleRow = document.getElementById("signupToggleRow");
+  let mode = "signin";
+
+  // If already signed in, go straight to the dashboard (or wherever "next" points).
+  supabase.auth.getSession().then(({ data: { session } }) => {
+    if (session) window.location.href = next;
+  });
+
+  function applyMode() {
+    const isForgot = mode === "forgot";
+    passwordField.style.display = isForgot ? "none" : "block";
+    passwordInput.required = !isForgot;
+    forgotHint.style.display = isForgot ? "block" : "none";
+    forgotRow.style.display = isForgot ? "none" : "block";
+    signupToggleRow.style.display = isForgot ? "none" : "block";
+    submitBtn.textContent = isForgot ? "Send Reset Link" : (mode === "signin" ? "Sign In" : "Create Account");
+    toggleText.textContent = mode === "signin" ? "Need an account?" : "Already have one?";
+    toggleBtn.textContent = mode === "signin" ? "Create one" : "Sign in";
+  }
+
+  toggleBtn.addEventListener("click", () => {
+    mode = mode === "signin" ? "signup" : "signin";
+    applyMode();
+    infoBox.style.display = "none";
+    clearError(errorBox);
+  });
+
+  forgotBtn.addEventListener("click", () => {
+    mode = "forgot";
+    applyMode();
+    infoBox.style.display = "none";
+    clearError(errorBox);
+  });
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearError(errorBox);
+    infoBox.style.display = "none";
+    submitBtn.disabled = true;
+    const email = document.getElementById("email").value.trim();
+    const password = passwordInput.value;
+
+    try {
+      if (mode === "forgot") {
+        // resetPasswordForEmail() never reveals whether the address has an
+        // account — Supabase's own API responds the same way either way —
+        // so this message is shown regardless of the outcome, and only a
+        // genuine failure (bad request, rate limit) throws below.
+        const redirectTo = new URL("reset-password.html", window.location.href).href;
+        const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
+        if (error) throw error;
+        infoBox.style.background = "var(--green-light)";
+        infoBox.style.color = "var(--green)";
+        infoBox.textContent = "If that email has an account, a password reset link is on its way.";
+        infoBox.style.display = "block";
+        mode = "signin";
+        applyMode();
+      } else if (mode === "signin") {
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+        window.location.href = next;
+      } else {
+        const { data, error } = await supabase.auth.signUp({ email, password });
+        if (error) throw error;
+        if (data.session) {
+          window.location.href = next;
+        } else {
+          infoBox.style.background = "var(--green-light)";
+          infoBox.style.color = "var(--green)";
+          infoBox.textContent = "Account created. Check your email to confirm, then sign in.";
+          infoBox.style.display = "block";
+        }
+      }
+    } catch (err) {
+      showError(errorBox, err);
+    } finally {
+      submitBtn.disabled = false;
+    }
+  });
+</script>
+</body>
+</html>

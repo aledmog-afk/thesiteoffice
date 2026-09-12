@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Inspection – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+<style>
+  .finding-card { border: 1px solid var(--rule); border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+  .finding-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.6rem; flex-wrap: wrap; }
+  .finding-title { font-weight: 600; }
+  .finding-photos { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.6rem; }
+  .finding-photos img { width: 72px; height: 72px; object-fit: cover; border-radius: 6px; border: 1px solid var(--rule); }
+  .action-link-box { background: var(--paper-soft); border-radius: 6px; padding: 0.6rem 0.8rem; margin-top: 0.6rem; font-size: 0.85rem; }
+</style>
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title" id="inspectionTitle">Loading…</div>
+      <div class="page-sub" id="projectSub"></div>
+    </div>
+    <div class="btn-row">
+      <span class="badge" id="statusBadge"></span>
+      <button class="btn btn-danger btn-sm" id="deleteBtn">Delete Inspection</button>
+    </div>
+  </div>
+
+  <div id="errorBox" class="error-box"></div>
+
+  <div class="card" id="detailsCard" style="margin-bottom:2rem;">
+    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Inspection Details</h3>
+    <form id="detailsForm">
+      <div class="form-grid">
+        <div class="field"><label for="title">Title *</label><input type="text" id="title" required></div>
+        <div class="field"><label for="inspectionDate">Date</label><input type="date" id="inspectionDate" required></div>
+      </div>
+      <div class="form-grid">
+        <div class="field">
+          <label for="inspectionType">Type</label>
+          <select id="inspectionType"></select>
+        </div>
+        <div class="field">
+          <label for="status">Status</label>
+          <select id="status"></select>
+        </div>
+      </div>
+      <div class="field"><label for="conductedBy">Inspector</label><input type="text" id="conductedBy"></div>
+      <div class="field"><label for="description">Notes</label><textarea id="description" rows="2"></textarea></div>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-amber btn-sm">Save Details</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.6rem; margin-bottom:1rem;">
+      <h3 style="font-family:var(--font-display); font-size:1rem; margin:0;">Findings</h3>
+      <button class="btn btn-amber btn-sm" id="newFindingBtn">+ Add Finding</button>
+    </div>
+
+    <div class="finding-card" id="newFindingCard" style="display:none; background:var(--paper-soft);">
+      <form id="newFindingForm">
+        <div class="field"><label for="findingTitle">Title *</label><input type="text" id="findingTitle" required placeholder="e.g. Missing fire stopping at floor 2"></div>
+        <div class="field"><label for="findingDescription">Description</label><textarea id="findingDescription" rows="2"></textarea></div>
+        <div class="form-grid">
+          <div class="field" style="max-width:200px;">
+            <label for="findingSeverity">Severity</label>
+            <select id="findingSeverity"></select>
+          </div>
+          <div class="field" style="max-width:200px;">
+            <label for="findingPlot">Plot <span class="hint">(optional)</span></label>
+            <select id="findingPlot"><option value="">Not plot-specific</option></select>
+          </div>
+        </div>
+        <div class="btn-row">
+          <button type="submit" class="btn btn-amber btn-sm">Add Finding</button>
+          <button type="button" class="btn btn-outline btn-sm" id="cancelFindingBtn">Cancel</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="findingsWrap"></div>
+    <div id="findingsEmpty" class="empty" style="display:none;"><p>No findings recorded yet.</p></div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, getInspection, updateInspection, deleteInspection, getFindings, createFinding, updateFinding, resolveFinding, deleteFinding, createActionFromFinding, createSnagFromFinding, getFindingPhotos, addFindingPhoto, deleteFindingPhoto, comparePlotNumbers, INSPECTION_TYPES, INSPECTION_TYPE_LABEL, INSPECTION_STATUSES, INSPECTION_STATUS_LABEL, INSPECTION_STATUS_BADGE, FINDING_SEVERITIES, FINDING_SEVERITY_LABEL, FINDING_SEVERITY_BADGE, FINDING_STATUSES, FINDING_STATUS_LABEL, FINDING_STATUS_BADGE, isFindingOutstanding, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel } from "./js/app.js";
+
+  await requireAuth();
+  const inspectionId = getParam("id");
+  if (!inspectionId) window.location.href = "dashboard.html";
+
+  const errorBox = document.getElementById("errorBox");
+  let inspection = null;
+  let findings = [];
+  let photosByFinding = {};
+  let actionsById = {};
+  let snagByFinding = {}; // finding.id -> its (first) linked snag_items row, for the link box below
+  let editors = [];
+  let plotsById = {}; // plot.id -> plot_number, for showing/picking plot context on findings
+
+  document.getElementById("inspectionType").innerHTML = INSPECTION_TYPES.map((t) => `<option value="${t}">${INSPECTION_TYPE_LABEL[t]}</option>`).join("");
+  document.getElementById("status").innerHTML = INSPECTION_STATUSES.map((s) => `<option value="${s}">${INSPECTION_STATUS_LABEL[s]}</option>`).join("");
+  document.getElementById("findingSeverity").innerHTML = FINDING_SEVERITIES.map((s) => `<option value="${s}" ${s === "medium" ? "selected" : ""}>${FINDING_SEVERITY_LABEL[s]}</option>`).join("");
+
+  function renderTitleAndStatus() {
+    document.getElementById("inspectionTitle").textContent = inspection.title;
+    const badge = document.getElementById("statusBadge");
+    badge.className = `badge ${INSPECTION_STATUS_BADGE[inspection.status]}`;
+    badge.textContent = INSPECTION_STATUS_LABEL[inspection.status];
+  }
+
+  function fillDetailsForm() {
+    document.getElementById("title").value = inspection.title;
+    document.getElementById("inspectionDate").value = inspection.inspection_date;
+    document.getElementById("inspectionType").value = inspection.inspection_type;
+    document.getElementById("status").value = inspection.status;
+    document.getElementById("conductedBy").value = inspection.conducted_by || "";
+    document.getElementById("description").value = inspection.description || "";
+  }
+
+  document.getElementById("detailsForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearError(errorBox);
+    try {
+      inspection = await updateInspection(inspectionId, {
+        title: document.getElementById("title").value.trim(),
+        inspection_date: document.getElementById("inspectionDate").value,
+        inspection_type: document.getElementById("inspectionType").value,
+        status: document.getElementById("status").value,
+        conducted_by: document.getElementById("conductedBy").value.trim() || null,
+        description: document.getElementById("description").value.trim() || null,
+      });
+      renderTitleAndStatus();
+    } catch (err) {
+      showError(errorBox, err);
+    }
+  });
+
+  document.getElementById("deleteBtn").addEventListener("click", async () => {
+    if (!confirm("Delete this inspection and all its findings? This cannot be undone.")) return;
+    clearError(errorBox);
+    try {
+      await deleteInspection(inspectionId);
+      window.location.href = `inspections.html?project=${inspection.project_id}`;
+    } catch (err) {
+      showError(errorBox, err);
+    }
+  });
+
+  // ─── Findings ───────────────────────────────────────────────────
+  document.getElementById("newFindingBtn").addEventListener("click", () => {
+    document.getElementById("newFindingForm").reset();
+    document.getElementById("newFindingCard").style.display = "block";
+  });
+  document.getElementById("cancelFindingBtn").addEventListener("click", () => {
+    document.getElementById("newFindingCard").style.display = "none";
+  });
+
+  document.getElementById("newFindingForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearError(errorBox);
+    try {
+      await createFinding(inspectionId, inspection.project_id, {
+        title: document.getElementById("findingTitle").value.trim(),
+        description: document.getElementById("findingDescription").value.trim() || null,
+        severity: document.getElementById("findingSeverity").value,
+        plotId: document.getElementById("findingPlot").value || null,
+      });
+      document.getElementById("newFindingCard").style.display = "none";
+      await loadFindings();
+    } catch (err) {
+      showError(errorBox, err);
+    }
+  });
+
+  async function saveFindingField(findingId, patch) {
+    clearError(errorBox);
+    try {
+      const updated = await updateFinding(findingId, patch);
+      const idx = findings.findIndex((f) => f.id === findingId);
+      if (idx >= 0) findings[idx] = updated;
+      renderFindings();
+    } catch (err) {
+      showError(errorBox, err);
+    }
+  }
+  window.setFindingSeverity = (id, val) => saveFindingField(id, { severity: val });
+  window.setFindingStatus = (id, val) => saveFindingField(id, { status: val });
+
+  window.markFindingResolved = async (id) => {
+    clearError(errorBox);
+    try {
+      const updated = await resolveFinding(id);
+      const idx = findings.findIndex((f) => f.id === id);
+      if (idx >= 0) findings[idx] = updated;
+      renderFindings();
+    } catch (err) {
+      showError(errorBox, err);
+    }
+  };
+
+  window.removeFinding = async (id) => {
+    if (!confirm("Delete this finding? This cannot be undone.")) return;
+    clearError(errorBox);
+    try {
+      await deleteFinding(id);
+      await loadFindings();
+    } catch (err) {
+      showError(errorBox, err);
+    }
+  };
+
+  window.toggleCreateActionForm = (id) => {
+    const el = document.getElementById(`action-form-${id}`);
+    if (el) el.style.display = el.style.display === "none" ? "block" : "none";
+  };
+
+  window.submitCreateAction = async (findingId, e) => {
+    e.preventDefault();
+    clearError(errorBox);
+    const form = e.target;
+    try {
+      const finding = findings.find((f) => f.id === findingId);
+      const { finding: updatedFinding, action } = await createActionFromFinding(finding, {
+        title: form.querySelector(".action-title").value.trim(),
+        description: form.querySelector(".action-description").value.trim() || null,
+        assignedTo: form.querySelector(".action-assignee").value || null,
+        priority: form.querySelector(".action-priority").value,
+        dueDate: form.querySelector(".action-due-date").value || null,
+      });
+      actionsById[action.id] = action;
+      const idx = findings.findIndex((f) => f.id === findingId);
+      if (idx >= 0) findings[idx] = updatedFinding;
+      renderFindings();
+    } catch (err) {
+      showError(errorBox, err);
+    }
+  };
+
+  window.toggleCreateSnagForm = (id) => {
+    const el = document.getElementById(`snag-form-${id}`);
+    if (el) el.style.display = el.style.display === "none" ? "block" : "none";
+  };
+
+  window.submitCreateSnag = async (findingId, e) => {
+    e.preventDefault();
+    clearError(errorBox);
+    const form = e.target;
+    try {
+      const finding = findings.find((f) => f.id === findingId);
+      const { snag, finding: updatedFinding } = await createSnagFromFinding(finding, {
+        location: form.querySelector(".snag-location").value.trim(),
+        trade: form.querySelector(".snag-trade").value.trim() || null,
+        priority: form.querySelector(".snag-priority").value,
+      });
+      snagByFinding[findingId] = snag;
+      const idx = findings.findIndex((f) => f.id === findingId);
+      if (idx >= 0) findings[idx] = updatedFinding;
+      renderFindings();
+    } catch (err) {
+      showError(errorBox, err);
+    }
+  };
+
+  // The original, uncompressed File behind each just-uploaded finding
+  // photo, kept in a side WeakMap (not on the photo record itself) so
+  // it can never accidentally be sent anywhere — it's purely local UI
+  // state for "Save to Device", separate from photo_url on the row
+  // addFindingPhoto() already persisted. A photo loaded back from the
+  // database on a fresh page load has no entry here, so it correctly
+  // offers no Save to Device control.
+  const photoDeviceState = new WeakMap(); // photo -> { file, status }
+
+  window.uploadFindingPhoto = async (findingId, input) => {
+    const file = input.files[0];
+    if (!file) return;
+    clearError(errorBox);
+    input.disabled = true;
+    try {
+      // addFindingPhoto() uploads via the existing (unchanged) compress-
+      // then-upload pipeline — `file` here is the original capture,
+      // never re-uploaded, only retained below for Save to Device.
+      const photo = await addFindingPhoto(findingId, inspection.project_id, file);
+      photoDeviceState.set(photo, { file, status: null });
+      photosByFinding[findingId] = [...(photosByFinding[findingId] || []), photo];
+      renderFindings();
+    } catch (err) {
+      showError(errorBox, err);
+    } finally {
+      input.disabled = false;
+      input.value = "";
+    }
+  };
+
+  window.saveFindingPhotoToDevice = async (findingId, photoId) => {
+    const photo = (photosByFinding[findingId] || []).find((p) => p.id === photoId);
+    const state = photo && photoDeviceState.get(photo);
+    if (!state || !state.file) return;
+    state.status = "saving";
+    renderFindings();
+    const result = await saveFileToDevice(state.file, deviceSavePhotoFilename(state.file));
+    state.status = result.status;
+    renderFindings();
+  };
+
+  window.removeFindingPhoto = async (photoId, findingId) => {
+    if (!confirm("Delete this photo?")) return;
+    clearError(errorBox);
+    try {
+      await deleteFindingPhoto(photoId);
+      photosByFinding[findingId] = (photosByFinding[findingId] || []).filter((p) => p.id !== photoId);
+      renderFindings();
+    } catch (err) {
+      showError(errorBox, err);
+    }
+  };
+
+  function severityOptionsHtml(current) {
+    return FINDING_SEVERITIES.map((s) => `<option value="${s}" ${s === current ? "selected" : ""}>${FINDING_SEVERITY_LABEL[s]}</option>`).join("");
+  }
+  function statusOptionsHtml(current) {
+    return FINDING_STATUSES.map((s) => `<option value="${s}" ${s === current ? "selected" : ""}>${FINDING_STATUS_LABEL[s]}</option>`).join("");
+  }
+  function assigneeOptionsHtml() {
+    return `<option value="">Unassigned</option>` + editors.map((m) => `<option value="${m.user_id}">${escapeHtml(m.email)}</option>`).join("");
+  }
+
+  function findingCardHtml(f) {
+    const photos = photosByFinding[f.id] || [];
+    const linkedAction = f.action_id ? actionsById[f.action_id] : null;
+    const linkedSnag = snagByFinding[f.id] || null;
+    const outstanding = isFindingOutstanding(f);
+
+    const actionBox = f.action_id
+      ? `<div class="action-link-box">
+           <a href="actions.html?project=${inspection.project_id}">📌 Linked Action</a>
+           ${linkedAction ? ` — <span class="badge ${ACTION_STATUS_BADGE[linkedAction.status]}">${ACTION_STATUS_LABEL[linkedAction.status]}</span>${linkedAction.due_date ? ` — due ${formatDate(linkedAction.due_date)}` : ""}` : ""}
+         </div>`
+      : `
+        <button type="button" class="btn btn-outline btn-sm" style="margin-top:0.6rem;" onclick="toggleCreateActionForm('${f.id}')">Create Action</button>
+        <form id="action-form-${f.id}" style="display:none; margin-top:0.6rem;" onsubmit="submitCreateAction('${f.id}', event)">
+          <div class="field"><label>Action title</label><input type="text" class="action-title" required value="${escapeHtml(f.title)}"></div>
+          <div class="field"><label>Description</label><textarea class="action-description" rows="2">${escapeHtml(f.description) || ""}</textarea></div>
+          <div class="form-grid">
+            <div class="field">
+              <label>Assigned to</label>
+              <select class="action-assignee">${assigneeOptionsHtml()}</select>
+            </div>
+            <div class="field">
+              <label>Priority</label>
+              <select class="action-priority">${ACTION_PRIORITIES.map((p) => `<option value="${p}" ${p === (f.severity === "critical" ? "critical" : f.severity === "high" ? "high" : "medium") ? "selected" : ""}>${ACTION_PRIORITY_LABEL[p]}</option>`).join("")}</select>
+            </div>
+          </div>
+          <div class="field"><label>Due date</label><input type="date" class="action-due-date"></div>
+          <div class="btn-row">
+            <button type="submit" class="btn btn-amber btn-sm">Create Action</button>
+          </div>
+        </form>
+      `;
+
+    const snagBox = linkedSnag
+      ? `<div class="action-link-box">
+           <a href="snag-list-edit.html?id=${linkedSnag.snag_list_id}">🔧 Linked Snag</a>
+           — <span class="badge ${SNAG_STATUS_BADGE[linkedSnag.status]}">${SNAG_STATUS_LABEL[linkedSnag.status]}</span>
+         </div>`
+      : `
+        <button type="button" class="btn btn-outline btn-sm" style="margin-top:0.6rem;" onclick="toggleCreateSnagForm('${f.id}')">Create Snag</button>
+        <form id="snag-form-${f.id}" style="display:none; margin-top:0.6rem;" onsubmit="submitCreateSnag('${f.id}', event)">
+          <div class="field"><label>Location *</label><input type="text" class="snag-location" required placeholder="e.g. First floor bathroom"></div>
+          <div class="form-grid">
+            <div class="field"><label>Trade responsible</label><input type="text" class="snag-trade"></div>
+            <div class="field">
+              <label>Priority</label>
+              <select class="snag-priority">${SNAG_PRIORITIES.map((p) => `<option value="${p}" ${p === (f.severity === "critical" || f.severity === "high" ? "high" : "medium") ? "selected" : ""}>${SNAG_PRIORITY_LABEL[p]}</option>`).join("")}</select>
+            </div>
+          </div>
+          <div class="btn-row">
+            <button type="submit" class="btn btn-amber btn-sm">Create Snag</button>
+          </div>
+        </form>
+      `;
+
+    return `
+      <div class="finding-card">
+        <div class="finding-head">
+          <div class="finding-title">${escapeHtml(f.title)}</div>
+          <div class="btn-row">
+            <select onchange="setFindingSeverity('${f.id}', this.value)" style="width:auto;" class="${FINDING_SEVERITY_BADGE[f.severity]}">${severityOptionsHtml(f.severity)}</select>
+            <select onchange="setFindingStatus('${f.id}', this.value)" style="width:auto;" class="${FINDING_STATUS_BADGE[f.status]}">${statusOptionsHtml(f.status)}</select>
+          </div>
+        </div>
+        ${f.plot_id ? `<p class="hint" style="margin-top:0.2rem;">Plot: <a href="plot-detail.html?id=${f.plot_id}">${escapeHtml(plotsById[f.plot_id] || "—")}</a></p>` : ""}
+        ${f.description ? `<p class="hint" style="margin-top:0.4rem;">${escapeHtml(f.description)}</p>` : ""}
+        ${actionBox}
+        ${snagBox}
+        <div class="finding-photos">
+          ${photos.map((p) => {
+            const state = photoDeviceState.get(p);
+            const saveHtml = state ? `
+              <div style="margin-top:0.3rem;">
+                <button type="button" class="btn btn-outline btn-sm" onclick="saveFindingPhotoToDevice('${f.id}', '${p.id}')" ${state.status === "saving" ? "disabled" : ""}>Save to Device</button>
+                <div class="hint">${escapeHtml(deviceSaveStatusLabel(state.status))}</div>
+              </div>` : "";
+            return `<div style="display:inline-block; vertical-align:top; margin:0 0.6rem 0.6rem 0;">
+              <a href="${p.photo_url}" target="_blank"><img src="${p.photo_url}" alt=""></a>
+              ${saveHtml}
+            </div>`;
+          }).join("")}
+        </div>
+        <div class="btn-row" style="margin-top:0.6rem;">
+          <label class="btn btn-outline btn-sm" style="cursor:pointer;">📷 Add Photo
+            <input type="file" accept="image/*" style="display:none;" onchange="uploadFindingPhoto('${f.id}', this)">
+          </label>
+          ${outstanding ? `<button type="button" class="btn btn-outline btn-sm" onclick="markFindingResolved('${f.id}')">Mark Resolved</button>` : ""}
+          <button type="button" class="btn btn-danger btn-sm" onclick="removeFinding('${f.id}')">Delete</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderFindings() {
+    document.getElementById("findingsEmpty").style.display = findings.length ? "none" : "block";
+    document.getElementById("findingsWrap").innerHTML = findings.map(findingCardHtml).join("");
+  }
+
+  async function loadFindings() {
+    clearError(errorBox);
+    try {
+      findings = await getFindings(inspectionId);
+      const photoLists = await Promise.all(findings.map((f) => getFindingPhotos(f.id)));
+      photosByFinding = {};
+      findings.forEach((f, i) => { photosByFinding[f.id] = photoLists[i]; });
+
+      const actionIds = findings.map((f) => f.action_id).filter(Boolean);
+      if (actionIds.length) {
+        const { data: actions } = await supabase.from("actions").select("id, status, due_date").in("id", actionIds);
+        actionsById = {};
+        (actions || []).forEach((a) => { actionsById[a.id] = a; });
+      }
+
+      const findingIds = findings.map((f) => f.id);
+      snagByFinding = {};
+      if (findingIds.length) {
+        const { data: snags } = await supabase.from("snag_items").select("id, status, snag_list_id, inspection_finding_id").in("inspection_finding_id", findingIds);
+        (snags || []).forEach((s) => { if (!snagByFinding[s.inspection_finding_id]) snagByFinding[s.inspection_finding_id] = s; });
+      }
+      renderFindings();
+    } catch (err) {
+      showError(errorBox, err);
+    }
+  }
+
+  async function init() {
+    try {
+      inspection = await getInspection(inspectionId);
+    } catch (err) {
+      document.getElementById("inspectionTitle").textContent = "Inspection not found";
+      return;
+    }
+    const project = inspection.projects;
+    renderHeader([
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project?.name || "Site", href: `project.html?id=${inspection.project_id}` },
+      { label: "Inspections", href: `inspections.html?project=${inspection.project_id}` },
+      { label: inspection.title },
+    ]);
+    document.getElementById("projectSub").textContent = project?.name || "";
+    renderTitleAndStatus();
+    fillDetailsForm();
+
+    const [{ data: members }, { data: plots }] = await Promise.all([
+      supabase.rpc("get_project_members", { p_project_id: inspection.project_id }),
+      supabase.from("plots").select("id, plot_number").eq("project_id", inspection.project_id),
+    ]);
+    editors = (members || []).filter((m) => m.role === "owner" || m.role === "collaborator");
+
+    const sortedPlots = (plots || []).slice().sort((a, b) => comparePlotNumbers(a.plot_number, b.plot_number));
+    sortedPlots.forEach((p) => { plotsById[p.id] = p.plot_number; });
+    const findingPlotSelect = document.getElementById("findingPlot");
+    sortedPlots.forEach((p) => {
+      const opt = document.createElement("option");
+      opt.value = p.id;
+      opt.textContent = p.plot_number;
+      findingPlotSelect.appendChild(opt);
+    });
+
+    await loadFindings();
+  }
+
+  init();
+</script>
+</body>
+</html>

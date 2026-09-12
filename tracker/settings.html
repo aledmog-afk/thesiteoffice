@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Settings – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page" style="max-width:600px;">
+  <div class="page-head">
+    <div>
+      <div class="page-title">Settings</div>
+      <div class="page-sub">Your organisation and company logo — the logo appears on every printed weekly report and snagging sheet.</div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:1.5rem;">
+    <div id="orgErrorBox" class="error-box"></div>
+    <div class="field">
+      <label for="orgName">Organisation name</label>
+      <input type="text" id="orgName" placeholder="e.g. Acme Construction Ltd">
+    </div>
+    <div class="btn-row">
+      <button type="button" class="btn btn-amber" id="saveOrgNameBtn">Save</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div id="errorBox" class="error-box"></div>
+    <div class="field">
+      <label>Company logo</label>
+      <div id="logoPreviewWrap" style="margin-bottom:1rem;">
+        <img id="logoPreview" class="logo-preview" style="display:none;">
+        <p id="noLogoText" style="color:var(--ink-soft); font-size:0.85rem;">No logo uploaded yet.</p>
+      </div>
+      <input type="file" id="logoInput" accept="image/*">
+      <p class="hint">PNG or JPG works best. It's shown small, so a wide logo (landscape) fits better than a tall one.</p>
+    </div>
+    <div class="btn-row">
+      <button type="button" class="btn btn-danger" id="removeBtn" style="display:none;">Remove Logo</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, showError, clearError, uploadPhoto, ensureOrganisation } from "./js/app.js";
+
+  await requireAuth();
+  renderHeader([{ label: "Settings" }]);
+
+  const orgId = await ensureOrganisation();
+
+  const orgErrorBox = document.getElementById("orgErrorBox");
+  const orgNameInput = document.getElementById("orgName");
+  const errorBox = document.getElementById("errorBox");
+  const logoPreview = document.getElementById("logoPreview");
+  const noLogoText = document.getElementById("noLogoText");
+  const removeBtn = document.getElementById("removeBtn");
+  const logoInput = document.getElementById("logoInput");
+
+  async function loadOrg() {
+    const { data } = await supabase.from("organisations").select("name").eq("id", orgId).single();
+    orgNameInput.value = data?.name || "";
+  }
+
+  document.getElementById("saveOrgNameBtn").addEventListener("click", async () => {
+    clearError(orgErrorBox);
+    const name = orgNameInput.value.trim();
+    if (!name) { showError(orgErrorBox, { message: "Organisation name can't be empty." }); return; }
+    const { error } = await supabase.from("organisations").update({ name, updated_at: new Date().toISOString() }).eq("id", orgId);
+    if (error) showError(orgErrorBox, error);
+  });
+
+  function showLogo(url) {
+    if (url) {
+      logoPreview.src = url;
+      logoPreview.style.display = "block";
+      noLogoText.style.display = "none";
+      removeBtn.style.display = "inline-flex";
+    } else {
+      logoPreview.style.display = "none";
+      noLogoText.style.display = "block";
+      removeBtn.style.display = "none";
+    }
+  }
+
+  async function load() {
+    const { data } = await supabase.from("org_settings").select("logo_url").eq("org_id", orgId).maybeSingle();
+    showLogo(data?.logo_url || null);
+  }
+
+  logoInput.addEventListener("change", async () => {
+    const file = logoInput.files[0];
+    if (!file) return;
+    clearError(errorBox);
+    logoInput.disabled = true;
+    try {
+      const url = await uploadPhoto(file, "org-logo");
+      const { error } = await supabase.from("org_settings").upsert({ org_id: orgId, logo_url: url, updated_at: new Date().toISOString() }, { onConflict: "org_id" });
+      if (error) throw error;
+      showLogo(url);
+    } catch (err) {
+      showError(errorBox, err);
+    } finally {
+      logoInput.value = "";
+      logoInput.disabled = false;
+    }
+  });
+
+  removeBtn.addEventListener("click", async () => {
+    if (!confirm("Remove the company logo from all future printed reports?")) return;
+    const { error } = await supabase.from("org_settings").upsert({ org_id: orgId, logo_url: null, updated_at: new Date().toISOString() }, { onConflict: "org_id" });
+    if (error) { showError(errorBox, error); return; }
+    showLogo(null);
+  });
+
+  loadOrg();
+  load();
+</script>
+</body>
+</html>

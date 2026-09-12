@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Document – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title" id="docTitle">Loading…</div>
+      <div class="page-sub" id="docSub"></div>
+    </div>
+    <div class="btn-row">
+      <span class="badge" id="statusBadge"></span>
+      <button class="btn btn-outline btn-sm" id="editMetaBtn" style="display:none;">Edit</button>
+      <button class="btn btn-outline btn-sm" id="archiveBtn" style="display:none;">Archive</button>
+    </div>
+  </div>
+
+  <div id="errorBox" class="error-box"></div>
+
+  <div class="card" id="editMetaCard" style="display:none; margin-bottom:1.5rem;">
+    <form id="editMetaForm">
+      <div class="form-grid">
+        <div class="field"><label for="editTitle">Title *</label><input type="text" id="editTitle" required></div>
+        <div class="field"><label for="editDocNumber">Document number</label><input type="text" id="editDocNumber"></div>
+      </div>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-amber">Save</button>
+        <button type="button" class="btn btn-outline" id="cancelEditMetaBtn">Cancel</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card" style="margin-bottom:1.5rem;">
+    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Document Details</h3>
+    <dl class="doc-facts" id="factsView"></dl>
+  </div>
+
+  <div class="card" style="margin-bottom:1.5rem;">
+    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Current Revision</h3>
+    <div id="currentRevisionWrap"></div>
+  </div>
+
+  <div class="card" id="uploadRevCard" style="display:none; margin-bottom:1.5rem;">
+    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Upload New Revision</h3>
+    <p class="hint" style="margin-bottom:0.8rem;">This creates a new revision — it never replaces the current file. The previous revision is preserved and marked superseded.</p>
+    <div id="uploadRevErrorBox" class="error-box"></div>
+    <form id="uploadRevForm">
+      <div class="field"><label for="revFile">File *</label><input type="file" id="revFile" required></div>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-amber" id="saveRevBtn">Upload Revision</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Revision History</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Revision</th><th>File</th><th>Status</th><th>Uploaded By</th><th>Uploaded</th><th></th></tr></thead>
+        <tbody id="revisionRows"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, getMemberEmailMap, DOCUMENT_TYPE_LABEL, DOCUMENT_STATUS_LABEL, DOCUMENT_STATUS_BADGE, getDocument, addDocumentRevision, updateDocumentMetadata, archiveDocument, getDocumentFileUrl, downloadDocumentFile } from "./js/app.js";
+
+  await requireAuth();
+  const documentId = getParam("id");
+  if (!documentId) window.location.href = "dashboard.html";
+
+  const errorBox = document.getElementById("errorBox");
+  let doc = null;
+  let isEditor = false;
+  let memberEmails = {};
+
+  async function openRevisionFile(revision) {
+    clearError(errorBox);
+    try {
+      const url = await getDocumentFileUrl(revision);
+      window.open(url, "_blank");
+    } catch (err) {
+      showError(errorBox, err);
+    }
+  }
+  window.openRevisionFile = (id) => openRevisionFile(doc.revisions.find((r) => r.id === id));
+
+  async function downloadRevisionFile(revision) {
+    clearError(errorBox);
+    try {
+      const blob = await downloadDocumentFile(revision);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = revision.file_name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      showError(errorBox, err);
+    }
+  }
+  window.downloadRevisionFile = (id) => downloadRevisionFile(doc.revisions.find((r) => r.id === id));
+
+  function renderStatus() {
+    const badge = document.getElementById("statusBadge");
+    badge.className = `badge ${DOCUMENT_STATUS_BADGE[doc.status] || "badge-grey"}`;
+    badge.textContent = DOCUMENT_STATUS_LABEL[doc.status] || doc.status;
+    document.getElementById("archiveBtn").style.display = (isEditor && doc.status !== "archived") ? "inline-flex" : "none";
+  }
+
+  function renderFacts() {
+    document.getElementById("factsView").innerHTML = `
+      <div><dt>Type</dt><dd>${DOCUMENT_TYPE_LABEL[doc.document_type] || escapeHtml(doc.document_type)}</dd></div>
+      <div><dt>Document Number</dt><dd>${doc.doc_number ? escapeHtml(doc.doc_number) : "—"}</dd></div>
+      <div><dt>Project</dt><dd>${escapeHtml(doc.projects?.name) || "—"}</dd></div>
+      <div><dt>Created By</dt><dd>${doc.created_by ? escapeHtml(memberEmails[doc.created_by] || "—") : "—"}</dd></div>
+      <div><dt>Created</dt><dd>${formatDate((doc.created_at || "").slice(0, 10))}</dd></div>
+      <div><dt>Last Updated</dt><dd>${formatDate((doc.updated_at || "").slice(0, 10))}</dd></div>
+    `;
+  }
+
+  function renderCurrentRevision() {
+    const wrap = document.getElementById("currentRevisionWrap");
+    const rev = doc.currentRevision;
+    if (!rev) { wrap.innerHTML = `<p class="hint">No revision uploaded yet.</p>`; return; }
+    wrap.innerHTML = `
+      <dl class="doc-facts">
+        <div><dt>Revision</dt><dd>Rev ${rev.revision_number}</dd></div>
+        <div><dt>File</dt><dd>${escapeHtml(rev.file_name)}</dd></div>
+        <div><dt>Uploaded By</dt><dd>${rev.uploaded_by ? escapeHtml(memberEmails[rev.uploaded_by] || "—") : "—"}</dd></div>
+        <div><dt>Uploaded</dt><dd>${formatDate((rev.uploaded_at || "").slice(0, 10))}</dd></div>
+      </dl>
+      <div class="btn-row" style="margin-top:0.8rem;">
+        <button type="button" class="btn btn-outline btn-sm" onclick="openRevisionFile('${rev.id}')">Open</button>
+        <button type="button" class="btn btn-outline btn-sm" onclick="downloadRevisionFile('${rev.id}')">Download</button>
+      </div>
+    `;
+  }
+
+  function renderRevisionHistory() {
+    document.getElementById("revisionRows").innerHTML = doc.revisions.map((r) => {
+      const isCurrent = r.id === doc.current_revision_id;
+      return `
+        <tr>
+          <td>Rev ${r.revision_number}</td>
+          <td>${escapeHtml(r.file_name)}</td>
+          <td><span class="badge ${isCurrent ? "badge-green" : "badge-grey"}">${isCurrent ? "Current" : "Superseded"}</span></td>
+          <td>${r.uploaded_by ? escapeHtml(memberEmails[r.uploaded_by] || "—") : "—"}</td>
+          <td>${formatDate((r.uploaded_at || "").slice(0, 10))}</td>
+          <td>
+            <button type="button" class="btn btn-outline btn-sm" onclick="openRevisionFile('${r.id}')">Open</button>
+            <button type="button" class="btn btn-outline btn-sm" onclick="downloadRevisionFile('${r.id}')">Download</button>
+          </td>
+        </tr>
+      `;
+    }).join("");
+  }
+
+  function render() {
+    document.title = `${doc.title} – Site Tracker`;
+    document.getElementById("docTitle").textContent = doc.title;
+    document.getElementById("docSub").textContent = doc.doc_number ? `${DOCUMENT_TYPE_LABEL[doc.document_type]} · ${doc.doc_number}` : DOCUMENT_TYPE_LABEL[doc.document_type];
+    renderHeader([
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: doc.projects?.name || "Site", href: `project.html?id=${doc.project_id}` },
+      { label: "Documents", href: `documents.html?project=${doc.project_id}` },
+      { label: doc.title },
+    ]);
+    renderStatus();
+    renderFacts();
+    renderCurrentRevision();
+    renderRevisionHistory();
+    document.getElementById("uploadRevCard").style.display = (isEditor && doc.status !== "archived") ? "block" : "none";
+  }
+
+  document.getElementById("editMetaBtn").addEventListener("click", () => {
+    document.getElementById("editTitle").value = doc.title;
+    document.getElementById("editDocNumber").value = doc.doc_number || "";
+    document.getElementById("editMetaCard").style.display = "block";
+  });
+  document.getElementById("cancelEditMetaBtn").addEventListener("click", () => {
+    document.getElementById("editMetaCard").style.display = "none";
+  });
+
+  document.getElementById("editMetaForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearError(errorBox);
+    try {
+      await updateDocumentMetadata(documentId, {
+        title: document.getElementById("editTitle").value.trim(),
+        doc_number: document.getElementById("editDocNumber").value.trim() || null,
+      });
+      document.getElementById("editMetaCard").style.display = "none";
+      await load();
+    } catch (err) {
+      showError(errorBox, err);
+    }
+  });
+
+  document.getElementById("archiveBtn").addEventListener("click", async () => {
+    if (!confirm(`Archive "${doc.title}"? Its revisions and history are preserved, but it will be marked archived.`)) return;
+    clearError(errorBox);
+    try {
+      await archiveDocument(documentId);
+      await load();
+    } catch (err) {
+      showError(errorBox, err);
+    }
+  });
+
+  document.getElementById("uploadRevForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearError(document.getElementById("uploadRevErrorBox"));
+    const file = document.getElementById("revFile").files[0];
+    if (!file) return;
+    const btn = document.getElementById("saveRevBtn");
+    btn.disabled = true;
+    try {
+      await addDocumentRevision(documentId, doc.project_id, file);
+      document.getElementById("uploadRevForm").reset();
+      await load();
+    } catch (err) {
+      showError(document.getElementById("uploadRevErrorBox"), err);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  async function load() {
+    clearError(errorBox);
+    try {
+      doc = await getDocument(documentId);
+      const { data: role } = await supabase.rpc("get_my_role", { p_project_id: doc.project_id });
+      isEditor = role === "owner" || role === "collaborator";
+      document.getElementById("editMetaBtn").style.display = isEditor ? "inline-flex" : "none";
+
+      const uploaderIds = [doc.created_by, ...doc.revisions.map((r) => r.uploaded_by)].filter(Boolean);
+      if (uploaderIds.length) memberEmails = await getMemberEmailMap([doc.project_id]);
+
+      render();
+    } catch (err) {
+      document.getElementById("docTitle").textContent = "Document not found";
+      showError(errorBox, err);
+    }
+  }
+
+  load();
+</script>
+</body>
+</html>
