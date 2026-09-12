@@ -93,7 +93,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, getInspection, updateInspection, deleteInspection, getFindings, createFinding, updateFinding, resolveFinding, deleteFinding, createActionFromFinding, createSnagFromFinding, getFindingPhotos, addFindingPhoto, deleteFindingPhoto, comparePlotNumbers, INSPECTION_TYPES, INSPECTION_TYPE_LABEL, INSPECTION_STATUSES, INSPECTION_STATUS_LABEL, INSPECTION_STATUS_BADGE, FINDING_SEVERITIES, FINDING_SEVERITY_LABEL, FINDING_SEVERITY_BADGE, FINDING_STATUSES, FINDING_STATUS_LABEL, FINDING_STATUS_BADGE, isFindingOutstanding, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, getInspection, updateInspection, deleteInspection, getFindings, createFinding, updateFinding, resolveFinding, deleteFinding, createActionFromFinding, createSnagFromFinding, getFindingPhotos, addFindingPhoto, deleteFindingPhoto, comparePlotNumbers, INSPECTION_TYPES, INSPECTION_TYPE_LABEL, INSPECTION_STATUSES, INSPECTION_STATUS_LABEL, INSPECTION_STATUS_BADGE, FINDING_SEVERITIES, FINDING_SEVERITY_LABEL, FINDING_SEVERITY_BADGE, FINDING_STATUSES, FINDING_STATUS_LABEL, FINDING_STATUS_BADGE, isFindingOutstanding, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel } from "./js/app.js";
 
   await requireAuth();
   const inspectionId = getParam("id");
@@ -272,13 +272,26 @@
     }
   };
 
+  // The original, uncompressed File behind each just-uploaded finding
+  // photo, kept in a side WeakMap (not on the photo record itself) so
+  // it can never accidentally be sent anywhere — it's purely local UI
+  // state for "Save to Device", separate from photo_url on the row
+  // addFindingPhoto() already persisted. A photo loaded back from the
+  // database on a fresh page load has no entry here, so it correctly
+  // offers no Save to Device control.
+  const photoDeviceState = new WeakMap(); // photo -> { file, status }
+
   window.uploadFindingPhoto = async (findingId, input) => {
     const file = input.files[0];
     if (!file) return;
     clearError(errorBox);
     input.disabled = true;
     try {
+      // addFindingPhoto() uploads via the existing (unchanged) compress-
+      // then-upload pipeline — `file` here is the original capture,
+      // never re-uploaded, only retained below for Save to Device.
       const photo = await addFindingPhoto(findingId, inspection.project_id, file);
+      photoDeviceState.set(photo, { file, status: null });
       photosByFinding[findingId] = [...(photosByFinding[findingId] || []), photo];
       renderFindings();
     } catch (err) {
@@ -287,6 +300,17 @@
       input.disabled = false;
       input.value = "";
     }
+  };
+
+  window.saveFindingPhotoToDevice = async (findingId, photoId) => {
+    const photo = (photosByFinding[findingId] || []).find((p) => p.id === photoId);
+    const state = photo && photoDeviceState.get(photo);
+    if (!state || !state.file) return;
+    state.status = "saving";
+    renderFindings();
+    const result = await saveFileToDevice(state.file, deviceSavePhotoFilename(state.file));
+    state.status = result.status;
+    renderFindings();
   };
 
   window.removeFindingPhoto = async (photoId, findingId) => {
@@ -380,7 +404,18 @@
         ${actionBox}
         ${snagBox}
         <div class="finding-photos">
-          ${photos.map((p) => `<a href="${p.photo_url}" target="_blank"><img src="${p.photo_url}" alt=""></a>`).join("")}
+          ${photos.map((p) => {
+            const state = photoDeviceState.get(p);
+            const saveHtml = state ? `
+              <div style="margin-top:0.3rem;">
+                <button type="button" class="btn btn-outline btn-sm" onclick="saveFindingPhotoToDevice('${f.id}', '${p.id}')" ${state.status === "saving" ? "disabled" : ""}>Save to Device</button>
+                <div class="hint">${escapeHtml(deviceSaveStatusLabel(state.status))}</div>
+              </div>` : "";
+            return `<div style="display:inline-block; vertical-align:top; margin:0 0.6rem 0.6rem 0;">
+              <a href="${p.photo_url}" target="_blank"><img src="${p.photo_url}" alt=""></a>
+              ${saveHtml}
+            </div>`;
+          }).join("")}
         </div>
         <div class="btn-row" style="margin-top:0.6rem;">
           <label class="btn btn-outline btn-sm" style="cursor:pointer;">📷 Add Photo

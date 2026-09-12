@@ -199,6 +199,109 @@ export async function uploadDrawing(file, path) {
   return uploadPhoto(compressed, `drawings/${path}`);
 }
 
+// ─── Save to Device (Priority 18) ────────────────────────────────
+// Lets the user keep the ORIGINAL captured photo on their own device
+// (their normal Photos/Gallery) alongside the compressed copy that
+// uploadImage() already sends to Supabase Storage above. These are two
+// independent outputs from the same original File — a page gets this
+// for free simply by holding onto the `file` it already has before
+// passing it into uploadImage(); nothing above this section changes.
+//
+// No web API lets a page write into the OS Photos/Gallery silently —
+// every browser requires an explicit user action. The best available
+// mechanism is the Web Share API (file sharing, "Level 2"), which
+// hands the file to the native OS share sheet where the user picks
+// "Save Image"/"Save to Photos" themselves; where that isn't
+// supported, a plain user-triggered browser download is the fallback.
+// Both are always the direct result of the user's own tap — never
+// automatic, never silent.
+
+// True only when this browser can genuinely share THIS file — checks
+// both navigator.share and navigator.canShare explicitly rather than
+// assuming either exists (canShare() can exist in browsers that still
+// don't support sharing files specifically).
+export function canShareFile(file) {
+  return typeof navigator !== "undefined"
+    && typeof navigator.share === "function"
+    && typeof navigator.canShare === "function"
+    && navigator.canShare({ files: [file] });
+}
+
+// A generic, non-identifying filename for the device copy — never a
+// project id, database id, or anything else that could name a client
+// or site. The original File's own name is deliberately NOT reused:
+// these file inputs also allow picking an existing photo from the
+// library, not only a fresh camera capture, so the original name isn't
+// guaranteed to be free of anything a user has typed into it (a client
+// name, a plot reference) — a fixed generic name removes that
+// possibility entirely, at no real cost.
+export function deviceSavePhotoFilename(file) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const ext = file?.type === "image/png" ? "png" : "jpg";
+  return `site-photo-${stamp}.${ext}`;
+}
+
+// Human-readable status text for the result of saveFileToDevice() —
+// kept in one place so the wording is identical everywhere this
+// feature appears. Deliberately never claims a save happened unless it
+// genuinely did: a cancelled share and a real failure both read as a
+// neutral "try again", and a plain download (no completion signal
+// exists for it) is described as a download, never as a gallery save.
+export function deviceSaveStatusLabel(status) {
+  switch (status) {
+    case "saving": return "Saving…";
+    case "saved": return "Saved to Device ✓";
+    case "downloaded": return "Download started";
+    case "cancelled": return "Not saved to device — you can try again.";
+    case "failed": return "Not saved to device — you can try again.";
+    default: return "";
+  }
+}
+
+// Attempts to get `file` onto the user's own device, using whichever
+// mechanism this browser actually supports. `filename` should come
+// from deviceSavePhotoFilename() (or be equally generic). The file is
+// wrapped in a new File with that name — the exact same bytes, not
+// re-encoded or re-compressed — so the shared/downloaded copy is still
+// the untouched original.
+//
+// Returns one of:
+//   { method: "share",    status: "saved" }        - share completed
+//   { method: "share",    status: "cancelled" }     - user dismissed the share sheet
+//   { method: "share",    status: "failed", error } - a real share error
+//   { method: "download", status: "downloaded" }    - a browser download was
+//                                                      triggered (there is no
+//                                                      completion signal for
+//                                                      this — callers must not
+//                                                      describe it as a
+//                                                      confirmed gallery save)
+//   { method: "download", status: "failed", error }
+export async function saveFileToDevice(file, filename) {
+  const named = new File([file], filename, { type: file.type, lastModified: file.lastModified });
+  if (canShareFile(named)) {
+    try {
+      await navigator.share({ files: [named] });
+      return { method: "share", status: "saved" };
+    } catch (err) {
+      if (err && err.name === "AbortError") return { method: "share", status: "cancelled" };
+      return { method: "share", status: "failed", error: err };
+    }
+  }
+  try {
+    const url = URL.createObjectURL(named);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 30000);
+    return { method: "download", status: "downloaded" };
+  } catch (err) {
+    return { method: "download", status: "failed", error: err };
+  }
+}
+
 // ─── Shared header ──────────────────────────────────────────────
 // Renders the top nav bar into #site-header. `crumbs` is an array of
 // {label, href} — href omitted on the last (current page) crumb.

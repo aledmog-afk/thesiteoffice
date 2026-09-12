@@ -81,7 +81,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, uploadImage, todayISO, comparePlotNumbers, SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_PRIORITY_BADGE, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE, categoriseSnag, assignSnag, verifySnag, unverifySnag, createActionFromSnag, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, uploadImage, todayISO, comparePlotNumbers, SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_PRIORITY_BADGE, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE, categoriseSnag, assignSnag, verifySnag, unverifySnag, createActionFromSnag, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel } from "./js/app.js";
 
   await requireAuth();
   const listId = getParam("id");
@@ -92,6 +92,15 @@
   let snagList = null;
   let allSnags = [];
   let photoUrl = null;
+  // The original, uncompressed File from the input — kept only for the
+  // lifetime of this add/edit session (never persisted, never re-read
+  // from a saved snag) so "Save to Device" can offer the real camera
+  // original, independent of the compressed copy uploadImage() already
+  // sent to Supabase above. A photo loaded from an existing snag (no
+  // File object survives a page reload) simply has no Save to Device
+  // control — an honest limitation, not a bug.
+  let originalPhotoFile = null;
+  let deviceSaveStatus = null;
   let isGeneralList = false;
   let plotsById = {};
   let members = []; // { user_id, email, role } — every project member is a legitimate snag assignee
@@ -108,6 +117,30 @@
 
   prioritySelect.innerHTML = SNAG_PRIORITIES.map((p) => `<option value="${p}">${SNAG_PRIORITY_LABEL[p]}</option>`).join("");
 
+  // Renders the current photo thumbnail plus, only when this session
+  // still has the original File in memory (i.e. it was just uploaded,
+  // not loaded back from a saved snag), a "Save to Device" control for
+  // it. Re-run after every state change instead of patching the DOM in
+  // place, matching this page's existing render-from-state pattern.
+  function renderPhotoGrid() {
+    if (!photoUrl) { photoGrid.innerHTML = ""; return; }
+    const saveHtml = originalPhotoFile ? `
+      <div style="margin-top:0.4rem;">
+        <button type="button" class="btn btn-outline btn-sm" id="savePhotoDeviceBtn" ${deviceSaveStatus === "saving" ? "disabled" : ""}>Save to Device</button>
+        <span class="hint" id="savePhotoDeviceStatus">${escapeHtml(deviceSaveStatusLabel(deviceSaveStatus))}</span>
+      </div>` : "";
+    photoGrid.innerHTML = `<div class="photo-thumb"><img src="${photoUrl}"></div>${saveHtml}`;
+    if (originalPhotoFile) {
+      document.getElementById("savePhotoDeviceBtn").addEventListener("click", async () => {
+        deviceSaveStatus = "saving";
+        renderPhotoGrid();
+        const result = await saveFileToDevice(originalPhotoFile, deviceSavePhotoFilename(originalPhotoFile));
+        deviceSaveStatus = result.status;
+        renderPhotoGrid();
+      });
+    }
+  }
+
   function openForAdd() {
     snagForm.reset();
     document.getElementById("editingId").value = "";
@@ -115,7 +148,9 @@
     prioritySelect.value = "medium";
     assignedToSelect.value = "";
     photoUrl = null;
-    photoGrid.innerHTML = "";
+    originalPhotoFile = null;
+    deviceSaveStatus = null;
+    renderPhotoGrid();
     document.getElementById("saveBtn").textContent = "Add Item";
     snagCard.style.display = "block";
   }
@@ -129,7 +164,12 @@
     document.getElementById("dueDate").value = s.due_date || "";
     assignedToSelect.value = s.assigned_to || "";
     photoUrl = s.photo_url || null;
-    photoGrid.innerHTML = photoUrl ? `<div class="photo-thumb"><img src="${photoUrl}"></div>` : "";
+    // A photo already saved on a snag has no surviving File object from
+    // this (or any prior) session — Save to Device is only ever offered
+    // for a photo just uploaded in the current add/edit interaction.
+    originalPhotoFile = null;
+    deviceSaveStatus = null;
+    renderPhotoGrid();
     document.getElementById("saveBtn").textContent = "Save Changes";
     snagCard.style.display = "block";
   }
@@ -150,8 +190,15 @@
     if (!file) return;
     photoInput.disabled = true;
     try {
+      // The existing compress-then-upload pipeline is untouched — file
+      // goes into uploadImage() exactly as before. `file` itself (the
+      // original, uncompressed capture) is kept separately below only
+      // so Save to Device can offer it later; it is never uploaded a
+      // second time and never sent anywhere else.
       photoUrl = await uploadImage(file, `${snagList.project_id}/snags`);
-      photoGrid.innerHTML = `<div class="photo-thumb"><img src="${photoUrl}"></div>`;
+      originalPhotoFile = file;
+      deviceSaveStatus = null;
+      renderPhotoGrid();
     } catch (err) {
       showError(errorBox, err);
     } finally {

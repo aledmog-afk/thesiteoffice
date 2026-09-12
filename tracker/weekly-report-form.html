@@ -121,7 +121,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, mountTableEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions, comparePlotNumbers, normalisePlotToken, syncGateStatusFromMilestones, EXTERNAL_WORKS_TAG, PHOTO_COMPLIANCE_STATUS, RESOURCE_ADEQUACY, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_LEVELS, RISK_IMPACT_BADGE, RISK_OWNER_SUGGESTIONS, STATUTORY_MILESTONE_TYPES, STATUTORY_OUTCOMES, STATUTORY_OUTCOME_BADGE, getWeeklyReportPosition, isWeeklyReportLocked, reviseWeeklyReport, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, CONTROL_LEVEL_BADGE, FINDING_SEVERITY_LABEL } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, mountTableEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions, comparePlotNumbers, normalisePlotToken, syncGateStatusFromMilestones, EXTERNAL_WORKS_TAG, PHOTO_COMPLIANCE_STATUS, RESOURCE_ADEQUACY, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_LEVELS, RISK_IMPACT_BADGE, RISK_OWNER_SUGGESTIONS, STATUTORY_MILESTONE_TYPES, STATUTORY_OUTCOMES, STATUTORY_OUTCOME_BADGE, getWeeklyReportPosition, isWeeklyReportLocked, reviseWeeklyReport, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, CONTROL_LEVEL_BADGE, FINDING_SEVERITY_LABEL, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -686,12 +686,29 @@
   const photoInput = document.getElementById("photoInput");
   const errorBox = document.getElementById("errorBox");
 
+  // The original, uncompressed File behind each just-uploaded photo,
+  // keyed by that photo's own object (not stored as a field on it) so
+  // it can never end up in the `photos` array that gets saved verbatim
+  // into weekly_reports.photos (jsonb) — purely local "Save to Device"
+  // UI state, entirely separate from the persisted record. A photo
+  // loaded back from a saved report has no entry here, so it correctly
+  // offers no Save to Device control (its original File doesn't survive
+  // a page reload — nothing on the server or in local storage keeps it).
+  const photoDeviceState = new WeakMap(); // photo -> { file, status }
+
   // Each photo is { url, plot_area, category, compliance_status, caption }
   // — all four fields directly editable in place on its card, rather
   // than a separate edit/view toggle, since there's already room for a
   // few small inputs alongside a photo this size.
   function renderPhotos() {
-    photoGallery.innerHTML = photos.map((p, i) => `
+    photoGallery.innerHTML = photos.map((p, i) => {
+      const state = photoDeviceState.get(p);
+      const saveHtml = state ? `
+        <div class="photo-card-fields" style="padding-top:0;">
+          <button type="button" class="btn btn-outline btn-sm save-device" data-i="${i}" ${state.status === "saving" ? "disabled" : ""}>Save to Device</button>
+          <span class="hint save-device-status" data-i="${i}">${escapeHtml(deviceSaveStatusLabel(state.status))}</span>
+        </div>` : "";
+      return `
       <div class="photo-card">
         <img src="${p.url}" alt="${escapeHtml(p.caption) || ""}">
         <button type="button" class="remove" data-i="${i}">✕</button>
@@ -705,8 +722,10 @@
           <input type="text" class="pc-caption" data-i="${i}" placeholder="Caption / observation notes" value="${escapeHtml(p.caption)}">
           ${p.snag_item_id ? `<span class="badge badge-green" title="A snag was raised for this photo when the report was last saved">✓ Snag Raised</span>` : (p.compliance_status === "Action Required" ? `<span class="hint">A snag will be raised for this automatically when you save.</span>` : "")}
         </div>
+        ${saveHtml}
       </div>
-    `).join("");
+    `;
+    }).join("");
     photoGallery.querySelectorAll(".remove").forEach((btn) => {
       btn.addEventListener("click", () => {
         photos.splice(Number(btn.dataset.i), 1);
@@ -717,6 +736,18 @@
     photoGallery.querySelectorAll(".pc-category").forEach((el) => el.addEventListener("change", () => { photos[Number(el.dataset.i)].category = el.value.trim(); }));
     photoGallery.querySelectorAll(".pc-status").forEach((el) => el.addEventListener("change", () => { photos[Number(el.dataset.i)].compliance_status = el.value; }));
     photoGallery.querySelectorAll(".pc-caption").forEach((el) => el.addEventListener("change", () => { photos[Number(el.dataset.i)].caption = el.value.trim(); }));
+    photoGallery.querySelectorAll(".save-device").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const p = photos[Number(btn.dataset.i)];
+        const state = p && photoDeviceState.get(p);
+        if (!state) return;
+        state.status = "saving";
+        renderPhotos();
+        const result = await saveFileToDevice(state.file, deviceSavePhotoFilename(state.file));
+        state.status = result.status;
+        renderPhotos();
+      });
+    });
   }
 
   photoInput.addEventListener("change", async () => {
@@ -724,8 +755,15 @@
     photoInput.disabled = true;
     try {
       for (const file of files) {
+        // The existing compress-then-upload pipeline is untouched —
+        // `file` goes into uploadImage() exactly as before. Each file
+        // is kept separately (matched 1:1 to the photo it produced) so
+        // Save to Device can later offer that exact original, never a
+        // second upload and never the compressed copy.
         const url = await uploadImage(file, `${projectId}/reports`);
-        photos.push({ url, plot_area: "", category: "", compliance_status: "", caption: "", snag_item_id: null, snag_list_id: null });
+        const photo = { url, plot_area: "", category: "", compliance_status: "", caption: "", snag_item_id: null, snag_list_id: null };
+        photoDeviceState.set(photo, { file, status: null });
+        photos.push(photo);
       }
       renderPhotos();
     } catch (err) {
