@@ -4507,3 +4507,150 @@ export async function getCommercialWarnings(projectId) {
   const eventsWithEvidence = new Set((evidenceLinks || []).map((l) => l.commercial_event_id));
   return { tbcEventIds, eventsWithEvidence };
 }
+
+// ─── Commercial Module — Phase 2 (Variation vertical slice) ────────
+// Built on the same Phase 0 spine as Dayworks (Phase 1) — a Variation
+// is a commercial_events row (type='variation') + its variations 1:1
+// extension row, exactly as a Daywork is commercial_events + dayworks.
+// It reuses every Phase 1 workflow/evidence/signature function
+// unchanged (submitCommercialEvent/approveCommercialEvent/
+// rejectCommercialEvent/reopenCommercialEvent, getCommercialEvidence/
+// addCommercialEvidencePhoto/removeCommercialEvidenceLink,
+// getCommercialSignatures) — only what's genuinely new to a Variation
+// (direct+linked-Dayworks pricing, the variations extension fields,
+// and variation_dayworks linking) gets its own functions here.
+
+export const COMMERCIAL_EVENT_TYPE_LABEL = { daywork: "Daywork", variation: "Variation" };
+
+// ─── variations (1:1 extension of commercial_events) ────────────────
+export async function createVariation(projectId, {
+  title, plotId = null, reason = null, instructionReference = null,
+  dateIdentified = null, dateInstructed = null, instructedBy = null, markupPct = 0,
+}) {
+  const { data: event, error } = await supabase.from("commercial_events").insert({
+    project_id: projectId,
+    type: "variation",
+    title,
+    plot_id: plotId || null,
+  }).select().single();
+  if (error) throw error;
+  const { error: vError } = await supabase.from("variations").insert({
+    commercial_event_id: event.id,
+    reason: reason || null,
+    instruction_reference: instructionReference || null,
+    date_identified: dateIdentified || null,
+    date_instructed: dateInstructed || null,
+    instructed_by: instructedBy || null,
+    markup_pct: markupPct === "" || markupPct === undefined || markupPct === null ? 0 : markupPct,
+  });
+  if (vError) throw vError;
+  return event;
+}
+
+export async function getVariation(eventId) {
+  const [{ data: event, error }, { data: v, error: vError }] = await Promise.all([
+    supabase.from("commercial_events").select("*").eq("id", eventId).eq("type", "variation").single(),
+    supabase.from("variations").select("*").eq("commercial_event_id", eventId).single(),
+  ]);
+  if (error) throw error;
+  if (vError) throw vError;
+  return { ...event, ...v };
+}
+
+export async function updateVariation(eventId, {
+  title, plotId, reason, instructionReference, dateIdentified, dateInstructed, instructedBy, markupPct,
+} = {}) {
+  const eventFields = {};
+  if (title !== undefined) eventFields.title = title;
+  if (plotId !== undefined) eventFields.plot_id = plotId || null;
+  if (Object.keys(eventFields).length) {
+    const { error } = await supabase.from("commercial_events").update(eventFields).eq("id", eventId);
+    if (error) throw error;
+  }
+  const variationFields = {};
+  if (reason !== undefined) variationFields.reason = reason || null;
+  if (instructionReference !== undefined) variationFields.instruction_reference = instructionReference || null;
+  if (dateIdentified !== undefined) variationFields.date_identified = dateIdentified || null;
+  if (dateInstructed !== undefined) variationFields.date_instructed = dateInstructed || null;
+  if (instructedBy !== undefined) variationFields.instructed_by = instructedBy || null;
+  if (markupPct !== undefined) variationFields.markup_pct = markupPct === "" ? 0 : markupPct;
+  if (Object.keys(variationFields).length) {
+    const { error } = await supabase.from("variations").update(variationFields).eq("commercial_event_id", eventId);
+    if (error) throw error;
+  }
+  return getVariation(eventId);
+}
+
+// ─── Linked Dayworks (variation_dayworks) ───────────────────────────
+// Eligibility (same project, not already linked, a real Daywork) is
+// DB-enforced independently at both the RLS layer and
+// variation_dayworks_before_insert() — see sql/schema.sql's "SECURITY
+// FIX (Phase 2)" comments. This client-side filter exists purely so
+// the picker UI doesn't even OFFER an ineligible Daywork; it grants no
+// access and closes no gap the database doesn't already close on its
+// own if bypassed.
+export async function listEligibleDayworksForLinking(projectId, variationEventId) {
+  const [{ data: allDayworks, error }, { data: linked, error: linkErr }] = await Promise.all([
+    listCommercialEvents(projectId, { type: "daywork" }),
+    supabase.from("variation_dayworks").select("daywork_id").eq("variation_id", variationEventId),
+  ]);
+  if (error) throw error;
+  if (linkErr) throw linkErr;
+  const linkedIds = new Set((linked || []).map((l) => l.daywork_id));
+  return (allDayworks || []).filter((d) => !linkedIds.has(d.id));
+}
+
+export async function getLinkedDayworks(variationEventId) {
+  const { data: links, error } = await supabase.from("variation_dayworks").select("*").eq("variation_id", variationEventId).order("linked_at", { ascending: true });
+  if (error) throw error;
+  const daywork_ids = (links || []).map((l) => l.daywork_id);
+  let dayworksById = {};
+  if (daywork_ids.length) {
+    const { data: events, error: evErr } = await supabase.from("commercial_events").select("*").in("id", daywork_ids);
+    if (evErr) throw evErr;
+    (events || []).forEach((e) => { dayworksById[e.id] = e; });
+  }
+  return (links || []).map((l) => ({ ...l, daywork: dayworksById[l.daywork_id] || null }));
+}
+
+export async function linkDaywork(variationEventId, daywork_id) {
+  const { data, error } = await supabase.from("variation_dayworks").insert({
+    variation_id: variationEventId,
+    daywork_id,
+  }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function unlinkDaywork(variationEventId, daywork_id) {
+  const { error } = await supabase.from("variation_dayworks").delete().eq("variation_id", variationEventId).eq("daywork_id", daywork_id);
+  if (error) throw error;
+}
+
+// For a Daywork's own detail page — "Linked Variation(s)". RLS on
+// commercial_events/variation_dayworks means this naturally returns
+// nothing for a Variation the caller can't see; no extra filtering
+// needed to avoid exposing an out-of-reach record.
+export async function getVariationsLinkedToDaywork(daywork_id) {
+  const { data: links, error } = await supabase.from("variation_dayworks").select("variation_id").eq("daywork_id", daywork_id);
+  if (error) throw error;
+  const variationIds = (links || []).map((l) => l.variation_id);
+  if (!variationIds.length) return [];
+  const { data: events, error: evErr } = await supabase.from("commercial_events").select("*").in("id", variationIds);
+  if (evErr) throw evErr;
+  return events || [];
+}
+
+// Immediate-feedback-ONLY client-side preview of what the authoritative
+// total WOULD become for a given direct-subtotal/linked-Dayworks-
+// subtotal/markup combination — used only while editing markup_pct
+// before saving. The value actually displayed everywhere else always
+// comes from the database (commercial_events.total_value or the
+// commercial_event_totals view), matching previewLineTotal()'s own
+// "never authoritative" precedent exactly.
+export function previewVariationTotal(directSubtotal, linkedDayworksSubtotal, markupPct) {
+  const direct = Number(directSubtotal) || 0;
+  const linked = Number(linkedDayworksSubtotal) || 0;
+  const markup = Number(markupPct) || 0;
+  return Math.round((direct + linked) * (1 + markup / 100) * 100) / 100;
+}

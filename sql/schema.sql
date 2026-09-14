@@ -5464,11 +5464,35 @@ language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  v_daywork_project_id uuid;
 begin
   select project_id into new.project_id from public.variations where commercial_event_id = new.variation_id;
   if new.project_id is null then
     raise exception 'variation_dayworks.variation_id must reference an existing variations row';
   end if;
+
+  -- SECURITY FIX (Phase 2): the original Phase 0 trigger validated only
+  -- that variation_id points at a real variations row — it never
+  -- checked that the daywork being linked belongs to the SAME project.
+  -- Confirmed exploitable: a contributor with edit access on their own
+  -- project's variation could link an arbitrary daywork_id from ANY
+  -- other project (including another organisation's), folding that
+  -- daywork's total_value into their own variation's total via
+  -- recompute_commercial_event_total() — a genuine cross-tenant value
+  -- leak, found and fixed before any Variation UI existed to surface
+  -- it. This check is deliberately duplicated at the RLS layer below
+  -- (the insert policy on variation_dayworks) rather than relied on
+  -- here alone, matching this schema's established "child locking must
+  -- be enforced independently at both layers" precedent.
+  select project_id into v_daywork_project_id from public.dayworks where commercial_event_id = new.daywork_id;
+  if v_daywork_project_id is null then
+    raise exception 'variation_dayworks.daywork_id must reference an existing dayworks row';
+  end if;
+  if v_daywork_project_id <> new.project_id then
+    raise exception 'A Daywork can only be linked to a Variation on the same project';
+  end if;
+
   return new;
 end;
 $$;
@@ -5483,8 +5507,21 @@ create policy "commercial viewers read variation_dayworks" on public.variation_d
   exists (select 1 from public.commercial_events ce where ce.id = variation_dayworks.variation_id and public.can_view_commercial(ce.project_id))
 );
 drop policy if exists "commercial contributors insert variation_dayworks" on public.variation_dayworks;
+-- SECURITY FIX (Phase 2): also requires the daywork's own commercial_events
+-- row to share the variation's project_id — see variation_dayworks_before_
+-- insert()'s comment above for the vulnerability this closes. Independent
+-- of the trigger's own check: even if the trigger were ever bypassed or
+-- changed, this policy alone still prevents the cross-project link.
 create policy "commercial contributors insert variation_dayworks" on public.variation_dayworks for insert with check (
-  exists (select 1 from public.commercial_events ce where ce.id = variation_dayworks.variation_id and public.can_edit_commercial(ce.project_id) and ce.status in ('draft', 'rejected'))
+  exists (
+    select 1
+    from public.commercial_events v_ce
+    join public.commercial_events d_ce on d_ce.id = variation_dayworks.daywork_id
+    where v_ce.id = variation_dayworks.variation_id
+      and v_ce.project_id = d_ce.project_id
+      and public.can_edit_commercial(v_ce.project_id)
+      and v_ce.status in ('draft', 'rejected')
+  )
 );
 drop policy if exists "commercial contributors delete variation_dayworks" on public.variation_dayworks;
 create policy "commercial contributors delete variation_dayworks" on public.variation_dayworks for delete using (

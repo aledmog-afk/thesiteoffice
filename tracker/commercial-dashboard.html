@@ -20,7 +20,9 @@
     </div>
     <div class="btn-row" id="headerActions" style="display:none;">
       <a class="btn btn-outline" href="dayworks.html" id="dayworksLink">View Dayworks</a>
+      <a class="btn btn-outline" href="variations.html" id="variationsLink">View Variations</a>
       <a class="btn btn-amber" href="daywork-detail.html" id="newDayworkLink" style="display:none;">+ New Daywork</a>
+      <a class="btn btn-amber" href="variation-detail.html" id="newVariationLink" style="display:none;">+ New Variation</a>
     </div>
   </div>
 
@@ -38,6 +40,16 @@
       <div class="totals-box"><div class="totals-label">Rejected</div><div class="totals-value" id="rejectedCount">0</div></div>
       <div class="totals-box"><div class="totals-label">Total Approved Value</div><div class="totals-value approved" id="approvedValue">£0.00</div></div>
       <div class="totals-box"><div class="totals-label">Outstanding Submitted Value</div><div class="totals-value pending" id="submittedValue">£0.00</div></div>
+    </div>
+
+    <h3 style="font-family:var(--font-display); font-size:0.85rem; color:var(--ink-soft); margin:0 0 0.6rem;">Variations Only</h3>
+    <div class="totals-bar" style="margin-bottom:2rem;">
+      <div class="totals-box"><div class="totals-label">Draft</div><div class="totals-value" id="varDraftCount">0</div></div>
+      <div class="totals-box"><div class="totals-label">Submitted</div><div class="totals-value pending" id="varSubmittedCount">0</div></div>
+      <div class="totals-box"><div class="totals-label">Approved</div><div class="totals-value approved" id="varApprovedCount">0</div></div>
+      <div class="totals-box"><div class="totals-label">Rejected</div><div class="totals-value" id="varRejectedCount">0</div></div>
+      <div class="totals-box"><div class="totals-label">Approved Variation Value</div><div class="totals-value approved" id="varApprovedValue">£0.00</div></div>
+      <div class="totals-box"><div class="totals-label">Outstanding Variation Value</div><div class="totals-value pending" id="varSubmittedValue">£0.00</div></div>
     </div>
 
     <div class="card" id="warningsCard" style="display:none; margin-bottom:2rem;">
@@ -70,16 +82,19 @@
 
   const pageErrorBox = document.getElementById("pageErrorBox");
   document.getElementById("dayworksLink").href = `dayworks.html?project=${projectId}`;
+  document.getElementById("variationsLink").href = `variations.html?project=${projectId}`;
   document.getElementById("newDayworkLink").href = `daywork-detail.html?project=${projectId}`;
+  document.getElementById("newVariationLink").href = `variation-detail.html?project=${projectId}`;
 
   const typeLabel = { daywork: "Daywork", variation: "Variation" };
+  const detailPageForType = { daywork: "daywork-detail.html", variation: "variation-detail.html" };
 
   function renderActivity(events, plotsById) {
     const rows = events.slice(0, 25);
     document.getElementById("emptyState").style.display = rows.length ? "none" : "block";
     document.getElementById("activityRows").innerHTML = rows.map((e) => `
       <tr>
-        <td><a href="daywork-detail.html?id=${e.id}">${escapeHtml(e.reference) || "—"}</a></td>
+        <td><a href="${detailPageForType[e.type] || "daywork-detail.html"}?id=${e.id}">${escapeHtml(e.reference) || "—"}</a></td>
         <td>${typeLabel[e.type] || e.type}</td>
         <td>${escapeHtml(e.title)}</td>
         <td>${e.plot_id ? escapeHtml(plotsById[e.plot_id] || "—") : "—"}</td>
@@ -119,7 +134,10 @@
     }
     document.getElementById("headerActions").style.display = "flex";
     document.getElementById("dashboardBody").style.display = "block";
-    if (caps.canEdit) document.getElementById("newDayworkLink").style.display = "inline-flex";
+    if (caps.canEdit) {
+      document.getElementById("newDayworkLink").style.display = "inline-flex";
+      document.getElementById("newVariationLink").style.display = "inline-flex";
+    }
 
     try {
       const [{ data: plots }, { events, counts, approvedValue, submittedValue }, warnings] = await Promise.all([
@@ -136,6 +154,26 @@
       document.getElementById("rejectedCount").textContent = counts.rejected;
       document.getElementById("approvedValue").textContent = formatCommercialGBP(approvedValue) || "£0.00";
       document.getElementById("submittedValue").textContent = formatCommercialGBP(submittedValue) || "£0.00";
+
+      // Variation-only breakdown — computed client-side from the same
+      // already-fetched `events` array (no second query), matching
+      // this dashboard's own "small fixed number of broad queries"
+      // convention.
+      const variations = events.filter((e) => e.type === "variation");
+      const varCounts = { draft: 0, submitted: 0, approved: 0, rejected: 0 };
+      let varApprovedValue = 0, varSubmittedValue = 0;
+      variations.forEach((e) => {
+        varCounts[e.status]++;
+        const value = Number(e.total_value) || 0;
+        if (e.status === "approved") varApprovedValue += value;
+        if (e.status === "submitted") varSubmittedValue += value;
+      });
+      document.getElementById("varDraftCount").textContent = varCounts.draft;
+      document.getElementById("varSubmittedCount").textContent = varCounts.submitted;
+      document.getElementById("varApprovedCount").textContent = varCounts.approved;
+      document.getElementById("varRejectedCount").textContent = varCounts.rejected;
+      document.getElementById("varApprovedValue").textContent = formatCommercialGBP(varApprovedValue) || "£0.00";
+      document.getElementById("varSubmittedValue").textContent = formatCommercialGBP(varSubmittedValue) || "£0.00";
 
       renderActivity(events, plotsById);
       renderWarnings(events, warnings);

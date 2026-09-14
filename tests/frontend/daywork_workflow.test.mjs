@@ -256,6 +256,9 @@ async function run(store, { role, userId, eventId = null, projectId = "p1" }) {
     rejectCommercialEvent: (...a) => store.rejectCommercialEvent(...a),
     reopenCommercialEvent: (...a) => store.reopenCommercialEvent(...a),
     getMemberEmailMap: (...a) => store.getMemberEmailMap(...a),
+    // Phase 2: defaults to empty (no linked Variations); a test can
+    // override it per-call by setting store.getVariationsLinkedToDaywork.
+    getVariationsLinkedToDaywork: (...a) => (store.getVariationsLinkedToDaywork ? store.getVariationsLinkedToDaywork(...a) : Promise.resolve([])),
     getDocumentFileUrl: (...a) => store.getDocumentFileUrl(...a),
     alert: () => {}, confirm: () => true,
   });
@@ -534,4 +537,29 @@ test("Evidence: cannot be added or removed once the record is approved", async (
   assert.equal(document.getElementById("addEvidenceRow").style.display, "none");
   assert.equal(document.querySelectorAll("[data-remove-evidence]").length, 0);
   await assert.rejects(store.removeCommercialEvidenceLink(store.evidenceLinks[0].id), /locked/);
+});
+
+// ─── Phase 2: Daywork <-> Variation visibility ─────────────────
+
+test("Daywork <-> Variation: the Linked Variation(s) card is hidden when there are none, and shows reference/title/status when a Variation links to this Daywork", async () => {
+  const store = makeStore();
+  const event = await store.createDaywork.call(Object.assign(store, { __userId: CONTRIBUTOR_A, __role: "contributor" }), "p1", { title: "Daywork linked to a variation" });
+
+  let { document } = await run(store, { role: "contributor", userId: CONTRIBUTOR_A, eventId: event.id });
+  await wait(30);
+  assert.equal(document.getElementById("linkedVariationsCard").style.display, "none", "no card should show when no Variation links to this Daywork");
+
+  // Re-run with a mocked linked Variation this time.
+  const context2 = await run(
+    Object.assign(store, {
+      getVariationsLinkedToDaywork: async () => [{ id: "v1", reference: "VAR-001", title: "Drainage change", status: "submitted" }],
+    }),
+    { role: "contributor", userId: CONTRIBUTOR_A, eventId: event.id }
+  );
+  document = context2.document;
+  await wait(30);
+  assert.equal(document.getElementById("linkedVariationsCard").style.display, "block");
+  const rowText = document.getElementById("linkedVariationRows").textContent;
+  assert.ok(rowText.includes("VAR-001"));
+  assert.ok(rowText.includes("Drainage change"));
 });

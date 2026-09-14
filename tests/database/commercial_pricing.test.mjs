@@ -230,11 +230,15 @@ test("Structural: variation_dayworks.daywork_id cannot reference a variation-typ
   // Attempt to link variationA as if variationB's "daywork" — daywork_id
   // must satisfy the FK to dayworks(commercial_event_id), and variationA
   // was never inserted into the dayworks table (its type is 'variation'),
-  // so this must fail at the foreign-key level, not merely be logically
-  // discouraged.
+  // so this must fail. Since Phase 2, variation_dayworks_before_insert()
+  // itself now looks daywork_id up in the dayworks table directly (a
+  // cross-project-linking fix), and raises its own clear exception
+  // before the raw FK constraint would even be reached — either layer
+  // independently blocks this, matching this schema's "enforce at more
+  // than one layer" convention.
   await assert.rejects(
     client.query(`insert into public.variation_dayworks (variation_id, daywork_id) values ($1,$2)`, [variationB, variationA]),
-    /foreign key|violates/i,
+    /variation_dayworks\.daywork_id must reference an existing dayworks row|foreign key|violates/i,
     "a variation can never be linked as another variation's daywork — this is a structural FK guarantee, not an application-level check, so no recompute cycle through variation_dayworks is reachable at all"
   );
 });
@@ -257,4 +261,146 @@ test("Structural: a variation cannot link a daywork to itself in a way that crea
     /variation_dayworks\.variation_id must reference an existing variations row/,
     "a daywork row has no corresponding variations row, so it can never appear as variation_id either — self-linking is structurally impossible. variation_dayworks_before_insert() enforces this itself (raising before the underlying FK would even be checked), so the guarantee holds independent of the FK too"
   );
+});
+
+// ─── Phase 2: Variation direct-lines + linked-Dayworks + markup ────
+// The exact scenarios required by the Phase 2 brief, each its own
+// named test with the brief's own worked numbers so a failure is
+// immediately traceable to which combination broke.
+
+async function newDaywork(title) {
+  const eventId = await newEvent("daywork", title);
+  await client.query(`insert into public.dayworks (commercial_event_id) values ($1)`, [eventId]);
+  return eventId;
+}
+async function newVariation(title, markupPct = 0) {
+  const eventId = await newEvent("variation", title);
+  await client.query(`insert into public.variations (commercial_event_id, markup_pct) values ($1, $2)`, [eventId, markupPct]);
+  return eventId;
+}
+async function link(variationId, daywork) {
+  await client.query(`insert into public.variation_dayworks (variation_id, daywork_id) values ($1,$2)`, [variationId, daywork]);
+}
+async function totalOf(eventId) {
+  const { rows } = await client.query("select total_value from public.commercial_events where id=$1", [eventId]);
+  return rows[0].total_value;
+}
+
+test("Variation pricing: direct lines only (no linked Dayworks) — total equals the direct line-item sum", async () => {
+  const variation = await newVariation("Direct only", 0);
+  await addLineItem(variation, { quantity: 4, rate: 250 }); // 1000.00
+  assert.equal(await totalOf(variation), "1000.00");
+});
+
+test("Variation pricing: linked Dayworks only, no direct lines — total equals the linked Dayworks' combined total", async () => {
+  const variation = await newVariation("Dayworks only", 0);
+  const dw1 = await newDaywork("DW only 1");
+  await addLineItem(dw1, { quantity: 1, rate: 500 }); // 500.00
+  const dw2 = await newDaywork("DW only 2");
+  await addLineItem(dw2, { quantity: 1, rate: 750 }); // 750.00
+  await link(variation, dw1);
+  await link(variation, dw2);
+  assert.equal(await totalOf(variation), "1250.00");
+});
+
+test("Variation pricing: the brief's exact worked example — direct £1,000 + Daywork A £500 + Daywork B £750, 10% markup = £2,475.00", async () => {
+  const variation = await newVariation("Worked example", 10);
+  await addLineItem(variation, { quantity: 1, rate: 1000 }); // direct: 1000.00
+  const dwA = await newDaywork("Daywork A");
+  await addLineItem(dwA, { quantity: 1, rate: 500 }); // 500.00
+  const dwB = await newDaywork("Daywork B");
+  await addLineItem(dwB, { quantity: 1, rate: 750 }); // 750.00
+  await link(variation, dwA);
+  await link(variation, dwB);
+  // (1000 + 500 + 750) * 1.10 = 2475.00
+  assert.equal(await totalOf(variation), "2475.00");
+});
+
+test("Variation pricing: at least three linked Dayworks are all counted", async () => {
+  const variation = await newVariation("Multiple dayworks", 0);
+  const dws = [];
+  for (const rate of [100, 200, 300]) {
+    const dw = await newDaywork(`DW rate ${rate}`);
+    await addLineItem(dw, { quantity: 1, rate });
+    await link(variation, dw);
+    dws.push(dw);
+  }
+  assert.equal(dws.length, 3);
+  assert.equal(await totalOf(variation), "600.00");
+});
+
+test("CRITICAL — no double counting: a Variation with a £1,000 direct line and a £500 linked Daywork totals £1,500.00, never £2,000.00", async () => {
+  const variation = await newVariation("Double counting guard", 0);
+  await addLineItem(variation, { quantity: 1, rate: 1000 }); // direct 1000.00
+  const dw = await newDaywork("Linked daywork 500");
+  await addLineItem(dw, { quantity: 1, rate: 500 }); // 500.00
+  await link(variation, dw);
+
+  const total = await totalOf(variation);
+  assert.equal(total, "1500.00", `the linked Daywork's £500 must be counted exactly once (total must be £1,500.00, not £2,000.00) — got £${total}`);
+  assert.notEqual(total, "2000.00");
+
+  // Belt and braces: the Daywork's own line items must not ALSO appear
+  // directly in the Variation's own line-item set (proving the £500
+  // isn't being summed a second time through a different path).
+  const { rows: directLines } = await client.query(
+    "select count(*)::int as n from public.commercial_line_items where commercial_event_id=$1", [variation]
+  );
+  assert.equal(directLines[0].n, 1, "the Variation must have exactly its own one direct line item — the linked Daywork's line item must not have been copied into it");
+});
+
+test("Variation pricing: zero markup leaves the combined direct + linked-Dayworks subtotal unchanged", async () => {
+  const variation = await newVariation("Zero markup", 0);
+  await addLineItem(variation, { quantity: 1, rate: 300 }); // 300.00
+  const dw = await newDaywork("Zero markup daywork");
+  await addLineItem(dw, { quantity: 1, rate: 200 }); // 200.00
+  await link(variation, dw);
+  assert.equal(await totalOf(variation), "500.00", "0% markup must leave the combined subtotal exactly as-is");
+});
+
+test("Variation pricing: a negative direct line item (omission) is supported and reduces the total correctly, markup included", async () => {
+  const variation = await newVariation("Omission with markup", 20);
+  await addLineItem(variation, { quantity: 1, rate: 1000 }); // 1000.00
+  await addLineItem(variation, { quantity: 2, rate: -100 }); // omission: -200.00
+  // (1000 - 200) * 1.20 = 960.00
+  assert.equal(await totalOf(variation), "960.00");
+});
+
+test("Variation pricing: a TBC (NULL rate) direct line item is excluded from the total, exactly as Phase 0 established for Dayworks — no new business rule introduced", async () => {
+  const variation = await newVariation("TBC line", 10);
+  await addLineItem(variation, { quantity: 1, rate: 500 }); // 500.00
+  const tbc = await addLineItem(variation, { quantity: 3, rate: null }); // TBC
+  assert.equal(tbc.line_total, null);
+  // (500 + 0) * 1.10 = 550.00 — the TBC line contributes nothing yet,
+  // exactly like a Daywork's TBC line does (tests/database/commercial_
+  // pricing.test.mjs's existing Phase 0 "NULL rate (TBC)" test).
+  assert.equal(await totalOf(variation), "550.00");
+});
+
+test("Variation pricing: unlinking a Daywork removes its contribution and re-applies markup correctly", async () => {
+  const variation = await newVariation("Unlink recompute", 10);
+  await addLineItem(variation, { quantity: 1, rate: 1000 });
+  const dw = await newDaywork("To be unlinked");
+  await addLineItem(dw, { quantity: 1, rate: 500 });
+  await link(variation, dw);
+  assert.equal(await totalOf(variation), "1650.00"); // (1000+500)*1.10
+
+  await client.query(`delete from public.variation_dayworks where variation_id=$1 and daywork_id=$2`, [variation, dw]);
+  assert.equal(await totalOf(variation), "1100.00", "unlinking must recompute back down to (1000)*1.10 = 1100.00");
+});
+
+test("Variation pricing: commercial_event_totals view agrees exactly with the cached total for the full direct+linked+markup combination", async () => {
+  const variation = await newVariation("View agreement", 15);
+  await addLineItem(variation, { quantity: 1, rate: 400 });
+  const dw = await newDaywork("View agreement daywork");
+  await addLineItem(dw, { quantity: 1, rate: 600 });
+  await link(variation, dw);
+  // (400 + 600) * 1.15 = 1150.00
+  const cached = await totalOf(variation);
+  const { rows: view } = await client.query("select total, own_subtotal, dayworks_subtotal, markup_pct from public.commercial_event_totals where commercial_event_id=$1", [variation]);
+  assert.equal(cached, "1150.00");
+  assert.equal(view[0].total, "1150.00");
+  assert.equal(view[0].own_subtotal, "400.00");
+  assert.equal(view[0].dayworks_subtotal, "600.00");
+  assert.equal(view[0].markup_pct, "15.00");
 });
