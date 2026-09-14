@@ -28,9 +28,11 @@
       <div class="page-sub" id="talkSub"></div>
     </div>
     <div class="btn-row">
+      <button type="button" class="btn btn-outline btn-sm" id="generatePdfBtn" style="display:none;">Generate PDF</button>
       <span class="badge" id="statusBadge"></span>
     </div>
   </div>
+  <div class="hint" id="pdfStatusText" style="text-align:right; margin-top:-0.6rem; margin-bottom:0.6rem;"></div>
 
   <div id="pageErrorBox" class="error-box"></div>
   <div class="card" id="noAccessCard" style="display:none;"><p>You don't have access to this Toolbox Talk.</p></div>
@@ -126,7 +128,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, getMyToolboxTalkRole, toolboxTalkCapabilities, getToolboxTalk, listToolboxTalkAttendees, addToolboxTalkAttendee, removeToolboxTalkAttendee, signToolboxTalkAttendee, recordToolboxTalkAttendeeException, updateToolboxTalkSiteNotes, completeToolboxTalk, cancelToolboxTalk, toolboxTalkSignatureProgress, getToolboxTalkTemplateVersion, getMemberEmailMap, TOOLBOX_TALK_STATUS_LABEL, TOOLBOX_TALK_STATUS_BADGE } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, getMyToolboxTalkRole, toolboxTalkCapabilities, getToolboxTalk, listToolboxTalkAttendees, addToolboxTalkAttendee, removeToolboxTalkAttendee, signToolboxTalkAttendee, recordToolboxTalkAttendeeException, updateToolboxTalkSiteNotes, completeToolboxTalk, cancelToolboxTalk, toolboxTalkSignatureProgress, getToolboxTalkTemplateVersion, getMemberEmailMap, TOOLBOX_TALK_STATUS_LABEL, TOOLBOX_TALK_STATUS_BADGE, generateToolboxTalkPdfBlob, saveFileToDevice, deviceSaveStatusLabel } from "./js/app.js";
 
   const user = await requireAuth();
   const talkId = getParam("id");
@@ -169,7 +171,8 @@
     document.getElementById("siteNotesInput").value = talk.site_notes || "";
 
     const version = await getToolboxTalkTemplateVersion(talk.template_version_id).catch(() => null);
-    document.getElementById("talkSub").textContent = version ? `Version ${version.version_number}` : "";
+    const subParts = [talk.reference, version ? `Version ${version.version_number}` : null].filter(Boolean);
+    document.getElementById("talkSub").textContent = subParts.join("   ·   ");
 
     const emailMap = await getMemberEmailMap([talk.project_id]);
     document.getElementById("deliveredByText").textContent = emailMap[talk.delivered_by] || "—";
@@ -182,6 +185,12 @@
     document.getElementById("talkActionsRow").style.display = (caps.canEdit && !locked) ? "flex" : "none";
     document.getElementById("saveSiteNotesBtn").style.display = (caps.canEdit && !locked) ? "inline-flex" : "none";
     document.getElementById("siteNotesInput").disabled = locked || !caps.canEdit;
+
+    // Only a completed talk has a final, immutable record to export —
+    // matches the database's own guard (buildToolboxTalkPdfDocument()
+    // refuses anything else) rather than trusting this check alone.
+    document.getElementById("generatePdfBtn").style.display = talk.status === "completed" ? "inline-flex" : "none";
+    document.getElementById("pdfStatusText").textContent = "";
   }
 
   function section(title, bodyHtml) {
@@ -375,6 +384,30 @@
       await reload();
     } catch (err) {
       showError(errBox, err);
+    }
+  });
+
+  // ─── PDF export ──────────────────────────────────────────────────
+  // Generates entirely client-side from this same, already-loaded
+  // completed record — no server round trip and no separate access
+  // check to keep in sync with the page's own (see generateToolboxTalkPdfBlob()
+  // in app.js). Sharing/saving reuses the exact Save to Device
+  // infrastructure already used for photos elsewhere in the app.
+  document.getElementById("generatePdfBtn").addEventListener("click", async () => {
+    const btn = document.getElementById("generatePdfBtn");
+    const statusEl = document.getElementById("pdfStatusText");
+    clearError(pageErrorBox);
+    btn.disabled = true;
+    statusEl.textContent = "Generating PDF…";
+    try {
+      const { blob, filename } = await generateToolboxTalkPdfBlob(talkId);
+      const result = await saveFileToDevice(blob, filename);
+      statusEl.textContent = deviceSaveStatusLabel(result.status);
+    } catch (err) {
+      statusEl.textContent = "";
+      showError(pageErrorBox, err);
+    } finally {
+      btn.disabled = false;
     }
   });
 

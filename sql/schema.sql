@@ -7190,3 +7190,141 @@ drop trigger if exists trg_audit_toolbox_talk_templates on public.toolbox_talk_t
 create trigger trg_audit_toolbox_talk_templates
   after insert or update on public.toolbox_talk_templates
   for each row execute function public.write_audit_log();
+
+-- ─── v45 ADDITIONS: Toolbox Talk PDF export ───────────────────────────
+-- Adds only a human-readable, immutable evidence reference to an
+-- already-shipped table (toolbox_talks) — the PDF export's own header
+-- needs one, since a raw UUID isn't something a site supervisor can
+-- read out or file. Everything else the PDF needs (content_snapshot,
+-- site_notes, attendees, signatures) already exists from v44 and is
+-- already RLS-protected; PDF generation itself is client-side, reading
+-- through the SAME can_view_toolbox_talks()-gated SELECT policies the
+-- detail page already uses — there is deliberately no new RPC/endpoint
+-- for this feature to create a second access-control surface to keep in
+-- sync with the first. No new table, no storage of the generated file
+-- (see tracker/README.md's Toolbox Talks PDF section): the completed
+-- record is immutable and always reconstructable, so a stored copy
+-- would only be a second, harder-to-secure copy of data that's already
+-- durable.
+alter table public.toolbox_talks add column if not exists reference text;
+
+-- Full replacement of v44's toolbox_talks_before_write() — same
+-- behaviour throughout, with reference generation added to the INSERT
+-- branch and reference preservation added to the UPDATE branch's
+-- immutable-identity-fields list. See sql/schema.sql's v44 section
+-- above for the original.
+create or replace function public.toolbox_talks_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_org_id uuid;
+  v_version record;
+  v_attendee_count integer;
+  v_unresolved integer;
+  v_next_ref integer;
+begin
+  select org_id into v_org_id from public.projects where id = new.project_id;
+  if v_org_id is null then
+    raise exception 'toolbox_talks.project_id must reference an existing project with an organisation';
+  end if;
+  new.org_id := v_org_id;
+
+  if TG_OP = 'INSERT' then
+    select tv.template_id, tv.content, t.title, t.source_filename, t.org_id as template_org_id
+      into v_version
+      from public.toolbox_talk_template_versions tv
+      join public.toolbox_talk_templates t on t.id = tv.template_id
+      where tv.id = new.template_version_id;
+
+    if v_version is null then
+      raise exception 'toolbox_talks.template_version_id must reference an existing template version';
+    end if;
+    if v_version.template_id <> new.template_id then
+      raise exception 'template_version_id must belong to the specified template_id';
+    end if;
+    if v_version.template_org_id is not null and v_version.template_org_id <> v_org_id then
+      raise exception 'This template does not belong to your organisation';
+    end if;
+
+    new.content_snapshot := v_version.content;
+    new.title := coalesce(nullif(trim(new.title), ''), v_version.title);
+    new.source_filename := v_version.source_filename;
+    new.delivered_by := auth.uid();
+    new.started_at := now();
+    new.status := 'in_progress';
+    new.completed_by := null; new.completed_at := null;
+    new.cancelled_by := null; new.cancelled_at := null; new.cancellation_reason := null;
+    new.created_at := now();
+    new.updated_at := now();
+
+    -- A stable, human-readable evidence reference, scoped per-project
+    -- and set once, never overwritten — set_snag_item_no()'s and
+    -- commercial_events' own established per-project max+1 numbering
+    -- convention exactly (same accepted residual concurrency risk as
+    -- those two, documented at their own definitions; not a new
+    -- pattern). Never overwrites an explicitly-supplied reference.
+    if new.reference is null then
+      select coalesce(max(substring(reference from '(\d+)$')::int), 0) + 1
+        into v_next_ref
+        from public.toolbox_talks
+        where project_id = new.project_id;
+      new.reference := 'TT-' || lpad(v_next_ref::text, 3, '0');
+    end if;
+
+    return new;
+  end if;
+
+  -- UPDATE path: identity/snapshot fields are permanently fixed from
+  -- the moment the talk is started.
+  new.created_at := old.created_at;
+  new.org_id := old.org_id;
+  new.project_id := old.project_id;
+  new.template_id := old.template_id;
+  new.template_version_id := old.template_version_id;
+  new.content_snapshot := old.content_snapshot;
+  new.source_filename := old.source_filename;
+  new.delivered_by := old.delivered_by;
+  new.started_at := old.started_at;
+  new.reference := old.reference;
+  new.updated_at := now();
+
+  if old.status <> 'in_progress' then
+    raise exception 'This toolbox talk is % and is immutable.', old.status;
+  end if;
+
+  if new.status <> old.status then
+    if not public.valid_toolbox_talk_status_transition(old.status, new.status) then
+      raise exception 'Invalid toolbox talk status transition: % -> %', old.status, new.status;
+    end if;
+
+    if new.status = 'completed' then
+      select count(*) into v_attendee_count from public.toolbox_talk_attendees where toolbox_talk_id = new.id;
+      if v_attendee_count = 0 then
+        raise exception 'Add at least one attendee before completing this talk.';
+      end if;
+      select count(*) into v_unresolved
+        from public.toolbox_talk_attendees
+        where toolbox_talk_id = new.id and signed_at is null and exception_reason is null;
+      if v_unresolved > 0 then
+        raise exception '% attendee(s) have not yet signed or been recorded as an exception.', v_unresolved;
+      end if;
+      new.completed_by := auth.uid();
+      new.completed_at := now();
+    elsif new.status = 'cancelled' then
+      if new.cancellation_reason is null or length(trim(new.cancellation_reason)) = 0 then
+        raise exception 'A cancellation reason is required to cancel a toolbox talk.';
+      end if;
+      new.cancelled_by := auth.uid();
+      new.cancelled_at := now();
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+-- No trigger re-creation needed — trg_toolbox_talks_before_write (v44)
+-- already points at this function by name; create or replace swaps its
+-- body in place.

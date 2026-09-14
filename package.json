@@ -10,6 +10,7 @@
   },
   "devDependencies": {
     "jsdom": "30.0.1",
+    "jspdf": "2.5.2",
     "pg": "8.23.0",
     "xlsx": "^0.18.5"
   }

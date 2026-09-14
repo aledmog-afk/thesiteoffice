@@ -271,6 +271,38 @@ test("Talk lifecycle: a contributor can start a talk from a system template, and
   }
 });
 
+test("Talk lifecycle: the evidence reference is generated server-side, sequential per-project, and independent between projects (v45 — needed for the PDF export's own header)", async () => {
+  const contributor = await userClient(DB, ORGA_CONTRIBUTOR);
+  const orgAAdmin = await userClient(DB, ORGA_ADMIN);
+  try {
+    const first = await contributor.query(
+      "select reference from public.toolbox_talks where id=$1", [fx.talk1]
+    );
+    assert.equal(first.rows[0].reference, "TT-001", "the very first talk started on this project");
+
+    const second = await contributor.query(
+      "insert into public.toolbox_talks (project_id, template_id, template_version_id, title) values ($1,$2,$3,'x') returning reference",
+      [fx.projA, fx.sysTemplateId, fx.sysV1]
+    );
+    assert.equal(second.rows[0].reference, "TT-002", "the second talk on the SAME project must continue the sequence");
+
+    // projA2 has never had a talk started on it before — its own
+    // sequence must start fresh at TT-001, not continue projA's.
+    await orgAAdmin.query(
+      "insert into public.project_module_roles (project_id, user_id, module, role, granted_by) values ($1,$2,'toolbox_talks','contributor',$2) on conflict do nothing",
+      [fx.projA2, ORGA_ADMIN]
+    );
+    const onOtherProject = await orgAAdmin.query(
+      "insert into public.toolbox_talks (project_id, template_id, template_version_id, title) values ($1,$2,$3,'x') returning reference",
+      [fx.projA2, fx.sysTemplateId, fx.sysV1]
+    );
+    assert.equal(onOtherProject.rows[0].reference, "TT-001", "a different project's own sequence must not be affected by projA's talks");
+  } finally {
+    await contributor.end();
+    await orgAAdmin.end();
+  }
+});
+
 test("Talk lifecycle: a viewer cannot start a talk", async () => {
   const viewer = await userClient(DB, ORGA_VIEWER);
   try {
@@ -411,6 +443,31 @@ test("Talk lifecycle: completion succeeds once every attendee has signed or been
   }
 });
 
+test("PDF export data layer: a viewer (view-only, no edit rights) can read every field the PDF export needs from a completed talk — same SELECT policy as the detail page itself, since PDF generation goes through no separate endpoint", async () => {
+  const viewer = await userClient(DB, ORGA_VIEWER);
+  try {
+    const talk = await viewer.query(
+      "select reference, title, content_snapshot, site_notes, status, started_at, completed_at, delivered_by from public.toolbox_talks where id=$1",
+      [fx.talk1]
+    );
+    assert.equal(talk.rowCount, 1, "a viewer must be able to read the completed talk itself");
+    assert.equal(talk.rows[0].status, "completed");
+    assert.ok(talk.rows[0].reference, "reference must be readable");
+    assert.ok(talk.rows[0].content_snapshot, "content_snapshot must be readable");
+
+    const attendees = await viewer.query(
+      "select name, company, signed_at, signature_data, signature_typed_name, exception_reason, exception_at from public.toolbox_talk_attendees where toolbox_talk_id=$1",
+      [fx.talk1]
+    );
+    assert.ok(attendees.rowCount > 0, "a viewer must be able to read the attendee/signature evidence");
+
+    const org = await viewer.query("select name from public.organisations where id=$1", [fx.orgA]);
+    assert.equal(org.rowCount, 1, "a viewer must be able to resolve the organisation name for the PDF header");
+  } finally {
+    await viewer.end();
+  }
+});
+
 test("IMMUTABILITY: a completed talk's content, status, and timestamps cannot be changed", async () => {
   const contributor = await userClient(DB, ORGA_CONTRIBUTOR);
   try {
@@ -422,6 +479,27 @@ test("IMMUTABILITY: a completed talk's content, status, and timestamps cannot be
       () => contributor.query("update public.toolbox_talks set status='in_progress' where id=$1", [fx.talk1]),
       /is completed and is immutable/i
     );
+  } finally {
+    await contributor.end();
+  }
+});
+
+test("IMMUTABILITY: the evidence reference on a completed talk cannot be changed by any update attempt", async () => {
+  const contributor = await userClient(DB, ORGA_CONTRIBUTOR);
+  try {
+    const before = await contributor.query("select reference from public.toolbox_talks where id=$1", [fx.talk1]);
+    // The talk is already completed at this point in the suite, so this
+    // whole UPDATE is refused outright (the same "is completed and is
+    // immutable" guard as the test above) — the reference was already
+    // proven immutable-by-construction (never re-derived, never
+    // overwritten by the trigger) back when it was still in_progress;
+    // this closes the loop for the fully-locked, PDF-eligible state.
+    await assert.rejects(
+      () => contributor.query("update public.toolbox_talks set reference='HACKED' where id=$1", [fx.talk1]),
+      /is completed and is immutable/i
+    );
+    const after = await contributor.query("select reference from public.toolbox_talks where id=$1", [fx.talk1]);
+    assert.equal(after.rows[0].reference, before.rows[0].reference);
   } finally {
     await contributor.end();
   }

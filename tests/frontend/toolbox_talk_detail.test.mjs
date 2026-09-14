@@ -44,6 +44,7 @@ const CONTENT_SNAPSHOT = {
 function makeTalk(overrides = {}) {
   return {
     id: "talk-1",
+    reference: "TT-003",
     project_id: "p1",
     template_version_id: "v-1",
     title: "Working at Height",
@@ -73,7 +74,7 @@ function makeSupabase({ projectName = "Test Site" } = {}) {
   };
 }
 
-function makeContext({ role = "contributor", talk, attendees = [], supabase } = {}) {
+function makeContext({ role = "contributor", talk, attendees = [], supabase, pdfBlob, pdfError, saveResult } = {}) {
   const calls = [];
   const ctx = {
     __url: "https://example.com/toolbox-talk-detail.html?id=talk-1",
@@ -100,6 +101,24 @@ function makeContext({ role = "contributor", talk, attendees = [], supabase } = 
     updateToolboxTalkSiteNotes: async (talkId, notes) => { calls.push({ fn: "updateToolboxTalkSiteNotes", talkId, notes }); },
     completeToolboxTalk: async (talkId) => { calls.push({ fn: "completeToolboxTalk", talkId }); },
     cancelToolboxTalk: async (talkId, reason) => { calls.push({ fn: "cancelToolboxTalk", talkId, reason }); },
+    generateToolboxTalkPdfBlob: async (talkId) => {
+      calls.push({ fn: "generateToolboxTalkPdfBlob", talkId });
+      if (pdfError) throw pdfError;
+      return { blob: pdfBlob || { type: "application/pdf" }, filename: "TT-003 - Working at Height.pdf" };
+    },
+    saveFileToDevice: async (blob, filename) => {
+      calls.push({ fn: "saveFileToDevice", blob, filename });
+      return saveResult || { method: "download", status: "downloaded" };
+    },
+    deviceSaveStatusLabel: (status) => {
+      switch (status) {
+        case "saved": return "Saved to Device ✓";
+        case "downloaded": return "Download started";
+        case "cancelled": return "Not saved to device — you can try again.";
+        case "failed": return "Not saved to device — you can try again.";
+        default: return "";
+      }
+    },
     TOOLBOX_TALK_STATUS_LABEL: { in_progress: "In Progress", completed: "Completed", cancelled: "Cancelled" },
     TOOLBOX_TALK_STATUS_BADGE: { in_progress: "badge-amber", completed: "badge-green", cancelled: "badge-grey" },
   };
@@ -281,4 +300,73 @@ test("Toolbox Talk detail: cancelling the talk requires a reason and calls cance
   assert.ok(call, "cancelToolboxTalk() must have been called");
   assert.equal(call.talkId, "talk-1");
   assert.equal(call.reason, "Weather turned unsafe");
+});
+
+// ─── PDF export ──────────────────────────────────────────────────────
+
+test("Toolbox Talk detail: Generate PDF is hidden for an in-progress talk and shown for a completed one", async () => {
+  const inProgress = makeContext({ talk: makeTalk({ status: "in_progress" }), attendees: [] });
+  const { document: doc1 } = await run(inProgress);
+  await wait(20);
+  assert.equal(doc1.getElementById("generatePdfBtn").style.display, "none");
+
+  const completed = makeContext({ talk: makeTalk({ status: "completed", completed_at: "2026-01-05T09:30:00Z" }), attendees: [{ id: "a1", name: "Alice", signed_at: "2026-01-05T09:20:00Z" }] });
+  const { document: doc2 } = await run(completed);
+  await wait(20);
+  assert.equal(doc2.getElementById("generatePdfBtn").style.display, "inline-flex");
+});
+
+test("Toolbox Talk detail: Generate PDF is hidden for a cancelled talk", async () => {
+  const ctx = makeContext({ talk: makeTalk({ status: "cancelled", cancellation_reason: "Rained off" }), attendees: [] });
+  const { document } = await run(ctx);
+  await wait(20);
+  assert.equal(document.getElementById("generatePdfBtn").style.display, "none");
+});
+
+test("Toolbox Talk detail: clicking Generate PDF calls generateToolboxTalkPdfBlob then saveFileToDevice with the returned blob/filename, and shows the resulting status", async () => {
+  const ctx = makeContext({
+    talk: makeTalk({ status: "completed", completed_at: "2026-01-05T09:30:00Z" }),
+    attendees: [{ id: "a1", name: "Alice", signed_at: "2026-01-05T09:20:00Z" }],
+    saveResult: { method: "share", status: "saved" },
+  });
+  const { document } = await run(ctx);
+  await wait(20);
+
+  fireEvent(document.getElementById("generatePdfBtn"), "click");
+  await wait(20);
+
+  const genCall = ctx.__calls.find((c) => c.fn === "generateToolboxTalkPdfBlob");
+  assert.ok(genCall, "generateToolboxTalkPdfBlob() must have been called");
+  assert.equal(genCall.talkId, "talk-1");
+
+  const saveCall = ctx.__calls.find((c) => c.fn === "saveFileToDevice");
+  assert.ok(saveCall, "saveFileToDevice() must have been called with the generated blob/filename");
+  assert.equal(saveCall.filename, "TT-003 - Working at Height.pdf");
+
+  assert.equal(document.getElementById("pdfStatusText").textContent, "Saved to Device ✓");
+});
+
+test("Toolbox Talk detail: a PDF generation failure shows the error and never calls saveFileToDevice", async () => {
+  const ctx = makeContext({
+    talk: makeTalk({ status: "completed", completed_at: "2026-01-05T09:30:00Z" }),
+    attendees: [{ id: "a1", name: "Alice", signed_at: "2026-01-05T09:20:00Z" }],
+    pdfError: new Error("Only a completed Toolbox Talk can be exported as a PDF."),
+  });
+  const { document } = await run(ctx);
+  await wait(20);
+
+  fireEvent(document.getElementById("generatePdfBtn"), "click");
+  await wait(20);
+
+  assert.ok(!ctx.__calls.some((c) => c.fn === "saveFileToDevice"), "must not attempt to save/share when generation failed");
+  assert.ok(document.getElementById("pageErrorBox").textContent.includes("Only a completed Toolbox Talk"));
+});
+
+test("Toolbox Talk detail: the talk's reference and template version both appear in the page subtitle", async () => {
+  const ctx = makeContext({ talk: makeTalk({ reference: "TT-009" }), attendees: [] });
+  const { document } = await run(ctx);
+  await wait(20);
+  const sub = document.getElementById("talkSub").textContent;
+  assert.ok(sub.includes("TT-009"));
+  assert.ok(sub.includes("Version 2"));
 });

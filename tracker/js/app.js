@@ -4939,3 +4939,435 @@ export function toolboxTalkSignatureProgress(attendees) {
   const resolved = attendees.filter((a) => a.signed_at || a.exception_reason).length;
   return { total, resolved, outstanding: total - resolved, allResolved: total > 0 && resolved === total };
 }
+
+// ─── Toolbox Talk PDF export ──────────────────────────────────────────
+// Generated entirely client-side, from data already fetched through the
+// same RLS-protected reads (getToolboxTalk/listToolboxTalkAttendees)
+// the detail page itself uses — deliberately no server-side PDF
+// endpoint/RPC, so there is no second access-control surface to keep in
+// sync with the first. The generated file is never stored: a completed
+// talk's content_snapshot/attendees/signatures are already immutable
+// and durable, so every "Generate PDF" click reproduces the exact same
+// evidence rather than reading a second, harder-to-secure copy of it.
+//
+// The heavy lifting is split in two, matching this file's existing
+// pure-function/async-wrapper convention (e.g. computePlotHandoverReadiness
+// vs its data-fetching wrapper): buildToolboxTalkPdfDocument() is pure —
+// given a jsPDF constructor and already-resolved plain data, it returns
+// a built document with no I/O of its own — so it can be exercised
+// directly against the real `jspdf` package in tests. Only
+// generateToolboxTalkPdfBlob() below touches Supabase, org branding, or
+// the CDN import.
+
+export function formatDateTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return "";
+  return d.toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+export function formatTimeOnly(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return "";
+  return d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+}
+
+// "TT-003 - Working at Height.pdf" (or just the title if no reference
+// exists yet — a talk started before this column was backfilled).
+export function toolboxTalkPdfFilename(talk) {
+  const label = talk.reference ? `${talk.reference} - ${talk.title}` : talk.title;
+  return `${sanitizeExportFilename(label)}.pdf`;
+}
+
+// jsPDF's addImage() needs an explicit format when it can't infer one;
+// both formats this app ever produces (canvas.toDataURL("image/png")
+// for signatures, and whatever an uploaded company logo happens to be)
+// are covered — anything else is left to jsPDF's own auto-detection.
+function detectImageFormat(dataUrl) {
+  if (/^data:image\/png/i.test(dataUrl)) return "PNG";
+  if (/^data:image\/jpe?g/i.test(dataUrl)) return "JPEG";
+  if (/^data:image\/webp/i.test(dataUrl)) return "WEBP";
+  return undefined;
+}
+
+const TT_PDF_PAGE = { width: 595.28, height: 841.89 }; // A4 in points
+const TT_PDF_MARGIN = 42;
+const TT_PDF_CONTENT_WIDTH = TT_PDF_PAGE.width - TT_PDF_MARGIN * 2;
+const TT_PDF_FOOTER_RESERVE = 30;
+
+// The pure PDF builder. `logo` is `{ dataUrl, width, height } | null`;
+// `attendees` and `talk` are exactly the shapes getToolboxTalk()/
+// listToolboxTalkAttendees() already return. Refuses to build for
+// anything but a completed talk — belt and braces alongside
+// generateToolboxTalkPdfBlob()'s own check below, since this function
+// can also be called directly (e.g. in tests).
+export function buildToolboxTalkPdfDocument({ jsPDFCtor, talk, projectName, orgName, logo, attendees, deliveredByLabel }) {
+  if (talk.status !== "completed") {
+    throw new Error("Only a completed Toolbox Talk can be exported as a PDF.");
+  }
+
+  const doc = new jsPDFCtor({ unit: "pt", format: "a4" });
+  let y = TT_PDF_MARGIN;
+
+  function newPage() {
+    doc.addPage();
+    y = TT_PDF_MARGIN;
+  }
+  function ensureSpace(needed) {
+    if (y + needed > TT_PDF_PAGE.height - TT_PDF_MARGIN - TT_PDF_FOOTER_RESERVE) newPage();
+  }
+  function heading(text, size = 11.5) {
+    ensureSpace(size + 12);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(size);
+    doc.setTextColor(20, 20, 20);
+    doc.text(text, TT_PDF_MARGIN, y);
+    y += size + 8;
+  }
+  function paragraph(text, size = 10) {
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(size);
+    doc.setTextColor(40, 40, 40);
+    const lines = doc.splitTextToSize(String(text), TT_PDF_CONTENT_WIDTH);
+    for (const line of lines) {
+      ensureSpace(size + 4);
+      doc.text(line, TT_PDF_MARGIN, y);
+      y += size + 4;
+    }
+    y += 6;
+  }
+  function bulletList(items) {
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(10);
+    doc.setTextColor(40, 40, 40);
+    for (const item of items) {
+      const lines = doc.splitTextToSize(String(item), TT_PDF_CONTENT_WIDTH - 14);
+      lines.forEach((line, i) => {
+        ensureSpace(14);
+        if (i === 0) doc.text("•", TT_PDF_MARGIN, y);
+        doc.text(line, TT_PDF_MARGIN + 14, y);
+        y += 14;
+      });
+    }
+    y += 4;
+  }
+  function contentSection(title, kind, data) {
+    if (kind === "text" && !data) return;
+    if (kind === "list" && (!data || !data.length)) return;
+    heading(title);
+    if (kind === "text") paragraph(data);
+    else bulletList(data);
+  }
+
+  // ─── HEADER ─────────────────────────────────────────────────────
+  if (logo && logo.dataUrl) {
+    const maxH = 36;
+    const ratio = logo.width && logo.height ? logo.width / logo.height : 1;
+    const h = maxH;
+    const w = Math.min(140, h * ratio);
+    const fmt = detectImageFormat(logo.dataUrl);
+    try { doc.addImage(logo.dataUrl, fmt, TT_PDF_MARGIN, y, w, h); } catch { /* a logo jsPDF can't decode is skipped, never fails the export */ }
+    y += maxH + 14;
+  }
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.5);
+  doc.setTextColor(130, 130, 130);
+  doc.text("TOOLBOX TALK", TT_PDF_MARGIN, y);
+  y += 16;
+  doc.setFontSize(18);
+  doc.setTextColor(15, 17, 23);
+  const titleLines = doc.splitTextToSize(talk.title, TT_PDF_CONTENT_WIDTH);
+  titleLines.forEach((line) => { doc.text(line, TT_PDF_MARGIN, y); y += 21; });
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  doc.setTextColor(100, 100, 100);
+  const subLine = [talk.reference, talk.template_version_number ? `Version ${talk.template_version_number}` : null].filter(Boolean).join("   ·   ");
+  if (subLine) { doc.text(subLine, TT_PDF_MARGIN, y); y += 18; }
+  y += 4;
+  doc.setDrawColor(210, 210, 210);
+  doc.line(TT_PDF_MARGIN, y, TT_PDF_MARGIN + TT_PDF_CONTENT_WIDTH, y);
+  y += 22;
+
+  // ─── PROJECT DETAILS ────────────────────────────────────────────
+  // Only real, non-empty fields — never a placeholder for something
+  // this talk genuinely doesn't have.
+  const details = [
+    ["Project", projectName],
+    ["Organisation", orgName],
+    ["Date", talk.started_at ? formatDateTime(talk.started_at).split(",")[0] : null],
+    ["Start Time", formatTimeOnly(talk.started_at)],
+    ["Completion Time", formatTimeOnly(talk.completed_at)],
+    ["Delivered By", deliveredByLabel],
+  ].filter(([, value]) => value);
+  if (details.length) {
+    const colW = TT_PDF_CONTENT_WIDTH / 2;
+    const rows = Math.ceil(details.length / 2);
+    ensureSpace(rows * 34 + 10);
+    const gridTop = y;
+    details.forEach(([label, value], i) => {
+      const col = i % 2;
+      const row = Math.floor(i / 2);
+      const x = TT_PDF_MARGIN + col * colW;
+      const rowY = gridTop + row * 34;
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(7.5);
+      doc.setTextColor(140, 140, 140);
+      doc.text(label.toUpperCase(), x, rowY);
+      doc.setFontSize(10.5);
+      doc.setTextColor(20, 20, 20);
+      doc.text(String(value), x, rowY + 14);
+    });
+    y = gridTop + rows * 34 + 8;
+  }
+
+  // ─── TALK CONTENT ───────────────────────────────────────────────
+  // Same section set/order/labels as toolbox-talk-detail.html's own
+  // renderContent() — the PDF must read as the same talk, not a
+  // reinterpretation of it.
+  const c = talk.content_snapshot || {};
+  contentSection("Introduction", "text", c.introduction);
+  contentSection("Key Message", "text", c.key_message);
+  contentSection("Key Points to Cover", "list", c.key_points);
+  const hasObservations = c.site_observations && ((c.site_observations.good_practice || []).length || (c.site_observations.warning_signs || []).length);
+  if (hasObservations) {
+    heading("What to Look For on Site");
+    if (c.site_observations.good_practice?.length) {
+      ensureSpace(14);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(9.5);
+      doc.setTextColor(30, 110, 50);
+      doc.text("Good Practice", TT_PDF_MARGIN, y);
+      y += 14;
+      bulletList(c.site_observations.good_practice);
+    }
+    if (c.site_observations.warning_signs?.length) {
+      ensureSpace(14);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(9.5);
+      doc.setTextColor(160, 80, 20);
+      doc.text("Warning Signs", TT_PDF_MARGIN, y);
+      y += 14;
+      bulletList(c.site_observations.warning_signs);
+    }
+  }
+  contentSection("Discussion Questions", "list", c.discussion_questions);
+  contentSection("Key Takeaways — What We All Agree To Do", "list", c.key_takeaways);
+  contentSection("Pre-Task Safety Check", "list", c.pre_task_checks);
+
+  // ─── SITE-SPECIFIC NOTES (only if present) ──────────────────────
+  if (talk.site_notes && talk.site_notes.trim()) {
+    heading("Site-Specific Notes");
+    paragraph(talk.site_notes.trim());
+  }
+
+  // ─── ATTENDANCE ──────────────────────────────────────────────────
+  // Always its own page — a half-finished table straddling the talk
+  // content above it is exactly the "broken table" look this feature
+  // must avoid, and the attendance evidence deserves a clean start.
+  newPage();
+  const progress = toolboxTalkSignatureProgress(attendees);
+  heading("Attendance & Signatures", 13);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.setTextColor(110, 110, 110);
+  doc.text(`${progress.resolved} of ${progress.total} attendee(s) resolved`, TT_PDF_MARGIN, y);
+  y += 18;
+
+  const col = {
+    name: TT_PDF_MARGIN,
+    company: TT_PDF_MARGIN + 145,
+    evidence: TT_PDF_MARGIN + 270,
+    signed: TT_PDF_MARGIN + TT_PDF_CONTENT_WIDTH - 60,
+  };
+  function tableHeaderRow() {
+    ensureSpace(24);
+    doc.setFillColor(240, 240, 240);
+    doc.rect(TT_PDF_MARGIN, y - 13, TT_PDF_CONTENT_WIDTH, 20, "F");
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8);
+    doc.setTextColor(70, 70, 70);
+    doc.text("ATTENDEE", col.name + 4, y);
+    doc.text("COMPANY", col.company + 4, y);
+    doc.text("SIGNATURE / EVIDENCE", col.evidence + 4, y);
+    doc.text("SIGNED", col.signed + 4, y);
+    y += 18;
+  }
+  tableHeaderRow();
+
+  const ROW_H = 52;
+  if (!attendees.length) {
+    doc.setFont("helvetica", "italic");
+    doc.setFontSize(9.5);
+    doc.setTextColor(140, 140, 140);
+    doc.text("No attendees recorded.", TT_PDF_MARGIN, y + 10);
+    y += ROW_H;
+  }
+  for (const a of attendees) {
+    if (y + ROW_H > TT_PDF_PAGE.height - TT_PDF_MARGIN - TT_PDF_FOOTER_RESERVE) {
+      newPage();
+      heading("Attendance & Signatures (continued)", 11);
+      tableHeaderRow();
+    }
+    const rowTop = y;
+    doc.setDrawColor(228, 228, 228);
+    doc.line(TT_PDF_MARGIN, rowTop + ROW_H - 8, TT_PDF_MARGIN + TT_PDF_CONTENT_WIDTH, rowTop + ROW_H - 8);
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(10);
+    doc.setTextColor(20, 20, 20);
+    const nameLines = doc.splitTextToSize(String(a.name || ""), col.company - col.name - 8);
+    doc.text(nameLines.slice(0, 2), col.name + 4, rowTop + 14);
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(90, 90, 90);
+    const companyLines = doc.splitTextToSize(String(a.company || "—"), col.evidence - col.company - 8);
+    doc.text(companyLines.slice(0, 2), col.company + 4, rowTop + 14);
+
+    if (a.signed_at && a.signature_data) {
+      const fmt = detectImageFormat(a.signature_data);
+      try {
+        doc.addImage(a.signature_data, fmt, col.evidence + 4, rowTop, 90, 34);
+      } catch {
+        doc.setFont("helvetica", "italic");
+        doc.setFontSize(8.5);
+        doc.setTextColor(180, 60, 60);
+        doc.text("(signature image could not be rendered)", col.evidence + 4, rowTop + 14);
+      }
+    } else if (a.signed_at && a.signature_typed_name) {
+      doc.setFont("helvetica", "italic");
+      doc.setFontSize(11);
+      doc.setTextColor(20, 20, 20);
+      doc.text(String(a.signature_typed_name), col.evidence + 4, rowTop + 20);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(7);
+      doc.setTextColor(150, 150, 150);
+      doc.text("typed-name attestation", col.evidence + 4, rowTop + 32);
+    } else if (a.exception_reason) {
+      doc.setFont("helvetica", "italic");
+      doc.setFontSize(8.5);
+      doc.setTextColor(150, 100, 20);
+      const exLines = doc.splitTextToSize(`Exception: ${a.exception_reason}`, col.signed - col.evidence - 8);
+      doc.text(exLines.slice(0, 3), col.evidence + 4, rowTop + 14);
+    } else {
+      doc.setFont("helvetica", "italic");
+      doc.setFontSize(9);
+      doc.setTextColor(180, 60, 60);
+      doc.text("Not resolved", col.evidence + 4, rowTop + 14);
+    }
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8.5);
+    doc.setTextColor(90, 90, 90);
+    const stamp = a.signed_at || a.exception_at;
+    doc.text(stamp ? formatTimeOnly(stamp) : "—", col.signed + 4, rowTop + 14);
+
+    y = rowTop + ROW_H;
+  }
+
+  // ─── COMPLETION SUMMARY ──────────────────────────────────────────
+  ensureSpace(90);
+  y += 8;
+  doc.setDrawColor(200, 200, 200);
+  doc.line(TT_PDF_MARGIN, y, TT_PDF_MARGIN + TT_PDF_CONTENT_WIDTH, y);
+  y += 24;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(12.5);
+  doc.setTextColor(20, 110, 20);
+  doc.text("STATUS: COMPLETED", TT_PDF_MARGIN, y);
+  y += 18;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  doc.setTextColor(40, 40, 40);
+  doc.text(`Attendance: ${progress.resolved} of ${progress.total} attendee(s) signed or recorded`, TT_PDF_MARGIN, y);
+  y += 16;
+  if (talk.completed_at) {
+    doc.text(`Completed: ${formatDateTime(talk.completed_at)}`, TT_PDF_MARGIN, y);
+    y += 16;
+  }
+
+  // ─── FOOTER (every page, drawn last since it needs the final page count) ──
+  const totalPages = doc.internal.getNumberOfPages();
+  for (let i = 1; i <= totalPages; i++) {
+    doc.setPage(i);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    doc.setTextColor(150, 150, 150);
+    doc.text("Attendance / acknowledgement record — not a legally binding electronic signature.", TT_PDF_MARGIN, TT_PDF_PAGE.height - 20);
+    doc.text(`Page ${i} of ${totalPages}`, TT_PDF_PAGE.width - TT_PDF_MARGIN, TT_PDF_PAGE.height - 20, { align: "right" });
+  }
+
+  return doc;
+}
+
+// Fetches an image URL and returns a data URL plus its natural pixel
+// dimensions (needed to draw the logo at the right aspect ratio) — or
+// null on any failure, so a missing/unreachable company logo never
+// fails the export. Browser-only (fetch + Image + canvas).
+async function loadImageDataUrl(url) {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+    const { width, height } = await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+      img.onerror = reject;
+      img.src = dataUrl;
+    });
+    return { dataUrl, width, height };
+  } catch {
+    return null;
+  }
+}
+
+// Returns the organisation's display name, or null — same shape and
+// failure mode as getOrgLogoUrl() above.
+export async function getOrganisationName(orgId) {
+  if (!orgId) return null;
+  const { data } = await supabase.from("organisations").select("name").eq("id", orgId).maybeSingle();
+  return data?.name || null;
+}
+
+// The async orchestrator: every read here goes through the same RLS
+// this user's own session already has for viewing the talk — there is
+// no separate PDF-generation privilege to grant or misconfigure. Only
+// callable for a completed talk (mirrored again, defensively, inside
+// buildToolboxTalkPdfDocument() itself above).
+export async function generateToolboxTalkPdfBlob(talkId) {
+  const talk = await getToolboxTalk(talkId);
+  if (talk.status !== "completed") {
+    throw new Error("Only a completed Toolbox Talk can be exported as a PDF.");
+  }
+  const [attendees, project, orgName, version, emailMap] = await Promise.all([
+    listToolboxTalkAttendees(talkId),
+    supabase.from("projects").select("name").eq("id", talk.project_id).single().then(({ data }) => data),
+    getOrganisationName(talk.org_id),
+    getToolboxTalkTemplateVersion(talk.template_version_id).catch(() => null),
+    getMemberEmailMap([talk.project_id]),
+  ]);
+  const logoUrl = await getOrgLogoUrl(talk.org_id);
+  const logo = logoUrl ? await loadImageDataUrl(logoUrl) : null;
+
+  // Same CDN-import approach this app already uses for SheetJS/JSZip —
+  // a pinned exact version, dynamically imported, zero build step.
+  const { jsPDF } = await import("https://esm.sh/jspdf@2.5.2");
+
+  const doc = buildToolboxTalkPdfDocument({
+    jsPDFCtor: jsPDF,
+    talk: { ...talk, template_version_number: version?.version_number || null },
+    projectName: project?.name || null,
+    orgName,
+    logo,
+    attendees,
+    deliveredByLabel: emailMap[talk.delivered_by] || null,
+  });
+  return { blob: doc.output("blob"), filename: toolboxTalkPdfFilename(talk) };
+}
