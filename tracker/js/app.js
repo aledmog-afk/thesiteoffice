@@ -4260,6 +4260,61 @@ export async function importProgrammeActivities(programmeId, rows) {
   return data;
 }
 
+// ─── Module Permissions (project-level) ────────────────────────────
+// Per-project, per-module role grants (project_module_roles) are how
+// every module built on this pattern — Commercial, Toolbox Talks, and
+// any future one — decides who can see and act on it. Being a project
+// collaborator does NOT by itself grant any module access; the two are
+// deliberately separate (see sql/schema.sql's project_module_roles
+// comment). Until now nothing in the app actually let an owner grant
+// these — this is that missing piece, built generically against the
+// module_roles catalog so a future module needs zero new UI code here.
+// Write access is owner-only at the RLS level (project_module_roles'
+// own insert/update/delete policies); these functions don't re-check
+// that client-side — a non-owner's write attempt fails at the database
+// the same way any other RLS-blocked write does.
+
+// The full {module, role, sort_order} catalog — every module/role
+// combination that can ever be granted, in this app's intended display
+// order per module.
+export async function getModuleRolesCatalog() {
+  const { data, error } = await supabase.from("module_roles").select("module, role, sort_order").order("module").order("sort_order");
+  if (error) throw error;
+  return data || [];
+}
+
+// Every module-role grant currently in effect on this project — any
+// member can read these (matches project_module_roles' own "members
+// read" policy), not just the owner managing them.
+export async function getProjectModuleRoles(projectId) {
+  const { data, error } = await supabase.from("project_module_roles").select("id, user_id, module, role").eq("project_id", projectId);
+  if (error) throw error;
+  return data || [];
+}
+
+// Sets (or, with role=null, removes) one person's role on one module —
+// explicit insert-or-update rather than a single upsert, matching this
+// file's existing convention elsewhere (no .upsert() call exists
+// anywhere else in this codebase).
+export async function setProjectModuleRole(projectId, userId, moduleName, role) {
+  if (!role) {
+    const { error } = await supabase.from("project_module_roles").delete()
+      .eq("project_id", projectId).eq("user_id", userId).eq("module", moduleName);
+    if (error) throw error;
+    return;
+  }
+  const { data: existing, error: findError } = await supabase.from("project_module_roles").select("id")
+    .eq("project_id", projectId).eq("user_id", userId).eq("module", moduleName).maybeSingle();
+  if (findError) throw findError;
+  if (existing) {
+    const { error } = await supabase.from("project_module_roles").update({ role }).eq("id", existing.id);
+    if (error) throw error;
+  } else {
+    const { error } = await supabase.from("project_module_roles").insert({ project_id: projectId, user_id: userId, module: moduleName, role });
+    if (error) throw error;
+  }
+}
+
 // ─── Commercial Module — Phase 1 (Daywork vertical slice) ──────────
 // Built on the Phase 0 database foundation (commercial_events shared
 // spine, module_roles/project_module_roles, DB-enforced workflow/

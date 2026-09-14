@@ -232,11 +232,23 @@
       <button type="button" class="btn btn-outline btn-sm" id="getSnaggingInviteLinkBtn">Get Snagging Invite Link</button>
     </div>
   </div>
+
+  <div class="card" id="modulePermissionsCard" style="margin-top:2rem; display:none;">
+    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.4rem;">Module Permissions</h3>
+    <p class="hint" style="margin-bottom:1rem;">Being a collaborator on this site does not by itself grant access to modules like Toolbox Talks or Commercial — switch each one on per person below.</p>
+    <div id="modulePermissionsErrorBox" class="error-box"></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr id="modulePermissionsHead"></tr></thead>
+        <tbody id="modulePermissionsRows"></tbody>
+      </table>
+    </div>
+  </div>
 </div>
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, geocodePostcode, recalculateActualProgress, generateMissingPlots, suggestPlotProgress, EXTERNAL_WORKS_TAG, monthStartISO, getProjectControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, isFindingOutstanding, categoriseSnag, getProjectPlotReadiness, getMyCommercialRole, commercialCapabilities, getMyToolboxTalkRole, toolboxTalkCapabilities } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, geocodePostcode, recalculateActualProgress, generateMissingPlots, suggestPlotProgress, EXTERNAL_WORKS_TAG, monthStartISO, getProjectControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, isFindingOutstanding, categoriseSnag, getProjectPlotReadiness, getMyCommercialRole, commercialCapabilities, getMyToolboxTalkRole, toolboxTalkCapabilities, getModuleRolesCatalog, getProjectModuleRoles, setProjectModuleRole } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("id");
@@ -337,6 +349,7 @@
     // Deleting the whole site is owner-only at the database level too —
     // hide the button for collaborators rather than let them hit an error.
     document.getElementById("deleteBtn").style.display = isOwner ? "inline-flex" : "none";
+    loadModulePermissions(members || [], isOwner);
   }
 
   async function removeMember(memberId, email, isYou) {
@@ -391,6 +404,77 @@
   document.getElementById("copySnaggingInviteBtn").addEventListener("click", () => {
     copyToClipboard(document.getElementById("snaggingInviteLinkInput").value);
   });
+
+  // ─── Module Permissions ─────────────────────────────────────────
+  const MODULE_LABEL = { commercial: "Commercial", toolbox_talks: "Toolbox Talks" };
+  const ROLE_OPTION_LABEL = { viewer: "Viewer", contributor: "Contributor", editor: "Editor", approver: "Approver" };
+
+  function moduleLabel(m) {
+    return MODULE_LABEL[m] || m.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+
+  function roleOptionLabel(r) {
+    return ROLE_OPTION_LABEL[r] || r.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+
+  const modulePermissionsCard = document.getElementById("modulePermissionsCard");
+  const modulePermissionsErrorBox = document.getElementById("modulePermissionsErrorBox");
+  let moduleCatalog = [];
+  let moduleGrants = [];
+
+  function renderModulePermissions(members) {
+    const modules = [...new Set(moduleCatalog.map((r) => r.module))];
+
+    document.getElementById("modulePermissionsHead").innerHTML =
+      `<th>Member</th>` + modules.map((m) => `<th>${escapeHtml(moduleLabel(m))}</th>`).join("");
+
+    document.getElementById("modulePermissionsRows").innerHTML = members.map((member) => {
+      const cells = modules.map((m) => {
+        const rolesForModule = moduleCatalog.filter((r) => r.module === m);
+        const current = moduleGrants.find((g) => g.user_id === member.user_id && g.module === m);
+        const options = `<option value="">— No access —</option>` + rolesForModule.map((r) =>
+          `<option value="${escapeHtml(r.role)}" ${current?.role === r.role ? "selected" : ""}>${escapeHtml(roleOptionLabel(r.role))}</option>`
+        ).join("");
+        return `<td><select data-user="${member.user_id}" data-module="${escapeHtml(m)}">${options}</select></td>`;
+      }).join("");
+      return `<tr><td>${escapeHtml(member.email)}</td>${cells}</tr>`;
+    }).join("");
+
+    document.querySelectorAll("#modulePermissionsRows select[data-user]").forEach((select) => {
+      select.addEventListener("change", async () => {
+        const userId = select.dataset.user;
+        const moduleName = select.dataset.module;
+        const role = select.value || null;
+        select.disabled = true;
+        clearError(modulePermissionsErrorBox);
+        try {
+          await setProjectModuleRole(projectId, userId, moduleName, role);
+          moduleGrants = moduleGrants.filter((g) => !(g.user_id === userId && g.module === moduleName));
+          if (role) moduleGrants.push({ user_id: userId, module: moduleName, role });
+        } catch (err) {
+          showError(modulePermissionsErrorBox, err);
+          renderModulePermissions(members);
+        } finally {
+          select.disabled = false;
+        }
+      });
+    });
+  }
+
+  async function loadModulePermissions(members, isOwner) {
+    modulePermissionsCard.style.display = isOwner ? "block" : "none";
+    if (!isOwner) return;
+    clearError(modulePermissionsErrorBox);
+    try {
+      [moduleCatalog, moduleGrants] = await Promise.all([
+        getModuleRolesCatalog(),
+        getProjectModuleRoles(projectId),
+      ]);
+      renderModulePermissions(members);
+    } catch (err) {
+      showError(modulePermissionsErrorBox, err);
+    }
+  }
 
   function renderFacts() {
     factsView.innerHTML = `
