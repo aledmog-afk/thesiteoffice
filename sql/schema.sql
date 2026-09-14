@@ -5030,3 +5030,970 @@ drop trigger if exists trg_plots_before_write on public.plots;
 create trigger trg_plots_before_write
   before update on public.plots
   for each row execute function public.plots_before_write();
+
+-- ─── v40 ADDITIONS: Commercial Module — Phase 0 (Database Foundation) ──
+-- Platform module-permission layer (module_roles / project_module_roles)
+-- plus the Commercial shared-spine schema (commercial_events, variations,
+-- dayworks, commercial_line_items, variation_dayworks,
+-- commercial_evidence_links, commercial_signatures), DB-enforced pricing
+-- (generated line_total, a trigger-maintained total_value cache, and the
+-- commercial_event_totals view as the authoritative figure), and DB-
+-- enforced workflow (draft -> submitted -> approved/rejected, immutable
+-- once approved, self-approval blocked). No frontend in this phase —
+-- see tracker/README.md once a later phase adds pages.
+--
+-- commercial_items (the existing informal weekly-report ledger) is
+-- untouched by this migration — it is a deliberately separate, smaller
+-- system serving a different purpose; see the architecture review.
+
+-- ─── Platform module-permission layer ──────────────────────────────
+-- Generalises "editor rights on a project" and "capability within one
+-- specific module" into two separate things — Commercial is the first
+-- consumer, but nothing here is Commercial-specific; a future module
+-- reuses the same two tables and adds its own (module, role) rows plus
+-- its own small set of can_*() helper functions.
+
+-- Static, admin-maintained reference data: every (module, role) pair
+-- that can ever be granted. Enabled RLS with only a SELECT policy is
+-- the same "reference data, no client writes" pattern already used for
+-- generic read-only reference lists elsewhere in this app.
+create table if not exists public.module_roles (
+  module text not null,
+  role text not null,
+  sort_order integer not null default 0,
+  primary key (module, role)
+);
+
+insert into public.module_roles (module, role, sort_order) values
+  ('commercial', 'viewer', 1),
+  ('commercial', 'contributor', 2),
+  ('commercial', 'approver', 3)
+on conflict (module, role) do nothing;
+
+alter table public.module_roles enable row level security;
+drop policy if exists "authenticated read module_roles" on public.module_roles;
+create policy "authenticated read module_roles" on public.module_roles for select using (auth.role() = 'authenticated');
+-- No insert/update/delete policy for any role — RLS enabled, unpolicied
+-- for writes, so Postgres denies them by default to every client; this
+-- table is edited only by re-running schema.sql, exactly like
+-- module_roles' own seed data above.
+
+-- The actual grants: which module-scoped role (if any) a specific user
+-- holds on a specific project. General project_members.role (owner/
+-- collaborator/snagging) is completely unchanged and untouched by this
+-- table — a project_module_roles grant is an ADDITIONAL, narrower gate
+-- layered on top of (never a replacement for) ordinary project
+-- membership; see commercial_role() below, which requires both.
+create table if not exists public.project_module_roles (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  module text not null,
+  role text not null,
+  granted_by uuid references auth.users(id) on delete set null,
+  granted_at timestamptz not null default now(),
+  unique (project_id, user_id, module),
+  foreign key (module, role) references public.module_roles (module, role)
+);
+
+create index if not exists project_module_roles_project_module_idx on public.project_module_roles (project_id, module);
+create index if not exists project_module_roles_user_idx on public.project_module_roles (user_id);
+
+alter table public.project_module_roles enable row level security;
+
+-- Any project member can see who holds what module access on their own
+-- project (matching this app's existing "Collaborators" list visibility
+-- — membership/role information is not itself sensitive the way the
+-- underlying module data might be).
+drop policy if exists "members read project_module_roles" on public.project_module_roles;
+create policy "members read project_module_roles" on public.project_module_roles for select using (public.is_project_member(project_id));
+
+-- Project OWNER only may grant/revoke — never org admin. Verified
+-- against the existing schema before writing this: is_org_admin() is
+-- used today only for organisation-level actions (updating the
+-- organisation itself, removing an organisation member) and never to
+-- bypass a project-level is_project_owner() check anywhere in this
+-- file — so there is no existing precedent to extend, and none is
+-- introduced here.
+drop policy if exists "owners insert project_module_roles" on public.project_module_roles;
+create policy "owners insert project_module_roles" on public.project_module_roles for insert with check (public.is_project_owner(project_id));
+drop policy if exists "owners update project_module_roles" on public.project_module_roles;
+create policy "owners update project_module_roles" on public.project_module_roles for update using (public.is_project_owner(project_id));
+drop policy if exists "owners delete project_module_roles" on public.project_module_roles;
+create policy "owners delete project_module_roles" on public.project_module_roles for delete using (public.is_project_owner(project_id));
+
+drop trigger if exists trg_audit_project_module_roles on public.project_module_roles;
+create trigger trg_audit_project_module_roles
+  after insert or update or delete on public.project_module_roles
+  for each row execute function public.write_audit_log();
+
+-- ─── Commercial permission helpers ─────────────────────────────────
+-- The caller's own effective role for `module` on a project, or null if
+-- none. Deliberately composes with (never re-derives) is_project_member()
+-- so a module grant can never outrun the platform's own real membership
+-- boundary — if is_project_member() is ever tightened later, this
+-- follows automatically rather than needing a matching update here.
+create or replace function public.project_module_role(p_project_id uuid, p_module text)
+returns text
+language sql stable security definer set search_path = public
+as $$
+  select pmr.role
+  from public.project_module_roles pmr
+  where pmr.project_id = p_project_id
+    and pmr.user_id = auth.uid()
+    and pmr.module = p_module
+    and public.is_project_member(p_project_id);
+$$;
+
+create or replace function public.can_view_commercial(p_project_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select public.project_module_role(p_project_id, 'commercial') in ('viewer', 'contributor', 'approver');
+$$;
+
+create or replace function public.can_edit_commercial(p_project_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select public.project_module_role(p_project_id, 'commercial') in ('contributor', 'approver');
+$$;
+
+create or replace function public.can_submit_commercial(p_project_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select public.project_module_role(p_project_id, 'commercial') in ('contributor', 'approver');
+$$;
+
+create or replace function public.can_approve_commercial(p_project_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select public.project_module_role(p_project_id, 'commercial') = 'approver';
+$$;
+
+-- ─── commercial_events — the shared spine ──────────────────────────
+create table if not exists public.commercial_events (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.organisations(id),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  plot_id uuid references public.plots(id) on delete set null,
+  type text not null check (type in ('variation', 'daywork')),
+  reference text,
+  title text not null,
+  status text not null default 'draft' check (status in ('draft', 'submitted', 'approved', 'rejected')),
+  -- Performance cache only — trigger-maintained, NEVER the authoritative
+  -- figure. commercial_event_totals (below) is authoritative; anything
+  -- approval/signature-critical must read the view, not this column.
+  total_value numeric(12,2) not null default 0,
+  submitted_by uuid references auth.users(id) on delete set null,
+  submitted_at timestamptz,
+  approved_by uuid references auth.users(id) on delete set null,
+  approved_at timestamptz,
+  rejected_by uuid references auth.users(id) on delete set null,
+  rejected_at timestamptz,
+  rejection_reason text,
+  -- Post-approval amendment path: a new row referencing the one it
+  -- corrects. Phase 0 only adds the column + FK; no revision UI yet.
+  supersedes_id uuid references public.commercial_events(id) on delete set null,
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists commercial_events_project_status_idx on public.commercial_events (project_id, status);
+create index if not exists commercial_events_project_type_idx on public.commercial_events (project_id, type);
+
+alter table public.commercial_events enable row level security;
+
+drop policy if exists "commercial viewers read commercial_events" on public.commercial_events;
+create policy "commercial viewers read commercial_events" on public.commercial_events for select using (public.can_view_commercial(project_id));
+drop policy if exists "commercial contributors insert commercial_events" on public.commercial_events;
+create policy "commercial contributors insert commercial_events" on public.commercial_events for insert with check (public.can_edit_commercial(project_id));
+drop policy if exists "commercial contributors update commercial_events" on public.commercial_events;
+create policy "commercial contributors update commercial_events" on public.commercial_events for update using (public.can_edit_commercial(project_id));
+-- No delete policy — deliberately out of Phase 0's scope; see final report.
+
+drop trigger if exists trg_audit_commercial_events on public.commercial_events;
+create trigger trg_audit_commercial_events
+  after insert or update or delete on public.commercial_events
+  for each row execute function public.write_audit_log();
+
+-- ─── variations / dayworks — 1:1 extensions of the spine ───────────
+-- `id` and `project_id` here are NOT the primary key (commercial_event_id
+-- is, per the approved architecture) — they exist solely so
+-- write_audit_log()'s generic lookups (`(to_jsonb(row)->>'id')::uuid`
+-- and `(to_jsonb(row)->>'project_id')::uuid`) work unchanged for these
+-- two tables, exactly like `document_revisions.project_id` is already
+-- denormalized elsewhere in this schema "so RLS doesn't need a two-hop
+-- join." write_audit_log() already special-cases `projects` and
+-- `org_settings` for the same underlying reason (their real identity
+-- isn't a plain id+project_id pair either); matching that existing
+-- shape on our own new tables is a smaller, safer fix than adding a
+-- third special case to a function 15 existing tables already depend
+-- on. project_id is trigger-populated below, never client-writable.
+create table if not exists public.variations (
+  commercial_event_id uuid primary key references public.commercial_events(id) on delete cascade,
+  id uuid not null default gen_random_uuid() unique,
+  project_id uuid not null references public.projects(id) on delete cascade,
+  date_identified date,
+  date_instructed date,
+  instruction_reference text,
+  instructed_by text,
+  reason text,
+  markup_pct numeric(5,2) not null default 0
+);
+
+create table if not exists public.dayworks (
+  commercial_event_id uuid primary key references public.commercial_events(id) on delete cascade,
+  id uuid not null default gen_random_uuid() unique,
+  project_id uuid not null references public.projects(id) on delete cascade,
+  date_undertaken date
+);
+
+-- A variations/dayworks row must point at a commercial_event of the
+-- matching type — Postgres has no native cross-table "this FK's target
+-- must also satisfy X" constraint, so this is the trigger-enforced
+-- equivalent. Also derives project_id server-side (never client-
+-- trusted, matching actions_before_write()'s own org_id-derivation
+-- pattern) and keeps it immutable on UPDATE. commercial_event_id is the
+-- PK, so both only ever apply at INSERT in practice, but the functions
+-- fire on UPDATE too so project_id can never be tampered with even if a
+-- client tries to include it in a later edit payload.
+create or replace function public.variations_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_project_id uuid;
+begin
+  select project_id into v_project_id from public.commercial_events where id = new.commercial_event_id and type = 'variation';
+  if v_project_id is null then
+    raise exception 'variations.commercial_event_id must reference a commercial_events row of type ''variation''';
+  end if;
+  new.project_id := v_project_id;
+  return new;
+end;
+$$;
+drop trigger if exists trg_variations_before_write on public.variations;
+create trigger trg_variations_before_write
+  before insert or update on public.variations
+  for each row execute function public.variations_before_write();
+
+create or replace function public.dayworks_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_project_id uuid;
+begin
+  select project_id into v_project_id from public.commercial_events where id = new.commercial_event_id and type = 'daywork';
+  if v_project_id is null then
+    raise exception 'dayworks.commercial_event_id must reference a commercial_events row of type ''daywork''';
+  end if;
+  new.project_id := v_project_id;
+  return new;
+end;
+$$;
+drop trigger if exists trg_dayworks_before_write on public.dayworks;
+create trigger trg_dayworks_before_write
+  before insert or update on public.dayworks
+  for each row execute function public.dayworks_before_write();
+
+alter table public.variations enable row level security;
+drop policy if exists "commercial viewers read variations" on public.variations;
+create policy "commercial viewers read variations" on public.variations for select using (
+  exists (select 1 from public.commercial_events ce where ce.id = variations.commercial_event_id and public.can_view_commercial(ce.project_id))
+);
+drop policy if exists "commercial contributors insert variations" on public.variations;
+create policy "commercial contributors insert variations" on public.variations for insert with check (
+  exists (select 1 from public.commercial_events ce where ce.id = variations.commercial_event_id and public.can_edit_commercial(ce.project_id))
+);
+drop policy if exists "commercial contributors update variations" on public.variations;
+create policy "commercial contributors update variations" on public.variations for update using (
+  exists (select 1 from public.commercial_events ce where ce.id = variations.commercial_event_id and public.can_edit_commercial(ce.project_id) and ce.status in ('draft', 'rejected'))
+);
+
+alter table public.dayworks enable row level security;
+drop policy if exists "commercial viewers read dayworks" on public.dayworks;
+create policy "commercial viewers read dayworks" on public.dayworks for select using (
+  exists (select 1 from public.commercial_events ce where ce.id = dayworks.commercial_event_id and public.can_view_commercial(ce.project_id))
+);
+drop policy if exists "commercial contributors insert dayworks" on public.dayworks;
+create policy "commercial contributors insert dayworks" on public.dayworks for insert with check (
+  exists (select 1 from public.commercial_events ce where ce.id = dayworks.commercial_event_id and public.can_edit_commercial(ce.project_id))
+);
+drop policy if exists "commercial contributors update dayworks" on public.dayworks;
+create policy "commercial contributors update dayworks" on public.dayworks for update using (
+  exists (select 1 from public.commercial_events ce where ce.id = dayworks.commercial_event_id and public.can_edit_commercial(ce.project_id) and ce.status in ('draft', 'rejected'))
+);
+
+drop trigger if exists trg_audit_variations on public.variations;
+create trigger trg_audit_variations
+  after insert or update or delete on public.variations
+  for each row execute function public.write_audit_log();
+drop trigger if exists trg_audit_dayworks on public.dayworks;
+create trigger trg_audit_dayworks
+  after insert or update or delete on public.dayworks
+  for each row execute function public.write_audit_log();
+
+-- ─── commercial_line_items ──────────────────────────────────────────
+-- Corrected architecture: a single, non-nullable, real FK straight to
+-- the shared spine (commercial_events), never a polymorphic
+-- parent_type/parent_id pointer and never two nullable FKs to the
+-- extension tables. This is stronger than either alternative (a real,
+-- mandatory FK Postgres itself enforces) and needs zero schema change
+-- as future commercial_event types are added later.
+create table if not exists public.commercial_line_items (
+  id uuid primary key default gen_random_uuid(),
+  commercial_event_id uuid not null references public.commercial_events(id) on delete cascade,
+  -- Denormalized, trigger-populated (never client-writable) — needed
+  -- purely so write_audit_log()'s generic project_id lookup works for
+  -- this table, matching document_revisions.project_id's own existing
+  -- denormalization in this schema for the identical reason.
+  project_id uuid not null references public.projects(id) on delete cascade,
+  line_type text not null check (line_type in ('labour', 'plant', 'material', 'subcontractor', 'other')),
+  description text not null,
+  trade text,
+  quantity numeric(10,2) not null default 1 check (quantity >= 0),
+  unit text,
+  -- Nullable = TBC (not yet priced), distinct from a genuine zero rate.
+  -- Negative rates are permitted deliberately, for omission lines.
+  rate numeric(12,4),
+  -- Postgres-computed, never client-trusted: NULL rate propagates to a
+  -- NULL line_total automatically (excluded from SUM() with no special
+  -- casing needed), and any inserted/updated quantity/rate pair is
+  -- rounded to 2dp by ordinary numeric-type scale coercion — verified
+  -- empirically against this project's actual Postgres 16 before this
+  -- migration was written (round-half-away-from-zero: 1 x 2.005 ->
+  -- 2.01), not merely assumed from documentation.
+  line_total numeric(12,2) generated always as (quantity * rate) stored,
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists commercial_line_items_event_idx on public.commercial_line_items (commercial_event_id);
+
+-- Shared by every table below whose own project_id is denormalized
+-- purely for write_audit_log() compatibility (see the comment on
+-- commercial_line_items.project_id above) — one generic function
+-- reused across commercial_line_items/commercial_evidence_links/
+-- commercial_signatures, matching write_audit_log() itself being one
+-- generic function reused across every audited table rather than one
+-- per table.
+create or replace function public.derive_project_id_from_commercial_event()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  select project_id into new.project_id from public.commercial_events where id = new.commercial_event_id;
+  if new.project_id is null then
+    raise exception '%.commercial_event_id must reference an existing commercial_events row', TG_TABLE_NAME;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_commercial_line_items_project_id on public.commercial_line_items;
+create trigger trg_commercial_line_items_project_id
+  before insert or update on public.commercial_line_items
+  for each row execute function public.derive_project_id_from_commercial_event();
+
+alter table public.commercial_line_items enable row level security;
+
+drop policy if exists "commercial viewers read commercial_line_items" on public.commercial_line_items;
+create policy "commercial viewers read commercial_line_items" on public.commercial_line_items for select using (
+  exists (select 1 from public.commercial_events ce where ce.id = commercial_line_items.commercial_event_id and public.can_view_commercial(ce.project_id))
+);
+-- Every write policy independently re-checks the PARENT's live status
+-- (draft/rejected only) on every single call — this is the child-table
+-- lock enforcement the parent trigger alone cannot provide, required
+-- specifically so line items stay immutable once their event is
+-- submitted or approved even if a client calls this table directly.
+drop policy if exists "commercial contributors insert commercial_line_items" on public.commercial_line_items;
+create policy "commercial contributors insert commercial_line_items" on public.commercial_line_items for insert with check (
+  exists (select 1 from public.commercial_events ce where ce.id = commercial_line_items.commercial_event_id and public.can_edit_commercial(ce.project_id) and ce.status in ('draft', 'rejected'))
+);
+drop policy if exists "commercial contributors update commercial_line_items" on public.commercial_line_items;
+create policy "commercial contributors update commercial_line_items" on public.commercial_line_items for update using (
+  exists (select 1 from public.commercial_events ce where ce.id = commercial_line_items.commercial_event_id and public.can_edit_commercial(ce.project_id) and ce.status in ('draft', 'rejected'))
+);
+drop policy if exists "commercial contributors delete commercial_line_items" on public.commercial_line_items;
+create policy "commercial contributors delete commercial_line_items" on public.commercial_line_items for delete using (
+  exists (select 1 from public.commercial_events ce where ce.id = commercial_line_items.commercial_event_id and public.can_edit_commercial(ce.project_id) and ce.status in ('draft', 'rejected'))
+);
+
+drop trigger if exists trg_audit_commercial_line_items on public.commercial_line_items;
+create trigger trg_audit_commercial_line_items
+  after insert or update or delete on public.commercial_line_items
+  for each row execute function public.write_audit_log();
+
+-- ─── variation_dayworks ─────────────────────────────────────────────
+-- FKs point at variations(commercial_event_id) / dayworks(commercial_event_id)
+-- rather than commercial_events(id) directly — a structural guarantee
+-- that variation_id can only ever hold a genuine Variation's id and
+-- daywork_id only ever a genuine Daywork's, since neither value could
+-- otherwise exist in that extension table at all. This is what actually
+-- "prevents a Daywork from indirectly linking to itself" — a Daywork's
+-- own id is never a valid value for variation_id, full stop.
+-- id + project_id: same write_audit_log() compatibility reasoning as
+-- variations/dayworks above — this table's real identity is the
+-- (variation_id, daywork_id) composite PK, not a plain id.
+create table if not exists public.variation_dayworks (
+  variation_id uuid not null references public.variations(commercial_event_id) on delete cascade,
+  daywork_id uuid not null references public.dayworks(commercial_event_id) on delete cascade,
+  id uuid not null default gen_random_uuid() unique,
+  project_id uuid not null references public.projects(id) on delete cascade,
+  linked_by uuid references auth.users(id) on delete set null,
+  linked_at timestamptz not null default now(),
+  primary key (variation_id, daywork_id)
+);
+
+create index if not exists variation_dayworks_daywork_idx on public.variation_dayworks (daywork_id);
+
+create or replace function public.variation_dayworks_before_insert()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  select project_id into new.project_id from public.variations where commercial_event_id = new.variation_id;
+  if new.project_id is null then
+    raise exception 'variation_dayworks.variation_id must reference an existing variations row';
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists trg_variation_dayworks_before_insert on public.variation_dayworks;
+create trigger trg_variation_dayworks_before_insert
+  before insert on public.variation_dayworks
+  for each row execute function public.variation_dayworks_before_insert();
+
+alter table public.variation_dayworks enable row level security;
+drop policy if exists "commercial viewers read variation_dayworks" on public.variation_dayworks;
+create policy "commercial viewers read variation_dayworks" on public.variation_dayworks for select using (
+  exists (select 1 from public.commercial_events ce where ce.id = variation_dayworks.variation_id and public.can_view_commercial(ce.project_id))
+);
+drop policy if exists "commercial contributors insert variation_dayworks" on public.variation_dayworks;
+create policy "commercial contributors insert variation_dayworks" on public.variation_dayworks for insert with check (
+  exists (select 1 from public.commercial_events ce where ce.id = variation_dayworks.variation_id and public.can_edit_commercial(ce.project_id) and ce.status in ('draft', 'rejected'))
+);
+drop policy if exists "commercial contributors delete variation_dayworks" on public.variation_dayworks;
+create policy "commercial contributors delete variation_dayworks" on public.variation_dayworks for delete using (
+  exists (select 1 from public.commercial_events ce where ce.id = variation_dayworks.variation_id and public.can_edit_commercial(ce.project_id) and ce.status in ('draft', 'rejected'))
+);
+
+drop trigger if exists trg_audit_variation_dayworks on public.variation_dayworks;
+create trigger trg_audit_variation_dayworks
+  after insert or update or delete on public.variation_dayworks
+  for each row execute function public.write_audit_log();
+
+-- ─── Pricing authority: total_value recompute (event totals) ──────
+-- Daywork total = sum of its own line items.
+-- Variation total = its own direct line items (commercial_event_id on
+-- commercial_line_items points at the VARIATION's own event id, never
+-- at a linked Daywork's) + the sum of each linked Daywork's own
+-- total_value (never that Daywork's raw line items directly — reading
+-- its already-computed total avoids ever double-summing the same line
+-- item through two different paths) + markup applied to that combined
+-- subtotal.
+create or replace function public.recompute_commercial_event_total(p_commercial_event_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_type text;
+  v_own_subtotal numeric(12,2);
+  v_dayworks_subtotal numeric(12,2);
+  v_markup_pct numeric(5,2);
+  v_total numeric(12,2);
+begin
+  select type into v_type from public.commercial_events where id = p_commercial_event_id;
+  if v_type is null then
+    return; -- event no longer exists (e.g. mid-cascade delete elsewhere) — nothing to do
+  end if;
+
+  select coalesce(sum(line_total), 0) into v_own_subtotal
+  from public.commercial_line_items
+  where commercial_event_id = p_commercial_event_id;
+
+  if v_type = 'variation' then
+    select coalesce(sum(d_ce.total_value), 0) into v_dayworks_subtotal
+    from public.variation_dayworks vd
+    join public.commercial_events d_ce on d_ce.id = vd.daywork_id
+    where vd.variation_id = p_commercial_event_id;
+
+    select markup_pct into v_markup_pct from public.variations where commercial_event_id = p_commercial_event_id;
+    v_total := round((v_own_subtotal + v_dayworks_subtotal) * (1 + coalesce(v_markup_pct, 0) / 100), 2);
+  else
+    v_total := v_own_subtotal;
+  end if;
+
+  update public.commercial_events set total_value = v_total where id = p_commercial_event_id;
+end;
+$$;
+
+-- Fires on every line-item write. Recomputes the line item's own parent
+-- event, then — if that parent is a Daywork linked into one or more
+-- Variations — recomputes each of those Variations too, since their
+-- own total depends on the Daywork's total_value. variation_dayworks
+-- only ever links a genuine daywork_id as the "daywork side" of the
+-- join (enforced by its own FK above), so a Variation's recompute can
+-- never in turn trigger another recompute of the same Daywork — the
+-- dependency graph is one-directional by construction, not merely by
+-- convention, so no recursion is possible.
+create or replace function public.commercial_line_items_after_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_event_id uuid;
+  v_variation_id uuid;
+begin
+  v_event_id := coalesce(new.commercial_event_id, old.commercial_event_id);
+  perform public.recompute_commercial_event_total(v_event_id);
+
+  for v_variation_id in select variation_id from public.variation_dayworks where daywork_id = v_event_id loop
+    perform public.recompute_commercial_event_total(v_variation_id);
+  end loop;
+
+  return coalesce(new, old);
+end;
+$$;
+
+drop trigger if exists trg_commercial_line_items_after_write on public.commercial_line_items;
+create trigger trg_commercial_line_items_after_write
+  after insert or update or delete on public.commercial_line_items
+  for each row execute function public.commercial_line_items_after_write();
+
+-- Fires on link/unlink — the affected Variation's total must include
+-- (or stop including) the linked Daywork's total_value immediately.
+create or replace function public.variation_dayworks_after_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  perform public.recompute_commercial_event_total(coalesce(new.variation_id, old.variation_id));
+  return coalesce(new, old);
+end;
+$$;
+
+drop trigger if exists trg_variation_dayworks_after_write on public.variation_dayworks;
+create trigger trg_variation_dayworks_after_write
+  after insert or delete on public.variation_dayworks
+  for each row execute function public.variation_dayworks_after_write();
+
+-- Fires when markup_pct itself changes (the only variations column the
+-- total depends on).
+create or replace function public.variations_after_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if new.markup_pct is distinct from old.markup_pct then
+    perform public.recompute_commercial_event_total(new.commercial_event_id);
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_variations_after_write on public.variations;
+create trigger trg_variations_after_write
+  after update on public.variations
+  for each row execute function public.variations_after_write();
+
+-- ─── commercial_event_totals — the authoritative pricing view ──────
+-- Computes live from source rows every time it's queried — it has no
+-- cache of its own to go stale, so it structurally cannot silently
+-- disagree with commercial_line_items/variation_dayworks, unlike
+-- commercial_events.total_value (a performance cache only). Anything
+-- approval/signature-critical must read this view, never the cached
+-- column.
+create or replace view public.commercial_event_totals as
+select
+  ce.id as commercial_event_id,
+  ce.type,
+  coalesce(li.own_subtotal, 0) as own_subtotal,
+  coalesce(dw.dayworks_subtotal, 0) as dayworks_subtotal,
+  case when ce.type = 'variation' then coalesce(v.markup_pct, 0) else null end as markup_pct,
+  case
+    when ce.type = 'variation' then
+      round((coalesce(li.own_subtotal, 0) + coalesce(dw.dayworks_subtotal, 0)) * (1 + coalesce(v.markup_pct, 0) / 100), 2)
+    else
+      coalesce(li.own_subtotal, 0)
+  end as total
+from public.commercial_events ce
+left join public.variations v on v.commercial_event_id = ce.id
+left join (
+  select commercial_event_id, sum(line_total) as own_subtotal
+  from public.commercial_line_items
+  group by commercial_event_id
+) li on li.commercial_event_id = ce.id
+left join (
+  select vd.variation_id, sum(d_ce.total_value) as dayworks_subtotal
+  from public.variation_dayworks vd
+  join public.commercial_events d_ce on d_ce.id = vd.daywork_id
+  group by vd.variation_id
+) dw on dw.variation_id = ce.id;
+
+-- Views run with the querying user's own RLS, not the view owner's, in
+-- Postgres by default (no security_definer/security_invoker override
+-- here) — so this view is exactly as access-controlled as the
+-- underlying commercial_events/commercial_line_items rows already are;
+-- it grants no visibility beyond what a caller's own RLS already permits.
+
+-- ─── Content hash for signatures ────────────────────────────────────
+-- A deterministic digest of a commercial event's current line items and
+-- its live (view-computed, never cached-column) total — used by
+-- commercial_signatures.record_hash so a later dispute can prove
+-- exactly what was signed off.
+create or replace function public.commercial_event_hash(p_commercial_event_id uuid)
+returns text
+language sql stable security definer set search_path = public
+as $$
+  select encode(
+    digest(
+      coalesce(
+        (select string_agg(
+          li.id::text || '|' || li.line_type || '|' || li.quantity::text || '|' || coalesce(li.rate::text, 'NULL') || '|' || coalesce(li.line_total::text, 'NULL'),
+          ';' order by li.id
+        ) from public.commercial_line_items li where li.commercial_event_id = p_commercial_event_id),
+        ''
+      ) || '|TOTAL:' || coalesce((select total::text from public.commercial_event_totals where commercial_event_id = p_commercial_event_id), '0'),
+      'sha256'
+    ),
+    'hex'
+  );
+$$;
+
+-- ─── commercial_evidence_links ──────────────────────────────────────
+-- Points at EXISTING evidence rather than duplicating it. Postgres has
+-- no native mechanism for a foreign key that targets a different table
+-- depending on another column's value, so source_id is NOT a real FK —
+-- this is a deliberate, explicit limitation (a fake/mislabelled FK
+-- would be worse than an honest absence of one), and everything that
+-- CAN be enforced at the database is: source_table is allow-listed,
+-- source_id/commercial_event_id are both required, and the child-table
+-- lock (draft/rejected only) applies exactly as it does for line items.
+--
+-- Scoped down from the approved architecture for Phase 0 specifically:
+-- source_table lists only the four existing tables with a genuine,
+-- stable row id an evidence link can point at today (snag_items,
+-- inspection_finding_photos, documents, actions). weekly_report_photo
+-- (a jsonb array element with no row id of its own) and
+-- commercial_direct_upload (net-new evidence, not sourced from an
+-- existing table at all) are intentionally NOT included — Phase 0
+-- builds no evidence-linking UI of any kind, so inventing an identity
+-- scheme for either now, with no consuming UI to validate it against,
+-- risks getting it wrong. Flagged explicitly in the Phase 0 report as a
+-- deviation, not a silent decision.
+create table if not exists public.commercial_evidence_links (
+  id uuid primary key default gen_random_uuid(),
+  commercial_event_id uuid not null references public.commercial_events(id) on delete cascade,
+  -- Denormalized, trigger-populated — same write_audit_log()
+  -- compatibility reasoning as commercial_line_items.project_id above.
+  project_id uuid not null references public.projects(id) on delete cascade,
+  source_table text not null check (source_table in ('snag_items', 'inspection_finding_photos', 'documents', 'actions')),
+  source_id uuid not null,
+  caption text,
+  is_primary boolean not null default false,
+  linked_by uuid references auth.users(id) on delete set null,
+  linked_at timestamptz not null default now()
+);
+
+create index if not exists commercial_evidence_links_event_idx on public.commercial_evidence_links (commercial_event_id);
+
+drop trigger if exists trg_commercial_evidence_links_project_id on public.commercial_evidence_links;
+create trigger trg_commercial_evidence_links_project_id
+  before insert or update on public.commercial_evidence_links
+  for each row execute function public.derive_project_id_from_commercial_event();
+
+alter table public.commercial_evidence_links enable row level security;
+drop policy if exists "commercial viewers read commercial_evidence_links" on public.commercial_evidence_links;
+create policy "commercial viewers read commercial_evidence_links" on public.commercial_evidence_links for select using (
+  exists (select 1 from public.commercial_events ce where ce.id = commercial_evidence_links.commercial_event_id and public.can_view_commercial(ce.project_id))
+);
+drop policy if exists "commercial contributors insert commercial_evidence_links" on public.commercial_evidence_links;
+create policy "commercial contributors insert commercial_evidence_links" on public.commercial_evidence_links for insert with check (
+  exists (select 1 from public.commercial_events ce where ce.id = commercial_evidence_links.commercial_event_id and public.can_edit_commercial(ce.project_id) and ce.status in ('draft', 'rejected'))
+);
+drop policy if exists "commercial contributors update commercial_evidence_links" on public.commercial_evidence_links;
+create policy "commercial contributors update commercial_evidence_links" on public.commercial_evidence_links for update using (
+  exists (select 1 from public.commercial_events ce where ce.id = commercial_evidence_links.commercial_event_id and public.can_edit_commercial(ce.project_id) and ce.status in ('draft', 'rejected'))
+);
+drop policy if exists "commercial contributors delete commercial_evidence_links" on public.commercial_evidence_links;
+create policy "commercial contributors delete commercial_evidence_links" on public.commercial_evidence_links for delete using (
+  exists (select 1 from public.commercial_events ce where ce.id = commercial_evidence_links.commercial_event_id and public.can_edit_commercial(ce.project_id) and ce.status in ('draft', 'rejected'))
+);
+
+drop trigger if exists trg_audit_commercial_evidence_links on public.commercial_evidence_links;
+create trigger trg_audit_commercial_evidence_links
+  after insert or update or delete on public.commercial_evidence_links
+  for each row execute function public.write_audit_log();
+
+-- ─── commercial_signatures ──────────────────────────────────────────
+-- Insert-only in the strictest sense available: RLS is enabled with
+-- ONLY a select policy — there is no insert/update/delete policy for
+-- ANY client role at all, mirroring audit_log's own "the only writer is
+-- a trusted, security-definer trigger" pattern exactly. The sole writer
+-- is commercial_events_before_write() below, inserting a signature row
+-- as a side effect of a successful submitted/approved/rejected
+-- transition — never a direct client insert, so a client can never
+-- fabricate, backdate, or misattribute a signature.
+--
+-- signed_by_name is the signer's email — no display-name field exists
+-- anywhere in this schema (identity is resolved via auth.users.email
+-- throughout the app, e.g. getMemberEmailMap() in tracker/js/app.js),
+-- so this matches existing convention rather than inventing a new one.
+create table if not exists public.commercial_signatures (
+  id uuid primary key default gen_random_uuid(),
+  commercial_event_id uuid not null references public.commercial_events(id) on delete cascade,
+  -- Denormalized — same write_audit_log() compatibility reasoning as
+  -- commercial_line_items.project_id above. Populated directly by
+  -- commercial_events_after_write() below (the only writer this table
+  -- ever has), not by a separate trigger.
+  project_id uuid not null references public.projects(id) on delete cascade,
+  action text not null check (action in ('submitted', 'approved', 'rejected')),
+  -- Deliberately NOT "on delete set null" — a signature must always
+  -- name a real signer; if this ever needs to change to accommodate
+  -- genuine account deletion, that is its own deliberate data-retention
+  -- decision, not a default to fall into silently.
+  signed_by_user_id uuid not null references auth.users(id),
+  signed_by_name text not null,
+  org_id uuid not null references public.organisations(id),
+  statement_version text not null default 'v1',
+  record_hash text,
+  signed_at timestamptz not null default now()
+);
+
+create index if not exists commercial_signatures_event_idx on public.commercial_signatures (commercial_event_id);
+
+alter table public.commercial_signatures enable row level security;
+drop policy if exists "commercial viewers read commercial_signatures" on public.commercial_signatures;
+create policy "commercial viewers read commercial_signatures" on public.commercial_signatures for select using (
+  exists (select 1 from public.commercial_events ce where ce.id = commercial_signatures.commercial_event_id and public.can_view_commercial(ce.project_id))
+);
+-- No insert/update/delete policy for any client role — see comment above.
+
+drop trigger if exists trg_audit_commercial_signatures on public.commercial_signatures;
+create trigger trg_audit_commercial_signatures
+  after insert or update or delete on public.commercial_signatures
+  for each row execute function public.write_audit_log();
+
+-- ─── Workflow enforcement: commercial_events_before_write() ────────
+create or replace function public.valid_commercial_event_status_transition(p_from text, p_to text)
+returns boolean
+language sql
+immutable
+set search_path = public
+as $$
+  select (p_from, p_to) in (
+    ('draft', 'submitted'),
+    ('submitted', 'approved'),
+    ('submitted', 'rejected'),
+    ('rejected', 'draft')
+  );
+$$;
+
+create or replace function public.commercial_events_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_org_id uuid;
+  v_plot_project_id uuid;
+  v_signer_email text;
+  v_hash text;
+begin
+  select org_id into v_org_id from public.projects where id = new.project_id;
+  if v_org_id is null then
+    raise exception 'commercial_events.project_id must reference an existing project with an organisation';
+  end if;
+  new.org_id := v_org_id;
+
+  if new.plot_id is not null then
+    select project_id into v_plot_project_id from public.plots where id = new.plot_id;
+    if v_plot_project_id is null then
+      raise exception 'commercial_events.plot_id must reference an existing plot';
+    end if;
+    if v_plot_project_id <> new.project_id then
+      raise exception 'plot_id must belong to the same project as the commercial event';
+    end if;
+  end if;
+
+  if TG_OP = 'INSERT' then
+    new.created_by := auth.uid();
+    new.created_at := now();
+    new.updated_at := now();
+    new.status := 'draft'; -- an event can never be created pre-submitted/approved/rejected
+    new.total_value := 0;
+    new.submitted_by := null; new.submitted_at := null;
+    new.approved_by := null; new.approved_at := null;
+    new.rejected_by := null; new.rejected_at := null; new.rejection_reason := null;
+    return new;
+  end if;
+
+  -- identity fields are immutable regardless of payload
+  new.created_by := old.created_by;
+  new.created_at := old.created_at;
+  new.updated_at := now();
+  new.type := old.type; -- type never changes after creation
+  new.org_id := old.org_id; -- re-derived above from project_id, but project_id itself never changes post-creation either (no policy allows editing it out from under an existing event)
+
+  -- Absolute immutability once approved — nobody, including a project
+  -- owner or org admin, may change anything at all. The only correction
+  -- mechanism is a new row referencing this one via supersedes_id (no
+  -- revision UI is built in this phase, but the guarantee holds from
+  -- day one so nothing built on top of it later has to work around a
+  -- gap that should never have existed).
+  if old.status = 'approved' then
+    raise exception 'This commercial event is approved and is immutable. Create a superseding record instead of editing it.';
+  end if;
+
+  if new.status <> old.status then
+    if not public.valid_commercial_event_status_transition(old.status, new.status) then
+      raise exception 'Invalid commercial event status transition: % -> %', old.status, new.status;
+    end if;
+
+    if new.status = 'submitted' then
+      if not public.can_submit_commercial(new.project_id) then
+        raise exception 'You do not have permission to submit commercial events on this project';
+      end if;
+      -- Submitting must be a pure status flip — any content edit must
+      -- already have been saved in a prior, separate update while still
+      -- draft. Mirrors weekly_reports_before_write()'s own
+      -- lock-on-transition comparison exactly.
+      if (to_jsonb(new) - array['status', 'submitted_by', 'submitted_at', 'rejected_by', 'rejected_at', 'rejection_reason', 'updated_at', 'total_value']::text[])
+         is distinct from
+         (to_jsonb(old) - array['status', 'submitted_by', 'submitted_at', 'rejected_by', 'rejected_at', 'rejection_reason', 'updated_at', 'total_value']::text[]) then
+        raise exception 'Save your changes first, then submit as a separate step.';
+      end if;
+      new.submitted_by := auth.uid();
+      new.submitted_at := now();
+      new.rejected_by := null; new.rejected_at := null; new.rejection_reason := null;
+
+    elsif new.status = 'approved' then
+      if not public.can_approve_commercial(new.project_id) then
+        raise exception 'You do not have permission to approve commercial events on this project';
+      end if;
+      if old.created_by = auth.uid() then
+        raise exception 'You cannot approve a commercial event you created yourself';
+      end if;
+      if (to_jsonb(new) - array['status', 'approved_by', 'approved_at', 'updated_at', 'total_value']::text[])
+         is distinct from
+         (to_jsonb(old) - array['status', 'approved_by', 'approved_at', 'updated_at', 'total_value']::text[]) then
+        raise exception 'Approval must be a pure status change — no other field may change at the same time.';
+      end if;
+      new.approved_by := auth.uid();
+      new.approved_at := now();
+
+    elsif new.status = 'rejected' then
+      if not public.can_approve_commercial(new.project_id) then
+        raise exception 'You do not have permission to reject commercial events on this project';
+      end if;
+      -- no self-rejection restriction, per the approved architecture
+      if (to_jsonb(new) - array['status', 'rejected_by', 'rejected_at', 'rejection_reason', 'updated_at', 'total_value']::text[])
+         is distinct from
+         (to_jsonb(old) - array['status', 'rejected_by', 'rejected_at', 'rejection_reason', 'updated_at', 'total_value']::text[]) then
+        raise exception 'Rejection must be a pure status change (plus an optional reason) — no other field may change at the same time.';
+      end if;
+      new.rejected_by := auth.uid();
+      new.rejected_at := now();
+
+    elsif new.status = 'draft' then
+      -- reopening a rejected record
+      if not public.can_edit_commercial(new.project_id) then
+        raise exception 'You do not have permission to edit commercial events on this project';
+      end if;
+    end if;
+
+  else
+    -- No status change: an ordinary content edit is only permitted
+    -- while the record is genuinely open (draft/rejected). total_value/
+    -- updated_at are system-maintained (the recompute trigger) and are
+    -- excluded from this comparison so a line-item-driven total refresh
+    -- is never mistaken for a disallowed user content edit.
+    if old.status not in ('draft', 'rejected') then
+      if (to_jsonb(new) - array['total_value', 'updated_at']::text[])
+         is distinct from
+         (to_jsonb(old) - array['total_value', 'updated_at']::text[]) then
+        raise exception 'This commercial event is % — its content is locked until it is rejected back to draft.', old.status;
+      end if;
+    else
+      if not public.can_edit_commercial(new.project_id) then
+        raise exception 'You do not have permission to edit commercial events on this project';
+      end if;
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_commercial_events_before_write on public.commercial_events;
+create trigger trg_commercial_events_before_write
+  before insert or update on public.commercial_events
+  for each row execute function public.commercial_events_before_write();
+
+-- A second, AFTER trigger captures the signature — it needs new.id to
+-- be the final, committed row, and needs to read the freshly-computed
+-- hash/total, both of which are simplest to do once the row (and its
+-- status) has actually landed, rather than folding it into the BEFORE
+-- trigger above.
+create or replace function public.commercial_events_after_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_signer_email text;
+  v_action text;
+begin
+  if TG_OP <> 'UPDATE' or new.status = old.status then
+    return new;
+  end if;
+
+  if new.status = 'submitted' then
+    v_action := 'submitted';
+  elsif new.status = 'approved' then
+    v_action := 'approved';
+  elsif new.status = 'rejected' then
+    v_action := 'rejected';
+  else
+    return new; -- reopening to draft is not itself an attested action
+  end if;
+
+  select email into v_signer_email from auth.users where id = auth.uid();
+
+  insert into public.commercial_signatures
+    (commercial_event_id, project_id, action, signed_by_user_id, signed_by_name, org_id, statement_version, record_hash)
+  values
+    (new.id, new.project_id, v_action, auth.uid(), coalesce(v_signer_email, 'unknown'), new.org_id, 'v1', public.commercial_event_hash(new.id));
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_commercial_events_after_write on public.commercial_events;
+create trigger trg_commercial_events_after_write
+  after update on public.commercial_events
+  for each row execute function public.commercial_events_after_write();
