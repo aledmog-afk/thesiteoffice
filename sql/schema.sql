@@ -6433,3 +6433,52 @@ as $$
   order by r.requested_at desc;
 $$;
 grant execute on function public.get_organisation_membership_requests(uuid, text) to authenticated;
+
+-- ─── v43 ADDITIONS: restrict the v42 RPCs to authenticated only ────────
+-- PostgreSQL grants EXECUTE on a newly created function to PUBLIC by
+-- default, which every one of the 8 security-definer functions added in
+-- v42 inherited alongside their explicit "grant ... to authenticated"
+-- (that grant was, and remains, correct — it just wasn't the ONLY grant
+-- in effect). Review flagged this: it meant a fully anonymous caller
+-- (Supabase's `anon` role — no session at all, not merely an
+-- authenticated session with no identity) could invoke e.g.
+-- search_organisations(), despite the brief specifying "a non-member
+-- AUTHENTICATED user."
+--
+-- Scope is deliberately narrow: only these 8 v42 functions are touched.
+-- The same PUBLIC-default characteristic exists on every one of this
+-- schema's other ~47 pre-existing security-definer functions too — left
+-- alone here on purpose (not a schema-wide cleanup; see the Phase 0
+-- report's Known Issues, which already flagged this as a pre-existing,
+-- accepted pattern this migration does not attempt to remediate
+-- everywhere).
+revoke execute on function public.search_organisations(text) from public;
+revoke execute on function public.create_organisation(text, text) from public;
+revoke execute on function public.request_organisation_membership(uuid) from public;
+revoke execute on function public.approve_organisation_membership(uuid) from public;
+revoke execute on function public.reject_organisation_membership(uuid, text) from public;
+revoke execute on function public.get_my_organisation_requests() from public;
+revoke execute on function public.get_organisation_members(uuid) from public;
+revoke execute on function public.get_organisation_membership_requests(uuid, text) from public;
+
+-- Belt and braces: Supabase provisions an `anon` role for every project
+-- (the actual role a genuinely unauthenticated REST API request runs
+-- as), and some Supabase projects also carry an explicit default-
+-- privilege grant of EXECUTE to `anon` on newly created public-schema
+-- functions, independent of the PUBLIC pseudo-role revoked above. This
+-- statement is a no-op wherever no such grant exists (REVOKE never
+-- errors when the privilege being removed isn't present) and is the
+-- decisive fix wherever it does.
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'anon') then
+    revoke execute on function public.search_organisations(text) from anon;
+    revoke execute on function public.create_organisation(text, text) from anon;
+    revoke execute on function public.request_organisation_membership(uuid) from anon;
+    revoke execute on function public.approve_organisation_membership(uuid) from anon;
+    revoke execute on function public.reject_organisation_membership(uuid, text) from anon;
+    revoke execute on function public.get_my_organisation_requests() from anon;
+    revoke execute on function public.get_organisation_members(uuid) from anon;
+    revoke execute on function public.get_organisation_membership_requests(uuid, text) from anon;
+  end if;
+end $$;

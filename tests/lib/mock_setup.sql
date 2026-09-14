@@ -87,3 +87,21 @@ grant select, insert, update, delete on all tables in schema storage to authenti
 grant select on all tables in schema auth to authenticated;
 alter default privileges in schema public grant select, insert, update, delete on tables to authenticated;
 alter default privileges in schema public grant usage, select on sequences to authenticated;
+
+-- A real, non-superuser role standing in for Supabase's `anon` Postgres
+-- role — a genuinely UNAUTHENTICATED REST API caller (no session at
+-- all), distinct from `authenticated` with no JWT sub (a signed-in
+-- session with no identity — the case tests/lib/db.mjs's
+-- userClient(db, null) represents). Deliberately given only schema
+-- USAGE, nothing else — the point of a test using this role is to prove
+-- a specific function/table grant is genuinely absent, which only works
+-- if this role starts with no privileges to fall back on.
+do $$
+begin
+  if not exists (select 1 from pg_roles where rolname = 'anon') then
+    create role anon nologin;
+  end if;
+end $$;
+
+grant usage on schema public to anon;
+grant usage on schema auth to anon;

@@ -96,6 +96,21 @@ export async function userClient(dbName, userId) {
   return client;
 }
 
+// A connection acting as Supabase's `anon` Postgres role — a genuinely
+// UNAUTHENTICATED REST API caller (no session at all). Distinct from
+// userClient(db, null), which is the `authenticated` role with no JWT
+// sub (a signed-in session with no identity — RLS-relevant, but a
+// different case). This one exists specifically to test EXECUTE-
+// privilege boundaries (GRANT/REVOKE on functions), which the
+// `authenticated` role satisfies regardless of auth.uid() and which RLS
+// itself never governs.
+export async function anonClient(dbName) {
+  const client = new pg.Client({ ...PG_CONFIG, database: dbName });
+  await client.connect();
+  await client.query("SET ROLE anon");
+  return client;
+}
+
 // True if the query raised an RLS/permission error (INSERT/UPDATE denial),
 // as opposed to some other kind of failure a test should not silently
 // treat as "the security boundary worked".

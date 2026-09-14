@@ -61,9 +61,29 @@
   const signupToggleRow = document.getElementById("signupToggleRow");
   let mode = "signin";
 
-  // If already signed in, go straight to the dashboard (or wherever "next" points).
-  supabase.auth.getSession().then(({ data: { session } }) => {
-    if (session) window.location.href = next;
+  // Resolves where a signed-in user should actually land: `next` (the
+  // dashboard, by default) if they already have at least one approved
+  // organisation membership, or onboarding.html if they don't — covering
+  // not just a brand-new signup but also an existing user who somehow
+  // still has zero organisations (e.g. their only membership was
+  // removed) and anyone whose only relationship to an organisation is a
+  // still-pending join REQUEST (organisation_membership_requests is a
+  // separate table — see sql/schema.sql v42 — so a pending request never
+  // shows up here). Deliberately reads the real organisation_members
+  // table through the ordinary RLS-protected client, exactly the way any
+  // other page in this app reads its own data — never inferred from
+  // anything client-side/spoofable, and the `.eq("user_id", userId)`
+  // filter combined with organisation_members' own RLS policy means this
+  // can only ever return the caller's own rows, never another user's.
+  async function landingPageFor(userId) {
+    const { data } = await supabase.from("organisation_members").select("id").eq("user_id", userId).limit(1);
+    return (data && data.length > 0) ? next : "onboarding.html";
+  }
+
+  // If already signed in, go straight to the dashboard (or wherever "next"
+  // points) — or to onboarding.html first, if they have no organisation yet.
+  supabase.auth.getSession().then(async ({ data: { session } }) => {
+    if (session) window.location.href = await landingPageFor(session.user.id);
   });
 
   function applyMode() {
@@ -116,9 +136,9 @@
         mode = "signin";
         applyMode();
       } else if (mode === "signin") {
-        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
-        window.location.href = next;
+        window.location.href = await landingPageFor(data.user.id);
       } else {
         const { data, error } = await supabase.auth.signUp({ email, password });
         if (error) throw error;
