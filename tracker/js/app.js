@@ -4736,3 +4736,206 @@ export function previewVariationTotal(directSubtotal, linkedDayworksSubtotal, ma
   const markup = Number(markupPct) || 0;
   return Math.round((direct + linked) * (1 + markup / 100) * 100) / 100;
 }
+
+// ─── Toolbox Talks ──────────────────────────────────────────────────
+export async function getMyToolboxTalkRole(projectId) {
+  const { data, error } = await supabase.rpc("project_module_role", { p_project_id: projectId, p_module: "toolbox_talks" });
+  if (error) throw error;
+  return data || null;
+}
+
+// Mirrors commercialCapabilities()'s exact shape/reasoning — the same
+// view/edit matrix can_view_toolbox_talks()/can_edit_toolbox_talks()
+// (sql/schema.sql v44) enforce, computed once so every page agrees.
+export function toolboxTalkCapabilities(role) {
+  return {
+    role,
+    canView: role === "viewer" || role === "contributor" || role === "editor",
+    canEdit: role === "contributor" || role === "editor", // start talks, manage attendees/signatures
+    canEditTemplateLibrary: role === "editor", // project-level signal only — the real authority is canEditToolboxTalkTemplateLibrary(orgId) above
+  };
+}
+
+export const TOOLBOX_TALK_STATUS_LABEL = { in_progress: "In Progress", completed: "Completed", cancelled: "Cancelled" };
+export const TOOLBOX_TALK_STATUS_BADGE = { in_progress: "badge-amber", completed: "badge-green", cancelled: "badge-grey" };
+export const ATTENDANCE_STATUS_LABEL = { confirmed: "Confirmed", left_early: "Left Early", excused: "Excused" };
+
+// Every Toolbox Talk template a caller can see: the shared system
+// library (org_id null — the imported standard talks) plus their own
+// organisation's own templates, exactly what "members read
+// toolbox_talk_templates" RLS already scopes this query to — no org_id
+// filter needed client-side, matching the same "let RLS do the
+// filtering" convention getPortfolioControlSummary() etc. already use.
+export async function listToolboxTalkTemplates({ activeOnly = true } = {}) {
+  let query = supabase.from("toolbox_talk_templates").select("*").order("title");
+  if (activeOnly) query = query.eq("is_active", true);
+  const { data, error } = await query;
+  if (error) throw error;
+  return data || [];
+}
+
+export async function getToolboxTalkTemplate(templateId) {
+  const { data, error } = await supabase.from("toolbox_talk_templates").select("*").eq("id", templateId).single();
+  if (error) throw error;
+  return data;
+}
+
+export async function getToolboxTalkTemplateVersion(versionId) {
+  const { data, error } = await supabase.from("toolbox_talk_template_versions").select("*").eq("id", versionId).single();
+  if (error) throw error;
+  return data;
+}
+
+export async function listToolboxTalkTemplateVersions(templateId) {
+  const { data, error } = await supabase.from("toolbox_talk_template_versions").select("*").eq("template_id", templateId).order("version_number", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+// Whether the signed-in user may create/edit templates in the given
+// organisation's library — org admin, or an 'editor' toolbox_talks grant
+// on any of the organisation's projects. Mirrors getMyCommercialRole()'s
+// "ask the database, never infer client-side" precedent.
+export async function canEditToolboxTalkTemplateLibrary(orgId) {
+  const { data, error } = await supabase.rpc("can_edit_toolbox_talk_template_library", { p_org_id: orgId });
+  if (error) throw error;
+  return !!data;
+}
+
+// A template + its first version, created together as one logical
+// action — same "no in-between state" precedent as createDocument()/
+// createDaywork() above.
+export async function createToolboxTalkTemplate(orgId, { title, description = null, content }) {
+  const { data: template, error } = await supabase.from("toolbox_talk_templates").insert({
+    org_id: orgId, title, description,
+  }).select().single();
+  if (error) throw error;
+  const { error: vError } = await supabase.from("toolbox_talk_template_versions").insert({
+    template_id: template.id,
+    content: content || {},
+  });
+  if (vError) throw vError;
+  return template;
+}
+
+// Saving an edit always creates a NEW version — the template row itself
+// only ever gets metadata changes (title/description/active) via
+// updateToolboxTalkTemplate() below. This is what "editing must not
+// alter historical completed talks" actually means at the API level:
+// there is deliberately no "update the content" function at all.
+export async function addToolboxTalkTemplateVersion(templateId, content) {
+  const { data, error } = await supabase.from("toolbox_talk_template_versions").insert({
+    template_id: templateId,
+    content,
+  }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateToolboxTalkTemplate(templateId, { title, description, isActive } = {}) {
+  const fields = {};
+  if (title !== undefined) fields.title = title;
+  if (description !== undefined) fields.description = description;
+  if (isActive !== undefined) fields.is_active = isActive;
+  if (!Object.keys(fields).length) return;
+  const { error } = await supabase.from("toolbox_talk_templates").update(fields).eq("id", templateId);
+  if (error) throw error;
+}
+
+// ─── Delivered talks ────────────────────────────────────────────────
+export async function listToolboxTalks(projectId) {
+  const { data, error } = await supabase.from("toolbox_talks").select("*").eq("project_id", projectId).order("started_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function getToolboxTalk(talkId) {
+  const { data, error } = await supabase.from("toolbox_talks").select("*").eq("id", talkId).single();
+  if (error) throw error;
+  return data;
+}
+
+// Content, org_id, delivered_by, started_at and status are all derived
+// server-side by toolbox_talks_before_write() — this only ever supplies
+// the identity of what's being started, never the content itself (see
+// sql/schema.sql v44 for why: trusting a client-supplied snapshot would
+// let it claim content the referenced version never actually had).
+export async function startToolboxTalk(projectId, templateId, templateVersionId) {
+  const { data, error } = await supabase.from("toolbox_talks").insert({
+    project_id: projectId,
+    template_id: templateId,
+    template_version_id: templateVersionId,
+  }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateToolboxTalkSiteNotes(talkId, siteNotes) {
+  const { error } = await supabase.from("toolbox_talks").update({ site_notes: siteNotes }).eq("id", talkId);
+  if (error) throw error;
+}
+
+export async function completeToolboxTalk(talkId) {
+  const { data, error } = await supabase.from("toolbox_talks").update({ status: "completed" }).eq("id", talkId).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function cancelToolboxTalk(talkId, reason) {
+  const { data, error } = await supabase.from("toolbox_talks").update({ status: "cancelled", cancellation_reason: reason }).eq("id", talkId).select().single();
+  if (error) throw error;
+  return data;
+}
+
+// ─── Attendees & signatures ─────────────────────────────────────────
+export async function listToolboxTalkAttendees(talkId) {
+  const { data, error } = await supabase.from("toolbox_talk_attendees").select("*").eq("toolbox_talk_id", talkId).order("created_at");
+  if (error) throw error;
+  return data || [];
+}
+
+export async function addToolboxTalkAttendee(talkId, { name, company = null, userId = null }) {
+  const { data, error } = await supabase.from("toolbox_talk_attendees").insert({
+    toolbox_talk_id: talkId, name, company, user_id: userId,
+  }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function removeToolboxTalkAttendee(attendeeId) {
+  const { error } = await supabase.from("toolbox_talk_attendees").delete().eq("id", attendeeId);
+  if (error) throw error;
+}
+
+// The signature action itself — signed_at/signed_by are set server-side
+// (toolbox_talk_attendees_before_update(), sql/schema.sql v44) the
+// instant signed_at is first non-null; this only ever supplies the
+// signature artefact itself (a touch-drawn image, and/or a typed-name
+// attestation — see tracker/README.md for which the UI offers). Once
+// set, the database refuses to let any of these four fields change
+// again, silently discarding a second attempt rather than erroring.
+export async function signToolboxTalkAttendee(attendeeId, { signatureData = null, typedName = null }) {
+  const { data, error } = await supabase.from("toolbox_talk_attendees").update({
+    signed_at: new Date().toISOString(), // server-side value wins; this only signals "sign now"
+    signature_data: signatureData,
+    signature_typed_name: typedName,
+  }).eq("id", attendeeId).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function recordToolboxTalkAttendeeException(attendeeId, reason) {
+  const { data, error } = await supabase.from("toolbox_talk_attendees").update({ exception_reason: reason }).eq("id", attendeeId).select().single();
+  if (error) throw error;
+  return data;
+}
+
+// Pure, display-only helper — never the authority on whether a talk CAN
+// complete (the database's own "N attendee(s) have not yet signed"
+// exception is, via toolbox_talks_before_write()). Used only to render
+// "6 of 8 attendees have signed" before the deliverer even attempts it.
+export function toolboxTalkSignatureProgress(attendees) {
+  const total = attendees.length;
+  const resolved = attendees.filter((a) => a.signed_at || a.exception_reason).length;
+  return { total, resolved, outstanding: total - resolved, allResolved: total > 0 && resolved === total };
+}

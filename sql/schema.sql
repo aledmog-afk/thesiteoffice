@@ -6482,3 +6482,711 @@ begin
     revoke execute on function public.get_organisation_membership_requests(uuid, text) from anon;
   end if;
 end $$;
+
+-- ─── v44 ADDITIONS: Toolbox Talks ────────────────────────────────────
+-- A new module, following the exact architecture already established by
+-- Commercial (Phase 0-2) and Documents: module_roles/project_module_roles
+-- for permissions (no new permission system), a parent+immutable-version
+-- pair modelled directly on documents/document_revisions for the
+-- template library, a signature/audit pattern modelled on
+-- commercial_signatures/write_audit_log, and child-locking RLS modelled
+-- on commercial_line_items. No changes to organisations, projects,
+-- module_roles' existing rows, commercial_items, or any Commercial table.
+--
+-- Template scope: toolbox_talk_templates.org_id is NULLABLE.
+--   - NULL = a system-provided template (the imported standard library).
+--     Readable by every authenticated user (mirrors module_roles' own
+--     "authenticated read" policy — the only existing precedent in this
+--     schema for non-org-scoped, globally-readable reference data) but
+--     writable by NOBODY through the client — only the import process,
+--     which runs with elevated (RLS-bypassing) database access, ever
+--     creates one. This is what makes "organisations can use the
+--     standard talks without being able to modify another organisation's
+--     (or the system's) templates" true by construction, not by policy
+--     discipline alone.
+--   - A specific org_id = that organisation's own template, editable only
+--     by that organisation's authorised users, invisible to every other
+--     organisation. Two completely independent scopes sharing one table,
+--     exactly the way commercial_events already shares one table across
+--     variation/daywork via a `type` discriminator.
+--
+-- Versioning: toolbox_talk_template_versions rows are immutable once
+-- created (no update/delete policy at all, same as document_revisions),
+-- and every delivered toolbox_talks row snapshots the exact version
+-- content at start time — never a live reference to "whatever the
+-- template currently says" — so editing a template can never alter a
+-- historical completed talk.
+
+insert into public.module_roles (module, role, sort_order) values
+  ('toolbox_talks', 'viewer', 1),
+  ('toolbox_talks', 'contributor', 2),
+  ('toolbox_talks', 'editor', 3)
+on conflict (module, role) do nothing;
+
+create table if not exists public.toolbox_talk_templates (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid references public.organisations(id),
+  title text not null,
+  description text,
+  source_filename text,
+  source_reference text,
+  is_active boolean not null default true,
+  -- FK added below, once toolbox_talk_template_versions exists (the two
+  -- tables reference each other, same ordering reason as documents/
+  -- document_revisions.current_revision_id above).
+  current_version_id uuid,
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_by uuid references auth.users(id) on delete set null,
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.toolbox_talk_template_versions (
+  id uuid primary key default gen_random_uuid(),
+  template_id uuid not null references public.toolbox_talk_templates(id) on delete cascade,
+  version_number integer not null,
+  -- Structured content — sections vary slightly by talk (see the
+  -- imported library's own shape: introduction, key_message, key_points,
+  -- site_observations {good_practice, warning_signs}, discussion_
+  -- questions, key_takeaways, pre_task_checks, duration_label, audience)
+  -- but every talk's content is fundamentally "a handful of named
+  -- sections", which is what jsonb is for here — not a schema-avoidance
+  -- shortcut. There is deliberately no per-section relational table: a
+  -- talk's sections are never independently queried, filtered, or
+  -- joined against anywhere in this feature.
+  content jsonb not null,
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  unique (template_id, version_number)
+);
+
+alter table public.toolbox_talk_templates drop constraint if exists toolbox_talk_templates_current_version_id_fkey;
+alter table public.toolbox_talk_templates add constraint toolbox_talk_templates_current_version_id_fkey
+  foreign key (current_version_id) references public.toolbox_talk_template_versions(id) on delete set null;
+
+create index if not exists toolbox_talk_templates_org_idx on public.toolbox_talk_templates (org_id);
+create index if not exists toolbox_talk_template_versions_template_idx on public.toolbox_talk_template_versions (template_id, version_number);
+
+-- Org-level authority to maintain the template library: either the
+-- organisation's admin (mirrors how is_org_admin() already governs the
+-- organisation's own settings/name), OR anyone holding the 'editor'
+-- toolbox_talks module role on at least one of the organisation's
+-- projects (project_module_roles is inherently per-project, so this
+-- composes it up to org level rather than inventing a separate org-level
+-- grant table — an org admin can delegate library-editing rights to a
+-- specific trusted person via the exact same owner-grants-module-roles
+-- mechanism Commercial already uses, without making them org admin).
+create or replace function public.can_edit_toolbox_talk_template_library(p_org_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select public.is_org_admin(p_org_id) or exists (
+    select 1
+    from public.project_module_roles pmr
+    join public.projects p on p.id = pmr.project_id
+    where p.org_id = p_org_id
+      and pmr.user_id = auth.uid()
+      and pmr.module = 'toolbox_talks'
+      and pmr.role = 'editor'
+      and public.is_project_member(p.id)
+  );
+$$;
+revoke execute on function public.can_edit_toolbox_talk_template_library(uuid) from public;
+grant execute on function public.can_edit_toolbox_talk_template_library(uuid) to authenticated;
+-- Belt and braces, same as v42's own organisation RPCs (see the "Phase 0
+-- Cleanup" migration above): some Supabase projects carry a default-
+-- privilege grant of EXECUTE to `anon` on new public-schema functions,
+-- independent of the PUBLIC pseudo-role revoked above. This is a no-op
+-- wherever that grant doesn't exist, and the decisive fix wherever it does.
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'anon') then
+    revoke execute on function public.can_edit_toolbox_talk_template_library(uuid) from anon;
+  end if;
+end $$;
+
+alter table public.toolbox_talk_templates enable row level security;
+drop policy if exists "members read toolbox_talk_templates" on public.toolbox_talk_templates;
+create policy "members read toolbox_talk_templates" on public.toolbox_talk_templates for select using (
+  (org_id is null and auth.role() = 'authenticated') or public.is_org_member(org_id)
+);
+drop policy if exists "editors insert toolbox_talk_templates" on public.toolbox_talk_templates;
+create policy "editors insert toolbox_talk_templates" on public.toolbox_talk_templates for insert with check (
+  org_id is not null and public.can_edit_toolbox_talk_template_library(org_id)
+);
+drop policy if exists "editors update toolbox_talk_templates" on public.toolbox_talk_templates;
+create policy "editors update toolbox_talk_templates" on public.toolbox_talk_templates for update using (
+  org_id is not null and public.can_edit_toolbox_talk_template_library(org_id)
+) with check (
+  org_id is not null and public.can_edit_toolbox_talk_template_library(org_id)
+);
+-- No delete policy — templates are retired via is_active = false, never
+-- deleted (matches documents' own "archive, never delete" convention).
+-- System templates (org_id null) have no insert/update policy at all —
+-- only the import process, running with RLS-bypassing access, ever
+-- writes one.
+
+drop policy if exists "members read toolbox_talk_template_versions" on public.toolbox_talk_template_versions;
+alter table public.toolbox_talk_template_versions enable row level security;
+create policy "members read toolbox_talk_template_versions" on public.toolbox_talk_template_versions for select using (
+  exists (
+    select 1 from public.toolbox_talk_templates t
+    where t.id = toolbox_talk_template_versions.template_id
+      and ((t.org_id is null and auth.role() = 'authenticated') or public.is_org_member(t.org_id))
+  )
+);
+drop policy if exists "editors insert toolbox_talk_template_versions" on public.toolbox_talk_template_versions;
+create policy "editors insert toolbox_talk_template_versions" on public.toolbox_talk_template_versions for insert with check (
+  exists (
+    select 1 from public.toolbox_talk_templates t
+    where t.id = toolbox_talk_template_versions.template_id
+      and t.org_id is not null
+      and public.can_edit_toolbox_talk_template_library(t.org_id)
+  )
+);
+-- No update/delete policy — versions are immutable the moment they're
+-- created, exactly like document_revisions.
+
+create or replace function public.toolbox_talk_templates_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if TG_OP = 'INSERT' then
+    new.created_by := auth.uid();
+    new.created_at := now();
+    new.updated_by := auth.uid();
+    new.updated_at := now();
+    new.current_version_id := null; -- always starts empty; set by the first version's own insert
+    return new;
+  end if;
+
+  new.created_by := old.created_by;
+  new.created_at := old.created_at;
+  new.org_id := old.org_id; -- a template never moves between organisations (or in/out of system scope)
+  new.updated_by := auth.uid();
+  new.updated_at := now();
+
+  if coalesce(current_setting('app.allow_toolbox_talk_current_version_change', true), '') <> 'on' then
+    new.current_version_id := old.current_version_id;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_toolbox_talk_templates_before_write on public.toolbox_talk_templates;
+create trigger trg_toolbox_talk_templates_before_write
+  before insert or update on public.toolbox_talk_templates
+  for each row execute function public.toolbox_talk_templates_before_write();
+
+create or replace function public.toolbox_talk_template_versions_before_insert()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_next integer;
+begin
+  new.created_by := auth.uid();
+  new.created_at := now();
+  if new.version_number is null then
+    select coalesce(max(version_number), 0) + 1 into v_next
+      from public.toolbox_talk_template_versions where template_id = new.template_id;
+    new.version_number := v_next;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_toolbox_talk_template_versions_before_insert on public.toolbox_talk_template_versions;
+create trigger trg_toolbox_talk_template_versions_before_insert
+  before insert on public.toolbox_talk_template_versions
+  for each row execute function public.toolbox_talk_template_versions_before_insert();
+
+-- Promotes the new version to be its template's "current" one — same
+-- session-local-flag idiom as document_revisions_after_insert(), so the
+-- templates_before_write() guard above lets this one specific,
+-- internally-triggered UPDATE through without opening current_version_id
+-- up to ordinary client writes.
+create or replace function public.toolbox_talk_template_versions_after_insert()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  perform set_config('app.allow_toolbox_talk_current_version_change', 'on', true);
+  update public.toolbox_talk_templates set current_version_id = new.id where id = new.template_id;
+  perform set_config('app.allow_toolbox_talk_current_version_change', 'off', true);
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_toolbox_talk_template_versions_after_insert on public.toolbox_talk_template_versions;
+create trigger trg_toolbox_talk_template_versions_after_insert
+  after insert on public.toolbox_talk_template_versions
+  for each row execute function public.toolbox_talk_template_versions_after_insert();
+
+-- ─── Project-level permissions: delivering/attending talks ─────────
+create or replace function public.can_view_toolbox_talks(p_project_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select public.project_module_role(p_project_id, 'toolbox_talks') in ('viewer', 'contributor', 'editor');
+$$;
+
+create or replace function public.can_edit_toolbox_talks(p_project_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select public.project_module_role(p_project_id, 'toolbox_talks') in ('contributor', 'editor');
+$$;
+-- Deliberately no explicit grant/revoke on these two — they're used only
+-- inside RLS policies below, the same as can_view_commercial/
+-- can_edit_commercial (Phase 0), which have never needed a direct client
+-- grant either.
+
+-- ─── toolbox_talks — a delivered talk (the workflow's core record) ──
+create table if not exists public.toolbox_talks (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.organisations(id),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  template_id uuid not null references public.toolbox_talk_templates(id),
+  template_version_id uuid not null references public.toolbox_talk_template_versions(id),
+  title text not null,
+  -- The actual, server-populated copy of the version's content at the
+  -- moment this talk was started — see toolbox_talks_before_write()
+  -- below. Never client-supplied: a client could otherwise claim to have
+  -- delivered content that was never really in the referenced version.
+  content_snapshot jsonb not null,
+  source_filename text,
+  -- Site-specific additions (today's conditions, extra hazards, notes) —
+  -- kept in its OWN column, deliberately separate from content_snapshot,
+  -- so the standard template content always stays identifiable as
+  -- exactly what was published, never silently merged with ad hoc notes.
+  site_notes text,
+  status text not null default 'in_progress' check (status in ('in_progress', 'completed', 'cancelled')),
+  delivered_by uuid not null references auth.users(id),
+  started_at timestamptz not null default now(),
+  completed_by uuid references auth.users(id) on delete set null,
+  completed_at timestamptz,
+  cancelled_by uuid references auth.users(id) on delete set null,
+  cancelled_at timestamptz,
+  cancellation_reason text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists toolbox_talks_project_status_idx on public.toolbox_talks (project_id, status);
+create index if not exists toolbox_talks_org_idx on public.toolbox_talks (org_id);
+
+alter table public.toolbox_talks enable row level security;
+drop policy if exists "toolbox talk viewers read toolbox_talks" on public.toolbox_talks;
+create policy "toolbox talk viewers read toolbox_talks" on public.toolbox_talks for select using (
+  public.can_view_toolbox_talks(project_id)
+);
+drop policy if exists "toolbox talk contributors insert toolbox_talks" on public.toolbox_talks;
+create policy "toolbox talk contributors insert toolbox_talks" on public.toolbox_talks for insert with check (
+  public.can_edit_toolbox_talks(project_id)
+);
+drop policy if exists "toolbox talk contributors update toolbox_talks" on public.toolbox_talks;
+create policy "toolbox talk contributors update toolbox_talks" on public.toolbox_talks for update using (
+  public.can_edit_toolbox_talks(project_id)
+);
+-- No delete policy — a started talk always leaves a record, even if
+-- cancelled.
+
+create or replace function public.valid_toolbox_talk_status_transition(p_from text, p_to text)
+returns boolean
+language sql immutable set search_path = public
+as $$
+  select (p_from, p_to) in (('in_progress', 'completed'), ('in_progress', 'cancelled'));
+$$;
+
+-- The workflow's real authority. Two things matter most here:
+--   1. content_snapshot is ALWAYS taken server-side from the real
+--      template_version_id row, never from client input — closing the
+--      same class of gap Commercial Phase 2 found and fixed for
+--      variation_dayworks (a SECURITY DEFINER trigger reaching across a
+--      table whose own RLS the trigger itself bypasses MUST re-implement
+--      that table's boundary check, not rely on RLS having already run).
+--   2. That same lookup is where the cross-organisation boundary is
+--      enforced: the referenced template must be either system-provided
+--      (org_id is null) or belong to the SAME organisation as the
+--      project the talk is being started on — otherwise a project in
+--      Org A could start a talk against Org B's private template id
+--      (if guessed/leaked) and have its full content silently copied in.
+create or replace function public.toolbox_talks_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_org_id uuid;
+  v_version record;
+  v_attendee_count integer;
+  v_unresolved integer;
+begin
+  select org_id into v_org_id from public.projects where id = new.project_id;
+  if v_org_id is null then
+    raise exception 'toolbox_talks.project_id must reference an existing project with an organisation';
+  end if;
+  new.org_id := v_org_id;
+
+  if TG_OP = 'INSERT' then
+    select tv.template_id, tv.content, t.title, t.source_filename, t.org_id as template_org_id
+      into v_version
+      from public.toolbox_talk_template_versions tv
+      join public.toolbox_talk_templates t on t.id = tv.template_id
+      where tv.id = new.template_version_id;
+
+    if v_version is null then
+      raise exception 'toolbox_talks.template_version_id must reference an existing template version';
+    end if;
+    if v_version.template_id <> new.template_id then
+      raise exception 'template_version_id must belong to the specified template_id';
+    end if;
+    if v_version.template_org_id is not null and v_version.template_org_id <> v_org_id then
+      raise exception 'This template does not belong to your organisation';
+    end if;
+
+    new.content_snapshot := v_version.content;
+    new.title := coalesce(nullif(trim(new.title), ''), v_version.title);
+    new.source_filename := v_version.source_filename;
+    new.delivered_by := auth.uid();
+    new.started_at := now();
+    new.status := 'in_progress';
+    new.completed_by := null; new.completed_at := null;
+    new.cancelled_by := null; new.cancelled_at := null; new.cancellation_reason := null;
+    new.created_at := now();
+    new.updated_at := now();
+    return new;
+  end if;
+
+  -- UPDATE path: identity/snapshot fields are permanently fixed from
+  -- the moment the talk is started.
+  new.created_at := old.created_at;
+  new.org_id := old.org_id;
+  new.project_id := old.project_id;
+  new.template_id := old.template_id;
+  new.template_version_id := old.template_version_id;
+  new.content_snapshot := old.content_snapshot;
+  new.source_filename := old.source_filename;
+  new.delivered_by := old.delivered_by;
+  new.started_at := old.started_at;
+  new.updated_at := now();
+
+  if old.status <> 'in_progress' then
+    raise exception 'This toolbox talk is % and is immutable.', old.status;
+  end if;
+
+  if new.status <> old.status then
+    if not public.valid_toolbox_talk_status_transition(old.status, new.status) then
+      raise exception 'Invalid toolbox talk status transition: % -> %', old.status, new.status;
+    end if;
+
+    if new.status = 'completed' then
+      select count(*) into v_attendee_count from public.toolbox_talk_attendees where toolbox_talk_id = new.id;
+      if v_attendee_count = 0 then
+        raise exception 'Add at least one attendee before completing this talk.';
+      end if;
+      select count(*) into v_unresolved
+        from public.toolbox_talk_attendees
+        where toolbox_talk_id = new.id and signed_at is null and exception_reason is null;
+      if v_unresolved > 0 then
+        raise exception '% attendee(s) have not yet signed or been recorded as an exception.', v_unresolved;
+      end if;
+      new.completed_by := auth.uid();
+      new.completed_at := now();
+    elsif new.status = 'cancelled' then
+      if new.cancellation_reason is null or length(trim(new.cancellation_reason)) = 0 then
+        raise exception 'A cancellation reason is required to cancel a toolbox talk.';
+      end if;
+      new.cancelled_by := auth.uid();
+      new.cancelled_at := now();
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_toolbox_talks_before_write on public.toolbox_talks;
+create trigger trg_toolbox_talks_before_write
+  before insert or update on public.toolbox_talks
+  for each row execute function public.toolbox_talks_before_write();
+
+-- ─── toolbox_talk_attendees — one row per attendee, never a name list ──
+create table if not exists public.toolbox_talk_attendees (
+  id uuid primary key default gen_random_uuid(),
+  toolbox_talk_id uuid not null references public.toolbox_talks(id) on delete cascade,
+  -- Denormalized, trigger-populated — same write_audit_log()
+  -- compatibility reasoning as commercial_line_items.project_id.
+  project_id uuid not null references public.projects(id) on delete cascade,
+  -- An attendee's own platform account, where they have one — never
+  -- required (see brief: attendance must not require an account).
+  user_id uuid references auth.users(id) on delete set null,
+  name text not null,
+  company text,
+  attendance_status text not null default 'confirmed' check (attendance_status in ('confirmed', 'left_early', 'excused')),
+  signed_at timestamptz,
+  signature_data text,
+  signature_typed_name text,
+  -- Who actually performed the sign action (in practice, almost always
+  -- the deliverer's own session — the phone is handed around and they
+  -- tap submit for each attendee in turn, exactly as the brief's own
+  -- workflow describes) — distinct from user_id, which is the
+  -- attendee's own identity if they happen to have one.
+  signed_by uuid references auth.users(id) on delete set null,
+  exception_reason text,
+  exception_recorded_by uuid references auth.users(id) on delete set null,
+  exception_at timestamptz,
+  added_by uuid not null references auth.users(id),
+  created_at timestamptz not null default now(),
+  check (signed_at is null or exception_reason is null)
+);
+
+create index if not exists toolbox_talk_attendees_talk_idx on public.toolbox_talk_attendees (toolbox_talk_id);
+create index if not exists toolbox_talk_attendees_project_idx on public.toolbox_talk_attendees (project_id);
+
+alter table public.toolbox_talk_attendees enable row level security;
+drop policy if exists "toolbox talk viewers read toolbox_talk_attendees" on public.toolbox_talk_attendees;
+create policy "toolbox talk viewers read toolbox_talk_attendees" on public.toolbox_talk_attendees for select using (
+  exists (select 1 from public.toolbox_talks tt where tt.id = toolbox_talk_attendees.toolbox_talk_id and public.can_view_toolbox_talks(tt.project_id))
+);
+-- Every write policy below independently re-checks the PARENT talk's
+-- live status (in_progress only) on every call — the actual child-lock
+-- enforcement, mirroring commercial_line_items' own write policies
+-- exactly (a parent-side trigger alone cannot protect a child table a
+-- client can still write to directly).
+drop policy if exists "toolbox talk contributors insert toolbox_talk_attendees" on public.toolbox_talk_attendees;
+create policy "toolbox talk contributors insert toolbox_talk_attendees" on public.toolbox_talk_attendees for insert with check (
+  exists (select 1 from public.toolbox_talks tt where tt.id = toolbox_talk_attendees.toolbox_talk_id and public.can_edit_toolbox_talks(tt.project_id) and tt.status = 'in_progress')
+);
+drop policy if exists "toolbox talk contributors update toolbox_talk_attendees" on public.toolbox_talk_attendees;
+create policy "toolbox talk contributors update toolbox_talk_attendees" on public.toolbox_talk_attendees for update using (
+  exists (select 1 from public.toolbox_talks tt where tt.id = toolbox_talk_attendees.toolbox_talk_id and public.can_edit_toolbox_talks(tt.project_id) and tt.status = 'in_progress')
+);
+drop policy if exists "toolbox talk contributors delete toolbox_talk_attendees" on public.toolbox_talk_attendees;
+create policy "toolbox talk contributors delete toolbox_talk_attendees" on public.toolbox_talk_attendees for delete using (
+  exists (select 1 from public.toolbox_talks tt where tt.id = toolbox_talk_attendees.toolbox_talk_id and public.can_edit_toolbox_talks(tt.project_id) and tt.status = 'in_progress')
+  and signed_at is null and exception_reason is null
+);
+-- Deleting is only ever possible before an attendee has signed or been
+-- excepted — once either of those exists, the row is protected even
+-- from deletion, matching "once signatures have started, protect the
+-- integrity of existing attendance/signature records" exactly.
+
+create or replace function public.toolbox_talk_attendees_before_insert()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_project_id uuid;
+  v_status text;
+begin
+  select project_id, status into v_project_id, v_status from public.toolbox_talks where id = new.toolbox_talk_id;
+  if v_project_id is null then
+    raise exception 'toolbox_talk_attendees.toolbox_talk_id must reference an existing toolbox_talks row';
+  end if;
+  if v_status <> 'in_progress' then
+    raise exception 'Attendees cannot be added to a % toolbox talk.', v_status;
+  end if;
+  new.project_id := v_project_id;
+  new.added_by := auth.uid();
+  new.created_at := now();
+  new.signed_at := null; new.signature_data := null; new.signature_typed_name := null; new.signed_by := null;
+  new.exception_reason := null; new.exception_recorded_by := null; new.exception_at := null;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_toolbox_talk_attendees_before_insert on public.toolbox_talk_attendees;
+create trigger trg_toolbox_talk_attendees_before_insert
+  before insert on public.toolbox_talk_attendees
+  for each row execute function public.toolbox_talk_attendees_before_insert();
+
+-- Signing / exception-recording both happen as an UPDATE on the
+-- attendee's own row — this IS the signature workflow (deliberately not
+-- a separate signatures table: an attendee has at most one signature
+-- ever, so the extra join would buy nothing commercial_signatures'
+-- shape needs for its many-signatures-per-event case). Once signed_at
+-- (or exception_reason) is first set, it is permanently locked — this
+-- function is the only place either can ever be written, and it refuses
+-- to let either be changed a second time.
+create or replace function public.toolbox_talk_attendees_before_update()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_status text;
+begin
+  select status into v_status from public.toolbox_talks where id = new.toolbox_talk_id;
+  if v_status <> 'in_progress' then
+    raise exception 'This toolbox talk is % — its attendee records are locked.', v_status;
+  end if;
+
+  new.toolbox_talk_id := old.toolbox_talk_id;
+  new.project_id := old.project_id;
+  new.added_by := old.added_by;
+  new.created_at := old.created_at;
+
+  if old.signed_at is not null then
+    new.signed_at := old.signed_at;
+    new.signature_data := old.signature_data;
+    new.signature_typed_name := old.signature_typed_name;
+    new.signed_by := old.signed_by;
+  elsif new.signed_at is not null then
+    if new.exception_reason is not null then
+      raise exception 'An attendee cannot be both signed and recorded as an exception.';
+    end if;
+    new.signed_at := now();
+    new.signed_by := auth.uid();
+  end if;
+
+  if old.exception_reason is not null then
+    new.exception_reason := old.exception_reason;
+    new.exception_recorded_by := old.exception_recorded_by;
+    new.exception_at := old.exception_at;
+  elsif new.exception_reason is not null then
+    if new.signed_at is not null then
+      raise exception 'An attendee cannot be both signed and recorded as an exception.';
+    end if;
+    new.exception_recorded_by := auth.uid();
+    new.exception_at := now();
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_toolbox_talk_attendees_before_update on public.toolbox_talk_attendees;
+create trigger trg_toolbox_talk_attendees_before_update
+  before update on public.toolbox_talk_attendees
+  for each row execute function public.toolbox_talk_attendees_before_update();
+
+-- ─── Audit integration ──────────────────────────────────────────────
+-- toolbox_talks and toolbox_talk_attendees both carry a real project_id
+-- already, so write_audit_log()'s existing generic branch covers talk-
+-- started/updated, attendee-added/signed/excepted, and completion,
+-- with zero changes to that function. They both default into
+-- can_read_audit_row()'s existing editor-level fallback, which already
+-- matches these tables' own RLS (can_edit_toolbox_talks) — also zero
+-- changes needed there.
+drop trigger if exists trg_audit_toolbox_talks on public.toolbox_talks;
+create trigger trg_audit_toolbox_talks
+  after insert or update on public.toolbox_talks
+  for each row execute function public.write_audit_log();
+
+drop trigger if exists trg_audit_toolbox_talk_attendees on public.toolbox_talk_attendees;
+create trigger trg_audit_toolbox_talk_attendees
+  after insert or update or delete on public.toolbox_talk_attendees
+  for each row execute function public.write_audit_log();
+
+-- toolbox_talk_templates has no project_id at all (it's org- or system-
+-- scoped, never project-scoped) — the same shape org_settings already
+-- has, so it needs the same two small, precedented additions
+-- write_audit_log()/can_read_audit_row() already carry for org_settings,
+-- rather than a schema-wide audit rework. Template VERSIONS are
+-- deliberately NOT run through the generic audit trigger at all: they
+-- are themselves an append-only, immutable history (every version row
+-- already carries its own created_by/created_at forever) — a separate
+-- audit_log entry for "a version was created" would duplicate
+-- information the versions table itself already preserves permanently.
+create or replace function public.write_audit_log()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_record jsonb := to_jsonb(coalesce(new, old));
+  v_record_id uuid;
+  v_project_id uuid;
+  v_org_id uuid;
+begin
+  if TG_TABLE_NAME = 'projects' then
+    v_record_id := (v_record->>'id')::uuid;
+    v_project_id := v_record_id;
+    v_org_id := (v_record->>'org_id')::uuid;
+  elsif TG_TABLE_NAME = 'org_settings' then
+    v_project_id := null;
+    v_org_id := (v_record->>'org_id')::uuid;
+    v_record_id := v_org_id;
+  elsif TG_TABLE_NAME = 'toolbox_talk_templates' then
+    v_record_id := (v_record->>'id')::uuid;
+    v_project_id := null;
+    v_org_id := (v_record->>'org_id')::uuid;
+  else
+    v_record_id := (v_record->>'id')::uuid;
+    v_project_id := (v_record->>'project_id')::uuid;
+    select org_id into v_org_id from public.projects where id = v_project_id;
+  end if;
+
+  insert into public.audit_log (org_id, project_id, user_id, action, table_name, record_id, old_data, new_data)
+  values (
+    v_org_id,
+    v_project_id,
+    auth.uid(),
+    TG_OP,
+    TG_TABLE_NAME,
+    v_record_id,
+    case when TG_OP = 'INSERT' then null else to_jsonb(old) end,
+    case when TG_OP = 'DELETE' then null else to_jsonb(new) end
+  );
+
+  return coalesce(new, old);
+end;
+$$;
+
+create or replace function public.can_read_audit_row(p_table_name text, p_project_id uuid, p_org_id uuid)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+begin
+  if p_table_name = 'org_settings' then
+    return p_org_id is not null and public.is_org_member(p_org_id);
+  end if;
+
+  if p_table_name = 'toolbox_talk_templates' then
+    return p_org_id is not null and public.is_org_member(p_org_id);
+  end if;
+
+  if p_project_id is null then
+    return false;
+  end if;
+
+  -- Member-level (not editor-level) tables: projects/snag_items (Priority
+  -- 1), documents/document_revisions (Phase Documents), and now
+  -- toolbox_talks/toolbox_talk_attendees — matching their own real SELECT
+  -- RLS (can_view_toolbox_talks, which a viewer already satisfies) exactly
+  -- the same reasoning documents/document_revisions were added for: the
+  -- function's editor-level default would otherwise incorrectly hide a
+  -- viewer's own audit history for data they can already read directly.
+  if p_table_name in ('projects', 'snag_items', 'documents', 'document_revisions', 'toolbox_talks', 'toolbox_talk_attendees') then
+    return public.is_project_member(p_project_id);
+  end if;
+
+  return public.is_project_editor(p_project_id);
+end;
+$$;
+
+drop trigger if exists trg_audit_toolbox_talk_templates on public.toolbox_talk_templates;
+create trigger trg_audit_toolbox_talk_templates
+  after insert or update on public.toolbox_talk_templates
+  for each row execute function public.write_audit_log();

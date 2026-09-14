@@ -92,10 +92,17 @@ alter default privileges in schema public grant usage, select on sequences to au
 -- role — a genuinely UNAUTHENTICATED REST API caller (no session at
 -- all), distinct from `authenticated` with no JWT sub (a signed-in
 -- session with no identity — the case tests/lib/db.mjs's
--- userClient(db, null) represents). Deliberately given only schema
--- USAGE, nothing else — the point of a test using this role is to prove
--- a specific function/table grant is genuinely absent, which only works
--- if this role starts with no privileges to fall back on.
+-- userClient(db, null) represents). Mirrors `authenticated`'s own table-
+-- level grants exactly (real Supabase gives `anon` the same broad
+-- SELECT/INSERT/UPDATE/DELETE table grants as `authenticated` — RLS,
+-- not the coarser GRANT, is the real boundary between them) so that a
+-- test against this role actually exercises RLS, the real security
+-- layer, rather than merely tripping a table-level permission error that
+-- would mask what RLS itself does or doesn't allow. Function EXECUTE
+-- privileges are the one thing that genuinely differs per-function (see
+-- REVOKE ... FROM PUBLIC/anon in sql/schema.sql v42/v43) and this role
+-- starts with none beyond Postgres's own PUBLIC default, exactly like
+-- production.
 do $$
 begin
   if not exists (select 1 from pg_roles where rolname = 'anon') then
@@ -105,3 +112,9 @@ end $$;
 
 grant usage on schema public to anon;
 grant usage on schema auth to anon;
+grant usage on schema storage to anon;
+grant select, insert, update, delete on all tables in schema public to anon;
+grant select, insert, update, delete on all tables in schema storage to anon;
+grant select on all tables in schema auth to anon;
+alter default privileges in schema public grant select, insert, update, delete on tables to anon;
+alter default privileges in schema public grant usage, select on sequences to anon;

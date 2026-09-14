@@ -222,7 +222,7 @@ test("Audit trail: the v28 migration block (table, triggers, policies) is idempo
     const triggers = await client.query(`
       select count(*)::int as n from pg_trigger where tgname like 'trg_audit_%'
     `);
-    assert.equal(triggers.rows[0].n, 23, "exactly 23 audit triggers must exist after repeated re-application (the original 8 from Priority 4, actions from Priority 5, inspections + inspection_findings from Priority 7, documents + document_revisions from Priority 10, programmes + programme_activities from Priority 11, and project_module_roles + commercial_events + variations + dayworks + commercial_line_items + variation_dayworks + commercial_evidence_links + commercial_signatures from the Commercial Module Phase 0), never duplicated");
+    assert.equal(triggers.rows[0].n, 26, "exactly 26 audit triggers must exist after repeated re-application (the original 8 from Priority 4, actions from Priority 5, inspections + inspection_findings from Priority 7, documents + document_revisions from Priority 10, programmes + programme_activities from Priority 11, project_module_roles + commercial_events + variations + dayworks + commercial_line_items + variation_dayworks + commercial_evidence_links + commercial_signatures from the Commercial Module Phase 0, and toolbox_talks + toolbox_talk_attendees + toolbox_talk_templates from Toolbox Talks), never duplicated");
     await client.end();
   } finally {
     await dropTestDatabase(db);

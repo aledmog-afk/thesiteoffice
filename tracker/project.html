@@ -104,6 +104,11 @@
       <div class="tile-name">Commercials</div>
       <div class="tile-stats"><div><strong id="commercialsPendingCount">–</strong>pending review</div></div>
     </a>
+    <a class="tile" href="toolbox-talks.html?project=" id="toolboxTalksTile" style="display:none;">
+      <div class="tile-icon">🦺</div>
+      <div class="tile-name">Toolbox Talks</div>
+      <div class="tile-stats"><div><strong id="toolboxTalksInProgressCount">–</strong>in progress</div></div>
+    </a>
     <a class="tile" href="commercial-dashboard.html?project=" id="commercialModuleTile" style="display:none;">
       <div class="tile-icon">🧾</div>
       <div class="tile-name">Commercial</div>
@@ -231,7 +236,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, geocodePostcode, recalculateActualProgress, generateMissingPlots, suggestPlotProgress, EXTERNAL_WORKS_TAG, monthStartISO, getProjectControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, isFindingOutstanding, categoriseSnag, getProjectPlotReadiness, getMyCommercialRole, commercialCapabilities } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, geocodePostcode, recalculateActualProgress, generateMissingPlots, suggestPlotProgress, EXTERNAL_WORKS_TAG, monthStartISO, getProjectControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, isFindingOutstanding, categoriseSnag, getProjectPlotReadiness, getMyCommercialRole, commercialCapabilities, getMyToolboxTalkRole, toolboxTalkCapabilities } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("id");
@@ -244,6 +249,7 @@
   document.getElementById("hsAuditsTile").href = `hs-audits.html?project=${projectId}`;
   document.getElementById("commercialsTile").href = `commercials.html?project=${projectId}`;
   document.getElementById("commercialModuleTile").href = `commercial-dashboard.html?project=${projectId}`;
+  document.getElementById("toolboxTalksTile").href = `toolbox-talks.html?project=${projectId}`;
   document.getElementById("drawingsTile").href = `drawings.html?project=${projectId}`;
   document.getElementById("documentsTile").href = `documents.html?project=${projectId}`;
   document.getElementById("programmeTile").href = `programme.html?project=${projectId}`;
@@ -676,7 +682,7 @@
     document.getElementById("controlCard").style.display = "none";
     document.getElementById("detailsCard").style.display = "none";
     document.getElementById("collaboratorsCard").style.display = "none";
-    ["reportsTile", "monthlyReportsTile", "plotHandoversTile", "hsAuditsTile", "commercialsTile", "commercialModuleTile", "drawingsTile", "actionsTile", "inspectionsTile", "programmeTile"].forEach((id) => {
+    ["reportsTile", "monthlyReportsTile", "plotHandoversTile", "hsAuditsTile", "commercialsTile", "commercialModuleTile", "toolboxTalksTile", "drawingsTile", "actionsTile", "inspectionsTile", "programmeTile"].forEach((id) => {
       document.getElementById(id).style.display = "none";
     });
   }
@@ -699,6 +705,20 @@
     } catch {
       // A failed permission check must never surface as a page error —
       // it just means the tile stays hidden, same as "no grant".
+    }
+  }
+
+  // Same permission-aware pattern as Commercial's own tile above.
+  async function loadToolboxTalksTile() {
+    try {
+      const role = await getMyToolboxTalkRole(projectId);
+      const caps = toolboxTalkCapabilities(role);
+      if (!caps.canView) return;
+      document.getElementById("toolboxTalksTile").style.display = "block";
+      const { count } = await supabase.from("toolbox_talks").select("id", { count: "exact", head: true }).eq("project_id", projectId).eq("status", "in_progress");
+      document.getElementById("toolboxTalksInProgressCount").textContent = count ?? 0;
+    } catch {
+      // Tile stays hidden — same reasoning as loadCommercialModuleTile().
     }
   }
 
@@ -731,6 +751,7 @@
     loadMembers();
     loadControlSummary();
     loadCommercialModuleTile();
+    loadToolboxTalksTile();
 
     const [{ count: reportCount }, { count: monthlyReportCount }, { data: snags }, { count: fetchedPlotsCount }, { data: gates }, { data: commercials }, { count: drawingsCount }, { data: hsAudits }, { data: actions }, { data: findings }, { count: documentsCount }, { count: programmeActivitiesCount }] = await Promise.all([
       supabase.from("weekly_reports").select("id", { count: "exact", head: true }).eq("project_id", projectId),
