@@ -48,6 +48,15 @@ rest of the file's actual source.
 Nothing in this suite ever touches the real Supabase project. See
 "Test data isolation" below.
 
+**`tests/frontend/toolbox_talk_pdf.test.mjs` additionally needs
+`poppler-utils`** (`pdftotext`/`pdfinfo`) on `PATH` — it generates real
+PDF bytes with the actual `jspdf` package and verifies them structurally
+against those CLI tools rather than trusting jsPDF's own internal state.
+Install with `apt-get install -y poppler-utils` (already present in most
+dev containers/Codespaces images; CI installs it explicitly — see
+`.github/workflows/test.yml`). Without it, those tests fail with `spawn
+pdftotext ENOENT` — every other test file is unaffected.
+
 ## Structure
 
 ```
@@ -669,5 +678,6 @@ provided by the test.
 ## CI
 
 `.github/workflows/test.yml` runs `npm test` against a `postgres:16`
-service container on every push and pull request — see that file for
-the exact steps. A failing test fails the workflow.
+service container on every push and pull request, after installing
+`poppler-utils` — see that file for the exact steps. A failing test
+fails the workflow.
