@@ -356,3 +356,78 @@ test("Unauthenticated: sees zero commercial data and cannot write any of it", as
     await anon.end();
   }
 });
+
+// ─── commercial_event_totals view: security_invoker regression ────
+//
+// This is the one gap the rest of this file could never have caught:
+// every other test here queries commercial_events/commercial_line_items
+// directly, so a broken RLS policy on those TABLES would fail loudly.
+// A view created without `security_invoker = true` (Postgres 15+) is a
+// different, subtler failure mode — Postgres evaluates the view's
+// underlying-table access (RLS included) using the VIEW OWNER's
+// privileges, not the querying user's. Since every migration-applying
+// role (including Supabase's own migration tooling, and this test
+// suite's own schema-setup superuser — see tests/lib/db.mjs's
+// setupSchema()) is exactly this kind of elevated, RLS-bypassing role,
+// a view missing this option silently leaks every organisation's data
+// through its own auto-exposed endpoint, with EVERY underlying table's
+// RLS still individually correct and every other test in this file
+// still green. Discovered for real during the Phase 1 production
+// deploy via Supabase's security advisor (an ERROR-level "Security
+// Definer View" finding) — commercial_event_totals had exactly this
+// gap despite an (incorrect) code comment claiming otherwise.
+test("commercial_event_totals view: is created with security_invoker=true, so it enforces RLS as the querying user, not the view owner", async () => {
+  const admin = adminClient(DB);
+  await admin.connect();
+  try {
+    const { rows } = await admin.query("select reloptions from pg_class where relname='commercial_event_totals'");
+    assert.ok(
+      (rows[0]?.reloptions || []).includes("security_invoker=true"),
+      "commercial_event_totals must be created with security_invoker=true, or it silently bypasses RLS for every caller"
+    );
+  } finally {
+    await admin.end();
+  }
+});
+
+test("commercial_event_totals view: a contributor on project B cannot see project A's totals through the view, even though the view was created by a superuser", async () => {
+  const contributorA = await userClient(DB, CONTRIBUTOR_A); // granted on projA only
+  const ownerB = await userClient(DB, OWNER_B); // owns projB, no commercial grant anywhere
+  try {
+    // Give an unrelated draft daywork on project A a real, non-zero
+    // total via a real line item, so there is something non-trivial for
+    // the view to leak if security_invoker were missing.
+    const { rows: created } = await contributorA.query(
+      `insert into public.commercial_events (project_id, type, title) values ($1,'daywork','View isolation test') returning id`,
+      [fx.projA]
+    );
+    const eventId = created[0].id;
+    await contributorA.query(
+      `insert into public.commercial_line_items (commercial_event_id, line_type, description, quantity, rate) values ($1,'labour','x',10,50)`,
+      [eventId]
+    );
+
+    // The contributor (who legitimately has access to project A) sees it.
+    const { rows: seenByContributor } = await contributorA.query(
+      "select total from public.commercial_event_totals where commercial_event_id=$1", [eventId]
+    );
+    assert.equal(seenByContributor.length, 1, "a user with real access to the event must still see it through the view");
+    assert.equal(seenByContributor[0].total, "500.00");
+
+    // ownerB has no Commercial grant on projA (or anywhere) — querying
+    // the VIEW (not the base table) must return zero rows for them,
+    // exactly as commercial_events itself already does.
+    const { rows: seenByOwnerB } = await ownerB.query(
+      "select total from public.commercial_event_totals where commercial_event_id=$1", [eventId]
+    );
+    assert.equal(seenByOwnerB.length, 0, "commercial_event_totals must enforce RLS as the querying user — an unrelated project owner must see nothing through the view, not everything");
+
+    // Belt and braces: an unfiltered select must also come back empty
+    // for ownerB, not merely a specific id lookup.
+    const { rows: allForOwnerB } = await ownerB.query("select * from public.commercial_event_totals");
+    assert.equal(allForOwnerB.length, 0, "an unfiltered query against the view must also return zero rows for a user with no Commercial access anywhere");
+  } finally {
+    await contributorA.end();
+    await ownerB.end();
+  }
+});

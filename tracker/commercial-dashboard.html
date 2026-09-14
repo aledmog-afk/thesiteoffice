@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Commercial – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title">Commercial</div>
+      <div class="page-sub" id="projectSub">Dayworks &amp; variations — valuations, evidence and approvals.</div>
+    </div>
+    <div class="btn-row" id="headerActions" style="display:none;">
+      <a class="btn btn-outline" href="dayworks.html" id="dayworksLink">View Dayworks</a>
+      <a class="btn btn-amber" href="daywork-detail.html" id="newDayworkLink" style="display:none;">+ New Daywork</a>
+    </div>
+  </div>
+
+  <div id="pageErrorBox" class="error-box"></div>
+
+  <div class="card" id="noAccessCard" style="display:none;">
+    <p>You don't have Commercial access on this site. Ask the site owner to grant you a Commercial role (Viewer, Contributor or Approver) if you need it.</p>
+  </div>
+
+  <div id="dashboardBody" style="display:none;">
+    <div class="totals-bar" style="margin-bottom:2rem;">
+      <div class="totals-box"><div class="totals-label">Drafts</div><div class="totals-value" id="draftCount">0</div></div>
+      <div class="totals-box"><div class="totals-label">Submitted / Awaiting Approval</div><div class="totals-value pending" id="submittedCount">0</div></div>
+      <div class="totals-box"><div class="totals-label">Approved</div><div class="totals-value approved" id="approvedCount">0</div></div>
+      <div class="totals-box"><div class="totals-label">Rejected</div><div class="totals-value" id="rejectedCount">0</div></div>
+      <div class="totals-box"><div class="totals-label">Total Approved Value</div><div class="totals-value approved" id="approvedValue">£0.00</div></div>
+      <div class="totals-box"><div class="totals-label">Outstanding Submitted Value</div><div class="totals-value pending" id="submittedValue">£0.00</div></div>
+    </div>
+
+    <div class="card" id="warningsCard" style="display:none; margin-bottom:2rem;">
+      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.8rem;">Needs Attention</h3>
+      <ul id="warningsList" style="margin:0; padding-left:1.2rem; line-height:1.9;"></ul>
+    </div>
+
+    <div class="card">
+      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Recent Activity</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Reference</th><th>Type</th><th>Title</th><th>Plot</th><th>Value</th><th>Status</th><th>Created</th><th>Submitted</th></tr>
+          </thead>
+          <tbody id="activityRows"></tbody>
+        </table>
+      </div>
+      <div id="emptyState" class="empty" style="display:none;"><p>Nothing logged yet — create your first Daywork to get started.</p></div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showCommercialError, clearError, getMyCommercialRole, commercialCapabilities, getCommercialSummary, getCommercialWarnings, formatCommercialGBP, COMMERCIAL_STATUS_LABEL, COMMERCIAL_STATUS_BADGE, comparePlotNumbers } from "./js/app.js";
+
+  await requireAuth();
+  const projectId = getParam("project");
+  if (!projectId) window.location.href = "dashboard.html";
+
+  const pageErrorBox = document.getElementById("pageErrorBox");
+  document.getElementById("dayworksLink").href = `dayworks.html?project=${projectId}`;
+  document.getElementById("newDayworkLink").href = `daywork-detail.html?project=${projectId}`;
+
+  const typeLabel = { daywork: "Daywork", variation: "Variation" };
+
+  function renderActivity(events, plotsById) {
+    const rows = events.slice(0, 25);
+    document.getElementById("emptyState").style.display = rows.length ? "none" : "block";
+    document.getElementById("activityRows").innerHTML = rows.map((e) => `
+      <tr>
+        <td><a href="daywork-detail.html?id=${e.id}">${escapeHtml(e.reference) || "—"}</a></td>
+        <td>${typeLabel[e.type] || e.type}</td>
+        <td>${escapeHtml(e.title)}</td>
+        <td>${e.plot_id ? escapeHtml(plotsById[e.plot_id] || "—") : "—"}</td>
+        <td>${formatCommercialGBP(e.total_value) || "£0.00"}</td>
+        <td><span class="badge ${COMMERCIAL_STATUS_BADGE[e.status]}">${COMMERCIAL_STATUS_LABEL[e.status]}</span></td>
+        <td>${formatDate(e.created_at?.slice(0, 10))}</td>
+        <td>${e.submitted_at ? formatDate(e.submitted_at.slice(0, 10)) : "—"}</td>
+      </tr>
+    `).join("");
+  }
+
+  function renderWarnings(events, warnings) {
+    const items = [];
+    const tbcCount = events.filter((e) => e.status !== "approved" && warnings.tbcEventIds.has(e.id)).length;
+    const noEvidenceCount = events.filter((e) => e.status !== "draft" && !warnings.eventsWithEvidence.has(e.id)).length;
+    const rejectedCount = events.filter((e) => e.status === "rejected").length;
+    if (tbcCount) items.push(`<li>${tbcCount} record${tbcCount === 1 ? "" : "s"} still ${tbcCount === 1 ? "has" : "have"} TBC (to-be-confirmed) pricing on at least one line item.</li>`);
+    if (noEvidenceCount) items.push(`<li>${noEvidenceCount} submitted/approved record${noEvidenceCount === 1 ? "" : "s"} ${noEvidenceCount === 1 ? "has" : "have"} no evidence attached.</li>`);
+    if (rejectedCount) items.push(`<li>${rejectedCount} record${rejectedCount === 1 ? "" : "s"} ${rejectedCount === 1 ? "is" : "are"} rejected and awaiting amendment.</li>`);
+    document.getElementById("warningsCard").style.display = items.length ? "block" : "none";
+    document.getElementById("warningsList").innerHTML = items.join("");
+  }
+
+  async function load() {
+    clearError(pageErrorBox);
+    let role;
+    try {
+      role = await getMyCommercialRole(projectId);
+    } catch (err) {
+      showCommercialError(pageErrorBox, err);
+      return;
+    }
+    const caps = commercialCapabilities(role);
+    if (!caps.canView) {
+      document.getElementById("noAccessCard").style.display = "block";
+      return;
+    }
+    document.getElementById("headerActions").style.display = "flex";
+    document.getElementById("dashboardBody").style.display = "block";
+    if (caps.canEdit) document.getElementById("newDayworkLink").style.display = "inline-flex";
+
+    try {
+      const [{ data: plots }, { events, counts, approvedValue, submittedValue }, warnings] = await Promise.all([
+        supabase.from("plots").select("id, plot_number").eq("project_id", projectId),
+        getCommercialSummary(projectId),
+        getCommercialWarnings(projectId),
+      ]);
+      const plotsById = {};
+      (plots || []).forEach((p) => { plotsById[p.id] = p.plot_number; });
+
+      document.getElementById("draftCount").textContent = counts.draft;
+      document.getElementById("submittedCount").textContent = counts.submitted;
+      document.getElementById("approvedCount").textContent = counts.approved;
+      document.getElementById("rejectedCount").textContent = counts.rejected;
+      document.getElementById("approvedValue").textContent = formatCommercialGBP(approvedValue) || "£0.00";
+      document.getElementById("submittedValue").textContent = formatCommercialGBP(submittedValue) || "£0.00";
+
+      renderActivity(events, plotsById);
+      renderWarnings(events, warnings);
+    } catch (err) {
+      showCommercialError(pageErrorBox, err);
+    }
+  }
+
+  async function init() {
+    const { data: project } = await supabase.from("projects").select("name").eq("id", projectId).single();
+    renderHeader([
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project?.name || "Site", href: `project.html?id=${projectId}` },
+      { label: "Commercial" },
+    ]);
+    document.getElementById("projectSub").textContent = project ? `${project.name} — dayworks & variations.` : "";
+    load();
+  }
+
+  init();
+</script>
+</body>
+</html>

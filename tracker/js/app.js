@@ -4177,3 +4177,333 @@ export async function importProgrammeActivities(programmeId, rows) {
   if (error) throw error;
   return data;
 }
+
+// ─── Commercial Module — Phase 1 (Daywork vertical slice) ──────────
+// Built on the Phase 0 database foundation (commercial_events shared
+// spine, module_roles/project_module_roles, DB-enforced workflow/
+// pricing/child-locking) — see sql/schema.sql's "v40 ADDITIONS" and
+// "v41 ADDITIONS" blocks. RLS + the commercial_events_before_write()/
+// valid_commercial_event_status_transition() triggers remain the real
+// enforcement boundary throughout this section: every function below
+// is a thin, honest pass-through to Supabase, never a second source of
+// truth. Client-side helpers here (capability flags, transition lists,
+// the line-total preview) exist ONLY to drive what the UI shows before
+// a round-trip confirms it — every value actually persisted or
+// displayed as final always comes back from the database.
+
+export const COMMERCIAL_ROLE_LABEL = { viewer: "Viewer", contributor: "Contributor", approver: "Approver" };
+
+export const COMMERCIAL_STATUS_LABEL = { draft: "Draft", submitted: "Submitted", approved: "Approved", rejected: "Rejected" };
+export const COMMERCIAL_STATUS_BADGE = { draft: "badge-grey", submitted: "badge-amber", approved: "badge-green", rejected: "badge-red" };
+
+export const COMMERCIAL_LINE_TYPES = ["labour", "plant", "material", "subcontractor", "other"];
+export const COMMERCIAL_LINE_TYPE_LABEL = { labour: "Labour", plant: "Plant", material: "Material", subcontractor: "Subcontractor", other: "Other" };
+
+// The DB-enforced transition set (valid_commercial_event_status_
+// transition(), sql/schema.sql) mirrored here ONLY to decide which
+// buttons a page offers — attempting an illegal transition is always
+// re-rejected server-side regardless of what this returns, so a stale
+// or wrong copy here can only ever make the UI too conservative, never
+// unsafe.
+const COMMERCIAL_TRANSITIONS = { draft: ["submitted"], submitted: ["approved", "rejected"], rejected: ["draft"], approved: [] };
+export function validCommercialStatusTransitions(status) {
+  return COMMERCIAL_TRANSITIONS[status] || [];
+}
+
+// ─── Capability ─────────────────────────────────────────────────
+// Asks the database for the caller's OWN Commercial role on a project
+// (project_module_role(), granted client EXECUTE in v41 specifically
+// for this) — never assumed from project ownership, org admin status,
+// or general project-editor status. Returns null when the caller has
+// no Commercial grant at all, which is the normal, expected case for
+// most project members. This exists purely to drive the UI (show/hide
+// the nav entry, buttons, forms); RLS enforces the real boundary
+// regardless of what this returns.
+export async function getMyCommercialRole(projectId) {
+  const { data, error } = await supabase.rpc("project_module_role", { p_project_id: projectId, p_module: "commercial" });
+  if (error) throw error;
+  return data || null;
+}
+
+// Derives the same view/edit/submit/approve capability matrix the
+// database enforces (can_view_commercial/can_edit_commercial/
+// can_submit_commercial/can_approve_commercial, sql/schema.sql) — kept
+// as one small pure function so every page computes it identically.
+export function commercialCapabilities(role) {
+  return {
+    role,
+    canView: role === "viewer" || role === "contributor" || role === "approver",
+    canEdit: role === "contributor" || role === "approver",
+    canSubmit: role === "contributor" || role === "approver",
+    canApprove: role === "approver",
+  };
+}
+
+// ─── Error messages ─────────────────────────────────────────────
+// Phase 0's own trigger exceptions (invalid transition, locked
+// content, submit/approve/reject permission, self-approval, "save
+// your changes first") are already written as clear, human-readable
+// sentences — passed through unchanged rather than re-worded. Only
+// the genuinely raw/unfriendly error shapes (an RLS policy silently
+// blocking access, a broken foreign key, a dropped network request)
+// get translated. The original error is always still logged to the
+// console for diagnosis; nothing here hides it from developer tools.
+export function commercialErrorMessage(err) {
+  const msg = (err && err.message) ? err.message : String(err);
+  console.error("Commercial module error:", err);
+  if (/row-level security|permission denied for (table|relation)/i.test(msg)) {
+    return "You don't have permission to do that.";
+  }
+  if (/violates foreign key constraint/i.test(msg)) {
+    return "That record couldn't be found — it may have been deleted or is no longer available.";
+  }
+  if (/violates check constraint|invalid input syntax/i.test(msg)) {
+    return "That value isn't valid — please check what you've entered and try again.";
+  }
+  if (/Failed to fetch|NetworkError|ERR_INTERNET|network/i.test(msg)) {
+    return "Network error — please check your connection and try again.";
+  }
+  return msg;
+}
+
+export function showCommercialError(el, err) {
+  el.textContent = commercialErrorMessage(err);
+  el.style.display = "block";
+}
+
+// ─── commercial_events (shared spine) ──────────────────────────────
+// One broad, project-scoped select — matches every other module's
+// "small fixed number of broad queries, never one per row" convention.
+export async function listCommercialEvents(projectId, { type } = {}) {
+  let query = supabase.from("commercial_events").select("*").eq("project_id", projectId);
+  if (type) query = query.eq("type", type);
+  const { data, error } = await query.order("created_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function updateCommercialEvent(eventId, fields) {
+  const { data, error } = await supabase.from("commercial_events").update(fields).eq("id", eventId).select().single();
+  if (error) throw error;
+  return data;
+}
+
+// Workflow transitions — each a pure status flip, matching
+// commercial_events_before_write()'s own "submitting/approving/
+// rejecting must be a pure status change" requirement exactly. Any
+// pending content edit must already be saved as a separate prior step.
+export async function submitCommercialEvent(eventId) {
+  return updateCommercialEvent(eventId, { status: "submitted" });
+}
+export async function approveCommercialEvent(eventId) {
+  return updateCommercialEvent(eventId, { status: "approved" });
+}
+export async function rejectCommercialEvent(eventId, reason = null) {
+  return updateCommercialEvent(eventId, { status: "rejected", rejection_reason: reason || null });
+}
+export async function reopenCommercialEvent(eventId) {
+  return updateCommercialEvent(eventId, { status: "draft" });
+}
+
+// ─── Dayworks (1:1 extension of commercial_events) ──────────────────
+// A Daywork is always a commercial_events row PLUS its dayworks
+// extension row, created together as one logical action — mirrors
+// createDocument()'s own "document + first revision, no in-between
+// state" precedent.
+export async function createDaywork(projectId, { title, plotId = null, dateUndertaken = null }) {
+  const { data: event, error } = await supabase.from("commercial_events").insert({
+    project_id: projectId,
+    type: "daywork",
+    title,
+    plot_id: plotId || null,
+  }).select().single();
+  if (error) throw error;
+  const { error: dwError } = await supabase.from("dayworks").insert({
+    commercial_event_id: event.id,
+    date_undertaken: dateUndertaken || null,
+  });
+  if (dwError) throw dwError;
+  return event;
+}
+
+export async function getDaywork(eventId) {
+  const [{ data: event, error }, { data: dw, error: dwError }] = await Promise.all([
+    supabase.from("commercial_events").select("*").eq("id", eventId).eq("type", "daywork").single(),
+    supabase.from("dayworks").select("*").eq("commercial_event_id", eventId).single(),
+  ]);
+  if (error) throw error;
+  if (dwError) throw dwError;
+  return { ...event, ...dw };
+}
+
+export async function updateDaywork(eventId, { title, plotId, dateUndertaken } = {}) {
+  const eventFields = {};
+  if (title !== undefined) eventFields.title = title;
+  if (plotId !== undefined) eventFields.plot_id = plotId || null;
+  if (Object.keys(eventFields).length) {
+    const { error } = await supabase.from("commercial_events").update(eventFields).eq("id", eventId);
+    if (error) throw error;
+  }
+  if (dateUndertaken !== undefined) {
+    const { error } = await supabase.from("dayworks").update({ date_undertaken: dateUndertaken || null }).eq("commercial_event_id", eventId);
+    if (error) throw error;
+  }
+  return getDaywork(eventId);
+}
+
+// ─── Line items ─────────────────────────────────────────────────
+export async function getCommercialLineItems(eventId) {
+  const { data, error } = await supabase.from("commercial_line_items").select("*").eq("commercial_event_id", eventId).order("created_at", { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function addCommercialLineItem(eventId, { lineType, description, trade = null, quantity = 1, unit = null, rate = null }) {
+  const { data, error } = await supabase.from("commercial_line_items").insert({
+    commercial_event_id: eventId,
+    line_type: lineType,
+    description,
+    trade: trade || null,
+    quantity,
+    unit: unit || null,
+    rate: rate === "" || rate === undefined ? null : rate,
+  }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateCommercialLineItem(lineItemId, fields) {
+  const { data, error } = await supabase.from("commercial_line_items").update(fields).eq("id", lineItemId).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function deleteCommercialLineItem(lineItemId) {
+  const { error } = await supabase.from("commercial_line_items").delete().eq("id", lineItemId);
+  if (error) throw error;
+}
+
+// Immediate-feedback-ONLY client-side mirror of the database's own
+// generated line_total (quantity * rate, rounded to 2dp) — used purely
+// to show a live number as the user types, before the row is even
+// saved. Never written back anywhere, never treated as the record of
+// truth: every total actually displayed once a line item exists comes
+// straight from the database's generated column (or the
+// commercial_event_totals view), not from this. A NULL/blank rate
+// always previews as "TBC" (null), never silently coerced to zero.
+export function previewLineTotal(quantity, rate) {
+  if (rate === null || rate === undefined || rate === "") return null;
+  const q = Number(quantity);
+  const r = Number(rate);
+  if (Number.isNaN(q) || Number.isNaN(r)) return null;
+  return Math.round(q * r * 100) / 100;
+}
+
+// Formats a nullable numeric value (rate or a total) as GBP to 2dp —
+// deliberately separate from formatGBP() above, which rounds to whole
+// pounds for the summary dashboards that already use it; Commercial
+// pricing needs its real pence, never rounded away. NULL reads as
+// "TBC" by the caller, never as "£0.00" — this function only ever
+// formats a genuinely known number.
+export function formatCommercialGBP(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  if (Number.isNaN(n)) return null;
+  return n.toLocaleString("en-GB", { style: "currency", currency: "GBP", minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// ─── Evidence (backed by the existing Documents module) ─────────────
+// commercial_evidence_links (Phase 0) only accepts source_table values
+// from a fixed allow-list — snag_items, inspection_finding_photos,
+// documents, actions — deliberately scoped to existing tables that
+// already have a stable row and an existing storage path; there is no
+// "commercial direct upload" table, on purpose (see the schema
+// comment). A freshly-captured Daywork photo is therefore uploaded
+// through the SAME createDocument() the Documents module already uses
+// (its "controlled-documents" bucket, its existing upload path) as
+// document_type 'other', then linked via a commercial_evidence_links
+// row with source_table 'documents' — no second storage bucket, no
+// second upload path, no duplicate photo entity.
+export async function getCommercialEvidence(eventId) {
+  const { data: links, error } = await supabase.from("commercial_evidence_links").select("*").eq("commercial_event_id", eventId).order("linked_at", { ascending: true });
+  if (error) throw error;
+  const documentIds = (links || []).filter((l) => l.source_table === "documents").map((l) => l.source_id);
+  let documentsById = {};
+  if (documentIds.length) {
+    const { data: docs, error: docErr } = await supabase.from("documents").select("id, title, current_revision_id").in("id", documentIds);
+    if (docErr) throw docErr;
+    const revisionIds = (docs || []).map((d) => d.current_revision_id).filter(Boolean);
+    let revisionsById = {};
+    if (revisionIds.length) {
+      const { data: revs, error: revErr } = await supabase.from("document_revisions").select("*").in("id", revisionIds);
+      if (revErr) throw revErr;
+      (revs || []).forEach((r) => { revisionsById[r.id] = r; });
+    }
+    (docs || []).forEach((d) => {
+      documentsById[d.id] = { ...d, currentRevision: d.current_revision_id ? revisionsById[d.current_revision_id] : null };
+    });
+  }
+  return (links || []).map((l) => ({ ...l, document: l.source_table === "documents" ? (documentsById[l.source_id] || null) : null }));
+}
+
+export async function addCommercialEvidencePhoto(eventId, projectId, file, caption = null) {
+  const doc = await createDocument(projectId, {
+    documentType: "other",
+    title: caption || `Commercial evidence photo — ${todayISO()}`,
+  }, file);
+  const { data, error } = await supabase.from("commercial_evidence_links").insert({
+    commercial_event_id: eventId,
+    source_table: "documents",
+    source_id: doc.id,
+    caption: caption || null,
+  }).select().single();
+  if (error) throw error;
+  return { link: data, document: doc };
+}
+
+export async function removeCommercialEvidenceLink(linkId) {
+  const { error } = await supabase.from("commercial_evidence_links").delete().eq("id", linkId);
+  if (error) throw error;
+}
+
+// ─── commercial_signatures (read-only from the client) ─────────────
+export async function getCommercialSignatures(eventId) {
+  const { data, error } = await supabase.from("commercial_signatures").select("*").eq("commercial_event_id", eventId).order("signed_at", { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+
+// ─── Dashboard — V1, deliberately simple ───────────────────────────
+// Three broad, project-scoped queries total (events, line items,
+// evidence links — each already carries a denormalized project_id,
+// added in Phase 0 for audit-log compatibility, which is what makes a
+// single flat filter possible here instead of an N+1 per event).
+// Summarised entirely client-side; no analytics engine, no charts.
+export async function getCommercialSummary(projectId) {
+  const events = await listCommercialEvents(projectId);
+  const counts = { draft: 0, submitted: 0, approved: 0, rejected: 0 };
+  let approvedValue = 0;
+  let submittedValue = 0;
+  events.forEach((e) => {
+    if (e.status in counts) counts[e.status]++;
+    const value = Number(e.total_value) || 0;
+    if (e.status === "approved") approvedValue += value;
+    if (e.status === "submitted") submittedValue += value;
+  });
+  return { events, counts, approvedValue, submittedValue };
+}
+
+// Evidence/TBC/rejected warnings for the dashboard's "needs attention"
+// panel — computed from the same kind of broad, flat queries as
+// everything else in this app, never a per-record round trip.
+export async function getCommercialWarnings(projectId) {
+  const [{ data: lineItems, error: liErr }, { data: evidenceLinks, error: evErr }] = await Promise.all([
+    supabase.from("commercial_line_items").select("commercial_event_id, rate").eq("project_id", projectId),
+    supabase.from("commercial_evidence_links").select("commercial_event_id").eq("project_id", projectId),
+  ]);
+  if (liErr) throw liErr;
+  if (evErr) throw evErr;
+  const tbcEventIds = new Set((lineItems || []).filter((li) => li.rate === null).map((li) => li.commercial_event_id));
+  const eventsWithEvidence = new Set((evidenceLinks || []).map((l) => l.commercial_event_id));
+  return { tbcEventIds, eventsWithEvidence };
+}

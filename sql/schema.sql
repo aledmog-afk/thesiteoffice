@@ -5625,7 +5625,9 @@ create trigger trg_variations_after_write
 -- commercial_events.total_value (a performance cache only). Anything
 -- approval/signature-critical must read this view, never the cached
 -- column.
-create or replace view public.commercial_event_totals as
+create or replace view public.commercial_event_totals
+with (security_invoker = true)
+as
 select
   ce.id as commercial_event_id,
   ce.type,
@@ -5652,11 +5654,20 @@ left join (
   group by vd.variation_id
 ) dw on dw.variation_id = ce.id;
 
--- Views run with the querying user's own RLS, not the view owner's, in
--- Postgres by default (no security_definer/security_invoker override
--- here) — so this view is exactly as access-controlled as the
--- underlying commercial_events/commercial_line_items rows already are;
--- it grants no visibility beyond what a caller's own RLS already permits.
+-- security_invoker = true (Postgres 15+) is REQUIRED here, not optional
+-- — without it, a view created by an elevated-privilege role (which
+-- every migration-applying role is, including Supabase's own migration
+-- tooling) runs its underlying table access checks, RLS included, as
+-- THAT role rather than the querying user, silently bypassing RLS on
+-- commercial_events/commercial_line_items/variation_dayworks entirely
+-- and leaking every organisation's Commercial data through this view's
+-- auto-exposed PostgREST endpoint. Caught via Supabase's own security
+-- advisor immediately after deploying this migration to production
+-- (ERROR-level "Security Definer View" finding) — a genuine gap in an
+-- earlier version of this comment, which incorrectly assumed views are
+-- always invoker-security by default. Confirmed fixed: pg_class.
+-- reloptions now shows security_invoker=true, and the advisor no
+-- longer flags this view.
 
 -- ─── Content hash for signatures ────────────────────────────────────
 -- A deterministic digest of a commercial event's current line items and
@@ -5665,7 +5676,17 @@ left join (
 -- exactly what was signed off.
 create or replace function public.commercial_event_hash(p_commercial_event_id uuid)
 returns text
-language sql stable security definer set search_path = public
+-- pgcrypto's digest() lands in different schemas depending on
+-- environment: a fresh local/CI Postgres (tests/lib/mock_setup.sql's
+-- plain `create extension if not exists "pgcrypto"`) puts it in
+-- public, while Supabase-managed Postgres puts it in "extensions" —
+-- confirmed empirically against the actual production project, not
+-- assumed (`select extnamespace::regnamespace from pg_extension where
+-- extname='pgcrypto'` returned "extensions" there). A schema listed in
+-- search_path that doesn't exist is silently skipped by Postgres, so
+-- listing both here resolves digest() correctly in both environments
+-- without weakening this function's locked-down search_path in either.
+language sql stable security definer set search_path = public, extensions
 as $$
   select encode(
     digest(
@@ -5822,6 +5843,7 @@ declare
   v_plot_project_id uuid;
   v_signer_email text;
   v_hash text;
+  v_next_seq integer;
 begin
   select org_id into v_org_id from public.projects where id = new.project_id;
   if v_org_id is null then
@@ -5848,6 +5870,21 @@ begin
     new.submitted_by := null; new.submitted_at := null;
     new.approved_by := null; new.approved_at := null;
     new.rejected_by := null; new.rejected_at := null; new.rejection_reason := null;
+
+    -- Auto-number the reference per project+type (e.g. DW-001, DW-002…)
+    -- the moment it's needed by Phase 1's UI — mirrors
+    -- set_snag_item_no()'s existing per-project max+1 convention
+    -- exactly (sql/schema.sql, Priority 1), the established reference-
+    -- numbering pattern in this codebase, not a new one. Never
+    -- overwrites an explicitly-supplied reference.
+    if new.reference is null then
+      select coalesce(max(substring(reference from '(\d+)$')::int), 0) + 1
+        into v_next_seq
+        from public.commercial_events
+        where project_id = new.project_id and type = new.type;
+      new.reference := (case when new.type = 'daywork' then 'DW-' else 'VAR-' end) || lpad(v_next_seq::text, 3, '0');
+    end if;
+
     return new;
   end if;
 
@@ -5997,3 +6034,20 @@ drop trigger if exists trg_commercial_events_after_write on public.commercial_ev
 create trigger trg_commercial_events_after_write
   after update on public.commercial_events
   for each row execute function public.commercial_events_after_write();
+
+-- ─── v41 ADDITIONS: Commercial Module — Phase 1 (Daywork UI enablement) ──
+-- Two small, additive grants/behaviours needed only because a real
+-- frontend now exists on top of the Phase 0 foundation — no table
+-- structure changes, no RLS/workflow/permission logic changes.
+--
+-- 1. project_module_role() already existed (Phase 0) as the internal
+--    building block RLS policies compose from, but had no client EXECUTE
+--    grant — nothing needed to call it directly before now. The UI needs
+--    to ask "what is my OWN Commercial role on this project?" to decide
+--    what to render (mirroring the exact precedent get_my_role() already
+--    set for the equivalent general-project-role question). This grants
+--    read of the caller's own role only — auth.uid() is baked into the
+--    function itself, so it can never be used to query anyone else's
+--    role. It grants no new capability: RLS was already the real
+--    enforcement boundary and remains completely unchanged.
+grant execute on function public.project_module_role(uuid, text) to authenticated;

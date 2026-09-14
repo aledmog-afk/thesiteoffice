@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Dayworks – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title">Dayworks</div>
+      <div class="page-sub" id="projectSub">Day-rate work logged as it happens, priced by line item, submitted for approval.</div>
+    </div>
+    <a class="btn btn-amber" href="daywork-detail.html" id="newDayworkLink" style="display:none;">+ New Daywork</a>
+  </div>
+
+  <div id="pageErrorBox" class="error-box"></div>
+
+  <div class="card" id="noAccessCard" style="display:none;">
+    <p>You don't have Commercial access on this site. Ask the site owner to grant you a Commercial role if you need it.</p>
+  </div>
+
+  <div id="listBody" style="display:none;">
+    <div class="card">
+      <div class="form-grid">
+        <div class="field">
+          <label for="statusFilter">Status</label>
+          <select id="statusFilter">
+            <option value="">All statuses</option>
+            <option value="draft">Draft</option>
+            <option value="submitted">Submitted</option>
+            <option value="approved">Approved</option>
+            <option value="rejected">Rejected</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="searchInput">Search</label>
+          <input type="text" id="searchInput" placeholder="Reference or title">
+        </div>
+        <div class="field">
+          <label for="fromDate">From date undertaken</label>
+          <input type="date" id="fromDate">
+        </div>
+        <div class="field">
+          <label for="toDate">To date undertaken</label>
+          <input type="date" id="toDate">
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Reference</th><th>Date Undertaken</th><th>Plot</th><th>Title</th><th>Value</th><th>Status</th><th>Created By</th><th>Submitted</th><th>Approved</th></tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+      <div id="emptyState" class="empty" style="display:none;"><p>No Dayworks match these filters.</p></div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showCommercialError, clearError, getMyCommercialRole, commercialCapabilities, listCommercialEvents, formatCommercialGBP, getMemberEmailMap, COMMERCIAL_STATUS_LABEL, COMMERCIAL_STATUS_BADGE } from "./js/app.js";
+
+  await requireAuth();
+  const projectId = getParam("project");
+  if (!projectId) window.location.href = "dashboard.html";
+
+  const pageErrorBox = document.getElementById("pageErrorBox");
+  document.getElementById("newDayworkLink").href = `daywork-detail.html?project=${projectId}`;
+
+  let allDayworks = [];
+  let dayworkDatesById = {};
+  let plotsById = {};
+  let membersById = {};
+
+  function visibleRows() {
+    const status = document.getElementById("statusFilter").value;
+    const search = document.getElementById("searchInput").value.trim().toLowerCase();
+    const from = document.getElementById("fromDate").value;
+    const to = document.getElementById("toDate").value;
+    return allDayworks.filter((e) => {
+      if (status && e.status !== status) return false;
+      if (search && !(`${e.reference || ""} ${e.title}`.toLowerCase().includes(search))) return false;
+      const dateUndertaken = dayworkDatesById[e.id];
+      if (from && (!dateUndertaken || dateUndertaken < from)) return false;
+      if (to && (!dateUndertaken || dateUndertaken > to)) return false;
+      return true;
+    });
+  }
+
+  function render() {
+    const rows = visibleRows();
+    document.getElementById("emptyState").style.display = rows.length ? "none" : "block";
+    document.getElementById("rows").innerHTML = rows.map((e) => `
+      <tr>
+        <td><a href="daywork-detail.html?id=${e.id}">${escapeHtml(e.reference) || "—"}</a></td>
+        <td>${dayworkDatesById[e.id] ? formatDate(dayworkDatesById[e.id]) : "—"}</td>
+        <td>${e.plot_id ? escapeHtml(plotsById[e.plot_id] || "—") : "—"}</td>
+        <td>${escapeHtml(e.title)}</td>
+        <td>${formatCommercialGBP(e.total_value) || "£0.00"}</td>
+        <td><span class="badge ${COMMERCIAL_STATUS_BADGE[e.status]}">${COMMERCIAL_STATUS_LABEL[e.status]}</span></td>
+        <td>${e.created_by ? escapeHtml(membersById[e.created_by] || "—") : "—"}</td>
+        <td>${e.submitted_at ? formatDate(e.submitted_at.slice(0, 10)) : "—"}</td>
+        <td>${e.approved_at ? formatDate(e.approved_at.slice(0, 10)) : "—"}</td>
+      </tr>
+    `).join("");
+  }
+
+  ["statusFilter", "searchInput", "fromDate", "toDate"].forEach((id) => {
+    document.getElementById(id).addEventListener("input", render);
+    document.getElementById(id).addEventListener("change", render);
+  });
+
+  async function load() {
+    clearError(pageErrorBox);
+    let role;
+    try {
+      role = await getMyCommercialRole(projectId);
+    } catch (err) {
+      showCommercialError(pageErrorBox, err);
+      return;
+    }
+    const caps = commercialCapabilities(role);
+    if (!caps.canView) {
+      document.getElementById("noAccessCard").style.display = "block";
+      return;
+    }
+    document.getElementById("listBody").style.display = "block";
+    if (caps.canEdit) document.getElementById("newDayworkLink").style.display = "inline-flex";
+
+    try {
+      const [events, { data: plots }, { data: dayworkDates }, emailMap] = await Promise.all([
+        listCommercialEvents(projectId, { type: "daywork" }),
+        supabase.from("plots").select("id, plot_number").eq("project_id", projectId),
+        supabase.from("dayworks").select("commercial_event_id, date_undertaken").eq("project_id", projectId),
+        getMemberEmailMap([projectId]),
+      ]);
+      allDayworks = events;
+      plotsById = {};
+      (plots || []).forEach((p) => { plotsById[p.id] = p.plot_number; });
+      dayworkDatesById = {};
+      (dayworkDates || []).forEach((d) => { dayworkDatesById[d.commercial_event_id] = d.date_undertaken; });
+      membersById = emailMap;
+      render();
+    } catch (err) {
+      showCommercialError(pageErrorBox, err);
+    }
+  }
+
+  async function init() {
+    const { data: project } = await supabase.from("projects").select("name").eq("id", projectId).single();
+    renderHeader([
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project?.name || "Site", href: `project.html?id=${projectId}` },
+      { label: "Commercial", href: `commercial-dashboard.html?project=${projectId}` },
+      { label: "Dayworks" },
+    ]);
+    document.getElementById("projectSub").textContent = project ? `${project.name} — day-rate work logged as it happens.` : "";
+    load();
+  }
+
+  init();
+</script>
+</body>
+</html>

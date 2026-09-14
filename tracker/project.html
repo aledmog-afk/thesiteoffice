@@ -104,6 +104,11 @@
       <div class="tile-name">Commercials</div>
       <div class="tile-stats"><div><strong id="commercialsPendingCount">–</strong>pending review</div></div>
     </a>
+    <a class="tile" href="commercial-dashboard.html?project=" id="commercialModuleTile" style="display:none;">
+      <div class="tile-icon">🧾</div>
+      <div class="tile-name">Commercial</div>
+      <div class="tile-stats"><div><strong id="commercialAwaitingCount">–</strong>awaiting approval</div></div>
+    </a>
     <a class="tile" href="actions.html?project=" id="actionsTile">
       <div class="tile-icon">📌</div>
       <div class="tile-name">Actions</div>
@@ -226,7 +231,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, geocodePostcode, recalculateActualProgress, generateMissingPlots, suggestPlotProgress, EXTERNAL_WORKS_TAG, monthStartISO, getProjectControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, isFindingOutstanding, categoriseSnag, getProjectPlotReadiness } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, geocodePostcode, recalculateActualProgress, generateMissingPlots, suggestPlotProgress, EXTERNAL_WORKS_TAG, monthStartISO, getProjectControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, isFindingOutstanding, categoriseSnag, getProjectPlotReadiness, getMyCommercialRole, commercialCapabilities } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("id");
@@ -238,6 +243,7 @@
   document.getElementById("plotHandoversTile").href = `plot-handovers.html?project=${projectId}`;
   document.getElementById("hsAuditsTile").href = `hs-audits.html?project=${projectId}`;
   document.getElementById("commercialsTile").href = `commercials.html?project=${projectId}`;
+  document.getElementById("commercialModuleTile").href = `commercial-dashboard.html?project=${projectId}`;
   document.getElementById("drawingsTile").href = `drawings.html?project=${projectId}`;
   document.getElementById("documentsTile").href = `documents.html?project=${projectId}`;
   document.getElementById("programmeTile").href = `programme.html?project=${projectId}`;
@@ -670,9 +676,30 @@
     document.getElementById("controlCard").style.display = "none";
     document.getElementById("detailsCard").style.display = "none";
     document.getElementById("collaboratorsCard").style.display = "none";
-    ["reportsTile", "monthlyReportsTile", "plotHandoversTile", "hsAuditsTile", "commercialsTile", "drawingsTile", "actionsTile", "inspectionsTile", "programmeTile"].forEach((id) => {
+    ["reportsTile", "monthlyReportsTile", "plotHandoversTile", "hsAuditsTile", "commercialsTile", "commercialModuleTile", "drawingsTile", "actionsTile", "inspectionsTile", "programmeTile"].forEach((id) => {
       document.getElementById(id).style.display = "none";
     });
+  }
+
+  // Permission-aware nav entry point (new Commercial module, Phase 1):
+  // no grant at all -> not shown, matching the brief exactly ("Do NOT
+  // use generic project membership as a substitute for Commercial
+  // permission" — this asks the database for the caller's OWN
+  // Commercial role, never infers it from being the project owner or a
+  // general editor). Hiding it is a UX convenience only; RLS on
+  // commercial_events etc. is the real boundary regardless of this.
+  async function loadCommercialModuleTile() {
+    try {
+      const role = await getMyCommercialRole(projectId);
+      const caps = commercialCapabilities(role);
+      if (!caps.canView) return;
+      document.getElementById("commercialModuleTile").style.display = "block";
+      const { count } = await supabase.from("commercial_events").select("id", { count: "exact", head: true }).eq("project_id", projectId).eq("status", "submitted");
+      document.getElementById("commercialAwaitingCount").textContent = count ?? 0;
+    } catch {
+      // A failed permission check must never surface as a page error —
+      // it just means the tile stays hidden, same as "no grant".
+    }
   }
 
   async function load() {
@@ -703,6 +730,7 @@
 
     loadMembers();
     loadControlSummary();
+    loadCommercialModuleTile();
 
     const [{ count: reportCount }, { count: monthlyReportCount }, { data: snags }, { count: fetchedPlotsCount }, { data: gates }, { data: commercials }, { count: drawingsCount }, { data: hsAudits }, { data: actions }, { data: findings }, { count: documentsCount }, { count: programmeActivitiesCount }] = await Promise.all([
       supabase.from("weekly_reports").select("id", { count: "exact", head: true }).eq("project_id", projectId),
