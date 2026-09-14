@@ -382,6 +382,88 @@ export async function getOrgLogoUrl(orgId) {
   return data?.logo_url || null;
 }
 
+// ─── Organisation onboarding & membership requests (Phase 0) ──────
+// Onboarding/defaults/analytics classification only — never read by any
+// RLS policy or permission check (see sql/schema.sql, v42).
+export const ORGANISATION_TYPES = [
+  { value: "main_contractor", label: "Main Contractor" },
+  { value: "subcontractor", label: "Subcontractor" },
+  { value: "developer_client", label: "Developer / Client" },
+  { value: "consultant", label: "Consultant" },
+  { value: "supplier", label: "Supplier" },
+  { value: "other", label: "Other" },
+];
+
+// The independent-use signup path ("Create my own organisation"). Unlike
+// ensureOrganisation() (unchanged — still resolves/lazily creates THE
+// org for the existing project-creation flow), this ALWAYS creates a
+// brand-new organisation the caller becomes admin of immediately, no
+// approval needed. A user may belong to more than one organisation, so
+// "they already have one" is never a reason to refuse this.
+export async function createOrganisation(name, type = "other") {
+  const { data, error } = await supabase.rpc("create_organisation", { p_name: name, p_type: type });
+  if (error) throw error;
+  return data;
+}
+
+// Finds organisations to request membership of. Returns only
+// id/name/type — see search_organisations() in sql/schema.sql for why
+// that's the real (server-side) boundary, not just this function's shape.
+export async function searchOrganisations(q) {
+  const { data, error } = await supabase.rpc("search_organisations", { q });
+  if (error) throw error;
+  return data || [];
+}
+
+// The "Join an existing organisation" signup path. Creates (or, if one is
+// already pending, returns the existing) pending request — never grants
+// access by itself. Resolved only once an admin of that organisation
+// calls approveOrganisationMembership() below.
+export async function requestOrganisationMembership(organisationId) {
+  const { data, error } = await supabase.rpc("request_organisation_membership", { p_organisation_id: organisationId });
+  if (error) throw error;
+  return data;
+}
+
+// The signed-in user's own membership requests (any status), each with
+// the requested organisation's name attached — used to show "pending"/
+// "rejected" state back to the requester themselves.
+export async function getMyOrganisationRequests() {
+  const { data, error } = await supabase.rpc("get_my_organisation_requests");
+  if (error) throw error;
+  return data || [];
+}
+
+// Member list with emails, for an organisation's Settings page — same
+// reasoning as get_project_members(): clients can't query auth.users
+// directly, so this does the join server-side, scoped to members of that
+// one organisation only.
+export async function getOrganisationMembers(orgId) {
+  const { data, error } = await supabase.rpc("get_organisation_members", { p_org_id: orgId });
+  if (error) throw error;
+  return data || [];
+}
+
+// Admin-only pending-requests inbox for an organisation's Settings page.
+// Returns nothing for a caller who isn't that organisation's admin —
+// enforced inside get_organisation_membership_requests() itself, not by
+// this wrapper.
+export async function getOrganisationMembershipRequests(orgId, status = "pending") {
+  const { data, error } = await supabase.rpc("get_organisation_membership_requests", { p_org_id: orgId, p_status: status });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function approveOrganisationMembership(requestId) {
+  const { error } = await supabase.rpc("approve_organisation_membership", { p_request_id: requestId });
+  if (error) throw error;
+}
+
+export async function rejectOrganisationMembership(requestId, reason = null) {
+  const { error } = await supabase.rpc("reject_organisation_membership", { p_request_id: requestId, p_rejection_reason: reason });
+  if (error) throw error;
+}
+
 // ─── Actions Engine ─────────────────────────────────────────────
 // Server-side triggers (sql/schema.sql, v29 — actions_before_write())
 // are the real authority for org_id derivation, status-transition

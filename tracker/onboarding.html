@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Get Started – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page" style="max-width:640px;">
+  <div class="page-head">
+    <div>
+      <div class="page-title">Get Started</div>
+      <div class="page-sub">Choose how you'll use Site Tracker. You can always request access to another organisation later from Settings.</div>
+    </div>
+  </div>
+
+  <div id="errorBox" class="error-box"></div>
+
+  <div id="chooserView">
+    <div class="card">
+      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.5rem;">Create my own organisation</h3>
+      <p class="hint" style="margin-bottom:1rem;">Set up your own company/workspace and start using Site Tracker straight away — no approval needed. Good if you're working independently or want to manage your own sites.</p>
+      <button type="button" class="btn btn-amber" id="showCreateBtn">Create My Organisation</button>
+    </div>
+    <div class="card">
+      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.5rem;">Join an existing organisation</h3>
+      <p class="hint" style="margin-bottom:1rem;">Request to join a company that's already using Site Tracker. An administrator there will need to approve your request before you get access.</p>
+      <button type="button" class="btn btn-outline" id="showJoinBtn">Find an Organisation</button>
+    </div>
+    <div class="btn-row" style="margin-top:0.5rem; justify-content:center;">
+      <a href="dashboard.html" class="btn btn-ghost btn-sm" id="skipLink">Skip for now</a>
+    </div>
+  </div>
+
+  <div id="createView" class="card" style="display:none;">
+    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Create my own organisation</h3>
+    <div class="field">
+      <label for="orgName">Organisation / company name</label>
+      <input type="text" id="orgName" placeholder="e.g. ABC Plumbing Ltd">
+    </div>
+    <div class="field">
+      <label for="orgType">Organisation type</label>
+      <select id="orgType"></select>
+      <p class="hint">Used for defaults and onboarding only — it never affects what you can access.</p>
+    </div>
+    <div class="btn-row">
+      <button type="button" class="btn btn-amber" id="createSubmitBtn">Create &amp; Continue</button>
+      <button type="button" class="btn btn-outline" id="createBackBtn">Back</button>
+    </div>
+  </div>
+
+  <div id="joinView" class="card" style="display:none;">
+    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Join an existing organisation</h3>
+    <div class="field">
+      <label for="orgSearch">Search by organisation name</label>
+      <div class="btn-row">
+        <input type="text" id="orgSearch" placeholder="Start typing an organisation name…" style="flex:1; min-width:200px;">
+        <button type="button" class="btn btn-outline btn-sm" id="searchBtn">Search</button>
+      </div>
+    </div>
+    <div id="searchResults"></div>
+    <div class="btn-row" style="margin-top:1rem;">
+      <button type="button" class="btn btn-outline" id="joinBackBtn">Back</button>
+    </div>
+  </div>
+
+  <div id="pendingView" class="card" style="display:none;">
+    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.8rem;">Request sent</h3>
+    <p id="pendingMessage"></p>
+    <div class="btn-row" style="margin-top:1rem;">
+      <a href="dashboard.html" class="btn btn-amber">Continue to Dashboard</a>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, showError, clearError, escapeHtml, createOrganisation, searchOrganisations, requestOrganisationMembership, ORGANISATION_TYPES } from "./js/app.js";
+
+  await requireAuth();
+  renderHeader([{ label: "Get Started" }]);
+
+  const errorBox = document.getElementById("errorBox");
+  const chooserView = document.getElementById("chooserView");
+  const createView = document.getElementById("createView");
+  const joinView = document.getElementById("joinView");
+  const pendingView = document.getElementById("pendingView");
+
+  function showOnly(view) {
+    [chooserView, createView, joinView, pendingView].forEach((v) => { v.style.display = v === view ? "block" : "none"; });
+    clearError(errorBox);
+  }
+
+  const orgTypeSelect = document.getElementById("orgType");
+  orgTypeSelect.innerHTML = ORGANISATION_TYPES.map((t) => `<option value="${t.value}">${escapeHtml(t.label)}</option>`).join("");
+
+  document.getElementById("showCreateBtn").addEventListener("click", () => showOnly(createView));
+  document.getElementById("createBackBtn").addEventListener("click", () => showOnly(chooserView));
+  document.getElementById("showJoinBtn").addEventListener("click", () => showOnly(joinView));
+  document.getElementById("joinBackBtn").addEventListener("click", () => showOnly(chooserView));
+
+  document.getElementById("createSubmitBtn").addEventListener("click", async () => {
+    clearError(errorBox);
+    const name = document.getElementById("orgName").value.trim();
+    if (!name) { showError(errorBox, { message: "Organisation name is required." }); return; }
+    const type = orgTypeSelect.value;
+    const btn = document.getElementById("createSubmitBtn");
+    btn.disabled = true;
+    try {
+      await createOrganisation(name, type);
+      window.location.href = "dashboard.html";
+    } catch (err) {
+      showError(errorBox, err);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  const TYPE_LABEL = Object.fromEntries(ORGANISATION_TYPES.map((t) => [t.value, t.label]));
+
+  function renderResults(orgs) {
+    const results = document.getElementById("searchResults");
+    if (!orgs.length) {
+      results.innerHTML = `<p class="hint">No organisations found. Check the spelling, or create your own instead.</p>`;
+      return;
+    }
+    results.innerHTML = orgs.map((o) => `
+      <div class="card" style="margin-top:0.7rem; display:flex; align-items:center; justify-content:space-between; gap:1rem;">
+        <div>
+          <div style="font-weight:600;">${escapeHtml(o.name)}</div>
+          <div class="hint">${escapeHtml(TYPE_LABEL[o.type] || o.type)}</div>
+        </div>
+        <button type="button" class="btn btn-outline btn-sm" data-org-id="${o.id}" data-org-name="${escapeHtml(o.name)}">Request to Join</button>
+      </div>
+    `).join("");
+    results.querySelectorAll("button[data-org-id]").forEach((btn) => {
+      btn.addEventListener("click", () => requestJoin(btn.dataset.orgId, btn.dataset.orgName, btn));
+    });
+  }
+
+  async function doSearch() {
+    clearError(errorBox);
+    const q = document.getElementById("orgSearch").value.trim();
+    if (q.length < 2) {
+      document.getElementById("searchResults").innerHTML = `<p class="hint">Type at least 2 characters to search.</p>`;
+      return;
+    }
+    try {
+      const orgs = await searchOrganisations(q);
+      renderResults(orgs);
+    } catch (err) {
+      showError(errorBox, err);
+    }
+  }
+
+  document.getElementById("searchBtn").addEventListener("click", doSearch);
+  document.getElementById("orgSearch").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); doSearch(); }
+  });
+
+  async function requestJoin(orgId, orgName, btn) {
+    clearError(errorBox);
+    btn.disabled = true;
+    try {
+      await requestOrganisationMembership(orgId);
+      document.getElementById("pendingMessage").textContent =
+        `Your request to join "${orgName}" has been sent to the organisation administrator. You'll get access once they approve it. In the meantime you can continue using any organisation or project you already have access to.`;
+      showOnly(pendingView);
+    } catch (err) {
+      showError(errorBox, err);
+      btn.disabled = false;
+    }
+  }
+</script>
+</body>
+</html>

@@ -123,7 +123,12 @@
         const { data, error } = await supabase.auth.signUp({ email, password });
         if (error) throw error;
         if (data.session) {
-          window.location.href = next;
+          // A brand-new account, not an existing user signing back in —
+          // send them to the organisation choice (create own / join
+          // existing) rather than straight to the dashboard. Deliberately
+          // NOT applied to the signin branch above: an existing user
+          // signing in always goes straight to `next`, unchanged.
+          window.location.href = "onboarding.html";
         } else {
           infoBox.style.background = "var(--green-light)";
           infoBox.style.color = "var(--green)";

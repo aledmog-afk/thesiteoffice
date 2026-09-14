@@ -122,6 +122,57 @@ test("login.html: a failed login shows an error and does NOT navigate", async ()
   assert.equal(window.location.href, "", "a failed login must never navigate anywhere");
 });
 
+test("login.html: a successful signup with an immediate session goes to onboarding.html, not straight to the dashboard", async () => {
+  const supabase = {
+    auth: {
+      getSession: async () => ({ data: { session: null } }),
+      signUp: async () => ({ data: { session: { user: { id: "new-user" } } }, error: null }),
+    },
+  };
+  const { document, window, jsdomWindow } = await runLogin(supabase);
+  document.getElementById("toggleBtn").dispatchEvent(new jsdomWindow.Event("click"));
+  document.getElementById("email").value = "newuser@example.com";
+  document.getElementById("password").value = "correct-horse";
+  document.getElementById("authForm").dispatchEvent(new jsdomWindow.Event("submit", { cancelable: true }));
+  await new Promise((r) => setTimeout(r, 20));
+
+  assert.equal(window.location.href, "onboarding.html", "a brand-new account must be routed to the organisation choice, not straight to the dashboard");
+});
+
+test("login.html: a signup that requires email confirmation shows a message and does not navigate anywhere (existing behaviour, unchanged)", async () => {
+  const supabase = {
+    auth: {
+      getSession: async () => ({ data: { session: null } }),
+      signUp: async () => ({ data: { session: null }, error: null }),
+    },
+  };
+  const { document, window, jsdomWindow } = await runLogin(supabase);
+  document.getElementById("toggleBtn").dispatchEvent(new jsdomWindow.Event("click"));
+  document.getElementById("email").value = "newuser@example.com";
+  document.getElementById("password").value = "correct-horse";
+  document.getElementById("authForm").dispatchEvent(new jsdomWindow.Event("submit", { cancelable: true }));
+  await new Promise((r) => setTimeout(r, 20));
+
+  assert.equal(window.location.href, "", "no navigation should happen until the user actually has a session");
+  assert.ok(document.getElementById("infoBox").textContent.includes("Check your email"));
+});
+
+test("login.html: an ordinary sign-in (existing user) still goes straight to the dashboard, never onboarding", async () => {
+  const supabase = {
+    auth: {
+      getSession: async () => ({ data: { session: null } }),
+      signInWithPassword: async () => ({ error: null }),
+    },
+  };
+  const { window, jsdomWindow, document } = await runLogin(supabase);
+  document.getElementById("email").value = "existing@example.com";
+  document.getElementById("password").value = "correct-horse";
+  document.getElementById("authForm").dispatchEvent(new jsdomWindow.Event("submit", { cancelable: true }));
+  await new Promise((r) => setTimeout(r, 20));
+
+  assert.equal(window.location.href, "dashboard.html", "an existing user signing in must never be routed to onboarding");
+});
+
 test("login.html: already having a session redirects straight past the sign-in form", async () => {
   const supabase = {
     auth: {

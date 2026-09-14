@@ -6088,3 +6088,348 @@ create trigger trg_commercial_events_after_write
 --    role. It grants no new capability: RLS was already the real
 --    enforcement boundary and remains completely unchanged.
 grant execute on function public.project_module_role(uuid, text) to authenticated;
+
+-- ─── v42 ADDITIONS: Organisation Onboarding & Membership Requests ───────
+-- Phase 0 of the Account & Organisation Architecture work (see the
+-- read-only audit this migration implements). Two independent additions:
+--
+--   1. organisations.type — a classification column for onboarding/
+--      defaults/analytics ONLY. Deliberately never read by any RLS
+--      policy or permission function anywhere in this file — grep for
+--      "organisations.type" or ".type" against is_org_member/is_org_admin/
+--      is_project_*/can_*_commercial below to confirm none of them
+--      reference it, now or after any future edit.
+--
+--   2. organisation_membership_requests — a NEW, SEPARATE table for the
+--      "request to join an existing organisation" workflow, deliberately
+--      NOT folded into organisation_members. organisation_members keeps
+--      its existing meaning exactly as before this migration ("this row
+--      existing means this user has real access") — every predicate that
+--      already reads it (is_org_member, is_org_admin, and transitively
+--      is_project_member/is_project_owner/is_project_editor) is UNCHANGED
+--      by this migration, needs no new "and status = 'approved'" clause,
+--      and every existing organisation/project a user already had access
+--      to keeps working exactly as it did. A pending or rejected request
+--      never appears in organisation_members at all — only
+--      approve_organisation_membership() below ever inserts into it, and
+--      only once.
+--
+-- The existing project invite_code/snagging_invite_code flow
+-- (regenerate_invite_code/join_project_by_invite, "v1"/v26 above) is
+-- UNCHANGED — it remains an instant, owner-issued, project-scoped grant
+-- (which also still auto-enrols the joiner into that project's
+-- organisation, exactly as before). Organisation join REQUESTS below are
+-- a second, independent route into an organisation — self-service search
+-- + request, gated by admin approval — never routed through invite codes
+-- and never routing invite codes through it.
+
+alter table public.organisations
+  add column if not exists type text not null default 'other'
+  check (type in ('main_contractor', 'subcontractor', 'developer_client', 'consultant', 'supplier', 'other'));
+
+create table if not exists public.organisation_membership_requests (
+  id uuid primary key default gen_random_uuid(),
+  organisation_id uuid not null references public.organisations(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  status text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
+  requested_at timestamptz not null default now(),
+  reviewed_at timestamptz,
+  reviewed_by uuid references auth.users(id) on delete set null,
+  rejection_reason text,
+  updated_at timestamptz not null default now()
+);
+
+-- The actual "prevent duplicate simultaneous requests" enforcement — a
+-- partial unique index, not just an application-level check in
+-- request_organisation_membership() below (which also checks, for a
+-- friendly error message, but the index is what's actually relied on
+-- under concurrent calls). Deliberately partial (WHERE status='pending')
+-- rather than a plain unique(organisation_id, user_id): a user must be
+-- able to have MANY historical rejected/approved rows for the same
+-- organisation over time (e.g. rejected, then genuinely re-applies
+-- later) — only one row may ever be pending at once for a given
+-- (organisation, user) pair.
+create unique index if not exists organisation_membership_requests_pending_unique
+  on public.organisation_membership_requests (organisation_id, user_id)
+  where status = 'pending';
+
+create index if not exists organisation_membership_requests_org_status_idx
+  on public.organisation_membership_requests (organisation_id, status);
+create index if not exists organisation_membership_requests_user_idx
+  on public.organisation_membership_requests (user_id);
+
+alter table public.organisation_membership_requests enable row level security;
+
+-- A requester may read their own request rows (any status — they need to
+-- see "pending"/"rejected" too, not just once approved); an organisation
+-- admin may read every request row FOR THEIR OWN organisation, pending or
+-- otherwise. An ordinary (non-admin) member of the target organisation
+-- gets neither of those unless they're also the requester — approval
+-- authority (and visibility into who else has applied) stays admin-only,
+-- exactly as specified.
+drop policy if exists "requester or org admin read organisation_membership_requests" on public.organisation_membership_requests;
+create policy "requester or org admin read organisation_membership_requests" on public.organisation_membership_requests
+  for select using (user_id = auth.uid() or public.is_org_admin(organisation_id));
+
+-- No insert/update/delete policy for regular clients — RLS is enabled
+-- with zero write policies, so Postgres denies direct writes to every
+-- client role by default (the same "enabled, unpolicied = default-
+-- denied" pattern as audit_log and module_roles above). Every write to
+-- this table happens exclusively through the four security-definer
+-- functions below. This is what makes the approval boundary real rather
+-- than UI-only: a client cannot forge an 'approved' status, a
+-- reviewed_by, or a reviewed_at by writing the row directly — only
+-- approve_organisation_membership()/reject_organisation_membership() can
+-- ever set those columns, and both independently re-check admin
+-- authority server-side before doing so.
+
+-- Lets a non-member authenticated user find an organisation to request
+-- membership of, without weakening "members read organisations" (still
+-- member-only, unchanged) into a public/any-authenticated-read policy.
+-- Returns only the three fields a picker UI needs — never members,
+-- projects, settings, or any other organisation data. A query shorter
+-- than 2 characters returns nothing (fail closed against "" effectively
+-- listing every organisation in the system); results are capped at 25.
+create or replace function public.search_organisations(q text)
+returns table (id uuid, name text, type text)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select o.id, o.name, o.type
+  from public.organisations o
+  where q is not null
+    and length(trim(q)) >= 2
+    and o.name ilike '%' || trim(q) || '%'
+  order by o.name
+  limit 25;
+$$;
+grant execute on function public.search_organisations(text) to authenticated;
+
+-- The independent-use signup path ("Create my own organisation"). Unlike
+-- ensure_organisation() (unchanged, still used by dashboard.html/
+-- settings.html/existing tests for the "resolve or lazily create THE
+-- org" case), this ALWAYS creates a brand-new organisation and never
+-- reuses an existing one — a user may deliberately want a second, third,
+-- etc. organisation (see the audit's multi-org requirement), so "already
+-- has one" must never short-circuit this. No approval step: the caller
+-- becomes that organisation's sole admin atomically, in the same
+-- transaction as the organisation row itself.
+create or replace function public.create_organisation(p_name text, p_type text default 'other')
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  new_org uuid;
+  v_type text := coalesce(p_type, 'other');
+begin
+  if p_name is null or length(trim(p_name)) = 0 then
+    raise exception 'Organisation name is required';
+  end if;
+  if v_type not in ('main_contractor', 'subcontractor', 'developer_client', 'consultant', 'supplier', 'other') then
+    v_type := 'other';
+  end if;
+
+  insert into public.organisations (name, type) values (trim(p_name), v_type) returning id into new_org;
+  insert into public.organisation_members (org_id, user_id, role) values (new_org, auth.uid(), 'admin');
+
+  return new_org;
+end;
+$$;
+grant execute on function public.create_organisation(text, text) to authenticated;
+
+-- The "Join an existing organisation" signup path. Grants nothing by
+-- itself — only ever creates a pending request row. Safe against direct
+-- API/RPC manipulation: the organisation must genuinely exist, an
+-- already-approved member is refused outright (so this can never be
+-- (ab)used to re-confirm/duplicate an existing membership), and a second
+-- call while one request is already pending returns the SAME request id
+-- rather than erroring or creating a duplicate (idempotent from the
+-- caller's point of view; the partial unique index above is what
+-- actually guarantees only one pending row can ever exist even under a
+-- race between two concurrent calls). A previously rejected request
+-- does NOT block a fresh one — this inserts a new row, starting at
+-- 'pending' again, never resurrecting or auto-approving the old one.
+create or replace function public.request_organisation_membership(p_organisation_id uuid)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_request_id uuid;
+begin
+  if not exists (select 1 from public.organisations where id = p_organisation_id) then
+    raise exception 'Organisation not found';
+  end if;
+
+  if public.is_org_member(p_organisation_id) then
+    raise exception 'You are already a member of this organisation';
+  end if;
+
+  insert into public.organisation_membership_requests (organisation_id, user_id, status)
+  values (p_organisation_id, auth.uid(), 'pending')
+  on conflict (organisation_id, user_id) where status = 'pending' do nothing
+  returning id into v_request_id;
+
+  if v_request_id is null then
+    select id into v_request_id
+    from public.organisation_membership_requests
+    where organisation_id = p_organisation_id and user_id = auth.uid() and status = 'pending';
+  end if;
+
+  return v_request_id;
+end;
+$$;
+grant execute on function public.request_organisation_membership(uuid) to authenticated;
+
+-- Approval is atomic: the new organisation_members row and the request's
+-- own status flip happen inside the same function invocation (therefore
+-- the same statement-level transaction) — there is no window in which a
+-- caller could observe one without the other, and if either half were to
+-- fail the whole call rolls back, never leaving an approved-looking
+-- request with no real membership or a real membership with no approved
+-- record. Authority is re-checked here, server-side, every time — never
+-- inferred from the UI even having shown an approve button. Deliberately
+-- SELECTs the request (not UPDATE ... WHERE status='pending' as the
+-- first step) so an unauthorized caller is rejected BEFORE anything is
+-- written, not after a write is attempted and rolled back.
+create or replace function public.approve_organisation_membership(p_request_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_req record;
+begin
+  select organisation_id, user_id, status into v_req
+  from public.organisation_membership_requests
+  where id = p_request_id;
+
+  if v_req is null then
+    raise exception 'Membership request not found';
+  end if;
+
+  if not public.is_org_admin(v_req.organisation_id) then
+    raise exception 'Only an organisation admin can approve membership requests';
+  end if;
+
+  if v_req.status <> 'pending' then
+    raise exception 'This request is no longer pending';
+  end if;
+
+  insert into public.organisation_members (org_id, user_id, role)
+  values (v_req.organisation_id, v_req.user_id, 'member')
+  on conflict (org_id, user_id) do nothing;
+
+  update public.organisation_membership_requests
+  set status = 'approved', reviewed_at = now(), reviewed_by = auth.uid(), updated_at = now()
+  where id = p_request_id and status = 'pending';
+end;
+$$;
+grant execute on function public.approve_organisation_membership(uuid) to authenticated;
+
+-- Mirrors approve_organisation_membership() exactly, minus the
+-- organisation_members insert — a rejection never grants access under
+-- any circumstance.
+create or replace function public.reject_organisation_membership(p_request_id uuid, p_rejection_reason text default null)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_req record;
+begin
+  select organisation_id, status into v_req
+  from public.organisation_membership_requests
+  where id = p_request_id;
+
+  if v_req is null then
+    raise exception 'Membership request not found';
+  end if;
+
+  if not public.is_org_admin(v_req.organisation_id) then
+    raise exception 'Only an organisation admin can reject membership requests';
+  end if;
+
+  if v_req.status <> 'pending' then
+    raise exception 'This request is no longer pending';
+  end if;
+
+  update public.organisation_membership_requests
+  set status = 'rejected', reviewed_at = now(), reviewed_by = auth.uid(), rejection_reason = p_rejection_reason, updated_at = now()
+  where id = p_request_id and status = 'pending';
+end;
+$$;
+grant execute on function public.reject_organisation_membership(uuid, text) to authenticated;
+
+-- Lets a requester see their own requests (any status) WITH the
+-- organisation's name attached — the base table's own RLS policy above
+-- already lets them select their own rows directly, but they can't join
+-- to organisations for one they're not yet a member of (that table stays
+-- member-only-readable, unchanged). Strictly scoped to auth.uid() inside
+-- the function body — there is no parameter through which a caller could
+-- ask for anyone else's requests.
+create or replace function public.get_my_organisation_requests()
+returns table (id uuid, organisation_id uuid, organisation_name text, status text, requested_at timestamptz, reviewed_at timestamptz, rejection_reason text)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select r.id, r.organisation_id, o.name, r.status, r.requested_at, r.reviewed_at, r.rejection_reason
+  from public.organisation_membership_requests r
+  join public.organisations o on o.id = r.organisation_id
+  where r.user_id = auth.uid()
+  order by r.requested_at desc;
+$$;
+grant execute on function public.get_my_organisation_requests() to authenticated;
+
+-- Organisation-level counterpart to the existing get_project_members() —
+-- same shape, same reasoning (clients can't query auth.users directly).
+-- Scoped to members of that org only (any role, not admin-only — viewing
+-- who else is in your own organisation is not itself sensitive, same
+-- precedent as get_project_members()'s own project-member-level scope).
+create or replace function public.get_organisation_members(p_org_id uuid)
+returns table (member_id uuid, user_id uuid, email text, role text, joined_at timestamptz)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select om.id, om.user_id, u.email, om.role, om.created_at
+  from public.organisation_members om
+  join auth.users u on u.id = om.user_id
+  where om.org_id = p_org_id
+    and public.is_org_member(p_org_id)
+  order by (om.role = 'admin') desc, u.email;
+$$;
+grant execute on function public.get_organisation_members(uuid) to authenticated;
+
+-- Admin-only counterpart for the pending-requests inbox — deliberately
+-- gated on is_org_admin(), not is_org_member(): an ordinary member must
+-- not see who else has applied to join their organisation (the base
+-- table's own RLS policy above enforces the same boundary independently;
+-- this function is only for attaching the requester's email, which
+-- otherwise isn't joinable client-side).
+create or replace function public.get_organisation_membership_requests(p_org_id uuid, p_status text default 'pending')
+returns table (id uuid, organisation_id uuid, user_id uuid, email text, status text, requested_at timestamptz, reviewed_at timestamptz, reviewed_by uuid, rejection_reason text)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select r.id, r.organisation_id, r.user_id, u.email, r.status, r.requested_at, r.reviewed_at, r.reviewed_by, r.rejection_reason
+  from public.organisation_membership_requests r
+  join auth.users u on u.id = r.user_id
+  where r.organisation_id = p_org_id
+    and public.is_org_admin(p_org_id)
+    and (p_status is null or r.status = p_status)
+  order by r.requested_at desc;
+$$;
+grant execute on function public.get_organisation_membership_requests(uuid, text) to authenticated;

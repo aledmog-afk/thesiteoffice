@@ -28,10 +28,11 @@
     </div>
     <div class="btn-row">
       <button type="button" class="btn btn-amber" id="saveOrgNameBtn">Save</button>
+      <a href="onboarding.html" class="btn btn-outline btn-sm" style="margin-left:auto;">Join Another Organisation</a>
     </div>
   </div>
 
-  <div class="card">
+  <div class="card" style="margin-bottom:1.5rem;">
     <div id="errorBox" class="error-box"></div>
     <div class="field">
       <label>Company logo</label>
@@ -46,15 +47,46 @@
       <button type="button" class="btn btn-danger" id="removeBtn" style="display:none;">Remove Logo</button>
     </div>
   </div>
+
+  <div class="card" style="margin-bottom:1.5rem;">
+    <div id="membersErrorBox" class="error-box"></div>
+    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Organisation Members</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Email</th><th>Role</th><th>Joined</th></tr></thead>
+        <tbody id="memberRows"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card" id="pendingRequestsCard" style="display:none;">
+    <div id="requestsErrorBox" class="error-box"></div>
+    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.4rem;">Pending Requests</h3>
+    <p class="hint" style="margin-bottom:1rem;">People who have asked to join this organisation. Only admins can see and act on these.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Requester</th><th>Requested</th><th></th></tr></thead>
+        <tbody id="requestRows"></tbody>
+      </table>
+    </div>
+    <div id="requestsEmptyState" class="empty" style="display:none;"><p>No pending requests right now.</p></div>
+  </div>
 </div>
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, showError, clearError, uploadPhoto, ensureOrganisation } from "./js/app.js";
+  import { requireAuth, renderHeader, showError, clearError, escapeHtml, formatDate, uploadPhoto, ensureOrganisation, getOrganisationMembers, getOrganisationMembershipRequests, approveOrganisationMembership, rejectOrganisationMembership } from "./js/app.js";
 
-  await requireAuth();
+  const currentUser = await requireAuth();
   renderHeader([{ label: "Settings" }]);
 
+  // Settings manages the caller's "primary" organisation only — the same
+  // one ensureOrganisation() already resolves everywhere else in this
+  // app (their earliest membership). A user belonging to several
+  // organisations sees admin controls here for that one only; a full
+  // organisation switcher is deliberately out of scope for this phase
+  // (see the Phase 0 brief — "a sophisticated organisation switcher is
+  // NOT required").
   const orgId = await ensureOrganisation();
 
   const orgErrorBox = document.getElementById("orgErrorBox");
@@ -121,8 +153,91 @@
     showLogo(null);
   });
 
+  // ─── Organisation Members / Pending Requests ─────────────────────
+  const ROLE_LABEL = { admin: "Admin", member: "Member" };
+  const ROLE_BADGE = { admin: "badge-green", member: "badge-grey" };
+  const membersErrorBox = document.getElementById("membersErrorBox");
+  const requestsErrorBox = document.getElementById("requestsErrorBox");
+  const pendingRequestsCard = document.getElementById("pendingRequestsCard");
+
+  function renderMembers(members) {
+    document.getElementById("memberRows").innerHTML = members.map((m) => `
+      <tr>
+        <td>${escapeHtml(m.email)}${m.user_id === currentUser.id ? ` <span class="hint">(you)</span>` : ""}</td>
+        <td><span class="badge ${ROLE_BADGE[m.role]}">${ROLE_LABEL[m.role] || m.role}</span></td>
+        <td>${formatDate(m.joined_at?.slice(0, 10))}</td>
+      </tr>
+    `).join("");
+  }
+
+  function renderRequests(requests) {
+    const rows = document.getElementById("requestRows");
+    document.getElementById("requestsEmptyState").style.display = requests.length ? "none" : "block";
+    rows.innerHTML = requests.map((r) => `
+      <tr>
+        <td>${escapeHtml(r.email)}</td>
+        <td>${formatDate(r.requested_at?.slice(0, 10))}</td>
+        <td class="btn-row">
+          <button type="button" class="btn btn-outline btn-sm" data-approve="${r.id}">Approve</button>
+          <button type="button" class="btn btn-danger btn-sm" data-reject="${r.id}">Reject</button>
+        </td>
+      </tr>
+    `).join("");
+    rows.querySelectorAll("button[data-approve]").forEach((btn) => {
+      btn.addEventListener("click", () => approveRequest(btn.dataset.approve));
+    });
+    rows.querySelectorAll("button[data-reject]").forEach((btn) => {
+      btn.addEventListener("click", () => rejectRequest(btn.dataset.reject));
+    });
+  }
+
+  async function loadPendingRequests() {
+    clearError(requestsErrorBox);
+    try {
+      const requests = await getOrganisationMembershipRequests(orgId, "pending");
+      renderRequests(requests);
+    } catch (err) {
+      showError(requestsErrorBox, err);
+    }
+  }
+
+  async function approveRequest(requestId) {
+    clearError(requestsErrorBox);
+    try {
+      await approveOrganisationMembership(requestId);
+      await Promise.all([loadPendingRequests(), loadMembers()]);
+    } catch (err) {
+      showError(requestsErrorBox, err);
+    }
+  }
+
+  async function rejectRequest(requestId) {
+    const reason = prompt("Reason for rejecting (optional):", "") || null;
+    clearError(requestsErrorBox);
+    try {
+      await rejectOrganisationMembership(requestId, reason);
+      await loadPendingRequests();
+    } catch (err) {
+      showError(requestsErrorBox, err);
+    }
+  }
+
+  async function loadMembers() {
+    clearError(membersErrorBox);
+    try {
+      const members = await getOrganisationMembers(orgId);
+      renderMembers(members);
+      const isAdmin = members.some((m) => m.user_id === currentUser.id && m.role === "admin");
+      pendingRequestsCard.style.display = isAdmin ? "block" : "none";
+      if (isAdmin) loadPendingRequests();
+    } catch (err) {
+      showError(membersErrorBox, err);
+    }
+  }
+
   loadOrg();
   load();
+  loadMembers();
 </script>
 </body>
 </html>
