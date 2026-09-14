@@ -4793,8 +4793,14 @@ export function previewVariationTotal(directSubtotal, linkedDayworksSubtotal, ma
 }
 
 // ─── Toolbox Talks ──────────────────────────────────────────────────
+// v46: any project editor (owner/collaborator) gets 'contributor' access
+// automatically, without an explicit project_module_roles grant — see
+// sql/schema.sql's v46 section for why (H&S content needs broad
+// visibility, unlike Commercial). effective_toolbox_talk_role() is the
+// single source of truth this and the database's own RLS both read, so
+// this never drifts from what the server actually enforces.
 export async function getMyToolboxTalkRole(projectId) {
-  const { data, error } = await supabase.rpc("project_module_role", { p_project_id: projectId, p_module: "toolbox_talks" });
+  const { data, error } = await supabase.rpc("effective_toolbox_talk_role", { p_project_id: projectId });
   if (error) throw error;
   return data || null;
 }

@@ -7328,3 +7328,60 @@ $$;
 -- No trigger re-creation needed — trg_toolbox_talks_before_write (v44)
 -- already points at this function by name; create or replace swaps its
 -- body in place.
+
+-- ─── v46 ADDITIONS: Toolbox Talks — automatic project-editor access ───
+-- Real-world gap found via a trial account: project_module_roles (v44)
+-- made Toolbox Talks access a fully separate, explicit opt-in grant from
+-- project membership — correct for Commercial (sensitive financial
+-- approvals, deliberately kept untouched here), but wrong for Toolbox
+-- Talks (H&S safety briefings), which exist specifically to be seen and
+-- delivered by everyone genuinely working on a site. This app has no
+-- separate "subcontractor"/"main contractor" account concept — anyone
+-- added to a project is either an owner, a full collaborator, or a
+-- snagging-only member (is_project_editor() already draws exactly this
+-- line) — so "make it automatic for subcontractors, the main
+-- contractor, whoever's necessary" means: every owner/collaborator gets
+-- Toolbox Talks access automatically, without an owner having to grant
+-- project_module_roles rows one person at a time. Snagging-only members
+-- stay excluded by default (matches their existing deliberately-minimal
+-- access elsewhere) but can still be granted access explicitly via the
+-- Module Permissions UI's existing project_module_roles mechanism,
+-- which is untouched by this change and still the only way to grant the
+-- higher 'editor' tier (org-wide template library editing — a
+-- higher-trust action that must stay deliberate, never automatic).
+--
+-- effective_toolbox_talk_role() is the single new source of truth: an
+-- explicit project_module_roles grant if one exists, else 'contributor'
+-- if the caller is a project editor, else null. can_view_/
+-- can_edit_toolbox_talks() are redefined to read it instead of calling
+-- project_module_role() directly, so every existing RLS policy on
+-- toolbox_talks/toolbox_talk_attendees (all of which already compose
+-- through these two functions, never re-deriving the check themselves)
+-- picks up the new behaviour with no policy changes needed.
+-- can_edit_toolbox_talk_template_library() deliberately still calls
+-- project_module_role() directly, not this function, so template-library
+-- editing rights stay opt-in-only exactly as before.
+create or replace function public.effective_toolbox_talk_role(p_project_id uuid)
+returns text
+language sql stable security definer set search_path = public
+as $$
+  select coalesce(
+    public.project_module_role(p_project_id, 'toolbox_talks'),
+    case when public.is_project_editor(p_project_id) then 'contributor' end
+  );
+$$;
+grant execute on function public.effective_toolbox_talk_role(uuid) to authenticated;
+
+create or replace function public.can_view_toolbox_talks(p_project_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select public.effective_toolbox_talk_role(p_project_id) in ('viewer', 'contributor', 'editor');
+$$;
+
+create or replace function public.can_edit_toolbox_talks(p_project_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select public.effective_toolbox_talk_role(p_project_id) in ('contributor', 'editor');
+$$;

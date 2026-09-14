@@ -432,7 +432,14 @@
       const cells = modules.map((m) => {
         const rolesForModule = moduleCatalog.filter((r) => r.module === m);
         const current = moduleGrants.find((g) => g.user_id === member.user_id && g.module === m);
-        const options = `<option value="">— No access —</option>` + rolesForModule.map((r) =>
+        // v46: every owner/collaborator gets 'toolbox_talks' access
+        // automatically (see sql/schema.sql's v46 section) — for them,
+        // "no explicit grant" is not "no access", it's "use the
+        // automatic default", so the empty option must say so rather
+        // than implying access is absent.
+        const hasAutoDefault = m === "toolbox_talks" && (member.role === "owner" || member.role === "collaborator");
+        const emptyLabel = hasAutoDefault ? "Default (Contributor — automatic)" : "— No access —";
+        const options = `<option value="">${emptyLabel}</option>` + rolesForModule.map((r) =>
           `<option value="${escapeHtml(r.role)}" ${current?.role === r.role ? "selected" : ""}>${escapeHtml(roleOptionLabel(r.role))}</option>`
         ).join("");
         return `<td><select data-user="${member.user_id}" data-module="${escapeHtml(m)}">${options}</select></td>`;

@@ -40,6 +40,7 @@ const MODULE_CATALOG = [
 
 const OWNER = { member_id: "m1", user_id: "owner-1", email: "owner@example.com", role: "owner", joined_at: "2026-01-01T00:00:00Z" };
 const COLLAB = { member_id: "m2", user_id: "collab-1", email: "collab@example.com", role: "collaborator", joined_at: "2026-01-02T00:00:00Z" };
+const SNAG = { member_id: "m3", user_id: "snag-1", email: "snag@example.com", role: "snagging", joined_at: "2026-01-03T00:00:00Z" };
 
 function emptySupabase() {
   return {
@@ -193,6 +194,23 @@ test("Module Permissions: choosing '— No access —' calls setProjectModuleRol
   const call = ctx.__calls.find((c) => c.fn === "setProjectModuleRole");
   assert.ok(call, "setProjectModuleRole() must have been called");
   assert.equal(call.role, null);
+});
+
+test("Module Permissions: v46 auto-access — owner/collaborator toolbox_talks cells say so instead of implying no access, while snagging-only and every commercial cell still say 'No access'", async () => {
+  const ctx = makeContext({ members: [OWNER, COLLAB, SNAG] });
+  const { document } = await run(ctx);
+  await wait(30);
+
+  const ownerTT = document.querySelector(`select[data-user="owner-1"][data-module="toolbox_talks"]`);
+  const collabTT = document.querySelector(`select[data-user="collab-1"][data-module="toolbox_talks"]`);
+  const snagTT = document.querySelector(`select[data-user="snag-1"][data-module="toolbox_talks"]`);
+  const ownerCommercial = document.querySelector(`select[data-user="owner-1"][data-module="commercial"]`);
+
+  assert.equal(ownerTT.options[0].textContent, "Default (Contributor — automatic)");
+  assert.equal(ownerTT.value, "", "the empty option (automatic default) is selected when there's no explicit override");
+  assert.equal(collabTT.options[0].textContent, "Default (Contributor — automatic)");
+  assert.equal(snagTT.options[0].textContent, "— No access —", "snagging-only members get no automatic default");
+  assert.equal(ownerCommercial.options[0].textContent, "— No access —", "Commercial has no automatic default for anyone");
 });
 
 test("Module Permissions: a failed grant/revoke shows an error and reverts the dropdown to its previous value", async () => {
