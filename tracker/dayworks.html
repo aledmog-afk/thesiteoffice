@@ -24,7 +24,7 @@
   <div id="pageErrorBox" class="error-box"></div>
 
   <div class="card" id="noAccessCard" style="display:none;">
-    <p>You don't have Commercial access on this site. Ask the site owner to grant you a Commercial role if you need it.</p>
+    <p>You don't have Dayworks &amp; Variations access on this site. Ask the site owner to grant you a Dayworks &amp; Variations role if you need it.</p>
   </div>
 
   <div id="listBody" style="display:none;">
@@ -161,7 +161,7 @@
     renderHeader([
       { label: "Dashboard", href: "dashboard.html" },
       { label: project?.name || "Site", href: `project.html?id=${projectId}` },
-      { label: "Commercial", href: `commercial-dashboard.html?project=${projectId}` },
+      { label: "Dayworks & Variations", href: `commercial-dashboard.html?project=${projectId}` },
       { label: "Dayworks" },
     ]);
     document.getElementById("projectSub").textContent = project ? `${project.name} — day-rate work logged as it happens.` : "";

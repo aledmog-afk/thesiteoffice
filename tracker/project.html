@@ -111,7 +111,7 @@
     </a>
     <a class="tile" href="commercial-dashboard.html?project=" id="commercialModuleTile" style="display:none;">
       <div class="tile-icon">🧾</div>
-      <div class="tile-name">Commercial</div>
+      <div class="tile-name">Dayworks &amp; Variations</div>
       <div class="tile-stats"><div><strong id="commercialAwaitingCount">–</strong>awaiting approval</div></div>
     </a>
     <a class="tile" href="actions.html?project=" id="actionsTile">
@@ -235,7 +235,7 @@
 
   <div class="card" id="modulePermissionsCard" style="margin-top:2rem; display:none;">
     <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.4rem;">Module Permissions</h3>
-    <p class="hint" style="margin-bottom:1rem;">Being a collaborator on this site does not by itself grant access to modules like Toolbox Talks or Commercial — switch each one on per person below.</p>
+    <p class="hint" style="margin-bottom:1rem;">Being a collaborator on this site does not by itself grant access to modules like Toolbox Talks or Dayworks &amp; Variations — switch each one on per person below.</p>
     <div id="modulePermissionsErrorBox" class="error-box"></div>
     <div class="table-wrap">
       <table>
@@ -406,7 +406,7 @@
   });
 
   // ─── Module Permissions ─────────────────────────────────────────
-  const MODULE_LABEL = { commercial: "Commercial", toolbox_talks: "Toolbox Talks" };
+  const MODULE_LABEL = { commercial: "Dayworks & Variations", toolbox_talks: "Toolbox Talks" };
   const ROLE_OPTION_LABEL = { viewer: "Viewer", contributor: "Contributor", editor: "Editor", approver: "Approver" };
 
   function moduleLabel(m) {

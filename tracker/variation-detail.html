@@ -28,7 +28,7 @@
   <div id="pageErrorBox" class="error-box"></div>
 
   <div class="card" id="noAccessCard" style="display:none;">
-    <p>You don't have Commercial access on this site.</p>
+    <p>You don't have Dayworks &amp; Variations access on this site.</p>
   </div>
 
   <!-- ─── CREATE MODE ─────────────────────────────────────────── -->
@@ -535,7 +535,7 @@
     details.innerHTML = rows.length ? `<dl class="doc-facts">${rows.join("")}</dl>` : `<p class="hint">No workflow activity yet — this Variation is still in Draft.</p>`;
 
     if (event.status === "approved") {
-      details.innerHTML += `<p class="hint" style="margin-top:0.8rem;">This record is approved and permanently locked. If a correction is genuinely needed, contact your Commercial approver — a formal revision/supersession workflow is planned for a later phase, so for now any correction has to be handled outside Site Tracker.</p>`;
+      details.innerHTML += `<p class="hint" style="margin-top:0.8rem;">This record is approved and permanently locked. If a correction is genuinely needed, contact your Dayworks &amp; Variations approver — a formal revision/supersession workflow is planned for a later phase, so for now any correction has to be handled outside Site Tracker.</p>`;
     }
 
     const actions = document.getElementById("workflowActions");
@@ -742,7 +742,7 @@
       renderHeader([
         { label: "Dashboard", href: "dashboard.html" },
         { label: project?.name || "Site", href: `project.html?id=${crumbProjectId}` },
-        { label: "Commercial", href: `commercial-dashboard.html?project=${crumbProjectId}` },
+        { label: "Dayworks & Variations", href: `commercial-dashboard.html?project=${crumbProjectId}` },
         { label: "Variations", href: `variations.html?project=${crumbProjectId}` },
         { label: eventId ? (event?.reference || "Variation") : "New Variation" },
       ]);

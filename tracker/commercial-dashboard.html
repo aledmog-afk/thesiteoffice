@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
-<title>Commercial – Site Tracker</title>
+<title>Dayworks & Variations – Site Tracker</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/app.css">
@@ -15,7 +15,7 @@
 <div class="page">
   <div class="page-head">
     <div>
-      <div class="page-title">Commercial</div>
+      <div class="page-title">Dayworks &amp; Variations</div>
       <div class="page-sub" id="projectSub">Dayworks &amp; variations — valuations, evidence and approvals.</div>
     </div>
     <div class="btn-row" id="headerActions" style="display:none;">
@@ -29,7 +29,7 @@
   <div id="pageErrorBox" class="error-box"></div>
 
   <div class="card" id="noAccessCard" style="display:none;">
-    <p>You don't have Commercial access on this site. Ask the site owner to grant you a Commercial role (Viewer, Contributor or Approver) if you need it.</p>
+    <p>You don't have Dayworks &amp; Variations access on this site. Ask the site owner to grant you a Dayworks &amp; Variations role (Viewer, Contributor or Approver) if you need it.</p>
   </div>
 
   <div id="dashboardBody" style="display:none;">
@@ -187,7 +187,7 @@
     renderHeader([
       { label: "Dashboard", href: "dashboard.html" },
       { label: project?.name || "Site", href: `project.html?id=${projectId}` },
-      { label: "Commercial" },
+      { label: "Dayworks & Variations" },
     ]);
     document.getElementById("projectSub").textContent = project ? `${project.name} — dayworks & variations.` : "";
     load();

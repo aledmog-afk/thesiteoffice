@@ -125,7 +125,7 @@ test("Module Permissions: an owner sees the card, with one column per catalog mo
 
   assert.equal(document.getElementById("modulePermissionsCard").style.display, "block", "an owner must see the Module Permissions card");
   const head = document.getElementById("modulePermissionsHead").innerHTML;
-  assert.ok(head.includes("Commercial"));
+  assert.ok(head.includes("Dayworks &amp; Variations"));
   assert.ok(head.includes("Toolbox Talks"));
 
   const rows = document.getElementById("modulePermissionsRows").innerHTML;
