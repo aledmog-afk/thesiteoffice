@@ -66,7 +66,7 @@ test("Variation workflow: draft -> submitted -> approved succeeds end to end, wi
   try {
     const id = await createDraftVariation(contributor, "Legal path variation");
     await contributor.query(`update public.commercial_events set status='submitted' where id=$1`, [id]);
-    await approver.query(`update public.commercial_events set status='approved' where id=$1`, [id]);
+    await approver.query(`update public.commercial_events set status='approved', pending_signature_typed_name='Test Approver' where id=$1`, [id]);
 
     const { rows } = await approver.query("select status, approved_by from public.commercial_events where id=$1", [id]);
     assert.equal(rows[0].status, "approved");
@@ -86,7 +86,7 @@ test("Variation workflow: self-approval is blocked using the real DB mechanism, 
     const id = await createDraftVariation(approver, "Self-approval attempt");
     await approver.query(`update public.commercial_events set status='submitted' where id=$1`, [id]);
     await assert.rejects(
-      approver.query(`update public.commercial_events set status='approved' where id=$1`, [id]),
+      approver.query(`update public.commercial_events set status='approved', pending_signature_typed_name='Test Approver' where id=$1`, [id]),
       /cannot approve a commercial event you created yourself/i
     );
   } finally {
@@ -131,7 +131,7 @@ test("Variation workflow: reject -> draft -> amend (line item AND linked Daywork
     assert.equal(rows[0].total_value, "467.50");
 
     await contributor.query(`update public.commercial_events set status='submitted' where id=$1`, [id]);
-    await approver.query(`update public.commercial_events set status='approved' where id=$1`, [id]);
+    await approver.query(`update public.commercial_events set status='approved', pending_signature_typed_name='Test Approver' where id=$1`, [id]);
 
     ({ rows } = await approver.query("select status, total_value from public.commercial_events where id=$1", [id]));
     assert.equal(rows[0].status, "approved");
@@ -154,7 +154,7 @@ test("Variation workflow: an approved Variation is completely immutable — cann
     await contributor.query(`insert into public.dayworks (commercial_event_id) values ($1)`, [dw]);
     await contributor.query(`insert into public.variation_dayworks (variation_id, daywork_id) values ($1,$2)`, [id, dw]);
     await contributor.query(`update public.commercial_events set status='submitted' where id=$1`, [id]);
-    await approver.query(`update public.commercial_events set status='approved' where id=$1`, [id]);
+    await approver.query(`update public.commercial_events set status='approved', pending_signature_typed_name='Test Approver' where id=$1`, [id]);
 
     await assert.rejects(
       approver.query(`update public.commercial_events set title='hacked' where id=$1`, [id]),
@@ -209,7 +209,7 @@ test("Variation evidence: can be added while draft, locked once submitted, still
     const del1 = await contributor.query(`delete from public.commercial_evidence_links where id=$1`, [ev1[0].id]);
     assert.equal(del1.rowCount, 0, "existing evidence must not be removable once submitted");
 
-    await approver.query(`update public.commercial_events set status='approved' where id=$1`, [id]);
+    await approver.query(`update public.commercial_events set status='approved', pending_signature_typed_name='Test Approver' where id=$1`, [id]);
     await assert.rejects(
       approver.query(
         `insert into public.commercial_evidence_links (commercial_event_id, source_table, source_id, caption) values ($1,'documents',gen_random_uuid(),'post-approval photo') returning id`,

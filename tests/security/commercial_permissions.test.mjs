@@ -263,7 +263,7 @@ test("Contributor: can view, create, edit draft/rejected, submit — cannot appr
     assert.equal(after1[0].status, "submitted");
 
     await assert.rejects(
-      contributor.query(`update public.commercial_events set status='approved' where id=$1`, [eventId]),
+      contributor.query(`update public.commercial_events set status='approved', pending_signature_typed_name='Test Approver' where id=$1`, [eventId]),
       /permission to approve/i,
       "a contributor (not an approver) must not be able to approve, even their own submission"
     );
@@ -280,7 +280,7 @@ test("Approver: can view, create, edit draft/rejected, submit, and approve ANOTH
     const eventId = rows[0].id;
     await contributor.query(`update public.commercial_events set status='submitted' where id=$1`, [eventId]);
 
-    await approver.query(`update public.commercial_events set status='approved' where id=$1`, [eventId]);
+    await approver.query(`update public.commercial_events set status='approved', pending_signature_typed_name='Test Approver' where id=$1`, [eventId]);
     const { rows: after1 } = await approver.query("select status, approved_by from public.commercial_events where id=$1", [eventId]);
     assert.equal(after1[0].status, "approved");
     assert.equal(after1[0].approved_by, APPROVER_A);
@@ -291,7 +291,7 @@ test("Approver: can view, create, edit draft/rejected, submit, and approve ANOTH
     const ownId = own[0].id;
     await approver.query(`update public.commercial_events set status='submitted' where id=$1`, [ownId]);
     await assert.rejects(
-      approver.query(`update public.commercial_events set status='approved' where id=$1`, [ownId]),
+      approver.query(`update public.commercial_events set status='approved', pending_signature_typed_name='Test Approver' where id=$1`, [ownId]),
       /cannot approve a commercial event you created yourself/i
     );
   } finally {

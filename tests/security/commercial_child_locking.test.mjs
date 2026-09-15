@@ -150,7 +150,7 @@ test("commercial_line_items: still fully locked once the parent is APPROVED, for
   try {
     const { eventId, lineItemId } = await createDraftWithLineItem(contributor);
     await contributor.query(`update public.commercial_events set status='submitted' where id=$1`, [eventId]);
-    await approver.query(`update public.commercial_events set status='approved' where id=$1`, [eventId]);
+    await approver.query(`update public.commercial_events set status='approved', pending_signature_typed_name='Test Approver' where id=$1`, [eventId]);
 
     await assert.rejects(
       approver.query(
@@ -222,7 +222,7 @@ test("commercial_evidence_links: still fully locked once the parent is APPROVED"
   try {
     const { eventId, evidenceId } = await createDraftWithEvidence(contributor);
     await contributor.query(`update public.commercial_events set status='submitted' where id=$1`, [eventId]);
-    await approver.query(`update public.commercial_events set status='approved' where id=$1`, [eventId]);
+    await approver.query(`update public.commercial_events set status='approved', pending_signature_typed_name='Test Approver' where id=$1`, [eventId]);
 
     await assert.rejects(
       approver.query(

@@ -7385,3 +7385,270 @@ language sql stable security definer set search_path = public
 as $$
   select public.effective_toolbox_talk_role(p_project_id) in ('contributor', 'editor');
 $$;
+
+-- ─── v47 ADDITIONS: Commercial — real signatures, wider evidence, PDF ──
+-- Three related gaps found against how Dayworks/Variations are actually
+-- used: (1) "approval" was a confirm()-dialog attestation only — the
+-- text itself said "not a legally binding external signature" — with no
+-- captured signature image to put on a document sent externally; (2)
+-- evidence upload only accepted images (accept="image/*"), but proof of
+-- an instruction is usually an emailed PDF, not a photo — the server
+-- side (createDocument()) was already format-agnostic, only the file
+-- picker's accept attribute was narrow, so that part needs no schema
+-- change; (3) no PDF export existed for a completed Daywork/Variation to
+-- send to a client, mirroring the Toolbox Talks PDF export exactly
+-- (client-side jsPDF, on-demand, reading through the same RLS-gated
+-- queries the detail page already uses — no new endpoint).
+--
+-- Real signature capture reuses toolbox_talk_attendees' own
+-- signature_data/signature_typed_name shape. commercial_signatures
+-- itself still has NO insert/update/delete policy for any client role
+-- (unchanged from v40) — a client still cannot fabricate, backdate, or
+-- misattribute a signature. To let a real signature image/typed name
+-- reach that trigger-only INSERT without opening a direct write path,
+-- the caller supplies it as two ordinary, always-transient columns on
+-- the SAME commercial_events UPDATE that changes status
+-- (pending_signature_data/pending_signature_typed_name) — plain
+-- PostgREST .update() calls require real columns, they can't carry
+-- arbitrary extra JSON keys. commercial_events_before_write() captures
+-- them into transaction-local variables, unconditionally nulls the
+-- columns back out before the row is ever persisted (so the raw
+-- signature is never actually stored anywhere on commercial_events,
+-- only relayed through it), and hands them to
+-- commercial_events_after_write() via a transaction-local GUC — the
+-- exact same "app.<name>" one-shot relay pattern already used by
+-- toolbox_talks_before_write()'s
+-- app.allow_toolbox_talk_current_version_change. A signature or typed
+-- name is now REQUIRED to approve (the one action a client actually
+-- relies on as a sign-off); still optional for submit/reject, which
+-- remain attested by account+timestamp alone as before.
+alter table public.commercial_signatures add column if not exists signature_data text;
+alter table public.commercial_signatures add column if not exists signature_typed_name text;
+
+alter table public.commercial_events add column if not exists pending_signature_data text;
+alter table public.commercial_events add column if not exists pending_signature_typed_name text;
+
+-- Full replacement of v40's commercial_events_before_write() — same
+-- behaviour throughout, with signature capture/clearing added at the
+-- top, the two new transient columns added to every "pure status
+-- change" comparison's exclusion list (so supplying a signature never
+-- trips "no other field may change"), and a signature-required check
+-- added to the 'approved' branch. See v40's original above for the
+-- unmodified baseline.
+create or replace function public.commercial_events_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_org_id uuid;
+  v_plot_project_id uuid;
+  v_signer_email text;
+  v_hash text;
+  v_next_seq integer;
+  v_pending_sig_data text;
+  v_pending_sig_typed_name text;
+begin
+  -- Capture, then unconditionally clear — the raw signature is relayed
+  -- through this row, never actually persisted on it. Done first so
+  -- every later "did anything else change" comparison sees both old and
+  -- new as null here (old was cleared the same way on its own write).
+  v_pending_sig_data := new.pending_signature_data;
+  v_pending_sig_typed_name := new.pending_signature_typed_name;
+  new.pending_signature_data := null;
+  new.pending_signature_typed_name := null;
+  perform set_config('app.commercial_pending_signature_data', coalesce(v_pending_sig_data, ''), true);
+  perform set_config('app.commercial_pending_signature_typed_name', coalesce(v_pending_sig_typed_name, ''), true);
+
+  select org_id into v_org_id from public.projects where id = new.project_id;
+  if v_org_id is null then
+    raise exception 'commercial_events.project_id must reference an existing project with an organisation';
+  end if;
+  new.org_id := v_org_id;
+
+  if new.plot_id is not null then
+    select project_id into v_plot_project_id from public.plots where id = new.plot_id;
+    if v_plot_project_id is null then
+      raise exception 'commercial_events.plot_id must reference an existing plot';
+    end if;
+    if v_plot_project_id <> new.project_id then
+      raise exception 'plot_id must belong to the same project as the commercial event';
+    end if;
+  end if;
+
+  if TG_OP = 'INSERT' then
+    new.created_by := auth.uid();
+    new.created_at := now();
+    new.updated_at := now();
+    new.status := 'draft'; -- an event can never be created pre-submitted/approved/rejected
+    new.total_value := 0;
+    new.submitted_by := null; new.submitted_at := null;
+    new.approved_by := null; new.approved_at := null;
+    new.rejected_by := null; new.rejected_at := null; new.rejection_reason := null;
+
+    -- Auto-number the reference per project+type (e.g. DW-001, DW-002…)
+    -- the moment it's needed by Phase 1's UI — mirrors
+    -- set_snag_item_no()'s existing per-project max+1 convention
+    -- exactly (sql/schema.sql, Priority 1), the established reference-
+    -- numbering pattern in this codebase, not a new one. Never
+    -- overwrites an explicitly-supplied reference.
+    if new.reference is null then
+      select coalesce(max(substring(reference from '(\d+)$')::int), 0) + 1
+        into v_next_seq
+        from public.commercial_events
+        where project_id = new.project_id and type = new.type;
+      new.reference := (case when new.type = 'daywork' then 'DW-' else 'VAR-' end) || lpad(v_next_seq::text, 3, '0');
+    end if;
+
+    return new;
+  end if;
+
+  -- identity fields are immutable regardless of payload
+  new.created_by := old.created_by;
+  new.created_at := old.created_at;
+  new.updated_at := now();
+  new.type := old.type; -- type never changes after creation
+  new.org_id := old.org_id; -- re-derived above from project_id, but project_id itself never changes post-creation either (no policy allows editing it out from under an existing event)
+
+  -- Absolute immutability once approved — nobody, including a project
+  -- owner or org admin, may change anything at all. The only correction
+  -- mechanism is a new row referencing this one via supersedes_id (no
+  -- revision UI is built in this phase, but the guarantee holds from
+  -- day one so nothing built on top of it later has to work around a
+  -- gap that should never have existed).
+  if old.status = 'approved' then
+    raise exception 'This commercial event is approved and is immutable. Create a superseding record instead of editing it.';
+  end if;
+
+  if new.status <> old.status then
+    if not public.valid_commercial_event_status_transition(old.status, new.status) then
+      raise exception 'Invalid commercial event status transition: % -> %', old.status, new.status;
+    end if;
+
+    if new.status = 'submitted' then
+      if not public.can_submit_commercial(new.project_id) then
+        raise exception 'You do not have permission to submit commercial events on this project';
+      end if;
+      -- Submitting must be a pure status flip — any content edit must
+      -- already have been saved in a prior, separate update while still
+      -- draft. Mirrors weekly_reports_before_write()'s own
+      -- lock-on-transition comparison exactly.
+      if (to_jsonb(new) - array['status', 'submitted_by', 'submitted_at', 'rejected_by', 'rejected_at', 'rejection_reason', 'updated_at', 'total_value', 'pending_signature_data', 'pending_signature_typed_name']::text[])
+         is distinct from
+         (to_jsonb(old) - array['status', 'submitted_by', 'submitted_at', 'rejected_by', 'rejected_at', 'rejection_reason', 'updated_at', 'total_value', 'pending_signature_data', 'pending_signature_typed_name']::text[]) then
+        raise exception 'Save your changes first, then submit as a separate step.';
+      end if;
+      new.submitted_by := auth.uid();
+      new.submitted_at := now();
+      new.rejected_by := null; new.rejected_at := null; new.rejection_reason := null;
+
+    elsif new.status = 'approved' then
+      if not public.can_approve_commercial(new.project_id) then
+        raise exception 'You do not have permission to approve commercial events on this project';
+      end if;
+      if old.created_by = auth.uid() then
+        raise exception 'You cannot approve a commercial event you created yourself';
+      end if;
+      if v_pending_sig_data is null and v_pending_sig_typed_name is null then
+        raise exception 'A signature or typed name is required to approve this record.';
+      end if;
+      if (to_jsonb(new) - array['status', 'approved_by', 'approved_at', 'updated_at', 'total_value', 'pending_signature_data', 'pending_signature_typed_name']::text[])
+         is distinct from
+         (to_jsonb(old) - array['status', 'approved_by', 'approved_at', 'updated_at', 'total_value', 'pending_signature_data', 'pending_signature_typed_name']::text[]) then
+        raise exception 'Approval must be a pure status change — no other field may change at the same time.';
+      end if;
+      new.approved_by := auth.uid();
+      new.approved_at := now();
+
+    elsif new.status = 'rejected' then
+      if not public.can_approve_commercial(new.project_id) then
+        raise exception 'You do not have permission to reject commercial events on this project';
+      end if;
+      -- no self-rejection restriction, per the approved architecture
+      if (to_jsonb(new) - array['status', 'rejected_by', 'rejected_at', 'rejection_reason', 'updated_at', 'total_value', 'pending_signature_data', 'pending_signature_typed_name']::text[])
+         is distinct from
+         (to_jsonb(old) - array['status', 'rejected_by', 'rejected_at', 'rejection_reason', 'updated_at', 'total_value', 'pending_signature_data', 'pending_signature_typed_name']::text[]) then
+        raise exception 'Rejection must be a pure status change (plus an optional reason) — no other field may change at the same time.';
+      end if;
+      new.rejected_by := auth.uid();
+      new.rejected_at := now();
+
+    elsif new.status = 'draft' then
+      -- reopening a rejected record
+      if not public.can_edit_commercial(new.project_id) then
+        raise exception 'You do not have permission to edit commercial events on this project';
+      end if;
+    end if;
+
+  else
+    -- No status change: an ordinary content edit is only permitted
+    -- while the record is genuinely open (draft/rejected). total_value/
+    -- updated_at are system-maintained (the recompute trigger) and are
+    -- excluded from this comparison so a line-item-driven total refresh
+    -- is never mistaken for a disallowed user content edit.
+    if old.status not in ('draft', 'rejected') then
+      if (to_jsonb(new) - array['total_value', 'updated_at']::text[])
+         is distinct from
+         (to_jsonb(old) - array['total_value', 'updated_at']::text[]) then
+        raise exception 'This commercial event is % — its content is locked until it is rejected back to draft.', old.status;
+      end if;
+    else
+      if not public.can_edit_commercial(new.project_id) then
+        raise exception 'You do not have permission to edit commercial events on this project';
+      end if;
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+-- No trigger re-creation needed — trg_commercial_events_before_write
+-- (v40) already points at this function by name; create or replace
+-- swaps its body in place.
+
+-- Full replacement of v40's commercial_events_after_write() — same
+-- behaviour throughout, with signature_data/signature_typed_name added
+-- to the commercial_signatures insert, read back from the
+-- transaction-local GUCs the before-trigger above set.
+create or replace function public.commercial_events_after_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_signer_email text;
+  v_action text;
+  v_sig_data text;
+  v_sig_typed_name text;
+begin
+  if TG_OP <> 'UPDATE' or new.status = old.status then
+    return new;
+  end if;
+
+  if new.status = 'submitted' then
+    v_action := 'submitted';
+  elsif new.status = 'approved' then
+    v_action := 'approved';
+  elsif new.status = 'rejected' then
+    v_action := 'rejected';
+  else
+    return new; -- reopening to draft is not itself an attested action
+  end if;
+
+  select email into v_signer_email from auth.users where id = auth.uid();
+  v_sig_data := nullif(current_setting('app.commercial_pending_signature_data', true), '');
+  v_sig_typed_name := nullif(current_setting('app.commercial_pending_signature_typed_name', true), '');
+
+  insert into public.commercial_signatures
+    (commercial_event_id, project_id, action, signed_by_user_id, signed_by_name, org_id, statement_version, record_hash, signature_data, signature_typed_name)
+  values
+    (new.id, new.project_id, v_action, auth.uid(), coalesce(v_signer_email, 'unknown'), new.org_id, 'v1', public.commercial_event_hash(new.id), v_sig_data, v_sig_typed_name);
+
+  return new;
+end;
+$$;
+-- No trigger re-creation needed — trg_commercial_events_after_write
+-- (v40) already points at this function by name; create or replace
+-- swaps its body in place.

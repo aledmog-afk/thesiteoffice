@@ -247,6 +247,9 @@ async function run(store, { role, userId, eventId = null, projectId = "p1" }) {
     reopenCommercialEvent: (...a) => store.reopenCommercialEvent(...a),
     getMemberEmailMap: (...a) => store.getMemberEmailMap(...a),
     getDocumentFileUrl: (...a) => store.getDocumentFileUrl(...a),
+    generateCommercialEventPdfBlob: (...a) => (store.generateCommercialEventPdfBlob ? store.generateCommercialEventPdfBlob(...a) : Promise.resolve({ blob: new Blob(["pdf"]), filename: "test.pdf" })),
+    saveFileToDevice: (...a) => (store.saveFileToDevice ? store.saveFileToDevice(...a) : Promise.resolve({ status: "downloaded" })),
+    deviceSaveStatusLabel: (status) => (status === "downloaded" ? "Downloaded" : status),
     alert: () => {}, confirm: () => true,
   });
 }
@@ -390,9 +393,13 @@ test("Workflow: an eligible Approver (not the creator) can approve a submitted V
 
   const { document } = await run(store, { role: "approver", userId: APPROVER_A, eventId: variation.id });
   await wait(30);
-  const approveBtn = [...document.getElementById("workflowActions").querySelectorAll("button")].find((b) => b.textContent === "Approve");
+  const approveBtn = [...document.getElementById("workflowActions").querySelectorAll("button")].find((b) => b.textContent === "Sign & Approve");
   assert.ok(approveBtn);
   fireEvent(approveBtn, "click");
+  await wait(10);
+  assert.equal(document.getElementById("signApproveModal").style.display, "flex", "approving must open the sign-off modal, not approve immediately");
+  document.getElementById("typedNameInput").value = "Jane Approver";
+  fireEvent(document.getElementById("submitSigBtn"), "click");
   await wait(30);
   assert.equal(store.events.get(variation.id).status, "approved");
 });
@@ -445,4 +452,53 @@ test("Evidence: can be added while draft, locked once submitted", async () => {
   await wait(30);
   assert.equal(store.evidenceLinks.length, 1);
   assert.equal(store.evidenceLinks[0].source_table, "documents");
+});
+
+test("Evidence: the file input accepts PDFs as well as images — proof of an instruction is usually an emailed PDF, not a photo", async () => {
+  const store = makeStore();
+  store.__userId = CONTRIBUTOR_A; store.__role = "contributor";
+  const variation = await store.createVariation("p1", { title: "Evidence type test", markupPct: 0 });
+  const { document } = await run(store, { role: "contributor", userId: CONTRIBUTOR_A, eventId: variation.id });
+  await wait(30);
+  assert.equal(document.getElementById("evidenceFileInput").getAttribute("accept"), "application/pdf,image/*");
+});
+
+// ─── PDF export ──────────────────────────────────────────────────
+
+test("PDF export: Generate PDF is hidden on a draft, shown once submitted or approved", async () => {
+  const store = makeStore();
+  store.__userId = CONTRIBUTOR_A; store.__role = "contributor";
+  const variation = await store.createVariation("p1", { title: "PDF visibility test", markupPct: 0 });
+
+  let { document } = await run(store, { role: "contributor", userId: CONTRIBUTOR_A, eventId: variation.id });
+  await wait(30);
+  assert.notEqual(document.getElementById("generatePdfBtn").style.display, "inline-flex", "a draft must not offer a PDF export");
+
+  await store.addCommercialLineItem(variation.id, { lineType: "labour", description: "Labour", quantity: 1, rate: 10 });
+  await store.submitCommercialEvent(variation.id);
+  ({ document } = await run(store, { role: "approver", userId: APPROVER_A, eventId: variation.id }));
+  await wait(30);
+  assert.equal(document.getElementById("generatePdfBtn").style.display, "inline-flex", "a submitted record may be sent to the client for approval");
+});
+
+test("PDF export: clicking Generate PDF calls generateCommercialEventPdfBlob() with type 'variation' for this record", async () => {
+  const store = makeStore();
+  store.__userId = CONTRIBUTOR_A; store.__role = "contributor";
+  const variation = await store.createVariation("p1", { title: "PDF click test", markupPct: 0 });
+  await store.addCommercialLineItem(variation.id, { lineType: "labour", description: "Labour", quantity: 1, rate: 10 });
+  await store.submitCommercialEvent(variation.id);
+
+  const calls = [];
+  store.generateCommercialEventPdfBlob = async (eventId, type) => { calls.push({ eventId, type }); return { blob: new Blob(["pdf"]), filename: "VAR-001.pdf" }; };
+  store.saveFileToDevice = async (blob, filename) => { calls.push({ savedFilename: filename }); return { status: "downloaded" }; };
+
+  const { document } = await run(store, { role: "contributor", userId: CONTRIBUTOR_A, eventId: variation.id });
+  await wait(30);
+  fireEvent(document.getElementById("generatePdfBtn"), "click");
+  await wait(30);
+
+  assert.equal(calls[0].eventId, variation.id);
+  assert.equal(calls[0].type, "variation");
+  assert.equal(calls[1].savedFilename, "VAR-001.pdf");
+  assert.equal(document.getElementById("pdfStatusText").textContent, "Downloaded");
 });

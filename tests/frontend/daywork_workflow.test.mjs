@@ -260,6 +260,9 @@ async function run(store, { role, userId, eventId = null, projectId = "p1" }) {
     // override it per-call by setting store.getVariationsLinkedToDaywork.
     getVariationsLinkedToDaywork: (...a) => (store.getVariationsLinkedToDaywork ? store.getVariationsLinkedToDaywork(...a) : Promise.resolve([])),
     getDocumentFileUrl: (...a) => store.getDocumentFileUrl(...a),
+    generateCommercialEventPdfBlob: (...a) => (store.generateCommercialEventPdfBlob ? store.generateCommercialEventPdfBlob(...a) : Promise.resolve({ blob: new Blob(["pdf"]), filename: "test.pdf" })),
+    saveFileToDevice: (...a) => (store.saveFileToDevice ? store.saveFileToDevice(...a) : Promise.resolve({ status: "downloaded" })),
+    deviceSaveStatusLabel: (status) => (status === "downloaded" ? "Downloaded" : status),
     alert: () => {}, confirm: () => true,
   });
 }
@@ -364,12 +367,36 @@ test("Workflow: an eligible Approver (not the creator) can approve a submitted r
 
   const { document } = await run(store, { role: "approver", userId: APPROVER_A, eventId: event.id });
   await wait(30);
-  const approveBtn = [...document.getElementById("workflowActions").querySelectorAll("button")].find((b) => b.textContent === "Approve");
-  assert.ok(approveBtn, "an eligible approver should see an Approve button");
+  const approveBtn = [...document.getElementById("workflowActions").querySelectorAll("button")].find((b) => b.textContent === "Sign & Approve");
+  assert.ok(approveBtn, "an eligible approver should see a Sign & Approve button");
   fireEvent(approveBtn, "click");
+  await wait(10);
+  assert.equal(document.getElementById("signApproveModal").style.display, "flex", "approving must open the sign-off modal, not approve immediately");
+  // jsdom has no real canvas 2D context, so this exercises the
+  // typed-name fallback path — a real, independent code path, same
+  // convention as toolbox_talk_detail.test.mjs.
+  document.getElementById("typedNameInput").value = "Jane Approver";
+  fireEvent(document.getElementById("submitSigBtn"), "click");
   await wait(30);
   assert.equal(store.events.get(event.id).status, "approved");
   assert.equal(store.events.get(event.id).approved_by, APPROVER_A);
+});
+
+test("Workflow: approving without a signature or typed name is blocked client-side, with the modal staying open", async () => {
+  const store = makeStore();
+  const event = await store.createDaywork.call(Object.assign(store, { __userId: CONTRIBUTOR_A, __role: "contributor" }), "p1", { title: "No signature test" });
+  await store.addCommercialLineItem(event.id, { lineType: "labour", description: "Labour", quantity: 1, rate: 10 });
+  await store.submitCommercialEvent(event.id);
+
+  const { document } = await run(store, { role: "approver", userId: APPROVER_A, eventId: event.id });
+  await wait(30);
+  const approveBtn = [...document.getElementById("workflowActions").querySelectorAll("button")].find((b) => b.textContent === "Sign & Approve");
+  fireEvent(approveBtn, "click");
+  await wait(10);
+  fireEvent(document.getElementById("submitSigBtn"), "click");
+  await wait(30);
+  assert.equal(store.events.get(event.id).status, "submitted", "must not approve without a signature or typed name");
+  assert.ok(document.getElementById("signModalError").textContent.length > 0, "must show an error explaining a signature or name is required");
 });
 
 test("Workflow: a submitted record can be rejected, with a reason, and returned to draft for amendment", async () => {
@@ -562,4 +589,68 @@ test("Daywork <-> Variation: the Linked Variation(s) card is hidden when there a
   const rowText = document.getElementById("linkedVariationRows").textContent;
   assert.ok(rowText.includes("VAR-001"));
   assert.ok(rowText.includes("Drainage change"));
+});
+
+// ─── Evidence file type widening ────────────────────────────────
+
+test("Evidence: the file input accepts PDFs as well as images — proof of an instruction is usually an emailed PDF, not a photo", async () => {
+  const store = makeStore();
+  const event = await store.createDaywork.call(Object.assign(store, { __userId: CONTRIBUTOR_A, __role: "contributor" }), "p1", { title: "Evidence type test" });
+  const { document } = await run(store, { role: "contributor", userId: CONTRIBUTOR_A, eventId: event.id });
+  await wait(30);
+  assert.equal(document.getElementById("evidenceFileInput").getAttribute("accept"), "application/pdf,image/*");
+});
+
+// ─── PDF export ──────────────────────────────────────────────────
+
+test("PDF export: Generate PDF is hidden on a draft, shown once submitted or approved", async () => {
+  const store = makeStore();
+  const event = await store.createDaywork.call(Object.assign(store, { __userId: CONTRIBUTOR_A, __role: "contributor" }), "p1", { title: "PDF visibility test" });
+
+  let { document } = await run(store, { role: "contributor", userId: CONTRIBUTOR_A, eventId: event.id });
+  await wait(30);
+  assert.notEqual(document.getElementById("generatePdfBtn").style.display, "inline-flex", "a draft must not offer a PDF export");
+
+  await store.addCommercialLineItem(event.id, { lineType: "labour", description: "Labour", quantity: 1, rate: 10 });
+  await store.submitCommercialEvent(event.id);
+  ({ document } = await run(store, { role: "approver", userId: APPROVER_A, eventId: event.id }));
+  await wait(30);
+  assert.equal(document.getElementById("generatePdfBtn").style.display, "inline-flex", "a submitted record may be sent to the client for approval");
+});
+
+test("PDF export: clicking Generate PDF calls generateCommercialEventPdfBlob() for this record and saves the result", async () => {
+  const store = makeStore();
+  const event = await store.createDaywork.call(Object.assign(store, { __userId: CONTRIBUTOR_A, __role: "contributor" }), "p1", { title: "PDF click test" });
+  await store.addCommercialLineItem(event.id, { lineType: "labour", description: "Labour", quantity: 1, rate: 10 });
+  await store.submitCommercialEvent(event.id);
+
+  const calls = [];
+  store.generateCommercialEventPdfBlob = async (eventId, type) => { calls.push({ eventId, type }); return { blob: new Blob(["pdf"]), filename: "DW-001.pdf" }; };
+  store.saveFileToDevice = async (blob, filename) => { calls.push({ savedFilename: filename }); return { status: "downloaded" }; };
+
+  const { document } = await run(store, { role: "contributor", userId: CONTRIBUTOR_A, eventId: event.id });
+  await wait(30);
+  fireEvent(document.getElementById("generatePdfBtn"), "click");
+  await wait(30);
+
+  assert.equal(calls[0].eventId, event.id);
+  assert.equal(calls[0].type, "daywork");
+  assert.equal(calls[1].savedFilename, "DW-001.pdf");
+  assert.equal(document.getElementById("pdfStatusText").textContent, "Downloaded");
+});
+
+test("PDF export: a failure shows an error and clears the status text, rather than claiming success", async () => {
+  const store = makeStore();
+  const event = await store.createDaywork.call(Object.assign(store, { __userId: CONTRIBUTOR_A, __role: "contributor" }), "p1", { title: "PDF failure test" });
+  await store.addCommercialLineItem(event.id, { lineType: "labour", description: "Labour", quantity: 1, rate: 10 });
+  await store.submitCommercialEvent(event.id);
+  store.generateCommercialEventPdfBlob = async () => { throw new Error("Only a submitted or approved Commercial record can be exported as a PDF."); };
+
+  const { document } = await run(store, { role: "contributor", userId: CONTRIBUTOR_A, eventId: event.id });
+  await wait(30);
+  fireEvent(document.getElementById("generatePdfBtn"), "click");
+  await wait(30);
+
+  assert.equal(document.getElementById("pdfStatusText").textContent, "");
+  assert.ok(document.getElementById("pageErrorBox").textContent.includes("submitted or approved"));
 });

@@ -18,8 +18,12 @@
       <div class="page-title" id="pageTitle">New Variation</div>
       <div class="page-sub" id="projectSub"></div>
     </div>
-    <span class="badge" id="statusBadge" style="display:none;"></span>
+    <div class="btn-row">
+      <button type="button" class="btn btn-outline btn-sm" id="generatePdfBtn" style="display:none;">Generate PDF</button>
+      <span class="badge" id="statusBadge" style="display:none;"></span>
+    </div>
   </div>
+  <div class="hint" id="pdfStatusText" style="text-align:right; margin-top:-0.6rem; margin-bottom:0.6rem;"></div>
 
   <div id="pageErrorBox" class="error-box"></div>
 
@@ -119,8 +123,8 @@
       <div id="evidenceGrid"></div>
       <div id="evidenceEmpty" class="hint" style="display:none;">No evidence attached yet.</div>
       <div class="btn-row" id="addEvidenceRow" style="margin-top:0.8rem; display:none;">
-        <label class="btn btn-outline btn-sm" style="cursor:pointer;">📷 Add Photo
-          <input type="file" accept="image/*" style="display:none;" id="evidenceFileInput">
+        <label class="btn btn-outline btn-sm" style="cursor:pointer;">📎 Add Evidence
+          <input type="file" accept="application/pdf,image/*" style="display:none;" id="evidenceFileInput">
         </label>
       </div>
     </div>
@@ -144,6 +148,27 @@
   </div>
 </div>
 
+<!-- Sign & Approve -->
+<div class="modal-backdrop" id="signApproveModal" style="display:none;">
+  <div class="modal-box" style="max-width:520px;">
+    <h3 style="font-family:var(--font-display); margin-top:0;">Sign &amp; Approve</h3>
+    <p class="hint" style="margin-bottom:0.8rem;">By signing, you confirm you have reviewed the pricing and evidence above and accept this record as final. Once approved, it becomes permanently locked — nobody, including you, will be able to edit it again.</p>
+    <canvas id="sigCanvas" width="480" height="180"></canvas>
+    <div class="btn-row" style="margin-top:0.6rem;">
+      <button type="button" class="btn btn-outline btn-sm" id="clearSigBtn">Clear</button>
+    </div>
+    <div class="field" style="margin-top:0.8rem;">
+      <label for="typedNameInput">Or type name to confirm (if unable to sign by touch)</label>
+      <input type="text" id="typedNameInput">
+    </div>
+    <div id="signModalError" class="error-box"></div>
+    <div class="btn-row" style="margin-top:0.8rem;">
+      <button type="button" class="btn btn-amber" id="submitSigBtn">Approve</button>
+      <button type="button" class="btn btn-outline" id="cancelSigBtn">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-backdrop" id="addDayworkModal" style="display:none;">
   <div class="modal-box">
     <h3 style="font-family:var(--font-display); margin-top:0;">Link a Daywork</h3>
@@ -163,7 +188,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showCommercialError, clearError, getMyCommercialRole, commercialCapabilities, createVariation, getVariation, updateVariation, listEligibleDayworksForLinking, getLinkedDayworks, linkDaywork, unlinkDaywork, getCommercialLineItems, addCommercialLineItem, deleteCommercialLineItem, getCommercialEvidence, addCommercialEvidencePhoto, removeCommercialEvidenceLink, getCommercialSignatures, submitCommercialEvent, approveCommercialEvent, rejectCommercialEvent, reopenCommercialEvent, previewLineTotal, previewVariationTotal, formatCommercialGBP, getMemberEmailMap, getDocumentFileUrl, todayISO, comparePlotNumbers, COMMERCIAL_STATUS_LABEL, COMMERCIAL_STATUS_BADGE, COMMERCIAL_LINE_TYPES, COMMERCIAL_LINE_TYPE_LABEL } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showCommercialError, clearError, getMyCommercialRole, commercialCapabilities, createVariation, getVariation, updateVariation, listEligibleDayworksForLinking, getLinkedDayworks, linkDaywork, unlinkDaywork, getCommercialLineItems, addCommercialLineItem, deleteCommercialLineItem, getCommercialEvidence, addCommercialEvidencePhoto, removeCommercialEvidenceLink, getCommercialSignatures, submitCommercialEvent, approveCommercialEvent, rejectCommercialEvent, reopenCommercialEvent, previewLineTotal, previewVariationTotal, formatCommercialGBP, getMemberEmailMap, getDocumentFileUrl, todayISO, comparePlotNumbers, COMMERCIAL_STATUS_LABEL, COMMERCIAL_STATUS_BADGE, COMMERCIAL_LINE_TYPES, COMMERCIAL_LINE_TYPE_LABEL, generateCommercialEventPdfBlob, saveFileToDevice, deviceSaveStatusLabel } from "./js/app.js";
 
   await requireAuth();
   const eventId = getParam("id");
@@ -236,6 +261,8 @@
     badge.style.display = "inline-block";
     badge.className = `badge ${COMMERCIAL_STATUS_BADGE[event.status]}`;
     badge.textContent = COMMERCIAL_STATUS_LABEL[event.status];
+    document.getElementById("generatePdfBtn").style.display = (event.status === "submitted" || event.status === "approved") ? "inline-flex" : "none";
+    document.getElementById("pdfStatusText").textContent = "";
 
     document.getElementById("headerFacts").innerHTML = `
       <div><dt>Reference</dt><dd>${escapeHtml(event.reference) || "—"}</dd></div>
@@ -495,7 +522,6 @@
   // ─── Workflow (identical pattern to daywork-detail.html) ───────────
   function attestationText(action, userEmail) {
     if (action === "submitted") return `Submit this Variation for approval?\n\nBy continuing, you confirm the pricing, linked Dayworks and details above are accurate to the best of your knowledge. This will be recorded against your account (${userEmail}) with a timestamp, and the record cannot be edited again once submitted.\n\nThis is an internal confirmation within Site Tracker, not a legally binding external signature.`;
-    if (action === "approved") return `Approve this Variation?\n\nBy continuing, you confirm you have reviewed the pricing, linked Dayworks and evidence above and accept this record as final. This will be recorded against your account (${userEmail}) with a timestamp. Once approved, it becomes permanently locked — nobody, including you, will be able to edit it again.\n\nThis is an internal confirmation within Site Tracker, not a legally binding external signature.`;
     return "";
   }
 
@@ -534,12 +560,7 @@
       if (event.created_by === currentUserId) {
         actions.innerHTML += `<p class="hint">You submitted this Variation yourself — you cannot approve or reject your own submission. Another Commercial approver on this project needs to.</p>`;
       } else {
-        add("Approve", "btn-amber", async () => {
-          if (!confirm(attestationText("approved", membersById[currentUserId] || "you"))) return;
-          clearError(pageErrorBox);
-          try { await approveCommercialEvent(eventId); await reloadEvent(); }
-          catch (err) { showCommercialError(pageErrorBox, err); }
-        });
+        add("Sign & Approve", "btn-amber", () => { openSignApproveModal(); });
         add("Reject", "btn-danger", () => {
           document.getElementById("rejectReason").value = "";
           document.getElementById("rejectModal").style.display = "flex";
@@ -566,6 +587,105 @@
   });
   document.getElementById("rejectModal").addEventListener("click", (e) => {
     if (e.target === document.getElementById("rejectModal")) document.getElementById("rejectModal").style.display = "none";
+  });
+
+  // ─── Sign & Approve (touch/mouse canvas signature) ────────────────
+  const signApproveModal = document.getElementById("signApproveModal");
+  const sigCanvas = document.getElementById("sigCanvas");
+  const sigCtx = sigCanvas.getContext("2d");
+  let sigDrawing = false;
+  let sigHasStroke = false;
+
+  function sigCanvasPoint(e) {
+    const rect = sigCanvas.getBoundingClientRect();
+    const scaleX = sigCanvas.width / rect.width;
+    const scaleY = sigCanvas.height / rect.height;
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
+  }
+  function sigStartDraw(e) {
+    if (!sigCtx) return; // no 2D canvas support — the typed-name fallback still works
+    e.preventDefault();
+    sigDrawing = true;
+    const p = sigCanvasPoint(e);
+    sigCtx.beginPath();
+    sigCtx.moveTo(p.x, p.y);
+  }
+  function sigMoveDraw(e) {
+    if (!sigDrawing || !sigCtx) return;
+    e.preventDefault();
+    const p = sigCanvasPoint(e);
+    sigCtx.lineTo(p.x, p.y);
+    sigCtx.strokeStyle = "#0f1117";
+    sigCtx.lineWidth = 2;
+    sigCtx.lineCap = "round";
+    sigCtx.stroke();
+    sigHasStroke = true;
+  }
+  function sigEndDraw() { sigDrawing = false; }
+  sigCanvas.addEventListener("pointerdown", sigStartDraw);
+  sigCanvas.addEventListener("pointermove", sigMoveDraw);
+  sigCanvas.addEventListener("pointerup", sigEndDraw);
+  sigCanvas.addEventListener("pointerleave", sigEndDraw);
+
+  function sigClearCanvas() {
+    if (sigCtx) sigCtx.clearRect(0, 0, sigCanvas.width, sigCanvas.height);
+    sigHasStroke = false;
+  }
+  document.getElementById("clearSigBtn").addEventListener("click", sigClearCanvas);
+
+  function openSignApproveModal() {
+    document.getElementById("typedNameInput").value = "";
+    clearError(document.getElementById("signModalError"));
+    sigClearCanvas();
+    signApproveModal.style.display = "flex";
+  }
+  document.getElementById("cancelSigBtn").addEventListener("click", () => { signApproveModal.style.display = "none"; });
+  signApproveModal.addEventListener("click", (e) => { if (e.target === signApproveModal) signApproveModal.style.display = "none"; });
+
+  document.getElementById("submitSigBtn").addEventListener("click", async () => {
+    const errBox = document.getElementById("signModalError");
+    clearError(errBox);
+    const typedName = document.getElementById("typedNameInput").value.trim();
+    if (!sigHasStroke && !typedName) {
+      showCommercialError(errBox, { message: "Draw a signature or type a name to confirm." });
+      return;
+    }
+    try {
+      await approveCommercialEvent(eventId, {
+        signatureData: sigHasStroke ? sigCanvas.toDataURL("image/png") : null,
+        typedName: typedName || null,
+      });
+      signApproveModal.style.display = "none";
+      await reloadEvent();
+    } catch (err) {
+      showCommercialError(errBox, err);
+    }
+  });
+
+  // ─── PDF export ─────────────────────────────────────────────────
+  // Generates entirely client-side from this same, already-loaded
+  // submitted/approved record — no server round trip and no separate
+  // access check to keep in sync with the page's own (see
+  // generateCommercialEventPdfBlob() in app.js). Sharing/saving reuses
+  // the exact Save to Device infrastructure already used elsewhere.
+  document.getElementById("generatePdfBtn").addEventListener("click", async () => {
+    const btn = document.getElementById("generatePdfBtn");
+    const statusEl = document.getElementById("pdfStatusText");
+    clearError(pageErrorBox);
+    btn.disabled = true;
+    statusEl.textContent = "Generating PDF…";
+    try {
+      const { blob, filename } = await generateCommercialEventPdfBlob(eventId, "variation");
+      const result = await saveFileToDevice(blob, filename);
+      statusEl.textContent = deviceSaveStatusLabel(result.status);
+    } catch (err) {
+      statusEl.textContent = "";
+      showCommercialError(pageErrorBox, err);
+    } finally {
+      btn.disabled = false;
+    }
   });
 
   async function reloadEvent() {

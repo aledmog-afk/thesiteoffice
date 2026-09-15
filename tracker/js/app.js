@@ -4429,14 +4429,22 @@ export async function updateCommercialEvent(eventId, fields) {
 // commercial_events_before_write()'s own "submitting/approving/
 // rejecting must be a pure status change" requirement exactly. Any
 // pending content edit must already be saved as a separate prior step.
-export async function submitCommercialEvent(eventId) {
-  return updateCommercialEvent(eventId, { status: "submitted" });
+//
+// A signature/typed name is optional here but relayed through to the
+// same trigger via pending_signature_data/pending_signature_typed_name
+// (v47) — the trigger clears them from the persisted row immediately
+// and copies them into the resulting commercial_signatures row instead,
+// so they never actually rest on commercial_events itself. Approving
+// without either is rejected server-side regardless of what the UI
+// does, so this is a genuine requirement, not just a client nicety.
+export async function submitCommercialEvent(eventId, { signatureData = null, typedName = null } = {}) {
+  return updateCommercialEvent(eventId, { status: "submitted", pending_signature_data: signatureData, pending_signature_typed_name: typedName });
 }
-export async function approveCommercialEvent(eventId) {
-  return updateCommercialEvent(eventId, { status: "approved" });
+export async function approveCommercialEvent(eventId, { signatureData = null, typedName = null } = {}) {
+  return updateCommercialEvent(eventId, { status: "approved", pending_signature_data: signatureData, pending_signature_typed_name: typedName });
 }
-export async function rejectCommercialEvent(eventId, reason = null) {
-  return updateCommercialEvent(eventId, { status: "rejected", rejection_reason: reason || null });
+export async function rejectCommercialEvent(eventId, reason = null, { signatureData = null, typedName = null } = {}) {
+  return updateCommercialEvent(eventId, { status: "rejected", rejection_reason: reason || null, pending_signature_data: signatureData, pending_signature_typed_name: typedName });
 }
 export async function reopenCommercialEvent(eventId) {
   return updateCommercialEvent(eventId, { status: "draft" });
@@ -5431,4 +5439,378 @@ export async function generateToolboxTalkPdfBlob(talkId) {
     deliveredByLabel: emailMap[talk.delivered_by] || null,
   });
   return { blob: doc.output("blob"), filename: toolboxTalkPdfFilename(talk) };
+}
+
+// ─── Commercial (Daywork/Variation) PDF export ─────────────────────
+// Same architecture as the Toolbox Talk PDF above: generated entirely
+// client-side from data already fetched through the same RLS-protected
+// reads the detail page itself uses (no new endpoint, no second
+// access-control surface), never stored (a submitted/approved record's
+// underlying data is already immutable-or-locked and durable — every
+// "Generate PDF" click reproduces the exact same evidence rather than
+// reading a second, harder-to-secure copy), and split into a pure
+// builder (testable against the real jspdf package) plus a thin async
+// I/O wrapper.
+//
+// Only a 'submitted' or 'approved' record can be exported — a draft may
+// still be mid-edit with incomplete/incorrect pricing, and a rejected
+// record has been superseded — neither should reach a client looking
+// like an authoritative cost sheet. The PDF's own STATUS banner is
+// always the record's REAL current status (Pending Approval vs
+// Approved), read from the same commercial_events row the rest of the
+// app already trusts — never a separate "final" flag that could drift.
+
+// "DW-003 - Formwork strip-out.pdf" / "VAR-002 - Extra drainage.pdf"
+export function commercialEventPdfFilename(event) {
+  const label = event.reference ? `${event.reference} - ${event.title}` : event.title;
+  return `${sanitizeExportFilename(label)}.pdf`;
+}
+
+const CE_PDF_PAGE = { width: 595.28, height: 841.89 }; // A4 in points
+const CE_PDF_MARGIN = 42;
+const CE_PDF_CONTENT_WIDTH = CE_PDF_PAGE.width - CE_PDF_MARGIN * 2;
+const CE_PDF_FOOTER_RESERVE = 30;
+
+// The pure PDF builder. `logo` is `{ dataUrl, width, height } | null`.
+// `event`/`lineItems`/`linkedDayworks`/`evidence`/`signatures` are
+// exactly the shapes getDaywork()/getVariation()/getCommercialLineItems()/
+// getLinkedDayworks()/getCommercialEvidence()/getCommercialSignatures()
+// already return. `evidenceUploaderLabel`/`signerLabel` are plain
+// (userId -> display label) lookup functions, since the raw rows only
+// carry user ids. Refuses to build for anything but a submitted or
+// approved record — belt and braces alongside
+// generateCommercialEventPdfBlob()'s own check below.
+export function buildCommercialEventPdfDocument({ jsPDFCtor, event, lineItems, linkedDayworks = [], evidence = [], signatures = [], projectName, orgName, logo, evidenceUploaderLabel = () => null, signerLabel = () => null }) {
+  if (event.status !== "submitted" && event.status !== "approved") {
+    throw new Error("Only a submitted or approved Commercial record can be exported as a PDF.");
+  }
+
+  const doc = new jsPDFCtor({ unit: "pt", format: "a4" });
+  let y = CE_PDF_MARGIN;
+
+  function newPage() {
+    doc.addPage();
+    y = CE_PDF_MARGIN;
+  }
+  function ensureSpace(needed) {
+    if (y + needed > CE_PDF_PAGE.height - CE_PDF_MARGIN - CE_PDF_FOOTER_RESERVE) newPage();
+  }
+  function heading(text, size = 11.5) {
+    ensureSpace(size + 12);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(size);
+    doc.setTextColor(20, 20, 20);
+    doc.text(text, CE_PDF_MARGIN, y);
+    y += size + 8;
+  }
+  function paragraph(text, size = 10) {
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(size);
+    doc.setTextColor(40, 40, 40);
+    const lines = doc.splitTextToSize(String(text), CE_PDF_CONTENT_WIDTH);
+    for (const line of lines) {
+      ensureSpace(size + 4);
+      doc.text(line, CE_PDF_MARGIN, y);
+      y += size + 4;
+    }
+    y += 6;
+  }
+
+  // ─── HEADER ─────────────────────────────────────────────────────
+  if (logo && logo.dataUrl) {
+    const maxH = 36;
+    const ratio = logo.width && logo.height ? logo.width / logo.height : 1;
+    const h = maxH;
+    const w = Math.min(140, h * ratio);
+    const fmt = detectImageFormat(logo.dataUrl);
+    try { doc.addImage(logo.dataUrl, fmt, CE_PDF_MARGIN, y, w, h); } catch { /* a logo jsPDF can't decode is skipped, never fails the export */ }
+    y += maxH + 14;
+  }
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.5);
+  doc.setTextColor(130, 130, 130);
+  doc.text(event.type === "variation" ? "VARIATION" : "DAYWORK SHEET", CE_PDF_MARGIN, y);
+  y += 16;
+  doc.setFontSize(18);
+  doc.setTextColor(15, 17, 23);
+  const titleLines = doc.splitTextToSize(event.title, CE_PDF_CONTENT_WIDTH);
+  titleLines.forEach((line) => { doc.text(line, CE_PDF_MARGIN, y); y += 21; });
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  doc.setTextColor(100, 100, 100);
+  const subLine = [event.reference, COMMERCIAL_STATUS_LABEL[event.status]].filter(Boolean).join("   ·   ");
+  if (subLine) { doc.text(subLine, CE_PDF_MARGIN, y); y += 18; }
+  y += 4;
+  doc.setDrawColor(210, 210, 210);
+  doc.line(CE_PDF_MARGIN, y, CE_PDF_MARGIN + CE_PDF_CONTENT_WIDTH, y);
+  y += 22;
+
+  // ─── DETAILS ────────────────────────────────────────────────────
+  const details = [
+    ["Project", projectName],
+    ["Organisation", orgName],
+    ["Date", event.date_undertaken ? formatDate(event.date_undertaken) : (event.date_identified ? formatDate(event.date_identified) : null)],
+    ["Instruction / Reference", event.instruction_reference],
+    ["Markup", event.type === "variation" ? `${Number(event.markup_pct || 0)}%` : null],
+  ].filter(([, value]) => value);
+  if (details.length) {
+    const colW = CE_PDF_CONTENT_WIDTH / 2;
+    const rows = Math.ceil(details.length / 2);
+    ensureSpace(rows * 34 + 10);
+    const gridTop = y;
+    details.forEach(([label, value], i) => {
+      const col = i % 2;
+      const row = Math.floor(i / 2);
+      const x = CE_PDF_MARGIN + col * colW;
+      const rowY = gridTop + row * 34;
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(7.5);
+      doc.setTextColor(140, 140, 140);
+      doc.text(label.toUpperCase(), x, rowY);
+      doc.setFontSize(10.5);
+      doc.setTextColor(20, 20, 20);
+      doc.text(String(value), x, rowY + 14);
+    });
+    y = gridTop + rows * 34 + 8;
+  }
+  if (event.reason && event.reason.trim()) {
+    heading("Reason / Notes");
+    paragraph(event.reason.trim());
+  }
+
+  // ─── LINKED DAYWORKS (Variations only) ─────────────────────────
+  if (linkedDayworks.length) {
+    heading("Linked Dayworks");
+    const lCol = { ref: CE_PDF_MARGIN, title: CE_PDF_MARGIN + 90, value: CE_PDF_MARGIN + CE_PDF_CONTENT_WIDTH - 80 };
+    ensureSpace(20);
+    doc.setFillColor(240, 240, 240);
+    doc.rect(CE_PDF_MARGIN, y - 12, CE_PDF_CONTENT_WIDTH, 18, "F");
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8);
+    doc.setTextColor(70, 70, 70);
+    doc.text("REFERENCE", lCol.ref + 4, y);
+    doc.text("TITLE", lCol.title + 4, y);
+    doc.text("VALUE", lCol.value + 4, y);
+    y += 16;
+    for (const dw of linkedDayworks) {
+      ensureSpace(16);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      doc.setTextColor(40, 40, 40);
+      doc.text(String(dw.reference || "—"), lCol.ref + 4, y);
+      const dwTitleLines = doc.splitTextToSize(String(dw.title || ""), lCol.value - lCol.title - 12);
+      doc.text(dwTitleLines[0] || "", lCol.title + 4, y);
+      doc.text(formatCommercialGBP(dw.total_value) || "—", lCol.value + 4, y);
+      y += 15;
+    }
+    y += 8;
+  }
+
+  // ─── LINE ITEMS ─────────────────────────────────────────────────
+  heading("Line Items", 13);
+  const iCol = {
+    type: CE_PDF_MARGIN,
+    desc: CE_PDF_MARGIN + 60,
+    qty: CE_PDF_MARGIN + CE_PDF_CONTENT_WIDTH - 150,
+    rate: CE_PDF_MARGIN + CE_PDF_CONTENT_WIDTH - 100,
+    total: CE_PDF_MARGIN + CE_PDF_CONTENT_WIDTH - 50,
+  };
+  function lineItemHeaderRow() {
+    ensureSpace(20);
+    doc.setFillColor(240, 240, 240);
+    doc.rect(CE_PDF_MARGIN, y - 12, CE_PDF_CONTENT_WIDTH, 18, "F");
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8);
+    doc.setTextColor(70, 70, 70);
+    doc.text("TYPE", iCol.type + 4, y);
+    doc.text("DESCRIPTION", iCol.desc + 4, y);
+    doc.text("QTY", iCol.qty + 4, y);
+    doc.text("RATE", iCol.rate + 4, y);
+    doc.text("TOTAL", iCol.total + 4, y);
+    y += 16;
+  }
+  lineItemHeaderRow();
+  if (!lineItems.length) {
+    doc.setFont("helvetica", "italic");
+    doc.setFontSize(9.5);
+    doc.setTextColor(140, 140, 140);
+    ensureSpace(16);
+    doc.text("No line items recorded.", iCol.type + 4, y);
+    y += 16;
+  }
+  for (const item of lineItems) {
+    const descLines = doc.splitTextToSize(String(item.description || ""), iCol.qty - iCol.desc - 8);
+    const rowH = Math.max(15, descLines.length * 11 + 4);
+    ensureSpace(rowH);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8.5);
+    doc.setTextColor(40, 40, 40);
+    doc.text(COMMERCIAL_LINE_TYPE_LABEL[item.line_type] || item.line_type, iCol.type + 4, y);
+    descLines.forEach((line, i) => doc.text(line, iCol.desc + 4, y + i * 11));
+    doc.text(`${Number(item.quantity)}${item.unit ? " " + item.unit : ""}`, iCol.qty + 4, y);
+    doc.text(item.rate === null || item.rate === undefined ? "TBC" : formatCommercialGBP(item.rate) || "—", iCol.rate + 4, y);
+    doc.text(item.line_total === null || item.line_total === undefined ? "TBC" : formatCommercialGBP(item.line_total) || "—", iCol.total + 4, y);
+    y += rowH;
+  }
+  ensureSpace(20);
+  doc.setDrawColor(200, 200, 200);
+  doc.line(CE_PDF_MARGIN, y, CE_PDF_MARGIN + CE_PDF_CONTENT_WIDTH, y);
+  y += 16;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(11);
+  doc.setTextColor(20, 20, 20);
+  doc.text("GRAND TOTAL", iCol.qty - 8, y, { align: "right" });
+  doc.text(formatCommercialGBP(event.total_value) || "£0.00", CE_PDF_MARGIN + CE_PDF_CONTENT_WIDTH, y, { align: "right" });
+  y += 24;
+
+  // ─── EVIDENCE (referenced, not embedded — proof files may be PDFs) ──
+  heading("Evidence");
+  if (!evidence.length) {
+    doc.setFont("helvetica", "italic");
+    doc.setFontSize(9.5);
+    doc.setTextColor(140, 140, 140);
+    ensureSpace(14);
+    doc.text("No evidence attached.", CE_PDF_MARGIN, y);
+    y += 18;
+  } else {
+    for (const ev of evidence) {
+      ensureSpace(15);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9.5);
+      doc.setTextColor(40, 40, 40);
+      const label = ev.caption || ev.document?.title || "Evidence";
+      const uploader = evidenceUploaderLabel(ev.document?.created_by) || null;
+      const uploadedDate = ev.document?.created_at ? formatDate(ev.document.created_at.slice(0, 10)) : null;
+      const metaParts = [uploader, uploadedDate].filter(Boolean);
+      const line = metaParts.length ? `${label}  (${metaParts.join(", ")})` : label;
+      const lines = doc.splitTextToSize(`•  ${line}`, CE_PDF_CONTENT_WIDTH);
+      lines.forEach((l) => { ensureSpace(13); doc.text(l, CE_PDF_MARGIN, y); y += 13; });
+    }
+    doc.setFont("helvetica", "italic");
+    doc.setFontSize(8);
+    doc.setTextColor(140, 140, 140);
+    ensureSpace(14);
+    doc.text("Full evidence files remain attached and viewable in Site Tracker.", CE_PDF_MARGIN, y);
+    y += 18;
+  }
+
+  // ─── SIGNATURES ─────────────────────────────────────────────────
+  const SIG_ACTION_LABEL = { submitted: "Submitted", approved: "Approved", rejected: "Rejected" };
+  if (signatures.length) {
+    heading("Signatures", 13);
+    for (const sig of signatures) {
+      ensureSpace(70);
+      const rowTop = y;
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(10);
+      doc.setTextColor(20, 20, 20);
+      doc.text(SIG_ACTION_LABEL[sig.action] || sig.action, CE_PDF_MARGIN, rowTop);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8.5);
+      doc.setTextColor(110, 110, 110);
+      const who = signerLabel(sig.signed_by_user_id) || sig.signed_by_name;
+      doc.text(`${who} — ${formatDateTime(sig.signed_at)}`, CE_PDF_MARGIN, rowTop + 13);
+
+      const sigX = CE_PDF_MARGIN + 260;
+      if (sig.signature_data) {
+        const fmt = detectImageFormat(sig.signature_data);
+        try {
+          doc.addImage(sig.signature_data, fmt, sigX, rowTop - 6, 120, 32);
+        } catch {
+          doc.setFont("helvetica", "italic");
+          doc.setFontSize(8.5);
+          doc.setTextColor(180, 60, 60);
+          doc.text("(signature image could not be rendered)", sigX, rowTop + 10);
+        }
+      } else if (sig.signature_typed_name) {
+        doc.setFont("helvetica", "italic");
+        doc.setFontSize(11);
+        doc.setTextColor(20, 20, 20);
+        doc.text(String(sig.signature_typed_name), sigX, rowTop + 4);
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(7);
+        doc.setTextColor(150, 150, 150);
+        doc.text("typed-name attestation", sigX, rowTop + 16);
+      } else {
+        doc.setFont("helvetica", "italic");
+        doc.setFontSize(8.5);
+        doc.setTextColor(150, 150, 150);
+        doc.text("(no signature captured — internal attestation only)", sigX, rowTop + 4);
+      }
+      y = rowTop + 46;
+    }
+  }
+
+  // ─── STATUS BANNER ──────────────────────────────────────────────
+  ensureSpace(50);
+  y += 8;
+  doc.setDrawColor(200, 200, 200);
+  doc.line(CE_PDF_MARGIN, y, CE_PDF_MARGIN + CE_PDF_CONTENT_WIDTH, y);
+  y += 24;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(12.5);
+  doc.setTextColor(...(event.status === "approved" ? [20, 110, 20] : [160, 110, 20]));
+  doc.text(event.status === "approved" ? "STATUS: APPROVED" : "STATUS: PENDING APPROVAL", CE_PDF_MARGIN, y);
+  y += 18;
+  if (event.approved_at) {
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(10);
+    doc.setTextColor(40, 40, 40);
+    doc.text(`Approved: ${formatDateTime(event.approved_at)}`, CE_PDF_MARGIN, y);
+    y += 16;
+  }
+
+  // ─── FOOTER (every page, drawn last since it needs the final page count) ──
+  const totalPages = doc.internal.getNumberOfPages();
+  for (let i = 1; i <= totalPages; i++) {
+    doc.setPage(i);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    doc.setTextColor(150, 150, 150);
+    doc.text("Commercial record export — Site Tracker.", CE_PDF_MARGIN, CE_PDF_PAGE.height - 20);
+    doc.text(`Page ${i} of ${totalPages}`, CE_PDF_PAGE.width - CE_PDF_MARGIN, CE_PDF_PAGE.height - 20, { align: "right" });
+  }
+
+  return doc;
+}
+
+// The async orchestrator: every read here goes through the same RLS
+// this user's own session already has for viewing the record — no
+// separate PDF-generation privilege to grant or misconfigure.
+export async function generateCommercialEventPdfBlob(eventId, type) {
+  const event = type === "variation" ? await getVariation(eventId) : await getDaywork(eventId);
+  if (event.status !== "submitted" && event.status !== "approved") {
+    throw new Error("Only a submitted or approved Commercial record can be exported as a PDF.");
+  }
+  const [lineItems, linkedDayworks, evidence, signatures, project, orgName, emailMap] = await Promise.all([
+    getCommercialLineItems(eventId),
+    type === "variation" ? getLinkedDayworks(eventId) : Promise.resolve([]),
+    getCommercialEvidence(eventId),
+    getCommercialSignatures(eventId),
+    supabase.from("projects").select("name").eq("id", event.project_id).single().then(({ data }) => data),
+    getOrganisationName(event.org_id),
+    getMemberEmailMap([event.project_id]),
+  ]);
+  const logoUrl = await getOrgLogoUrl(event.org_id);
+  const logo = logoUrl ? await loadImageDataUrl(logoUrl) : null;
+
+  // Same CDN-import approach this app already uses for SheetJS/JSZip/
+  // the Toolbox Talk PDF above — a pinned exact version, dynamically
+  // imported, zero build step.
+  const { jsPDF } = await import("https://esm.sh/jspdf@2.5.2");
+
+  const doc = buildCommercialEventPdfDocument({
+    jsPDFCtor: jsPDF,
+    event,
+    lineItems,
+    linkedDayworks,
+    evidence,
+    signatures,
+    projectName: project?.name || null,
+    orgName,
+    logo,
+    evidenceUploaderLabel: (uid) => emailMap[uid] || null,
+    signerLabel: (uid) => emailMap[uid] || null,
+  });
+  return { blob: doc.output("blob"), filename: commercialEventPdfFilename(event) };
 }

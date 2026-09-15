@@ -83,11 +83,69 @@ test("Legal transitions: draft -> submitted -> approved succeeds end to end", as
   try {
     const id = await createDraft(contributor, fx.projA, "Legal path test");
     await contributor.query(`update public.commercial_events set status='submitted' where id=$1`, [id]);
-    await approver.query(`update public.commercial_events set status='approved' where id=$1`, [id]);
+    await approver.query(`update public.commercial_events set status='approved', pending_signature_typed_name='Test Approver' where id=$1`, [id]);
     const { rows } = await approver.query("select status, approved_by, approved_at from public.commercial_events where id=$1", [id]);
     assert.equal(rows[0].status, "approved");
     assert.equal(rows[0].approved_by, APPROVER_A);
     assert.ok(rows[0].approved_at);
+  } finally {
+    await contributor.end();
+    await approver.end();
+  }
+});
+
+test("v47 SIGNATURE REQUIRED: approving with neither a signature nor a typed name is rejected server-side, regardless of what the UI sends", async () => {
+  const contributor = await userClient(DB, CONTRIBUTOR_A);
+  const approver = await userClient(DB, APPROVER_A);
+  try {
+    const id = await createDraft(contributor, fx.projA, "No signature test");
+    await contributor.query(`update public.commercial_events set status='submitted' where id=$1`, [id]);
+    await assert.rejects(
+      approver.query(`update public.commercial_events set status='approved' where id=$1`, [id]),
+      /A signature or typed name is required to approve/i
+    );
+    const { rows } = await approver.query("select status from public.commercial_events where id=$1", [id]);
+    assert.equal(rows[0].status, "submitted", "must not have been approved");
+  } finally {
+    await contributor.end();
+    await approver.end();
+  }
+});
+
+test("v47 SIGNATURE REQUIRED: the raw signature is never persisted on commercial_events itself — only relayed into commercial_signatures", async () => {
+  const contributor = await userClient(DB, CONTRIBUTOR_A);
+  const approver = await userClient(DB, APPROVER_A);
+  try {
+    const id = await createDraft(contributor, fx.projA, "Relay-only test");
+    await contributor.query(`update public.commercial_events set status='submitted' where id=$1`, [id]);
+    await approver.query(
+      `update public.commercial_events set status='approved', pending_signature_data='data:image/png;base64,FAKE', pending_signature_typed_name='Jane Approver' where id=$1`,
+      [id]
+    );
+    const { rows: eventRows } = await approver.query("select pending_signature_data, pending_signature_typed_name from public.commercial_events where id=$1", [id]);
+    assert.equal(eventRows[0].pending_signature_data, null);
+    assert.equal(eventRows[0].pending_signature_typed_name, null);
+
+    const { rows: sigRows } = await approver.query(
+      "select signature_data, signature_typed_name from public.commercial_signatures where commercial_event_id=$1 and action='approved'", [id]
+    );
+    assert.equal(sigRows[0].signature_data, "data:image/png;base64,FAKE");
+    assert.equal(sigRows[0].signature_typed_name, "Jane Approver");
+  } finally {
+    await contributor.end();
+    await approver.end();
+  }
+});
+
+test("v47 SIGNATURE OPTIONAL: submit and reject succeed with no signature at all — only approve requires one", async () => {
+  const contributor = await userClient(DB, CONTRIBUTOR_A);
+  const approver = await userClient(DB, APPROVER_A);
+  try {
+    const id = await createDraft(contributor, fx.projA, "Optional signature test");
+    await contributor.query(`update public.commercial_events set status='submitted' where id=$1`, [id]);
+    await approver.query(`update public.commercial_events set status='rejected', rejection_reason='no thanks' where id=$1`, [id]);
+    const { rows } = await approver.query("select status from public.commercial_events where id=$1", [id]);
+    assert.equal(rows[0].status, "rejected", "reject must succeed with no signature — only approve requires one");
   } finally {
     await contributor.end();
     await approver.end();
@@ -115,7 +173,7 @@ test("Legal transitions: draft -> submitted -> rejected -> draft -> submitted ->
 
     // Round two: submit and approve successfully.
     await contributor.query(`update public.commercial_events set status='submitted' where id=$1`, [id]);
-    await approver.query(`update public.commercial_events set status='approved' where id=$1`, [id]);
+    await approver.query(`update public.commercial_events set status='approved', pending_signature_typed_name='Test Approver' where id=$1`, [id]);
     const { rows: final } = await approver.query("select status from public.commercial_events where id=$1", [id]);
     assert.equal(final[0].status, "approved");
   } finally {
@@ -146,7 +204,7 @@ test("Illegal transitions are DB-rejected: draft -> approved directly, submitted
   try {
     const draftId = await createDraft(contributor, fx.projA, "Illegal transition test");
     await assert.rejects(
-      contributor.query(`update public.commercial_events set status='approved' where id=$1`, [draftId]),
+      contributor.query(`update public.commercial_events set status='approved', pending_signature_typed_name='Test Approver' where id=$1`, [draftId]),
       /Invalid commercial event status transition/i,
       "draft -> approved must skip the required submitted step and be rejected"
     );
@@ -158,7 +216,7 @@ test("Illegal transitions are DB-rejected: draft -> approved directly, submitted
       "submitted -> draft must go through rejected, not be a direct transition"
     );
 
-    await approver.query(`update public.commercial_events set status='approved' where id=$1`, [draftId]);
+    await approver.query(`update public.commercial_events set status='approved', pending_signature_typed_name='Test Approver' where id=$1`, [draftId]);
     await assert.rejects(
       approver.query(`update public.commercial_events set status='rejected' where id=$1`, [draftId]),
       /immutable/i,
@@ -192,7 +250,7 @@ test("Content lock while submitted: no field other than the pure status transiti
     await contributor.query(`update public.commercial_events set status='submitted' where id=$1`, [id]);
 
     await assert.rejects(
-      approver.query(`update public.commercial_events set status='approved', title='sneaky approval edit' where id=$1`, [id]),
+      approver.query(`update public.commercial_events set status='approved', title='sneaky approval edit', pending_signature_typed_name='Test Approver' where id=$1`, [id]),
       /pure status change/i,
       "approval must be a pure status change"
     );
@@ -215,7 +273,7 @@ test("Approved immutability: even a project owner holding the approver role them
   try {
     const id = await createDraft(contributor, fx.projA, "Owner immutability test");
     await contributor.query(`update public.commercial_events set status='submitted' where id=$1`, [id]);
-    await owner.query(`update public.commercial_events set status='approved' where id=$1`, [id]);
+    await owner.query(`update public.commercial_events set status='approved', pending_signature_typed_name='Test Approver' where id=$1`, [id]);
 
     await assert.rejects(
       owner.query(`update public.commercial_events set title='owner override attempt' where id=$1`, [id]),
@@ -241,7 +299,7 @@ test("Correction mechanism: supersedes_id links a new draft to the approved reco
   try {
     const originalId = await createDraft(contributor, fx.projA, "Original approved record");
     await contributor.query(`update public.commercial_events set status='submitted' where id=$1`, [originalId]);
-    await approver.query(`update public.commercial_events set status='approved' where id=$1`, [originalId]);
+    await approver.query(`update public.commercial_events set status='approved', pending_signature_typed_name='Test Approver' where id=$1`, [originalId]);
 
     const { rows: created } = await contributor.query(
       `insert into public.commercial_events (project_id, type, title, supersedes_id) values ($1,'daywork','Corrected record',$2) returning id, status, supersedes_id`,
@@ -265,7 +323,7 @@ test("commercial_signatures: written automatically for submit/approve/reject wit
   try {
     const id = await createDraft(contributor, fx.projA, "Signature test");
     await contributor.query(`update public.commercial_events set status='submitted' where id=$1`, [id]);
-    await approver.query(`update public.commercial_events set status='approved' where id=$1`, [id]);
+    await approver.query(`update public.commercial_events set status='approved', pending_signature_typed_name='Test Approver' where id=$1`, [id]);
 
     const { rows: sigs } = await contributor.query(
       "select action, signed_by_user_id, signed_by_name, record_hash from public.commercial_signatures where commercial_event_id=$1 order by signed_at",
