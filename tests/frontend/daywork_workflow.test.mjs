@@ -47,16 +47,20 @@ const helperScope = `
   ${extractConst("COMMERCIAL_STATUS_BADGE")}
   ${extractConst("COMMERCIAL_LINE_TYPES")}
   ${extractConst("COMMERCIAL_LINE_TYPE_LABEL")}
+  ${extractConst("COMMERCIAL_APPROVAL_STATUS_LABEL")}
+  ${extractConst("COMMERCIAL_APPROVAL_STATUS_BADGE")}
   return {
     escapeHtml, formatDate, todayISO, comparePlotNumbers, previewLineTotal, formatCommercialGBP,
     commercialCapabilities, validCommercialStatusTransitions,
     COMMERCIAL_STATUS_LABEL, COMMERCIAL_STATUS_BADGE, COMMERCIAL_LINE_TYPES, COMMERCIAL_LINE_TYPE_LABEL,
+    COMMERCIAL_APPROVAL_STATUS_LABEL, COMMERCIAL_APPROVAL_STATUS_BADGE,
   };
 `;
 const {
   escapeHtml, formatDate, todayISO, comparePlotNumbers, previewLineTotal, formatCommercialGBP,
   commercialCapabilities, validCommercialStatusTransitions,
   COMMERCIAL_STATUS_LABEL, COMMERCIAL_STATUS_BADGE, COMMERCIAL_LINE_TYPES, COMMERCIAL_LINE_TYPE_LABEL,
+  COMMERCIAL_APPROVAL_STATUS_LABEL, COMMERCIAL_APPROVAL_STATUS_BADGE,
 } = new Function(helperScope)();
 
 const OWNER_A = "u-owner";
@@ -170,6 +174,16 @@ function makeStore() {
       return signatures.filter((s) => s.commercial_event_id === eventId);
     },
 
+    // P18b: no existing test in this file exercises the Client Approval
+    // card's actions — the default here is just enough for the page's
+    // own reloadEvent()/renderApproval() to run without throwing
+    // (empty history, card stays hidden). A test can still override
+    // any of these per-call via store.<name> exactly like the PDF/save
+    // hooks above.
+    async getCommercialApprovalRequests(eventId) {
+      return this.__approvalRequests ? this.__approvalRequests.filter((r) => r.commercial_event_id === eventId) : [];
+    },
+
     async submitCommercialEvent(eventId) {
       const row = events.get(eventId);
       if (!["contributor", "approver"].includes(this.__role)) throw new Error("You do not have permission to submit commercial events on this project");
@@ -256,6 +270,11 @@ async function run(store, { role, userId, eventId = null, projectId = "p1" }) {
     addCommercialEvidencePhoto: (...a) => store.addCommercialEvidencePhoto(...a),
     removeCommercialEvidenceLink: (...a) => store.removeCommercialEvidenceLink(...a),
     getCommercialSignatures: (...a) => store.getCommercialSignatures(...a),
+    getCommercialApprovalRequests: (...a) => store.getCommercialApprovalRequests(...a),
+    requestCommercialApproval: (...a) => (store.requestCommercialApproval ? store.requestCommercialApproval(...a) : Promise.reject(new Error("requestCommercialApproval not stubbed in this test"))),
+    revokeCommercialApprovalRequest: (...a) => (store.revokeCommercialApprovalRequest ? store.revokeCommercialApprovalRequest(...a) : Promise.resolve()),
+    buildCommercialApprovalUrl: (token) => `https://example.com/commercial-approval.html?token=${token}`,
+    COMMERCIAL_APPROVAL_STATUS_LABEL, COMMERCIAL_APPROVAL_STATUS_BADGE,
     submitCommercialEvent: (...a) => store.submitCommercialEvent(...a),
     approveCommercialEvent: (...a) => store.approveCommercialEvent(...a),
     rejectCommercialEvent: (...a) => store.rejectCommercialEvent(...a),

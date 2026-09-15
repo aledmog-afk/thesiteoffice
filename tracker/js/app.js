@@ -4626,6 +4626,57 @@ export async function getCommercialSignatures(eventId) {
   return data || [];
 }
 
+// ─── External Client Approval (P18b) ───────────────────────────────
+// commercial_approval_requests has an RLS SELECT policy for internal
+// viewers (can_view_commercial), so history/status reads are a normal
+// table select — only request/revoke and every external-facing
+// operation go through a SECURITY DEFINER RPC (see sql/schema.sql's
+// v50 section for the full rationale).
+export const COMMERCIAL_APPROVAL_STATUS_LABEL = {
+  pending: "Pending", viewed: "Viewed", approved: "Approved",
+  rejected: "Rejected", expired: "Expired", revoked: "Revoked",
+};
+export const COMMERCIAL_APPROVAL_STATUS_BADGE = {
+  pending: "badge-amber", viewed: "badge-amber", approved: "badge-green",
+  rejected: "badge-red", expired: "badge-grey", revoked: "badge-grey",
+};
+
+export async function getCommercialApprovalRequests(eventId) {
+  const { data, error } = await supabase.from("commercial_approval_requests").select("*").eq("commercial_event_id", eventId).order("created_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+// Returns { id, token, expires_at }. The raw token is returned ONCE,
+// here, and never again — only its hash is ever stored (see
+// commercial_approval_token_hash() in the schema). The caller must
+// build and hand over the approval link immediately; there is no way
+// to retrieve it later.
+export async function requestCommercialApproval(eventId, { recipientEmail, recipientName = null, recipientCompany = null, expiryHours = 168 } = {}) {
+  const { data, error } = await supabase.rpc("request_commercial_approval", {
+    p_event_id: eventId,
+    p_recipient_email: recipientEmail,
+    p_recipient_name: recipientName || null,
+    p_recipient_company: recipientCompany || null,
+    p_expiry_hours: expiryHours,
+  });
+  if (error) throw error;
+  return (data && data[0]) || null;
+}
+
+export async function revokeCommercialApprovalRequest(requestId) {
+  const { error } = await supabase.rpc("revoke_commercial_approval_request", { p_request_id: requestId });
+  if (error) throw error;
+}
+
+// Builds the exact public URL an internal user hands to the external
+// recipient — the same origin this page is served from, so it works
+// identically in any deployment (local, staging, production) without
+// a hardcoded domain.
+export function buildCommercialApprovalUrl(token) {
+  return `${window.location.origin}${window.location.pathname.replace(/[^/]*$/, "")}commercial-approval.html?token=${encodeURIComponent(token)}`;
+}
+
 // ─── Dashboard — V1, deliberately simple ───────────────────────────
 // Three broad, project-scoped queries total (events, line items,
 // evidence links — each already carries a denormalized project_id,

@@ -112,6 +112,20 @@
       <div id="workflowDetails" style="margin-bottom:1rem;"></div>
       <div class="btn-row" id="workflowActions"></div>
     </div>
+
+    <div class="card" id="approvalCard" style="display:none;">
+      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Client Approval</h3>
+      <div id="approvalDetails" style="margin-bottom:1rem;"></div>
+      <div class="btn-row" id="approvalActions"></div>
+      <div id="approvalLinkBox" style="display:none; margin-top:1rem; padding-top:1rem; border-top:1px solid var(--border);">
+        <p class="hint" style="margin-bottom:0.6rem;">This link works once — copy or send it now. It can't be shown again after you leave this page.</p>
+        <div class="field"><input type="text" id="approvalLinkValue" readonly></div>
+        <div class="btn-row" style="margin-top:0.6rem;">
+          <button type="button" class="btn btn-outline btn-sm" id="copyApprovalLinkBtn">Copy Link</button>
+          <a class="btn btn-outline btn-sm" id="emailApprovalLinkBtn" href="#" target="_blank" rel="noopener">Email Client</a>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -147,9 +161,34 @@
   </div>
 </div>
 
+<!-- Request Client Approval -->
+<div class="modal-backdrop" id="requestApprovalModal" style="display:none;">
+  <div class="modal-box" style="max-width:480px;">
+    <h3 style="font-family:var(--font-display); margin-top:0;">Request Client Approval</h3>
+    <p class="hint" style="margin-bottom:0.8rem;">Sends a one-time link to a client who doesn't need a Site Tracker account. They'll see this record's items, total, and evidence, and can approve or reject it.</p>
+    <div class="field"><label for="reqEmail">Client email *</label><input type="email" id="reqEmail" required></div>
+    <div class="field"><label for="reqName">Client name (optional)</label><input type="text" id="reqName"></div>
+    <div class="field"><label for="reqCompany">Client company (optional)</label><input type="text" id="reqCompany"></div>
+    <div class="field"><label for="reqExpiry">Link expires after</label>
+      <select id="reqExpiry">
+        <option value="24">24 hours</option>
+        <option value="72">3 days</option>
+        <option value="168" selected>7 days</option>
+        <option value="336">14 days</option>
+        <option value="720">30 days</option>
+      </select>
+    </div>
+    <div id="requestApprovalError" class="error-box"></div>
+    <div class="btn-row">
+      <button type="button" class="btn btn-amber" id="submitRequestApprovalBtn">Send Request</button>
+      <button type="button" class="btn btn-outline" id="cancelRequestApprovalBtn">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showCommercialError, clearError, getMyCommercialRole, commercialCapabilities, createDaywork, getDaywork, updateDaywork, getCommercialLineItems, addCommercialLineItem, deleteCommercialLineItem, getCommercialEvidence, addCommercialEvidencePhoto, removeCommercialEvidenceLink, getCommercialSignatures, submitCommercialEvent, approveCommercialEvent, rejectCommercialEvent, reopenCommercialEvent, validCommercialStatusTransitions, previewLineTotal, formatCommercialGBP, getMemberEmailMap, getDocumentFileUrl, todayISO, comparePlotNumbers, getVariationsLinkedToDaywork, COMMERCIAL_STATUS_LABEL, COMMERCIAL_STATUS_BADGE, COMMERCIAL_LINE_TYPES, COMMERCIAL_LINE_TYPE_LABEL, generateCommercialEventPdfBlob, saveFileToDevice, deviceSaveStatusLabel } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showCommercialError, clearError, getMyCommercialRole, commercialCapabilities, createDaywork, getDaywork, updateDaywork, getCommercialLineItems, addCommercialLineItem, deleteCommercialLineItem, getCommercialEvidence, addCommercialEvidencePhoto, removeCommercialEvidenceLink, getCommercialSignatures, submitCommercialEvent, approveCommercialEvent, rejectCommercialEvent, reopenCommercialEvent, validCommercialStatusTransitions, previewLineTotal, formatCommercialGBP, getMemberEmailMap, getDocumentFileUrl, todayISO, comparePlotNumbers, getVariationsLinkedToDaywork, COMMERCIAL_STATUS_LABEL, COMMERCIAL_STATUS_BADGE, COMMERCIAL_LINE_TYPES, COMMERCIAL_LINE_TYPE_LABEL, generateCommercialEventPdfBlob, saveFileToDevice, deviceSaveStatusLabel, getCommercialApprovalRequests, requestCommercialApproval, revokeCommercialApprovalRequest, buildCommercialApprovalUrl, COMMERCIAL_APPROVAL_STATUS_LABEL, COMMERCIAL_APPROVAL_STATUS_BADGE } from "./js/app.js";
 
   await requireAuth();
   const eventId = getParam("id");
@@ -162,6 +201,7 @@
   let lineItems = [];
   let evidence = [];
   let signatures = [];
+  let approvalRequests = [];
   let membersById = {};
   let currentUserId = null;
 
@@ -456,6 +496,127 @@
     }
   }
 
+  // ─── Client Approval (P18b) ────────────────────────────────────────
+  // The card shows the most recent request (if any) plus its full
+  // status — a client link is never re-shown after creation (only its
+  // hash is stored server-side), so "Resend" here means "start a new
+  // request", pre-filled with the same recipient details rather than
+  // literally resending an unrecoverable secret.
+  let lastRequestPrefill = null;
+  function renderApproval() {
+    document.getElementById("approvalLinkBox").style.display = "none";
+    const card = document.getElementById("approvalCard");
+    const latest = approvalRequests[0] || null;
+    const canRequestFresh = event.status === "submitted" && caps.canEdit && (!latest || !["pending", "viewed"].includes(latest.status));
+    const showCard = approvalRequests.length > 0 || canRequestFresh;
+    card.style.display = showCard ? "block" : "none";
+    if (!showCard) return;
+
+    const details = document.getElementById("approvalDetails");
+    if (!latest) {
+      details.innerHTML = `<p class="hint">No client approval has been requested yet.</p>`;
+    } else {
+      const rows = [];
+      rows.push(`<div><dt>Status</dt><dd><span class="badge ${COMMERCIAL_APPROVAL_STATUS_BADGE[latest.status]}">${COMMERCIAL_APPROVAL_STATUS_LABEL[latest.status]}</span></dd></div>`);
+      rows.push(`<div><dt>Recipient</dt><dd>${escapeHtml(latest.recipient_name || latest.recipient_email)}${latest.recipient_company ? " — " + escapeHtml(latest.recipient_company) : ""}</dd></div>`);
+      rows.push(`<div><dt>Requested</dt><dd>${formatDate(latest.created_at?.slice(0, 10))}</dd></div>`);
+      if (["pending", "viewed"].includes(latest.status)) rows.push(`<div><dt>Expires</dt><dd>${formatDate(latest.expires_at?.slice(0, 10))}</dd></div>`);
+      if (latest.viewed_at) rows.push(`<div><dt>Viewed</dt><dd>${formatDate(latest.viewed_at.slice(0, 10))}</dd></div>`);
+      if (latest.status === "approved") rows.push(`<div><dt>Approved by</dt><dd>${escapeHtml(latest.signer_name || "—")} — ${formatDate(latest.approved_at?.slice(0, 10))}</dd></div>`);
+      if (latest.status === "rejected") {
+        rows.push(`<div><dt>Rejected by</dt><dd>${escapeHtml(latest.signer_name || "—")} — ${formatDate(latest.rejected_at?.slice(0, 10))}</dd></div>`);
+        if (latest.rejection_reason) rows.push(`<div><dt>Reason</dt><dd>${escapeHtml(latest.rejection_reason)}</dd></div>`);
+      }
+      details.innerHTML = `<dl class="doc-facts">${rows.join("")}</dl>`;
+    }
+
+    const actions = document.getElementById("approvalActions");
+    actions.innerHTML = "";
+    const add = (label, cls, handler) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = `btn ${cls}`;
+      btn.textContent = label;
+      btn.addEventListener("click", handler);
+      actions.appendChild(btn);
+    };
+
+    if (latest && ["pending", "viewed"].includes(latest.status)) {
+      add("Revoke", "btn-danger", async () => {
+        if (!confirm("Revoke this approval request? The link will stop working immediately.")) return;
+        clearError(pageErrorBox);
+        try { await revokeCommercialApprovalRequest(latest.id); await reloadEvent(); }
+        catch (err) { showCommercialError(pageErrorBox, err); }
+      });
+      add("Resend", "btn-outline", async () => {
+        if (!confirm("Revoke the current link and start a new request?")) return;
+        clearError(pageErrorBox);
+        try {
+          await revokeCommercialApprovalRequest(latest.id);
+          lastRequestPrefill = { email: latest.recipient_email, name: latest.recipient_name, company: latest.recipient_company };
+          openRequestApprovalModal();
+        } catch (err) { showCommercialError(pageErrorBox, err); }
+      });
+    } else if (canRequestFresh) {
+      add("Request Client Approval", "btn-amber", () => { lastRequestPrefill = null; openRequestApprovalModal(); });
+    }
+  }
+
+  function openRequestApprovalModal() {
+    clearError(document.getElementById("requestApprovalError"));
+    document.getElementById("reqEmail").value = lastRequestPrefill?.email || "";
+    document.getElementById("reqName").value = lastRequestPrefill?.name || "";
+    document.getElementById("reqCompany").value = lastRequestPrefill?.company || "";
+    document.getElementById("reqExpiry").value = "168";
+    document.getElementById("requestApprovalModal").style.display = "flex";
+  }
+  document.getElementById("cancelRequestApprovalBtn").addEventListener("click", () => {
+    document.getElementById("requestApprovalModal").style.display = "none";
+  });
+  document.getElementById("requestApprovalModal").addEventListener("click", (e) => {
+    if (e.target === document.getElementById("requestApprovalModal")) document.getElementById("requestApprovalModal").style.display = "none";
+  });
+  document.getElementById("submitRequestApprovalBtn").addEventListener("click", async () => {
+    const errBox = document.getElementById("requestApprovalError");
+    clearError(errBox);
+    const email = document.getElementById("reqEmail").value.trim();
+    if (!email) { showCommercialError(errBox, { message: "A client email is required." }); return; }
+    const btn = document.getElementById("submitRequestApprovalBtn");
+    btn.disabled = true;
+    try {
+      const result = await requestCommercialApproval(eventId, {
+        recipientEmail: email,
+        recipientName: document.getElementById("reqName").value.trim() || null,
+        recipientCompany: document.getElementById("reqCompany").value.trim() || null,
+        expiryHours: Number(document.getElementById("reqExpiry").value),
+      });
+      document.getElementById("requestApprovalModal").style.display = "none";
+      await reloadEvent();
+      const link = buildCommercialApprovalUrl(result.token);
+      document.getElementById("approvalLinkValue").value = link;
+      const subject = encodeURIComponent(`Approval requested: ${event.reference || ""} ${event.title}`.trim());
+      const body = encodeURIComponent(`Hi,\n\nPlease review and approve/reject this ${event.type === "variation" ? "Variation" : "Daywork"} using the link below. No account is needed.\n\n${link}\n\nThis link expires ${formatDate(result.expires_at?.slice(0, 10))} and can only be used once.\n\nRegards,`);
+      document.getElementById("emailApprovalLinkBtn").href = `mailto:${email}?subject=${subject}&body=${body}`;
+      document.getElementById("approvalLinkBox").style.display = "block";
+    } catch (err) {
+      showCommercialError(errBox, err);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+  document.getElementById("copyApprovalLinkBtn").addEventListener("click", async () => {
+    const input = document.getElementById("approvalLinkValue");
+    try {
+      await navigator.clipboard.writeText(input.value);
+      const btn = document.getElementById("copyApprovalLinkBtn");
+      const original = btn.textContent;
+      btn.textContent = "Copied!";
+      setTimeout(() => { btn.textContent = original; }, 1500);
+    } catch {
+      input.select();
+    }
+  });
+
   document.getElementById("cancelRejectBtn").addEventListener("click", () => {
     document.getElementById("rejectModal").style.display = "none";
   });
@@ -587,17 +748,19 @@
   async function reloadEvent() {
     event = await getDaywork(eventId);
     let linkedVariations;
-    [lineItems, evidence, signatures, linkedVariations] = await Promise.all([
+    [lineItems, evidence, signatures, linkedVariations, approvalRequests] = await Promise.all([
       getCommercialLineItems(eventId),
       getCommercialEvidence(eventId),
       getCommercialSignatures(eventId),
       getVariationsLinkedToDaywork(eventId),
+      getCommercialApprovalRequests(eventId),
     ]);
     renderHeaderFacts();
     renderLineItems();
     renderLinkedVariations(linkedVariations);
     await renderEvidence();
     renderWorkflow();
+    renderApproval();
   }
 
   async function initDetailMode() {

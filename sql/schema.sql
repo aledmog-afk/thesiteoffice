@@ -8032,3 +8032,919 @@ $$;
 -- body in place. commercial_events_after_write() is unchanged — it
 -- still just reads the signature GUCs and inserts into
 -- commercial_signatures.
+
+-- ─── v50 ADDITIONS: Commercial — External Client Approval & Signing ───
+-- P18b. A contractor submits a Daywork/Variation, then wants a CLIENT
+-- who has no Site Tracker account at all to review and sign off on it
+-- externally — the same real-world need the on-site Sign & Approve flow
+-- (v48) addresses for a client who's physically present, extended to a
+-- client who isn't. This depended on the v49 fix (total_value being
+-- genuinely server-only) — approving an arbitrary, uncontrolled total
+-- and sending it to an external party would have been a strictly worse,
+-- externally-distributed version of that same gap.
+--
+-- Architecture (see also the accompanying report for the full
+-- rationale on each point):
+--   - A 256-bit random token, generated server-side, returned ONCE to
+--     the internal caller. Only its sha256 hash is ever stored — see
+--     commercial_approval_token_hash() below, the one place the
+--     hashing algorithm lives, reused by both the RPCs and the
+--     trigger's own independent re-validation.
+--   - Every anon-facing operation goes through a SECURITY DEFINER RPC
+--     that validates the token itself. `anon` has ZERO direct grants
+--     on commercial_approval_requests or any commercial table — no RLS
+--     policy for anon exists anywhere in this feature. A caller who
+--     only knows a request's UUID (non-secret, potentially visible in
+--     internal listings) gains nothing — only possession of the actual
+--     unguessable token satisfies any check.
+--   - The approval is bound to the exact submitted state via the
+--     EXISTING commercial_event_hash() function (line items + the now-
+--     authoritative total) captured at request-creation time and
+--     re-verified at approval time — no new versioning scheme
+--     introduced, reusing what was already built (and, per an
+--     independent audit, never actually used) in v40/v47.
+--   - Concurrency: SELECT ... FOR UPDATE on the approval-request row
+--     inside approve/reject — the same row-lock-based atomicity this
+--     schema already relies on for commercial_events itself.
+--   - The external RPC's final step is the SAME
+--     `update commercial_events set status='approved', ...` the
+--     internal Sign & Approve flow already issues — every existing
+--     trigger guarantee (immutability, pure-status-change, mandatory
+--     signature, v49's total_value protection) applies completely
+--     unchanged. The only new thing the trigger needs is an
+--     alternative, independently-re-validated authorization path for a
+--     caller with no project membership at all — see the
+--     commercial_events_before_write() changes below.
+--   - Evidence: Storage signed URLs can only be minted by the Storage
+--     service itself, not a SQL function, so this is the one place a
+--     small Edge Function is genuinely required (deployed alongside
+--     this migration) — it delegates ALL authorization to
+--     resolve_commercial_approval_evidence() below (fully testable in
+--     SQL) and only then calls Storage with the service-role key,
+--     which never reaches the browser.
+
+-- Single place the token-hashing algorithm lives.
+create or replace function public.commercial_approval_token_hash(p_token text)
+returns text
+language sql
+immutable
+set search_path = public, extensions
+as $$
+  select encode(digest(p_token, 'sha256'), 'hex');
+$$;
+
+create table if not exists public.commercial_approval_requests (
+  id uuid primary key default gen_random_uuid(),
+  commercial_event_id uuid not null references public.commercial_events(id) on delete cascade,
+  -- Denormalized, trigger-independent (set directly at insert by the
+  -- RPC, never client-writable since there is no client insert path at
+  -- all) — same write_audit_log() compatibility reasoning used
+  -- throughout this schema's other commercial tables.
+  project_id uuid not null references public.projects(id) on delete cascade,
+  org_id uuid not null references public.organisations(id),
+  recipient_email text not null,
+  recipient_name text,
+  recipient_company text,
+  token_hash text not null unique,
+  status text not null default 'pending' check (status in ('pending', 'viewed', 'approved', 'rejected', 'expired', 'revoked')),
+  expires_at timestamptz not null,
+  viewed_at timestamptz,
+  approved_at timestamptz,
+  rejected_at timestamptz,
+  rejection_reason text,
+  revoked_at timestamptz,
+  revoked_by uuid references auth.users(id) on delete set null,
+  -- Populated only once the request is actually actioned externally.
+  signer_name text,
+  signer_company text,
+  signer_email text,
+  signature_type text check (signature_type in ('drawn', 'typed')),
+  -- The exact state being approved, captured once at request creation
+  -- and re-verified (never re-derived and silently accepted) at
+  -- approval time — see approve_commercial_approval_request() below.
+  bound_total numeric(12,2) not null,
+  bound_content_hash text not null,
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- Exactly one ACTIVE (pending/viewed) request per event — a deliberate
+-- product decision (see report), enforced structurally rather than
+-- merely checked in application code: a second concurrent INSERT
+-- attempt hits this constraint even if two internal users somehow
+-- raced the same "Request Approval" action.
+create unique index if not exists commercial_approval_requests_one_active_idx
+  on public.commercial_approval_requests (commercial_event_id)
+  where status in ('pending', 'viewed');
+
+create index if not exists commercial_approval_requests_event_idx on public.commercial_approval_requests (commercial_event_id);
+create index if not exists commercial_approval_requests_project_idx on public.commercial_approval_requests (project_id);
+create index if not exists commercial_approval_requests_token_hash_idx on public.commercial_approval_requests (token_hash);
+
+alter table public.commercial_approval_requests enable row level security;
+
+-- Internal read only — this is what powers the "Approval Request"
+-- status panel on the record's own detail page. Every anon-facing
+-- read/write goes through the SECURITY DEFINER RPCs below instead,
+-- which return only the single permitted request's curated data —
+-- anon never gets a policy on this table at all.
+drop policy if exists "commercial viewers read commercial_approval_requests" on public.commercial_approval_requests;
+create policy "commercial viewers read commercial_approval_requests" on public.commercial_approval_requests for select using (
+  public.can_view_commercial(project_id)
+);
+drop policy if exists "commercial contributors insert commercial_approval_requests" on public.commercial_approval_requests;
+create policy "commercial contributors insert commercial_approval_requests" on public.commercial_approval_requests for insert with check (
+  public.can_edit_commercial(project_id)
+);
+-- Deliberately NO update or delete policy for any client role, ever —
+-- every status transition on this table (create, revoke, external
+-- approve, external reject, expiry) happens exclusively inside the
+-- RPCs below, so a client can never flip status, extend an expiry, or
+-- fabricate a signer identity via a raw UPDATE — the identical
+-- "insert-only/RPC-only" shape commercial_signatures already uses.
+
+drop trigger if exists trg_audit_commercial_approval_requests on public.commercial_approval_requests;
+create trigger trg_audit_commercial_approval_requests
+  after insert or update or delete on public.commercial_approval_requests
+  for each row execute function public.write_audit_log();
+
+-- ─── commercial_signatures: extended to represent an external signer ──
+-- An external signer has no auth.users row at all, so signed_by_user_id
+-- (previously mandatory) must become optional, with a new, equally
+-- mandatory-when-needed approval_request_id taking its place as the
+-- alternative identity path. The CHECK constraint below guarantees
+-- every signature row is still attributable to SOMETHING — either a
+-- real internal account or a specific, real approval request — never
+-- neither. This extends the EXISTING signature architecture rather
+-- than building a parallel one, per the brief's own instruction.
+alter table public.commercial_signatures alter column signed_by_user_id drop not null;
+alter table public.commercial_signatures add column if not exists approval_request_id uuid references public.commercial_approval_requests(id) on delete set null;
+alter table public.commercial_signatures drop constraint if exists commercial_signatures_signer_identity_check;
+alter table public.commercial_signatures add constraint commercial_signatures_signer_identity_check
+  check (signed_by_user_id is not null or approval_request_id is not null);
+
+-- ─── Full replacement of commercial_events_before_write() (v50) ───────
+-- Identical to v49's body, with exactly one addition: when a
+-- status-changing call does NOT satisfy can_submit_commercial() (i.e.
+-- the caller has no project membership at all — the anon/external
+-- case), it is now also permitted if a validated external-approval
+-- token is present. "Validated" means genuinely re-derived here, from
+-- scratch, by re-hashing the raw token and looking it up against
+-- commercial_approval_requests for THIS SPECIFIC event, in a
+-- pending/viewed, non-expired state — never merely trusting that some
+-- flag was set, since an ordinary GUC is not itself access-controlled
+-- and a malicious caller could otherwise set it directly. Only genuine
+-- possession of the token (not mere knowledge of a request's UUID,
+-- which is not treated as secret) can ever satisfy this check. On
+-- success, the resolved request id is stashed in a second
+-- transaction-local GUC so commercial_events_after_write() can record
+-- the signature against the correct approval_request_id without a
+-- second lookup.
+create or replace function public.commercial_events_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_org_id uuid;
+  v_plot_project_id uuid;
+  v_signer_email text;
+  v_hash text;
+  v_next_seq integer;
+  v_pending_sig_data text;
+  v_pending_sig_typed_name text;
+  v_ext_token text;
+  v_ext_request_id uuid;
+begin
+  v_pending_sig_data := new.pending_signature_data;
+  v_pending_sig_typed_name := new.pending_signature_typed_name;
+  new.pending_signature_data := null;
+  new.pending_signature_typed_name := null;
+  perform set_config('app.commercial_pending_signature_data', coalesce(v_pending_sig_data, ''), true);
+  perform set_config('app.commercial_pending_signature_typed_name', coalesce(v_pending_sig_typed_name, ''), true);
+
+  select org_id into v_org_id from public.projects where id = new.project_id;
+  if v_org_id is null then
+    raise exception 'commercial_events.project_id must reference an existing project with an organisation';
+  end if;
+  new.org_id := v_org_id;
+
+  if new.plot_id is not null then
+    select project_id into v_plot_project_id from public.plots where id = new.plot_id;
+    if v_plot_project_id is null then
+      raise exception 'commercial_events.plot_id must reference an existing plot';
+    end if;
+    if v_plot_project_id <> new.project_id then
+      raise exception 'plot_id must belong to the same project as the commercial event';
+    end if;
+  end if;
+
+  if TG_OP = 'INSERT' then
+    new.created_by := auth.uid();
+    new.created_at := now();
+    new.updated_at := now();
+    new.status := 'draft';
+    new.total_value := 0;
+    new.submitted_by := null; new.submitted_at := null;
+    new.approved_by := null; new.approved_at := null;
+    new.rejected_by := null; new.rejected_at := null; new.rejection_reason := null;
+
+    if new.reference is null then
+      select coalesce(max(substring(reference from '(\d+)$')::int), 0) + 1
+        into v_next_seq
+        from public.commercial_events
+        where project_id = new.project_id and type = new.type;
+      new.reference := (case when new.type = 'daywork' then 'DW-' else 'VAR-' end) || lpad(v_next_seq::text, 3, '0');
+    end if;
+
+    return new;
+  end if;
+
+  new.created_by := old.created_by;
+  new.created_at := old.created_at;
+  new.updated_at := now();
+  new.type := old.type;
+  new.org_id := old.org_id;
+
+  if coalesce(current_setting('app.allow_commercial_total_change', true), '') <> 'on' then
+    new.total_value := old.total_value;
+  end if;
+
+  if old.status = 'approved' then
+    raise exception 'This commercial event is approved and is immutable. Create a superseding record instead of editing it.';
+  end if;
+
+  if new.status <> old.status then
+    if not public.valid_commercial_event_status_transition(old.status, new.status) then
+      raise exception 'Invalid commercial event status transition: % -> %', old.status, new.status;
+    end if;
+
+    if new.status = 'submitted' then
+      if not public.can_submit_commercial(new.project_id) then
+        raise exception 'You do not have permission to submit commercial events on this project';
+      end if;
+      if (to_jsonb(new) - array['status', 'submitted_by', 'submitted_at', 'rejected_by', 'rejected_at', 'rejection_reason', 'updated_at', 'total_value', 'pending_signature_data', 'pending_signature_typed_name']::text[])
+         is distinct from
+         (to_jsonb(old) - array['status', 'submitted_by', 'submitted_at', 'rejected_by', 'rejected_at', 'rejection_reason', 'updated_at', 'total_value', 'pending_signature_data', 'pending_signature_typed_name']::text[]) then
+        raise exception 'Save your changes first, then submit as a separate step.';
+      end if;
+      new.submitted_by := auth.uid();
+      new.submitted_at := now();
+      new.rejected_by := null; new.rejected_at := null; new.rejection_reason := null;
+
+      -- v50: a (re-)submission invalidates any still-active external
+      -- approval request for this event — it was bound to the PRIOR
+      -- submitted state (see commercial_approval_requests.bound_
+      -- content_hash/bound_total), and a client link representing "the
+      -- last thing you saw" should not silently keep working against
+      -- whatever the record has since become, even if this happens to
+      -- be the very first submission (no prior request exists, so this
+      -- is a no-op) or the content ends up byte-identical after a
+      -- reject→edit→resubmit round trip. This runs on every successful
+      -- submit (never raises), so — unlike the equivalent check inside
+      -- approve_commercial_approval_request(), which only ever refuses
+      -- and can never itself persist a status change on the request it
+      -- just refused — this is where that request's status label
+      -- actually, reliably ends up 'expired'.
+      update public.commercial_approval_requests
+        set status = 'expired', updated_at = now()
+        where commercial_event_id = new.id and status in ('pending', 'viewed');
+
+    elsif new.status = 'approved' then
+      -- v50: "is not true", never a bare "not ..." — can_submit_commercial()
+      -- returns SQL NULL (not false) for a caller with no grant at all
+      -- (project_module_role() finds no row), and PL/pgSQL's `IF NOT
+      -- <NULL>` treats a NULL condition as false, silently SKIPPING this
+      -- whole block rather than entering it. That's harmless on every
+      -- OTHER branch in this function because RLS's OWN "NULL in a
+      -- USING clause = deny" semantics (a different, stricter context)
+      -- independently blocks a no-grant caller before the trigger ever
+      -- fires. It is NOT harmless here: this specific UPDATE is issued
+      -- from inside a SECURITY DEFINER RPC (approve_commercial_approval_
+      -- request()) that deliberately bypasses RLS so a validated
+      -- external token can succeed at all — which means THIS check is
+      -- the only backstop for that path, and a bare "not" would have
+      -- silently let a bare anonymous caller with no token whatsoever
+      -- through. Caught during local verification precisely because
+      -- commercial_signatures' new identity CHECK constraint refused to
+      -- accept a signature attributable to neither a user nor a request.
+      if public.can_submit_commercial(new.project_id) is not true then
+        -- v50: the external-approval fallback — see the comment just
+        -- above for exactly why this is safe.
+        v_ext_token := nullif(current_setting('app.commercial_external_approval_token', true), '');
+        v_ext_request_id := null;
+        if v_ext_token is not null then
+          select r.id into v_ext_request_id from public.commercial_approval_requests r
+            where r.commercial_event_id = new.id
+              and r.token_hash = public.commercial_approval_token_hash(v_ext_token)
+              and r.status in ('pending', 'viewed')
+              and r.expires_at > now();
+        end if;
+        if v_ext_request_id is null then
+          raise exception 'You do not have permission to approve commercial events on this project';
+        end if;
+        perform set_config('app.commercial_external_approval_request_id', v_ext_request_id::text, true);
+      end if;
+      if v_pending_sig_data is null and v_pending_sig_typed_name is null then
+        raise exception 'A signature or typed name is required to approve this record.';
+      end if;
+      if (to_jsonb(new) - array['status', 'approved_by', 'approved_at', 'updated_at', 'total_value', 'pending_signature_data', 'pending_signature_typed_name']::text[])
+         is distinct from
+         (to_jsonb(old) - array['status', 'approved_by', 'approved_at', 'updated_at', 'total_value', 'pending_signature_data', 'pending_signature_typed_name']::text[]) then
+        raise exception 'Approval must be a pure status change — no other field may change at the same time.';
+      end if;
+      new.approved_by := auth.uid();
+      new.approved_at := now();
+
+    elsif new.status = 'rejected' then
+      -- v50: same "is not true" reasoning as the approved branch above.
+      if public.can_submit_commercial(new.project_id) is not true then
+        -- v50: same external-approval fallback, for an external
+        -- rejection.
+        v_ext_token := nullif(current_setting('app.commercial_external_approval_token', true), '');
+        v_ext_request_id := null;
+        if v_ext_token is not null then
+          select r.id into v_ext_request_id from public.commercial_approval_requests r
+            where r.commercial_event_id = new.id
+              and r.token_hash = public.commercial_approval_token_hash(v_ext_token)
+              and r.status in ('pending', 'viewed')
+              and r.expires_at > now();
+        end if;
+        if v_ext_request_id is null then
+          raise exception 'You do not have permission to reject commercial events on this project';
+        end if;
+        perform set_config('app.commercial_external_approval_request_id', v_ext_request_id::text, true);
+      end if;
+      if (to_jsonb(new) - array['status', 'rejected_by', 'rejected_at', 'rejection_reason', 'updated_at', 'total_value', 'pending_signature_data', 'pending_signature_typed_name']::text[])
+         is distinct from
+         (to_jsonb(old) - array['status', 'rejected_by', 'rejected_at', 'rejection_reason', 'updated_at', 'total_value', 'pending_signature_data', 'pending_signature_typed_name']::text[]) then
+        raise exception 'Rejection must be a pure status change (plus an optional reason) — no other field may change at the same time.';
+      end if;
+      new.rejected_by := auth.uid();
+      new.rejected_at := now();
+
+    elsif new.status = 'draft' then
+      if not public.can_edit_commercial(new.project_id) then
+        raise exception 'You do not have permission to edit commercial events on this project';
+      end if;
+    end if;
+
+  else
+    if old.status not in ('draft', 'rejected') then
+      if (to_jsonb(new) - array['total_value', 'updated_at']::text[])
+         is distinct from
+         (to_jsonb(old) - array['total_value', 'updated_at']::text[]) then
+        raise exception 'This commercial event is % — its content is locked until it is rejected back to draft.', old.status;
+      end if;
+    else
+      if not public.can_edit_commercial(new.project_id) then
+        raise exception 'You do not have permission to edit commercial events on this project';
+      end if;
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+-- ─── Full replacement of commercial_events_after_write() (v50) ────────
+-- Identical to v47's body, with one addition: when the before-trigger
+-- resolved an external-approval request id, the signature row is
+-- attributed to THAT request (signed_by_user_id left null,
+-- approval_request_id set) with the signer's identity taken from the
+-- approval_requests row itself (already updated by the approve/reject
+-- RPC, in the same transaction, before this UPDATE was ever issued —
+-- see approve_commercial_approval_request() below), rather than from
+-- auth.uid()/auth.users, which do not exist for an external signer.
+create or replace function public.commercial_events_after_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_signer_email text;
+  v_action text;
+  v_sig_data text;
+  v_sig_typed_name text;
+  v_ext_request_id uuid;
+  v_ext_name text;
+  v_ext_email text;
+begin
+  if TG_OP <> 'UPDATE' or new.status = old.status then
+    return new;
+  end if;
+
+  if new.status = 'submitted' then
+    v_action := 'submitted';
+  elsif new.status = 'approved' then
+    v_action := 'approved';
+  elsif new.status = 'rejected' then
+    v_action := 'rejected';
+  else
+    return new;
+  end if;
+
+  v_sig_data := nullif(current_setting('app.commercial_pending_signature_data', true), '');
+  v_sig_typed_name := nullif(current_setting('app.commercial_pending_signature_typed_name', true), '');
+  v_ext_request_id := nullif(current_setting('app.commercial_external_approval_request_id', true), '')::uuid;
+
+  if v_ext_request_id is not null then
+    select coalesce(signer_name, recipient_name, 'external signer'), coalesce(signer_email, recipient_email)
+      into v_ext_name, v_ext_email
+      from public.commercial_approval_requests where id = v_ext_request_id;
+
+    insert into public.commercial_signatures
+      (commercial_event_id, project_id, action, signed_by_user_id, signed_by_name, approval_request_id, org_id, statement_version, record_hash, signature_data, signature_typed_name)
+    values
+      (new.id, new.project_id, v_action, null, v_ext_name || ' <' || v_ext_email || '> (external)', v_ext_request_id, new.org_id, 'v1', public.commercial_event_hash(new.id), v_sig_data, v_sig_typed_name);
+  else
+    select email into v_signer_email from auth.users where id = auth.uid();
+    insert into public.commercial_signatures
+      (commercial_event_id, project_id, action, signed_by_user_id, signed_by_name, org_id, statement_version, record_hash, signature_data, signature_typed_name)
+    values
+      (new.id, new.project_id, v_action, auth.uid(), coalesce(v_signer_email, 'unknown'), new.org_id, 'v1', public.commercial_event_hash(new.id), v_sig_data, v_sig_typed_name);
+  end if;
+
+  return new;
+end;
+$$;
+
+-- ─── Internal RPCs: request / revoke ───────────────────────────────────
+create or replace function public.request_commercial_approval(
+  p_event_id uuid,
+  p_recipient_email text,
+  p_recipient_name text default null,
+  p_recipient_company text default null,
+  p_expiry_hours integer default 168
+)
+returns table (id uuid, token text, expires_at timestamptz)
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_event public.commercial_events%rowtype;
+  v_view_total numeric(12,2);
+  v_token text;
+  v_request_id uuid;
+begin
+  -- "id" is qualified here (and nowhere else needs it) because this
+  -- function's own `returns table (id uuid, ...)` implicitly declares
+  -- an OUT parameter also named "id", which would otherwise make a
+  -- bare `id` ambiguous against commercial_events.id.
+  select * into v_event from public.commercial_events where commercial_events.id = p_event_id;
+  if v_event.id is null then
+    raise exception 'Commercial event not found';
+  end if;
+  -- "is not true", not a bare "not ..." — see the identical, more
+  -- detailed comment in commercial_events_before_write()'s v50
+  -- approved branch. This function is SECURITY DEFINER and its own
+  -- SELECT above already bypassed RLS to read this row at all, so this
+  -- check is the ONLY thing standing between an authenticated caller
+  -- with zero grant on this project and generating a real,
+  -- externally-usable approval token for someone else's record — a
+  -- bare "not" would treat can_edit_commercial()'s NULL (no grant, not
+  -- false) as "condition false", silently skipping the raise.
+  if public.can_edit_commercial(v_event.project_id) is not true then
+    raise exception 'You do not have permission to request client approval on this project';
+  end if;
+  if v_event.status <> 'submitted' then
+    raise exception 'Only a submitted record can have client approval requested — this record is %', v_event.status;
+  end if;
+  if p_recipient_email is null or trim(p_recipient_email) = '' then
+    raise exception 'A recipient email is required';
+  end if;
+  if p_expiry_hours is null or p_expiry_hours <= 0 or p_expiry_hours > 720 then
+    raise exception 'Expiry must be between 1 hour and 30 days';
+  end if;
+
+  -- Defense in depth: total_value is server-protected (v49), but
+  -- cross-check the live authoritative view before ever handing an
+  -- amount to an external party, and refuse on any disagreement rather
+  -- than silently proceed.
+  select total into v_view_total from public.commercial_event_totals where commercial_event_id = p_event_id;
+  if v_view_total is distinct from v_event.total_value then
+    raise exception 'Internal error: cached and authoritative totals disagree — refusing to request approval.';
+  end if;
+
+  if exists (select 1 from public.commercial_approval_requests where commercial_event_id = p_event_id and status in ('pending', 'viewed')) then
+    raise exception 'There is already an active approval request for this record — revoke it first, or wait for it to be actioned.';
+  end if;
+
+  v_token := encode(gen_random_bytes(32), 'base64');
+
+  insert into public.commercial_approval_requests (
+    commercial_event_id, project_id, org_id, recipient_email, recipient_name, recipient_company,
+    token_hash, expires_at, bound_total, bound_content_hash, created_by
+  ) values (
+    p_event_id, v_event.project_id, v_event.org_id, trim(p_recipient_email),
+    nullif(trim(coalesce(p_recipient_name, '')), ''), nullif(trim(coalesce(p_recipient_company, '')), ''),
+    public.commercial_approval_token_hash(v_token), now() + (p_expiry_hours || ' hours')::interval,
+    v_event.total_value, public.commercial_event_hash(p_event_id), auth.uid()
+  ) returning commercial_approval_requests.id into v_request_id;
+
+  return query select v_request_id, v_token, (now() + (p_expiry_hours || ' hours')::interval);
+end;
+$$;
+-- This project has an ALTER DEFAULT PRIVILEGES entry (owner role
+-- postgres) that auto-grants EXECUTE to anon AND authenticated on
+-- every newly created function, regardless of `revoke all ... from
+-- public` issued afterward — that only strips the aggregate PUBLIC
+-- pseudo-grant, not a direct per-role grant already made via the
+-- default ACL at CREATE TIME. Both REVOKE lines below are required —
+-- the same class of gotcha v42's cleanup migration fixed for 8 other
+-- RPCs. This function is internal/authenticated-only by design; a
+-- genuinely anonymous caller is independently blocked by its own
+-- can_edit_commercial(...) IS NOT TRUE check regardless, but the grant
+-- should still say what's actually intended.
+revoke all on function public.request_commercial_approval(uuid, text, text, text, integer) from public;
+revoke execute on function public.request_commercial_approval(uuid, text, text, text, integer) from anon;
+grant execute on function public.request_commercial_approval(uuid, text, text, text, integer) to authenticated;
+
+create or replace function public.revoke_commercial_approval_request(p_request_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_project_id uuid;
+begin
+  select project_id into v_project_id from public.commercial_approval_requests where id = p_request_id;
+  if v_project_id is null then
+    raise exception 'Approval request not found';
+  end if;
+  -- "is not true" — same reasoning as request_commercial_approval()
+  -- above: this SECURITY DEFINER function's own SELECT already
+  -- bypassed RLS, so this is the only real gate.
+  if public.can_edit_commercial(v_project_id) is not true then
+    raise exception 'You do not have permission to revoke approval requests on this project';
+  end if;
+  update public.commercial_approval_requests
+    set status = 'revoked', revoked_at = now(), revoked_by = auth.uid(), updated_at = now()
+    where id = p_request_id and status in ('pending', 'viewed');
+  if not found then
+    raise exception 'Only a pending or viewed request can be revoked';
+  end if;
+end;
+$$;
+-- Same default-ACL gotcha as request_commercial_approval() above —
+-- both REVOKE lines are required.
+revoke all on function public.revoke_commercial_approval_request(uuid) from public;
+revoke execute on function public.revoke_commercial_approval_request(uuid) from anon;
+grant execute on function public.revoke_commercial_approval_request(uuid) to authenticated;
+
+-- ─── External (anon-callable) RPCs ─────────────────────────────────────
+-- Read: returns a curated jsonb blob only — never raw table rows, never
+-- storage paths, never any other request/event/project's data. Marks
+-- the request 'viewed' (from 'pending') as a side effect of the first
+-- genuine read, and lazily flips an overdue 'pending'/'viewed' request
+-- to 'expired' — belt-and-braces alongside the same check the
+-- approve/reject RPCs repeat independently at the moment it actually
+-- matters.
+create or replace function public.get_commercial_approval_request(p_token text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_req public.commercial_approval_requests%rowtype;
+  v_event public.commercial_events%rowtype;
+  v_project_name text;
+  v_org_name text;
+  v_reason text;
+  v_instruction_reference text;
+  v_markup_pct numeric(5,2);
+  v_date date;
+  v_line_items jsonb;
+  v_linked jsonb;
+  v_evidence jsonb;
+  v_effective_status text;
+begin
+  if p_token is null or trim(p_token) = '' then
+    raise exception 'Invalid approval link.';
+  end if;
+
+  select * into v_req from public.commercial_approval_requests
+    where token_hash = public.commercial_approval_token_hash(p_token);
+  if v_req.id is null then
+    raise exception 'Invalid approval link.';
+  end if;
+
+  v_effective_status := v_req.status;
+  if v_effective_status in ('pending', 'viewed') and v_req.expires_at <= now() then
+    update public.commercial_approval_requests set status = 'expired', updated_at = now() where id = v_req.id and status in ('pending', 'viewed');
+    v_effective_status := 'expired';
+  elsif v_effective_status = 'pending' then
+    update public.commercial_approval_requests set status = 'viewed', viewed_at = now(), updated_at = now() where id = v_req.id and status = 'pending';
+    v_effective_status := 'viewed';
+  end if;
+
+  select * into v_event from public.commercial_events where id = v_req.commercial_event_id;
+  select name into v_project_name from public.projects where id = v_event.project_id;
+  select name into v_org_name from public.organisations where id = v_event.org_id;
+
+  -- reason/instruction_reference/markup live on the type-specific
+  -- extension table (variations), never on commercial_events itself;
+  -- date_undertaken is the Daywork equivalent.
+  v_reason := null; v_instruction_reference := null; v_markup_pct := null; v_date := null;
+  if v_event.type = 'variation' then
+    select reason, instruction_reference, markup_pct into v_reason, v_instruction_reference, v_markup_pct
+      from public.variations where commercial_event_id = v_req.commercial_event_id;
+  else
+    select date_undertaken into v_date from public.dayworks where commercial_event_id = v_req.commercial_event_id;
+  end if;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+    'line_type', li.line_type, 'description', li.description, 'trade', li.trade,
+    'quantity', li.quantity, 'unit', li.unit, 'rate', li.rate, 'line_total', li.line_total
+  ) order by li.created_at), '[]'::jsonb) into v_line_items
+  from public.commercial_line_items li where li.commercial_event_id = v_req.commercial_event_id;
+
+  v_linked := '[]'::jsonb;
+  if v_event.type = 'variation' then
+    select coalesce(jsonb_agg(jsonb_build_object(
+      'reference', d_ce.reference, 'title', d_ce.title, 'total_value', d_ce.total_value
+    ) order by d_ce.reference), '[]'::jsonb) into v_linked
+    from public.variation_dayworks vd
+    join public.commercial_events d_ce on d_ce.id = vd.daywork_id
+    where vd.variation_id = v_req.commercial_event_id;
+  end if;
+
+  -- Evidence is referenced by its LINK id only — never a raw storage
+  -- path or document id — the separate resolve_commercial_approval_
+  -- evidence() RPC re-derives the actual file location itself, scoped
+  -- to this exact token+event pairing.
+  select coalesce(jsonb_agg(jsonb_build_object(
+    'evidence_link_id', el.id, 'caption', el.caption,
+    'title', d.title, 'file_name', dr.file_name, 'mime_type', dr.mime_type
+  ) order by el.linked_at), '[]'::jsonb) into v_evidence
+  from public.commercial_evidence_links el
+  left join public.documents d on d.id = el.source_id and el.source_table = 'documents'
+  left join public.document_revisions dr on dr.id = d.current_revision_id
+  where el.commercial_event_id = v_req.commercial_event_id;
+
+  return jsonb_build_object(
+    'status', v_effective_status,
+    'expires_at', v_req.expires_at,
+    'recipient_name', v_req.recipient_name,
+    'recipient_company', v_req.recipient_company,
+    'recipient_email', v_req.recipient_email,
+    'signer_name', v_req.signer_name,
+    'approved_at', v_req.approved_at,
+    'rejected_at', v_req.rejected_at,
+    'rejection_reason', v_req.rejection_reason,
+    'event', jsonb_build_object(
+      'type', v_event.type, 'reference', v_event.reference, 'title', v_event.title,
+      'reason', v_reason, 'instruction_reference', v_instruction_reference, 'markup_pct', v_markup_pct,
+      'date_undertaken', v_date,
+      'total_value', v_event.total_value, 'status', v_event.status
+    ),
+    'project_name', v_project_name,
+    'org_name', v_org_name,
+    'line_items', v_line_items,
+    'linked_dayworks', v_linked,
+    'evidence', v_evidence
+  );
+end;
+$$;
+revoke all on function public.get_commercial_approval_request(text) from public;
+grant execute on function public.get_commercial_approval_request(text) to anon, authenticated;
+
+-- Evidence authorization only — returns the real bucket+path if (and
+-- only if) this evidence link genuinely belongs to this token's own
+-- event, the token is real, and the request isn't expired/revoked.
+-- Access remains available through approved/rejected too (the
+-- completed record's evidence should stay reviewable), only
+-- expired/revoked blocks it. The Edge Function calls this before ever
+-- touching Storage — see the report for why a plain SQL function
+-- cannot itself mint the signed URL.
+create or replace function public.resolve_commercial_approval_evidence(p_token text, p_evidence_link_id uuid)
+returns table (storage_bucket text, object_path text)
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_req public.commercial_approval_requests%rowtype;
+begin
+  if p_token is null or trim(p_token) = '' or p_evidence_link_id is null then
+    raise exception 'Invalid request.';
+  end if;
+
+  select * into v_req from public.commercial_approval_requests
+    where token_hash = public.commercial_approval_token_hash(p_token);
+  if v_req.id is null then
+    raise exception 'Invalid request.';
+  end if;
+
+  -- NOTE: unlike get_commercial_approval_request() (the read path,
+  -- which never raises), this function's job is exactly to raise on an
+  -- invalid attempt — so any UPDATE issued here to *also* persist a
+  -- status change would itself be rolled back the instant the RAISE
+  -- below unwinds this statement (Postgres has no partial-commit
+  -- inside a single failing function call). No status write is
+  -- attempted here for that reason; the request row's status label is
+  -- kept accurate via get_commercial_approval_request()'s own
+  -- lazy-expiry (an external signer always reads the link before
+  -- acting on it) and via commercial_events_before_write()'s own
+  -- request-invalidation on resubmission — see its comment. The
+  -- authorization outcome here (refused) is correct and final
+  -- regardless of what label the row carries afterward.
+  if v_req.status in ('pending', 'viewed') and v_req.expires_at <= now() then
+    raise exception 'This approval link has expired.';
+  end if;
+  if v_req.status not in ('pending', 'viewed', 'approved', 'rejected') then
+    raise exception 'This approval link is no longer valid.';
+  end if;
+
+  return query
+    select dr.storage_bucket, dr.file_url
+    from public.commercial_evidence_links el
+    join public.documents d on d.id = el.source_id and el.source_table = 'documents'
+    join public.document_revisions dr on dr.id = d.current_revision_id
+    where el.id = p_evidence_link_id
+      and el.commercial_event_id = v_req.commercial_event_id;
+end;
+$$;
+revoke all on function public.resolve_commercial_approval_evidence(text, uuid) from public;
+grant execute on function public.resolve_commercial_approval_evidence(text, uuid) to anon, authenticated;
+
+-- Approve. See the migration header for the full concurrency/binding
+-- rationale. Name is always required; the "signature" is either a real
+-- drawn image, or — matching the EXISTING internal Sign & Approve
+-- pattern exactly, where a single typed-name field already serves as
+-- both identity and typed-signature — the already-validated,
+-- already-required name itself, used as the typed attestation when no
+-- drawing is supplied. This avoids asking an external signer to type
+-- their name twice for no reason, and reuses rather than duplicates the
+-- existing signature shape.
+create or replace function public.approve_commercial_approval_request(
+  p_token text,
+  p_signer_name text,
+  p_signer_company text,
+  p_signature_data text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_req public.commercial_approval_requests%rowtype;
+  v_event public.commercial_events%rowtype;
+  v_current_hash text;
+  v_clean_name text;
+  v_clean_company text;
+  v_has_drawing boolean;
+  v_sig_type text;
+begin
+  v_clean_name := nullif(trim(coalesce(p_signer_name, '')), '');
+  v_clean_company := nullif(trim(coalesce(p_signer_company, '')), '');
+  v_has_drawing := p_signature_data is not null and trim(p_signature_data) <> '';
+
+  if v_clean_name is null then
+    raise exception 'A name is required to approve.';
+  end if;
+  if p_token is null or trim(p_token) = '' then
+    raise exception 'Invalid approval link.';
+  end if;
+
+  -- Serialization point for the whole approval: this row lock is held
+  -- for the rest of the transaction. A concurrent approve/reject call
+  -- for the SAME token blocks here until this transaction ends, then
+  -- re-reads the now-final status and fails cleanly — there is no
+  -- window between checking status and acting on it.
+  select * into v_req from public.commercial_approval_requests
+    where token_hash = public.commercial_approval_token_hash(p_token)
+    for update;
+  if v_req.id is null then
+    raise exception 'Invalid approval link.';
+  end if;
+  -- No status-changing UPDATE is attempted in any of the branches
+  -- below that end in RAISE — see the identical note in
+  -- resolve_commercial_approval_evidence() above: it would be rolled
+  -- back with the rest of this statement the instant the exception
+  -- unwinds it, so it would be dead code. The refusal itself is fully
+  -- effective and final regardless; commercial_events_before_write()'s
+  -- own submit-time invalidation (see its comment) is what keeps a
+  -- genuinely stale request's status label honest going forward.
+  if v_req.status in ('pending', 'viewed') and v_req.expires_at <= now() then
+    raise exception 'This approval link has expired.';
+  end if;
+  if v_req.status not in ('pending', 'viewed') then
+    raise exception 'This approval request has already been actioned or is no longer valid.';
+  end if;
+
+  select * into v_event from public.commercial_events where id = v_req.commercial_event_id;
+  if v_event.id is null or v_event.status <> 'submitted' then
+    raise exception 'This record is no longer awaiting approval.';
+  end if;
+
+  -- The material-change guard: re-derive the hash fresh, right now,
+  -- and compare against what was bound at request-creation time. Any
+  -- disagreement — in content OR total — refuses the approval outright
+  -- rather than silently approving something else. In the ordinary
+  -- flow this can only actually be reached via a stale link a client
+  -- still has open from BEFORE a reject→edit→resubmit cycle — that
+  -- resubmission already expired this very request via the trigger
+  -- (see commercial_events_before_write()), so this check is
+  -- deliberate defense in depth, not the primary enforcement point.
+  v_current_hash := public.commercial_event_hash(v_req.commercial_event_id);
+  if v_current_hash is distinct from v_req.bound_content_hash or v_event.total_value is distinct from v_req.bound_total then
+    raise exception 'This record has changed since this approval request was created. A new approval request is needed.';
+  end if;
+
+  v_sig_type := case when v_has_drawing then 'drawn' else 'typed' end;
+
+  update public.commercial_approval_requests
+    set signer_name = v_clean_name, signer_company = v_clean_company, signer_email = recipient_email,
+        signature_type = v_sig_type, updated_at = now()
+    where id = v_req.id;
+
+  perform set_config('app.commercial_external_approval_token', p_token, true);
+  update public.commercial_events
+    set status = 'approved',
+        pending_signature_data = case when v_has_drawing then p_signature_data else null end,
+        pending_signature_typed_name = case when v_has_drawing then null else v_clean_name end
+    where id = v_req.commercial_event_id;
+
+  update public.commercial_approval_requests set status = 'approved', approved_at = now(), updated_at = now() where id = v_req.id;
+
+  return jsonb_build_object('status', 'approved');
+end;
+$$;
+revoke all on function public.approve_commercial_approval_request(text, text, text, text) from public;
+grant execute on function public.approve_commercial_approval_request(text, text, text, text) to anon, authenticated;
+
+-- Reject. No signature required — matches the existing internal rule
+-- (v47) that rejection is never signature-gated — but a name and a
+-- reason are both mandatory so the internal side always knows who
+-- declined it and why.
+create or replace function public.reject_commercial_approval_request(
+  p_token text,
+  p_signer_name text,
+  p_rejection_reason text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_req public.commercial_approval_requests%rowtype;
+  v_event public.commercial_events%rowtype;
+  v_clean_name text;
+  v_clean_reason text;
+begin
+  v_clean_name := nullif(trim(coalesce(p_signer_name, '')), '');
+  v_clean_reason := nullif(trim(coalesce(p_rejection_reason, '')), '');
+  if v_clean_name is null then
+    raise exception 'A name is required to reject.';
+  end if;
+  if v_clean_reason is null then
+    raise exception 'A reason is required to reject.';
+  end if;
+  if p_token is null or trim(p_token) = '' then
+    raise exception 'Invalid approval link.';
+  end if;
+
+  select * into v_req from public.commercial_approval_requests
+    where token_hash = public.commercial_approval_token_hash(p_token)
+    for update;
+  if v_req.id is null then
+    raise exception 'Invalid approval link.';
+  end if;
+  -- See the identical note in approve_commercial_approval_request():
+  -- no status-changing UPDATE is attempted alongside a RAISE here —
+  -- it would be rolled back with it.
+  if v_req.status in ('pending', 'viewed') and v_req.expires_at <= now() then
+    raise exception 'This approval link has expired.';
+  end if;
+  if v_req.status not in ('pending', 'viewed') then
+    raise exception 'This approval request has already been actioned or is no longer valid.';
+  end if;
+
+  select * into v_event from public.commercial_events where id = v_req.commercial_event_id;
+  if v_event.id is null or v_event.status <> 'submitted' then
+    raise exception 'This record is no longer awaiting approval.';
+  end if;
+
+  update public.commercial_approval_requests
+    set signer_name = v_clean_name, signer_email = recipient_email, updated_at = now()
+    where id = v_req.id;
+
+  perform set_config('app.commercial_external_approval_token', p_token, true);
+  update public.commercial_events set status = 'rejected', rejection_reason = v_clean_reason where id = v_req.commercial_event_id;
+
+  update public.commercial_approval_requests set status = 'rejected', rejected_at = now(), rejection_reason = v_clean_reason, updated_at = now() where id = v_req.id;
+
+  return jsonb_build_object('status', 'rejected');
+end;
+$$;
+revoke all on function public.reject_commercial_approval_request(text, text, text) from public;
+grant execute on function public.reject_commercial_approval_request(text, text, text) to anon, authenticated;
