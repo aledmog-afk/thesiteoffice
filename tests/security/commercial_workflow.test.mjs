@@ -21,7 +21,11 @@
 //   - commercial_signatures rows are written automatically (and only
 //     automatically — no client can write them directly) on each
 //     submitted/approved/rejected transition, with the correct actor
-//     and a non-null content hash.
+//     and a non-null content hash;
+//   - v49: total_value is server-only — a client can never move it,
+//     alone or piggybacked on any status-changing call, by any means;
+//     the sole legitimate writer is recompute_commercial_event_total(),
+//     which announces itself via a transaction-local flag.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createTestDatabase, dropTestDatabase, setupSchema, adminClient, userClient, isRlsError } from "../lib/db.mjs";
@@ -95,6 +99,75 @@ test("Legal transitions: draft -> submitted -> approved succeeds end to end", as
   } finally {
     await contributor.end();
     await approver.end();
+  }
+});
+
+test("v49 FINANCIAL INTEGRITY: a lone direct UPDATE...SET total_value is silently forced back to the real, line-item-derived total", async () => {
+  const contributor = await userClient(DB, CONTRIBUTOR_A);
+  try {
+    const id = await createDraft(contributor, fx.projA, "v49 tamper test: lone update");
+    await contributor.query(
+      `insert into public.commercial_line_items (commercial_event_id, line_type, description, quantity, rate) values ($1,'labour','real labour',8,20)`,
+      [id]
+    );
+    const { rows: before } = await contributor.query("select total_value from public.commercial_events where id=$1", [id]);
+    assert.equal(before[0].total_value, "160.00");
+
+    await contributor.query(`update public.commercial_events set total_value = 999999.99 where id=$1`, [id]);
+    const { rows: after } = await contributor.query("select total_value from public.commercial_events where id=$1", [id]);
+    assert.equal(after[0].total_value, "160.00", "a direct total_value tamper attempt must be silently forced back to the authoritative recomputed value");
+  } finally {
+    await contributor.end();
+  }
+});
+
+test("v49 FINANCIAL INTEGRITY: tampering total_value in the SAME call as submit/approve does not stick — the real total is what gets permanently locked in", async () => {
+  const contributor = await userClient(DB, CONTRIBUTOR_A);
+  try {
+    const id = await createDraft(contributor, fx.projA, "v49 tamper test: piggybacked on submit/approve");
+    await contributor.query(
+      `insert into public.commercial_line_items (commercial_event_id, line_type, description, quantity, rate) values ($1,'labour','real labour',8,20)`,
+      [id]
+    );
+
+    await contributor.query(`update public.commercial_events set status='submitted', total_value=1.00 where id=$1`, [id]);
+    const { rows: submitted } = await contributor.query("select status, total_value from public.commercial_events where id=$1", [id]);
+    assert.equal(submitted[0].status, "submitted");
+    assert.equal(submitted[0].total_value, "160.00", "submitting must not let a piggybacked total_value change through");
+
+    await contributor.query(`update public.commercial_events set status='approved', total_value=0.01, pending_signature_typed_name='Client On-Site' where id=$1`, [id]);
+    const { rows: approved } = await contributor.query("select status, total_value from public.commercial_events where id=$1", [id]);
+    assert.equal(approved[0].status, "approved");
+    assert.equal(approved[0].total_value, "160.00", "approving must not let a piggybacked total_value change through — this is the exact value that becomes permanently immutable and gets exported to the client-facing PDF");
+
+    // Even now, approved and immutable, a lone tamper attempt must fail entirely.
+    await assert.rejects(
+      contributor.query(`update public.commercial_events set total_value = 42.00 where id=$1`, [id]),
+      /immutable/i
+    );
+    const { rows: final } = await contributor.query("select total_value from public.commercial_events where id=$1", [id]);
+    assert.equal(final[0].total_value, "160.00");
+  } finally {
+    await contributor.end();
+  }
+});
+
+test("v49 FINANCIAL INTEGRITY: the authoritative commercial_event_totals view always agrees with the now-protected cache", async () => {
+  const contributor = await userClient(DB, CONTRIBUTOR_A);
+  try {
+    const id = await createDraft(contributor, fx.projA, "v49 view-agreement test");
+    await contributor.query(
+      `insert into public.commercial_line_items (commercial_event_id, line_type, description, quantity, rate) values ($1,'plant','real plant',3,15)`,
+      [id]
+    );
+    await contributor.query(`update public.commercial_events set total_value = 1.00 where id=$1`, [id]); // ignored, per above
+    const { rows: cache } = await contributor.query("select total_value from public.commercial_events where id=$1", [id]);
+    const { rows: view } = await contributor.query("select total from public.commercial_event_totals where commercial_event_id=$1", [id]);
+    assert.equal(cache[0].total_value, "45.00");
+    assert.equal(view[0].total, "45.00");
+    assert.equal(cache[0].total_value, view[0].total, "the cache and the authoritative view must never disagree");
+  } finally {
+    await contributor.end();
   }
 });
 
