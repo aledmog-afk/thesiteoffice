@@ -180,15 +180,18 @@ function makeStore() {
     },
     async approveCommercialEvent(eventId) {
       const row = events.get(eventId);
-      if (this.__role !== "approver") throw new Error("You do not have permission to approve commercial events on this project");
-      if (row.created_by === this.__userId) throw new Error("You cannot approve a commercial event you created yourself");
+      // v48: no separate 'approver' role needed, and no self-approval
+      // block — the mandatory signature (enforced client-side before
+      // this is even called) is the assurance now, not the account
+      // role or a distinct signer.
+      if (!["contributor", "approver"].includes(this.__role)) throw new Error("You do not have permission to approve commercial events on this project");
       if (!TRANSITIONS[row.status].includes("approved")) throw new Error(`Invalid commercial event status transition: ${row.status} -> approved`);
       row.status = "approved"; row.approved_by = this.__userId; row.approved_at = "2026-09-03T00:00:00Z";
       return { ...row };
     },
     async rejectCommercialEvent(eventId, reason) {
       const row = events.get(eventId);
-      if (this.__role !== "approver") throw new Error("You do not have permission to reject commercial events on this project");
+      if (!["contributor", "approver"].includes(this.__role)) throw new Error("You do not have permission to reject commercial events on this project");
       if (!TRANSITIONS[row.status].includes("rejected")) throw new Error(`Invalid commercial event status transition: ${row.status} -> rejected`);
       row.status = "rejected"; row.rejected_by = this.__userId; row.rejected_at = "2026-09-03T00:00:00Z"; row.rejection_reason = reason || null;
       return { ...row };
@@ -423,7 +426,7 @@ test("Workflow: an approved Variation shows no edit/link/evidence controls at al
   assert.equal(document.getElementById("workflowActions").children.length, 0);
 });
 
-test("Permissions: an Approver cannot approve their OWN Variation submission", async () => {
+test("Permissions (v48): an Approver CAN sign & approve their OWN Variation submission on the spot", async () => {
   const store = makeStore();
   store.__userId = APPROVER_A; store.__role = "approver";
   const variation = await store.createVariation("p1", { title: "Self-approval test", markupPct: 0 });
@@ -433,7 +436,28 @@ test("Permissions: an Approver cannot approve their OWN Variation submission", a
   const { document } = await run(store, { role: "approver", userId: APPROVER_A, eventId: variation.id });
   await wait(30);
   const buttons = [...document.getElementById("workflowActions").querySelectorAll("button")].map((b) => b.textContent);
-  assert.ok(!buttons.includes("Approve"));
+  assert.ok(buttons.includes("Sign & Approve"), "an approver must see Sign & Approve on their own submission now");
+
+  const approveBtn = [...document.getElementById("workflowActions").querySelectorAll("button")].find((b) => b.textContent === "Sign & Approve");
+  fireEvent(approveBtn, "click");
+  await wait(10);
+  document.getElementById("typedNameInput").value = "On-Site Client";
+  fireEvent(document.getElementById("submitSigBtn"), "click");
+  await wait(30);
+  assert.equal(store.events.get(variation.id).status, "approved");
+});
+
+test("Permissions (v48): a Contributor CAN sign & approve a submitted Variation they didn't create", async () => {
+  const store = makeStore();
+  store.__userId = APPROVER_A; store.__role = "approver";
+  const variation = await store.createVariation("p1", { title: "Contributor-can-approve test", markupPct: 0 });
+  await store.addCommercialLineItem(variation.id, { lineType: "labour", description: "x", quantity: 1, rate: 10 });
+  await store.submitCommercialEvent(variation.id);
+
+  const { document } = await run(store, { role: "contributor", userId: CONTRIBUTOR_A, eventId: variation.id });
+  await wait(30);
+  const buttons = [...document.getElementById("workflowActions").querySelectorAll("button")].map((b) => b.textContent);
+  assert.ok(buttons.includes("Sign & Approve"), "a contributor must now be able to sign & approve, given a signature");
 });
 
 // ─── Evidence ───────────────────────────────────────────────────

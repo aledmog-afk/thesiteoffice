@@ -7652,3 +7652,185 @@ $$;
 -- No trigger re-creation needed — trg_commercial_events_after_write
 -- (v40) already points at this function by name; create or replace
 -- swaps its body in place.
+
+-- ─── v48 ADDITIONS: Commercial — on-site sign-off, no separate Approver account needed ──
+-- Real-world gap reported after v47 shipped: a client raising/receiving a
+-- Daywork/Variation almost never has a registered account on the project,
+-- let alone one explicitly granted the 'approver' Commercial role — so
+-- can_approve_commercial()'s gate, plus the "you cannot approve your own
+-- submission" self-block, made the whole Sign & Approve step unreachable
+-- in the most common real case: the site manager/subcontractor raises the
+-- record, then wants to hand the same device straight to the client to
+-- review the attached evidence and sign it there and then.
+--
+-- v47 already made a real signature (drawn or typed) mandatory to approve
+-- at all — that signature IS the assurance now, not the signer's account
+-- role. So the fix is to let anyone who can submit a record (i.e. anyone
+-- with edit access to Commercial on the project — 'contributor' or
+-- 'approver') also complete the approval, AS LONG AS they supply a
+-- signature (already enforced), and to drop the self-approval block,
+-- since "self" here refers to the logged-in account/device, not the
+-- actual physical signer — the whole scenario is the account holder's own
+-- device being handed to someone else to sign. Reject gets the identical
+-- permission relaxation so a client declining on the spot isn't left with
+-- no path either (a submitted record can only move to approved/rejected;
+-- rejected is the only way back to draft for edits).
+--
+-- can_approve_commercial() itself is left in place unused by this trigger
+-- — 'approver' remains a selectable Commercial role (still distinct from
+-- 'viewer', still included in can_edit_commercial/can_submit_commercial),
+-- it just no longer gates the approve/reject transition specifically,
+-- since every approval already requires a captured signature regardless
+-- of the signer's account role.
+create or replace function public.commercial_events_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_org_id uuid;
+  v_plot_project_id uuid;
+  v_signer_email text;
+  v_hash text;
+  v_next_seq integer;
+  v_pending_sig_data text;
+  v_pending_sig_typed_name text;
+begin
+  v_pending_sig_data := new.pending_signature_data;
+  v_pending_sig_typed_name := new.pending_signature_typed_name;
+  new.pending_signature_data := null;
+  new.pending_signature_typed_name := null;
+  perform set_config('app.commercial_pending_signature_data', coalesce(v_pending_sig_data, ''), true);
+  perform set_config('app.commercial_pending_signature_typed_name', coalesce(v_pending_sig_typed_name, ''), true);
+
+  select org_id into v_org_id from public.projects where id = new.project_id;
+  if v_org_id is null then
+    raise exception 'commercial_events.project_id must reference an existing project with an organisation';
+  end if;
+  new.org_id := v_org_id;
+
+  if new.plot_id is not null then
+    select project_id into v_plot_project_id from public.plots where id = new.plot_id;
+    if v_plot_project_id is null then
+      raise exception 'commercial_events.plot_id must reference an existing plot';
+    end if;
+    if v_plot_project_id <> new.project_id then
+      raise exception 'plot_id must belong to the same project as the commercial event';
+    end if;
+  end if;
+
+  if TG_OP = 'INSERT' then
+    new.created_by := auth.uid();
+    new.created_at := now();
+    new.updated_at := now();
+    new.status := 'draft';
+    new.total_value := 0;
+    new.submitted_by := null; new.submitted_at := null;
+    new.approved_by := null; new.approved_at := null;
+    new.rejected_by := null; new.rejected_at := null; new.rejection_reason := null;
+
+    if new.reference is null then
+      select coalesce(max(substring(reference from '(\d+)$')::int), 0) + 1
+        into v_next_seq
+        from public.commercial_events
+        where project_id = new.project_id and type = new.type;
+      new.reference := (case when new.type = 'daywork' then 'DW-' else 'VAR-' end) || lpad(v_next_seq::text, 3, '0');
+    end if;
+
+    return new;
+  end if;
+
+  new.created_by := old.created_by;
+  new.created_at := old.created_at;
+  new.updated_at := now();
+  new.type := old.type;
+  new.org_id := old.org_id;
+
+  if old.status = 'approved' then
+    raise exception 'This commercial event is approved and is immutable. Create a superseding record instead of editing it.';
+  end if;
+
+  if new.status <> old.status then
+    if not public.valid_commercial_event_status_transition(old.status, new.status) then
+      raise exception 'Invalid commercial event status transition: % -> %', old.status, new.status;
+    end if;
+
+    if new.status = 'submitted' then
+      if not public.can_submit_commercial(new.project_id) then
+        raise exception 'You do not have permission to submit commercial events on this project';
+      end if;
+      if (to_jsonb(new) - array['status', 'submitted_by', 'submitted_at', 'rejected_by', 'rejected_at', 'rejection_reason', 'updated_at', 'total_value', 'pending_signature_data', 'pending_signature_typed_name']::text[])
+         is distinct from
+         (to_jsonb(old) - array['status', 'submitted_by', 'submitted_at', 'rejected_by', 'rejected_at', 'rejection_reason', 'updated_at', 'total_value', 'pending_signature_data', 'pending_signature_typed_name']::text[]) then
+        raise exception 'Save your changes first, then submit as a separate step.';
+      end if;
+      new.submitted_by := auth.uid();
+      new.submitted_at := now();
+      new.rejected_by := null; new.rejected_at := null; new.rejection_reason := null;
+
+    elsif new.status = 'approved' then
+      -- v48: can_submit_commercial (contributor or approver), not
+      -- can_approve_commercial — the mandatory signature below is what
+      -- authorizes the approval now, not a separately-granted role.
+      if not public.can_submit_commercial(new.project_id) then
+        raise exception 'You do not have permission to approve commercial events on this project';
+      end if;
+      if v_pending_sig_data is null and v_pending_sig_typed_name is null then
+        raise exception 'A signature or typed name is required to approve this record.';
+      end if;
+      -- v48: the "cannot approve your own submission" block is removed —
+      -- the on-site flow this exists for is the raiser's own account/
+      -- device being handed to someone else (the client) to sign, so a
+      -- same-account check no longer reflects who actually signed.
+      if (to_jsonb(new) - array['status', 'approved_by', 'approved_at', 'updated_at', 'total_value', 'pending_signature_data', 'pending_signature_typed_name']::text[])
+         is distinct from
+         (to_jsonb(old) - array['status', 'approved_by', 'approved_at', 'updated_at', 'total_value', 'pending_signature_data', 'pending_signature_typed_name']::text[]) then
+        raise exception 'Approval must be a pure status change — no other field may change at the same time.';
+      end if;
+      new.approved_by := auth.uid();
+      new.approved_at := now();
+
+    elsif new.status = 'rejected' then
+      -- v48: same relaxation as approve, so a client declining on-site
+      -- isn't blocked either — a project with nobody in the 'approver'
+      -- role can still record a full submit/approve/reject cycle.
+      if not public.can_submit_commercial(new.project_id) then
+        raise exception 'You do not have permission to reject commercial events on this project';
+      end if;
+      if (to_jsonb(new) - array['status', 'rejected_by', 'rejected_at', 'rejection_reason', 'updated_at', 'total_value', 'pending_signature_data', 'pending_signature_typed_name']::text[])
+         is distinct from
+         (to_jsonb(old) - array['status', 'rejected_by', 'rejected_at', 'rejection_reason', 'updated_at', 'total_value', 'pending_signature_data', 'pending_signature_typed_name']::text[]) then
+        raise exception 'Rejection must be a pure status change (plus an optional reason) — no other field may change at the same time.';
+      end if;
+      new.rejected_by := auth.uid();
+      new.rejected_at := now();
+
+    elsif new.status = 'draft' then
+      if not public.can_edit_commercial(new.project_id) then
+        raise exception 'You do not have permission to edit commercial events on this project';
+      end if;
+    end if;
+
+  else
+    if old.status not in ('draft', 'rejected') then
+      if (to_jsonb(new) - array['total_value', 'updated_at']::text[])
+         is distinct from
+         (to_jsonb(old) - array['total_value', 'updated_at']::text[]) then
+        raise exception 'This commercial event is % — its content is locked until it is rejected back to draft.', old.status;
+      end if;
+    else
+      if not public.can_edit_commercial(new.project_id) then
+        raise exception 'You do not have permission to edit commercial events on this project';
+      end if;
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+-- No trigger re-creation needed — trg_commercial_events_before_write
+-- already points at this function by name; create or replace swaps its
+-- body in place. commercial_events_after_write() (v47) is unchanged —
+-- it still just reads the signature GUCs and inserts into
+-- commercial_signatures, unaffected by who was allowed to trigger it.

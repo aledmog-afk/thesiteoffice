@@ -7,8 +7,10 @@
 // assumed from project ownership.
 //
 // The mock store below mirrors the REAL rules Phase 0's triggers and
-// RLS already enforce (locked content while submitted/approved, no
-// self-approval, valid transitions only) — this file is not re-proving
+// RLS already enforce (locked content while submitted/approved, valid
+// transitions only, and — v48 — approve/reject need only the same
+// permission as submit, with no self-approval block, since a captured
+// signature is now the assurance) — this file is not re-proving
 // those rules (tests/security/commercial_*.test.mjs already does that
 // against a real Postgres database with real RLS), it proves the PAGE
 // respects them: hides the right controls, shows the right messages,
@@ -178,8 +180,11 @@ function makeStore() {
     },
     async approveCommercialEvent(eventId) {
       const row = events.get(eventId);
-      if (this.__role !== "approver") throw new Error("You do not have permission to approve commercial events on this project");
-      if (row.created_by === this.__userId) throw new Error("You cannot approve a commercial event you created yourself");
+      // v48: no separate 'approver' role needed, and no self-approval
+      // block — the mandatory signature (enforced client-side before
+      // this is even called; see the "blocked client-side" test below)
+      // is the assurance now, not the account role or a distinct signer.
+      if (!["contributor", "approver"].includes(this.__role)) throw new Error("You do not have permission to approve commercial events on this project");
       if (!TRANSITIONS[row.status].includes("approved")) throw new Error(`Invalid commercial event status transition: ${row.status} -> approved`);
       row.status = "approved"; row.approved_by = this.__userId; row.approved_at = "2026-09-03T00:00:00Z";
       signatures.push({ commercial_event_id: eventId, action: "approved", signed_by_user_id: this.__userId });
@@ -187,7 +192,7 @@ function makeStore() {
     },
     async rejectCommercialEvent(eventId, reason) {
       const row = events.get(eventId);
-      if (this.__role !== "approver") throw new Error("You do not have permission to reject commercial events on this project");
+      if (!["contributor", "approver"].includes(this.__role)) throw new Error("You do not have permission to reject commercial events on this project");
       if (!TRANSITIONS[row.status].includes("rejected")) throw new Error(`Invalid commercial event status transition: ${row.status} -> rejected`);
       row.status = "rejected"; row.rejected_by = this.__userId; row.rejected_at = "2026-09-03T00:00:00Z"; row.rejection_reason = reason || null;
       signatures.push({ commercial_event_id: eventId, action: "rejected", signed_by_user_id: this.__userId });
@@ -477,20 +482,33 @@ test("Permissions: a Viewer sees the record but no mutation controls anywhere on
   assert.ok(document.getElementById("lineItemList").textContent.includes("Labour"), "a viewer must still be able to SEE the pricing");
 });
 
-test("Permissions: a Contributor cannot approve — an Approve button never appears for them even on a submitted record they didn't create", async () => {
+test("Permissions: a Viewer never sees Sign & Approve/Reject on a submitted record", async () => {
   const store = makeStore();
-  const event = await store.createDaywork.call(Object.assign(store, { __userId: APPROVER_A, __role: "approver" }), "p1", { title: "Contributor-cannot-approve test" });
+  const event = await store.createDaywork.call(Object.assign(store, { __userId: APPROVER_A, __role: "approver" }), "p1", { title: "Viewer-cannot-approve test" });
+  await store.addCommercialLineItem(event.id, { lineType: "labour", description: "Labour", quantity: 1, rate: 10 });
+  await store.submitCommercialEvent(event.id);
+
+  const { document } = await run(store, { role: "viewer", userId: "u-viewer", eventId: event.id });
+  await wait(30);
+  const buttons = [...document.getElementById("workflowActions").querySelectorAll("button")].map((b) => b.textContent);
+  assert.ok(!buttons.includes("Sign & Approve"));
+  assert.ok(!buttons.includes("Reject"));
+});
+
+test("Permissions (v48): a Contributor CAN sign & approve a submitted record they didn't create — Sign & Approve/Reject buttons appear", async () => {
+  const store = makeStore();
+  const event = await store.createDaywork.call(Object.assign(store, { __userId: APPROVER_A, __role: "approver" }), "p1", { title: "Contributor-can-approve test" });
   await store.addCommercialLineItem(event.id, { lineType: "labour", description: "Labour", quantity: 1, rate: 10 });
   await store.submitCommercialEvent(event.id);
 
   const { document } = await run(store, { role: "contributor", userId: CONTRIBUTOR_A, eventId: event.id });
   await wait(30);
   const buttons = [...document.getElementById("workflowActions").querySelectorAll("button")].map((b) => b.textContent);
-  assert.ok(!buttons.includes("Approve"));
-  assert.ok(!buttons.includes("Reject"));
+  assert.ok(buttons.includes("Sign & Approve"), "a contributor must now be able to sign & approve, given a signature — the mandatory signature is the assurance, not the account role");
+  assert.ok(buttons.includes("Reject"));
 });
 
-test("Permissions: an Approver cannot approve their OWN submission — the page shows an explanatory message instead of Approve/Reject buttons", async () => {
+test("Permissions (v48): an Approver CAN sign & approve their OWN submission on the spot — no self-approval block, matching the on-site hand-the-device-to-the-client flow", async () => {
   const store = makeStore();
   const event = await store.createDaywork.call(Object.assign(store, { __userId: APPROVER_A, __role: "approver" }), "p1", { title: "Self-approval test" });
   await store.addCommercialLineItem(event.id, { lineType: "labour", description: "Labour", quantity: 1, rate: 10 });
@@ -499,8 +517,16 @@ test("Permissions: an Approver cannot approve their OWN submission — the page 
   const { document } = await run(store, { role: "approver", userId: APPROVER_A, eventId: event.id });
   await wait(30);
   const buttons = [...document.getElementById("workflowActions").querySelectorAll("button")].map((b) => b.textContent);
-  assert.ok(!buttons.includes("Approve"), "an approver must never see Approve on their own submission");
-  assert.ok(document.getElementById("workflowDetails").textContent.includes("cannot approve") || document.getElementById("workflowActions").textContent.includes("cannot approve"), "the page should explain why, not just silently hide the button");
+  assert.ok(buttons.includes("Sign & Approve"), "an approver must see Sign & Approve on their own submission now");
+  assert.ok(buttons.includes("Reject"));
+
+  const approveBtn = [...document.getElementById("workflowActions").querySelectorAll("button")].find((b) => b.textContent === "Sign & Approve");
+  fireEvent(approveBtn, "click");
+  await wait(10);
+  document.getElementById("typedNameInput").value = "On-Site Client";
+  fireEvent(document.getElementById("submitSigBtn"), "click");
+  await wait(30);
+  assert.equal(store.events.get(event.id).status, "approved", "the approver must be able to complete the self-approval given a signature");
 });
 
 test("Permissions: a project owner with NO Commercial grant gets the no-access card on a Daywork's detail page too", async () => {

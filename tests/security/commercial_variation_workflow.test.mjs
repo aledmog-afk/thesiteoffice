@@ -80,15 +80,15 @@ test("Variation workflow: draft -> submitted -> approved succeeds end to end, wi
   }
 });
 
-test("Variation workflow: self-approval is blocked using the real DB mechanism, not merely hidden in the UI", async () => {
+test("Variation workflow: v48 self-approval (with a signature) succeeds using the real DB mechanism, not merely allowed in the UI", async () => {
   const approver = await userClient(DB, APPROVER_A);
   try {
     const id = await createDraftVariation(approver, "Self-approval attempt");
     await approver.query(`update public.commercial_events set status='submitted' where id=$1`, [id]);
-    await assert.rejects(
-      approver.query(`update public.commercial_events set status='approved', pending_signature_typed_name='Test Approver' where id=$1`, [id]),
-      /cannot approve a commercial event you created yourself/i
-    );
+    await approver.query(`update public.commercial_events set status='approved', pending_signature_typed_name='Test Approver' where id=$1`, [id]);
+    const { rows } = await approver.query("select status, approved_by from public.commercial_events where id=$1", [id]);
+    assert.equal(rows[0].status, "approved");
+    assert.equal(rows[0].approved_by, APPROVER_A);
   } finally {
     await approver.end();
   }

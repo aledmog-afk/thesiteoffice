@@ -30,7 +30,7 @@ function commercialCapabilities(role) {
     canView: role === "viewer" || role === "contributor" || role === "approver",
     canEdit: role === "contributor" || role === "approver",
     canSubmit: role === "contributor" || role === "approver",
-    canApprove: role === "approver",
+    canApprove: role === "contributor" || role === "approver", // v48
   };
 }
 const COMMERCIAL_STATUS_LABEL = { draft: "Draft", submitted: "Submitted", approved: "Approved", rejected: "Rejected" };

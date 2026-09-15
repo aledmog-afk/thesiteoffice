@@ -250,7 +250,7 @@ test("Viewer: can view, cannot create, cannot edit, cannot submit, cannot approv
   }
 });
 
-test("Contributor: can view, create, edit draft/rejected, submit — cannot approve", async () => {
+test("Contributor: can view, create, edit draft/rejected, submit, and (v48) sign & approve their OWN submission on the spot", async () => {
   const contributor = await userClient(DB, CONTRIBUTOR_A);
   try {
     const { rows } = await contributor.query(`insert into public.commercial_events (project_id, type, title) values ($1,'daywork','Contributor test') returning id`, [fx.projA]);
@@ -262,17 +262,25 @@ test("Contributor: can view, create, edit draft/rejected, submit — cannot appr
     const { rows: after1 } = await contributor.query("select status from public.commercial_events where id=$1", [eventId]);
     assert.equal(after1[0].status, "submitted");
 
+    // v48: no separate 'approver' role needed — a plain contributor can
+    // complete the on-site sign-off themselves, since the mandatory
+    // signature is what authorizes the approval now, not the account
+    // role. Still requires a signature (unchanged from v47).
     await assert.rejects(
-      contributor.query(`update public.commercial_events set status='approved', pending_signature_typed_name='Test Approver' where id=$1`, [eventId]),
-      /permission to approve/i,
-      "a contributor (not an approver) must not be able to approve, even their own submission"
+      contributor.query(`update public.commercial_events set status='approved' where id=$1`, [eventId]),
+      /signature or typed name is required/i,
+      "a contributor CAN approve now, but the mandatory-signature rule is unchanged"
     );
+    await contributor.query(`update public.commercial_events set status='approved', pending_signature_typed_name='Client On-Site' where id=$1`, [eventId]);
+    const { rows: after2 } = await contributor.query("select status, approved_by from public.commercial_events where id=$1", [eventId]);
+    assert.equal(after2[0].status, "approved");
+    assert.equal(after2[0].approved_by, CONTRIBUTOR_A, "a contributor can now approve their own submission, given a signature");
   } finally {
     await contributor.end();
   }
 });
 
-test("Approver: can view, create, edit draft/rejected, submit, and approve ANOTHER user's record — but not their own", async () => {
+test("Approver: can view, create, edit draft/rejected, submit, and (v48) approve ANOTHER user's record or their own", async () => {
   const contributor = await userClient(DB, CONTRIBUTOR_A);
   const approver = await userClient(DB, APPROVER_A);
   try {
@@ -285,15 +293,17 @@ test("Approver: can view, create, edit draft/rejected, submit, and approve ANOTH
     assert.equal(after1[0].status, "approved");
     assert.equal(after1[0].approved_by, APPROVER_A);
 
-    // Now the approver's OWN submission — must be rejected even though
-    // they hold the approver role.
+    // v48: the approver's OWN submission can now also be approved by
+    // them, given a signature — the self-approval block was removed
+    // (see commercial_workflow.test.mjs for the dedicated coverage of
+    // this specific change).
     const { rows: own } = await approver.query(`insert into public.commercial_events (project_id, type, title) values ($1,'daywork','Approver self-approval test') returning id`, [fx.projA]);
     const ownId = own[0].id;
     await approver.query(`update public.commercial_events set status='submitted' where id=$1`, [ownId]);
-    await assert.rejects(
-      approver.query(`update public.commercial_events set status='approved', pending_signature_typed_name='Test Approver' where id=$1`, [ownId]),
-      /cannot approve a commercial event you created yourself/i
-    );
+    await approver.query(`update public.commercial_events set status='approved', pending_signature_typed_name='Test Approver' where id=$1`, [ownId]);
+    const { rows: after2 } = await approver.query("select status, approved_by from public.commercial_events where id=$1", [ownId]);
+    assert.equal(after2[0].status, "approved");
+    assert.equal(after2[0].approved_by, APPROVER_A);
   } finally {
     await contributor.end();
     await approver.end();

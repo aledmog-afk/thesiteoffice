@@ -441,16 +441,11 @@
       });
     }
     if (event.status === "submitted" && caps.canApprove) {
-      const isOwnSubmission = event.created_by === currentUserId;
-      if (isOwnSubmission) {
-        actions.innerHTML += `<p class="hint">You submitted this Daywork yourself — you cannot approve or reject your own submission. Another Commercial approver on this project needs to.</p>`;
-      } else {
-        add("Sign & Approve", "btn-amber", () => { openSignApproveModal(); });
-        add("Reject", "btn-danger", () => {
-          document.getElementById("rejectReason").value = "";
-          document.getElementById("rejectModal").style.display = "flex";
-        });
-      }
+      add("Sign & Approve", "btn-amber", () => { openSignApproveModal(); });
+      add("Reject", "btn-danger", () => {
+        document.getElementById("rejectReason").value = "";
+        document.getElementById("rejectModal").style.display = "flex";
+      });
     }
     if (event.status === "rejected" && caps.canEdit) {
       add("Return to Draft", "btn-outline", async () => {

@@ -6,8 +6,12 @@
 //     submitted->approved, submitted->rejected, rejected->draft — every
 //     other transition (including submitted->draft directly, and any
 //     transition out of approved) is DB-rejected, not just UI-hidden;
-//   - self-rejection (an approver rejecting their own submission) is
-//     explicitly ALLOWED — only self-APPROVAL is blocked;
+//   - v48: both self-rejection AND self-approval (an approver/
+//     contributor rejecting or approving their own submission) are
+//     explicitly ALLOWED — the account holder's own device is expected
+//     to be handed to someone else (e.g. the client) to sign on the
+//     spot, so a same-account check no longer reflects who actually
+//     signed; the mandatory signature (v47) is the real assurance now;
 //   - once approved, a record is completely immutable for EVERYONE,
 //     including a project owner holding the approver role themselves —
 //     the immutability check fires before any role/permission check;
@@ -182,17 +186,25 @@ test("Legal transitions: draft -> submitted -> rejected -> draft -> submitted ->
   }
 });
 
-test("Self-rejection is explicitly ALLOWED — only self-approval is blocked", async () => {
+test("v48: self-rejection AND self-approval are both explicitly ALLOWED — the mandatory signature is the assurance now, not a distinct account", async () => {
   const approver = await userClient(DB, APPROVER_A);
   try {
-    const id = await createDraft(approver, fx.projA, "Self-reject test");
-    await approver.query(`update public.commercial_events set status='submitted' where id=$1`, [id]);
-    // The approver rejecting their OWN submission must succeed — no
-    // restriction exists on this, unlike self-approval.
-    await approver.query(`update public.commercial_events set status='rejected' where id=$1`, [id]);
-    const { rows } = await approver.query("select status, rejected_by from public.commercial_events where id=$1", [id]);
-    assert.equal(rows[0].status, "rejected");
-    assert.equal(rows[0].rejected_by, APPROVER_A);
+    const rejectId = await createDraft(approver, fx.projA, "Self-reject test");
+    await approver.query(`update public.commercial_events set status='submitted' where id=$1`, [rejectId]);
+    await approver.query(`update public.commercial_events set status='rejected' where id=$1`, [rejectId]);
+    const { rows: rej } = await approver.query("select status, rejected_by from public.commercial_events where id=$1", [rejectId]);
+    assert.equal(rej[0].status, "rejected");
+    assert.equal(rej[0].rejected_by, APPROVER_A);
+
+    // v48: self-approval, with a signature, must now succeed too — this
+    // is the exact on-site scenario the change exists for: the raiser's
+    // own account/device, handed to someone else to sign.
+    const approveId = await createDraft(approver, fx.projA, "Self-approve test");
+    await approver.query(`update public.commercial_events set status='submitted' where id=$1`, [approveId]);
+    await approver.query(`update public.commercial_events set status='approved', pending_signature_typed_name='On-Site Client' where id=$1`, [approveId]);
+    const { rows: app } = await approver.query("select status, approved_by from public.commercial_events where id=$1", [approveId]);
+    assert.equal(app[0].status, "approved");
+    assert.equal(app[0].approved_by, APPROVER_A);
   } finally {
     await approver.end();
   }
