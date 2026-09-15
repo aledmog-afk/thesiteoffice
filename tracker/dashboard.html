@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Dashboard – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title">Dashboard</div>
+      <div class="page-sub">What requires attention right now, across every site you can access.</div>
+    </div>
+    <div class="btn-row">
+      <a class="btn btn-outline btn-sm" href="my-work.html">My Work</a>
+      <button class="btn btn-outline btn-sm" id="refreshBtn">↻ Refresh</button>
+      <button class="btn btn-amber" id="newProjectBtn">+ New Site</button>
+    </div>
+  </div>
+
+  <div class="card" id="newProjectCard" style="display:none;">
+    <div id="errorBox" class="error-box"></div>
+    <form id="projectForm">
+      <div class="form-grid">
+        <div class="field">
+          <label for="name">Site name *</label>
+          <input type="text" id="name" required placeholder="e.g. Elm Grove, Phase 2">
+        </div>
+        <div class="field">
+          <label for="contractRef">Contract reference</label>
+          <input type="text" id="contractRef" placeholder="e.g. CON-2026-014">
+        </div>
+      </div>
+      <div class="field">
+        <label for="address">Site address</label>
+        <input type="text" id="address">
+      </div>
+      <div class="form-grid">
+        <div class="field">
+          <label for="contractorName">Main contractor name</label>
+          <input type="text" id="contractorName" placeholder="e.g. Balfour Build Ltd">
+        </div>
+        <div class="field">
+          <label for="contractorEmail">Main contractor email</label>
+          <input type="email" id="contractorEmail" placeholder="reports@contractor.co.uk">
+        </div>
+      </div>
+      <div class="field">
+        <label for="startDate">Start date</label>
+        <input type="date" id="startDate">
+      </div>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-amber">Create Site</button>
+        <button type="button" class="btn btn-outline" id="cancelBtn">Cancel</button>
+      </div>
+    </form>
+  </div>
+
+  <div id="controlErrorBox" class="error-box"></div>
+  <div id="controlErrorRetryWrap" style="display:none; margin-bottom:1.2rem;">
+    <button class="btn btn-outline btn-sm" id="controlRetryBtn">Retry loading control summary</button>
+  </div>
+
+  <div id="controlSection" style="display:none;">
+    <div class="totals-bar" id="totalsBar"></div>
+
+    <div class="card" style="margin-bottom:1.5rem;">
+      <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.6rem; margin-bottom:1rem;">
+        <h3 style="font-family:var(--font-display); font-size:1rem; margin:0;">⚠️ Actions Requiring Attention</h3>
+        <select id="attentionFilter" style="width:auto;">
+          <option value="all">All</option>
+          <option value="overdue">Overdue</option>
+          <option value="dueToday">Due Today</option>
+          <option value="dueSoon">Due Soon (7 days)</option>
+          <option value="blocked">Blocked</option>
+          <option value="highCritical">High / Critical Priority</option>
+        </select>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Title</th><th>Project</th><th>Owner</th><th>Priority</th><th>Status</th><th>Due</th></tr></thead>
+          <tbody id="attentionRows"></tbody>
+        </table>
+      </div>
+      <div id="attentionEmpty" class="empty" style="display:none;"><p>No actions currently require attention.</p></div>
+    </div>
+
+    <div class="card" style="margin-bottom:1.5rem;">
+      <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.6rem; margin-bottom:1rem;">
+        <h3 style="font-family:var(--font-display); font-size:1rem; margin:0;">Project Control List</h3>
+        <div class="btn-row" id="projectFilterGroup">
+          <button type="button" class="btn btn-outline btn-sm" data-filter="all">All</button>
+          <button type="button" class="btn btn-outline btn-sm" data-filter="attention">Attention</button>
+          <button type="button" class="btn btn-outline btn-sm" data-filter="watch">Watch</button>
+          <button type="button" class="btn btn-outline btn-sm" data-filter="on_track">On Track</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Project</th><th>Status</th><th>Open</th><th>Overdue</th><th>Blocked</th><th>Due Soon</th></tr></thead>
+          <tbody id="controlRows"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div id="grid" class="grid" style="margin-top:1.5rem;"></div>
+  <div id="emptyState" class="empty" style="display:none;">
+    <p>No sites yet. Add your first one to start logging weekly reports and snags — or ask a teammate to send you an invite link to one of theirs.</p>
+    <button class="btn btn-amber" id="emptyNewBtn">+ New Site</button>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, ensureOrganisation, getPortfolioControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE } from "./js/app.js";
+
+  await requireAuth();
+  renderHeader([{ label: "Dashboard" }]);
+
+  const grid = document.getElementById("grid");
+  const emptyState = document.getElementById("emptyState");
+  const errorBox = document.getElementById("errorBox");
+  const newProjectCard = document.getElementById("newProjectCard");
+  const controlErrorBox = document.getElementById("controlErrorBox");
+  const controlSection = document.getElementById("controlSection");
+
+  let controlSummary = null;
+  let attentionActions = [];
+  let memberEmails = {};
+  let projectFilter = "all";
+  let attentionFilter = "all";
+
+  function toggleForm(show) {
+    newProjectCard.style.display = show ? "block" : "none";
+  }
+  document.getElementById("newProjectBtn").addEventListener("click", () => toggleForm(true));
+  document.getElementById("emptyNewBtn")?.addEventListener("click", () => toggleForm(true));
+  document.getElementById("cancelBtn").addEventListener("click", () => toggleForm(false));
+
+  document.getElementById("projectForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearError(errorBox);
+    const { data: { user } } = await supabase.auth.getUser();
+    try {
+      const orgId = await ensureOrganisation();
+      const payload = {
+        name: document.getElementById("name").value.trim(),
+        contract_ref: document.getElementById("contractRef").value.trim() || null,
+        address: document.getElementById("address").value.trim() || null,
+        main_contractor_name: document.getElementById("contractorName").value.trim() || null,
+        main_contractor_email: document.getElementById("contractorEmail").value.trim() || null,
+        start_date: document.getElementById("startDate").value || null,
+        org_id: orgId,
+        created_by: user.id,
+      };
+      const { data, error } = await supabase.from("projects").insert(payload).select().single();
+      if (error) throw error;
+      window.location.href = `project.html?id=${data.id}`;
+    } catch (err) {
+      showError(errorBox, err);
+    }
+  });
+
+  // ─── Control summary (portfolio) ───────────────────────────────
+  function renderTotals() {
+    const t = controlSummary.totals;
+    const overdueProgramme = t.overdueProgrammeActivities + t.overdueProgrammeMilestones;
+    const forecastLateProgramme = t.materialForecastLateProgrammeActivities + t.forecastLateProgrammeMilestones;
+    const cards = [
+      ["Projects Requiring Attention", controlSummary.projectsRequiringAttention, controlSummary.projectsRequiringAttention > 0 ? "var(--red)" : "var(--ink)"],
+      ["Open Actions", t.openActions, "var(--ink)"],
+      ["Overdue", t.overdue, t.overdue > 0 ? "var(--red)" : "var(--ink)"],
+      ["Due Today", t.dueToday, t.dueToday > 0 ? "var(--amber)" : "var(--ink)"],
+      ["Blocked", t.blocked, t.blocked > 0 ? "var(--red)" : "var(--ink)"],
+      ["High / Critical Priority", t.highCritical, t.highCritical > 0 ? "var(--amber)" : "var(--ink)"],
+      ["Overdue Programme", overdueProgramme, overdueProgramme > 0 ? "var(--red)" : "var(--ink)"],
+      ["Programme Forecast Late", forecastLateProgramme, forecastLateProgramme > 0 ? "var(--amber)" : "var(--ink)"],
+    ];
+    document.getElementById("totalsBar").innerHTML = cards.map(([label, value, color]) => `
+      <div class="totals-box">
+        <div class="totals-label">${escapeHtml(label)}</div>
+        <div class="totals-value" style="color:${color};">${value}</div>
+      </div>
+    `).join("");
+  }
+
+  function renderAttentionActions() {
+    const filtered = attentionFilter === "all" ? attentionActions : attentionActions.filter((a) => a.categories[attentionFilter]);
+    document.getElementById("attentionEmpty").style.display = filtered.length ? "none" : "block";
+    document.getElementById("attentionRows").innerHTML = filtered.map((a) => {
+      const due = a.categories.overdue ? "overdue" : a.categories.dueToday ? "due_today" : a.categories.dueSoon ? "upcoming" : "none";
+      const dueBadge = due === "none" ? "" : `<span class="badge ${ACTION_DUE_BADGE[due]}">${ACTION_DUE_LABEL[due]}</span>`;
+      const dueText = a.due_date ? formatDate(a.due_date) : "—";
+      return `
+        <tr>
+          <td><a href="actions.html?project=${a.project_id}">${escapeHtml(a.title)}</a></td>
+          <td><a href="project.html?id=${a.project_id}">${escapeHtml(a.projects?.name || "—")}</a></td>
+          <td>${a.assigned_to ? escapeHtml(memberEmails[a.assigned_to] || "—") : "Unassigned"}</td>
+          <td><span class="badge ${ACTION_PRIORITY_BADGE[a.priority]}">${ACTION_PRIORITY_LABEL[a.priority]}</span></td>
+          <td><span class="badge ${ACTION_STATUS_BADGE[a.status]}">${ACTION_STATUS_LABEL[a.status]}</span></td>
+          <td>${dueText} ${dueBadge}</td>
+        </tr>
+      `;
+    }).join("");
+  }
+  document.getElementById("attentionFilter").addEventListener("change", (e) => {
+    attentionFilter = e.target.value;
+    renderAttentionActions();
+  });
+
+  function renderControlRows() {
+    const rows = projectFilter === "all" ? controlSummary.rows : controlSummary.rows.filter((r) => r.status.level === projectFilter);
+    document.getElementById("controlRows").innerHTML = rows.map((r) => {
+      const c = r.counts;
+      return `
+        <tr>
+          <td><a href="project.html?id=${r.project.id}">${escapeHtml(r.project.name)}</a></td>
+          <td><span class="badge ${CONTROL_LEVEL_BADGE[r.status.level]}" title="${escapeHtml(r.status.reason)}">${escapeHtml(r.status.label)}</span></td>
+          <td>${c ? c.openActions : "—"}</td>
+          <td>${c ? c.overdue : "—"}</td>
+          <td>${c ? c.blocked : "—"}</td>
+          <td>${c ? c.dueSoon : "—"}</td>
+        </tr>
+      `;
+    }).join("");
+  }
+  document.querySelectorAll("#projectFilterGroup button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      projectFilter = btn.dataset.filter;
+      document.querySelectorAll("#projectFilterGroup button").forEach((b) => b.classList.toggle("btn-amber", b === btn));
+      renderControlRows();
+    });
+  });
+  document.querySelector('#projectFilterGroup button[data-filter="all"]').classList.add("btn-amber");
+
+  async function loadControlSummary() {
+    clearError(controlErrorBox);
+    document.getElementById("controlErrorRetryWrap").style.display = "none";
+    try {
+      controlSummary = await getPortfolioControlSummary();
+      attentionActions = await getAttentionActions();
+      const projectIds = [...new Set(attentionActions.map((a) => a.project_id))];
+      memberEmails = projectIds.length ? await getMemberEmailMap(projectIds) : {};
+      controlSection.style.display = controlSummary.rows.length ? "block" : "none";
+      renderTotals();
+      renderAttentionActions();
+      renderControlRows();
+    } catch (err) {
+      // Never silently show 0s for a control dashboard — a failed query
+      // and "genuinely nothing outstanding" must look completely
+      // different to the person relying on this page.
+      controlSection.style.display = "none";
+      showError(controlErrorBox, err);
+      document.getElementById("controlErrorRetryWrap").style.display = "block";
+    }
+  }
+  document.getElementById("controlRetryBtn").addEventListener("click", loadControlSummary);
+  document.getElementById("refreshBtn").addEventListener("click", () => { loadControlSummary(); loadSites(); });
+
+  // ─── Site tiles (existing) ──────────────────────────────────────
+  async function loadSites() {
+    const { data: projects, error } = await supabase
+      .from("projects")
+      .select("*")
+      .order("created_at", { ascending: false });
+    if (error) { grid.innerHTML = `<div class="error-box" style="display:block;">${escapeHtml(error.message)}</div>`; return; }
+
+    if (!projects.length) {
+      emptyState.style.display = "block";
+      return;
+    }
+    emptyState.style.display = "none";
+
+    const [{ data: snags }, { data: reports }] = await Promise.all([
+      supabase.from("snag_items").select("project_id, status"),
+      supabase.from("weekly_reports").select("project_id, week_ending"),
+    ]);
+
+    const openSnagCount = {};
+    (snags || []).forEach((s) => {
+      if (s.status === "open") openSnagCount[s.project_id] = (openSnagCount[s.project_id] || 0) + 1;
+    });
+    const lastReport = {};
+    (reports || []).forEach((r) => {
+      if (!lastReport[r.project_id] || r.week_ending > lastReport[r.project_id]) {
+        lastReport[r.project_id] = r.week_ending;
+      }
+    });
+
+    grid.innerHTML = projects.map((p) => `
+      <a class="tile" href="project.html?id=${p.id}">
+        <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:0.6rem;">
+          <div class="tile-name">${escapeHtml(p.name)}</div>
+          <span class="badge badge-${p.rag_status} rag-badge"><span class="rag-dot rag-${p.rag_status}"></span>${RAG_LABEL[p.rag_status]}</span>
+        </div>
+        <div class="tile-meta">${escapeHtml(p.main_contractor_name || "No contractor set")}${p.status !== "active" ? ` · <span class="badge badge-grey">${escapeHtml(p.status)}</span>` : ""}</div>
+        ${renderProgressBlock(p.baseline_progress_pct, p.actual_progress_pct, p.rag_status)}
+        <div class="tile-stats">
+          <div><strong>${openSnagCount[p.id] || 0}</strong>open snags</div>
+          <div><strong>${lastReport[p.id] ? formatDate(lastReport[p.id]) : "—"}</strong>last report</div>
+        </div>
+      </a>
+    `).join("");
+  }
+
+  loadControlSummary();
+  loadSites();
+</script>
+</body>
+</html>
