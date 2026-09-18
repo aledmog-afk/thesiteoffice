@@ -1,0 +1,22 @@
+# Cloudflare Pages (and Netlify, which reads the same file/syntax) apply
+# these to every response matching the path below. Scoped to /tracker/*
+# only — the repo root also serves an unrelated document-sales product
+# with different embeds (Stripe.js, checkout flows) that this policy was
+# never designed against, so it must never apply there.
+#
+# script-src includes 'unsafe-inline': every one of Site Tracker's pages
+# is a single static HTML file with its logic in an inline
+# <script type="module"> block (no build step, so nothing bundles these
+# into external files to hash or nonce) — without 'unsafe-inline' every
+# page would fail to load at all. This is a real, deliberate gap in
+# script-src specifically; everything else below still holds regardless
+# (an attacker-injected <script src="..."> from an unlisted origin is
+# still blocked, and connect-src/img-src still block exfiltration to an
+# unlisted origin even from an inline-script context).
+/tracker/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: geolocation=(), camera=(), microphone=(), payment=()
+  Strict-Transport-Security: max-age=31536000
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://esm.sh; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://*.supabase.co; connect-src 'self' https://*.supabase.co https://api.postcodes.io https://api.open-meteo.com https://esm.sh; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'

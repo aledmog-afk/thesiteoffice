@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>H&amp;S Audits – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title">H&amp;S Audits</div>
+      <div class="page-sub" id="projectSub">Expected once a month — internal walk-rounds against a fixed checklist, or an uploaded third-party audit.</div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-outline" id="newExternalBtn">+ Upload External Audit</button>
+      <button class="btn btn-amber" id="newInternalBtn">+ New Internal Audit</button>
+    </div>
+  </div>
+
+  <input type="file" id="externalFileInput" accept="application/pdf,image/*" style="display:none;">
+
+  <div id="errorBox" class="error-box"></div>
+  <div id="monthFlag" class="badge badge-amber" style="display:none; margin-bottom:1rem;"></div>
+
+  <div class="card">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Month</th><th>Type</th><th>Conducted By</th><th>Score</th><th>Flagged</th><th>Logged</th><th></th></tr>
+        </thead>
+        <tbody id="auditRows"></tbody>
+      </table>
+    </div>
+    <div id="emptyState" class="empty" style="display:none;">
+      <p>No H&amp;S audits logged yet. Start a monthly internal walk-round, or upload one from a third party.</p>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, formatDate, uploadImage, todayISO, monthStartISO, HS_CHECKLIST, hsAuditScore } from "./js/app.js";
+
+  await requireAuth();
+  const projectId = getParam("project");
+  if (!projectId) window.location.href = "dashboard.html";
+
+  const errorBox = document.getElementById("errorBox");
+
+  async function createInternalAudit() {
+    clearError(errorBox);
+    const btn = document.getElementById("newInternalBtn");
+    btn.disabled = true;
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const { data: audit, error } = await supabase
+        .from("hs_audits")
+        .insert({ project_id: projectId, audit_type: "internal", month: monthStartISO(), conducted_by: user.email, conducted_date: todayISO(), created_by: user.id })
+        .select()
+        .single();
+      if (error) throw error;
+
+      const items = HS_CHECKLIST.map((c, i) => ({
+        audit_id: audit.id,
+        project_id: projectId,
+        section: c.section,
+        item_name: c.item,
+        status: "compliant",
+        sort_order: i,
+      }));
+      const { error: itemsError } = await supabase.from("hs_audit_items").insert(items);
+      if (itemsError) throw itemsError;
+
+      window.location.href = `hs-audit-detail.html?id=${audit.id}`;
+    } catch (err) {
+      showError(errorBox, err);
+      btn.disabled = false;
+    }
+  }
+  document.getElementById("newInternalBtn").addEventListener("click", createInternalAudit);
+
+  document.getElementById("newExternalBtn").addEventListener("click", () => {
+    document.getElementById("externalFileInput").click();
+  });
+
+  document.getElementById("externalFileInput").addEventListener("change", async () => {
+    const fileInput = document.getElementById("externalFileInput");
+    const file = fileInput.files[0];
+    if (!file) return;
+    clearError(errorBox);
+    const conductedBy = prompt("Who / which company conducted this audit? (optional)", "");
+    fileInput.disabled = true;
+    try {
+      const url = await uploadImage(file, `${projectId}/hs-audits`);
+      const { data: { user } } = await supabase.auth.getUser();
+      const { data: audit, error } = await supabase
+        .from("hs_audits")
+        .insert({
+          project_id: projectId,
+          audit_type: "external",
+          month: monthStartISO(),
+          conducted_by: (conductedBy || "").trim() || null,
+          conducted_date: todayISO(),
+          file_url: url,
+          file_name: file.name,
+          created_by: user.id,
+        })
+        .select()
+        .single();
+      if (error) throw error;
+      window.location.href = `hs-audit-detail.html?id=${audit.id}`;
+    } catch (err) {
+      showError(errorBox, err);
+    } finally {
+      fileInput.disabled = false;
+      fileInput.value = "";
+    }
+  });
+
+  function typeBadge(type) {
+    return type === "internal" ? `<span class="badge badge-blue">Internal</span>` : `<span class="badge badge-grey">External</span>`;
+  }
+
+  async function load() {
+    const { data: project } = await supabase.from("projects").select("name").eq("id", projectId).single();
+    renderHeader([
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project?.name || "Site", href: `project.html?id=${projectId}` },
+      { label: "H&S Audits" },
+    ]);
+    document.getElementById("projectSub").textContent = project ? `${project.name} — expected once a month — internal walk-rounds against a fixed checklist, or an uploaded third-party audit.` : "";
+
+    const [{ data: audits }, { data: items }] = await Promise.all([
+      supabase.from("hs_audits").select("*").eq("project_id", projectId).order("month", { ascending: false }),
+      supabase.from("hs_audit_items").select("audit_id, status").eq("project_id", projectId),
+    ]);
+
+    const itemsByAudit = {};
+    (items || []).forEach((i) => {
+      itemsByAudit[i.audit_id] = itemsByAudit[i.audit_id] || [];
+      itemsByAudit[i.audit_id].push(i);
+    });
+
+    const thisMonth = monthStartISO();
+    const hasThisMonth = (audits || []).some((a) => a.month === thisMonth);
+    const monthFlag = document.getElementById("monthFlag");
+    if (!hasThisMonth) {
+      monthFlag.style.display = "inline-flex";
+      const monthLabel = new Date(thisMonth + "T00:00:00").toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+      monthFlag.textContent = `⚠️ No H&S audit logged yet for ${monthLabel}`;
+    } else {
+      monthFlag.style.display = "none";
+    }
+
+    if (!audits || !audits.length) {
+      document.getElementById("emptyState").style.display = "block";
+      return;
+    }
+
+    document.getElementById("auditRows").innerHTML = audits.map((a) => {
+      const monthLabel = new Date(a.month + "T00:00:00").toLocaleDateString("en-GB", { month: "long", year: "numeric" });
+      let scoreCell = "—";
+      let flaggedCell = "—";
+      if (a.audit_type === "internal") {
+        const { scorePct, flaggedCount } = hsAuditScore(itemsByAudit[a.id] || []);
+        scoreCell = scorePct === null ? "—" : `${scorePct}%`;
+        flaggedCell = flaggedCount > 0 ? `<span class="badge badge-red">${flaggedCount}</span>` : "0";
+      } else if (a.file_url) {
+        scoreCell = `<a href="${a.file_url}" target="_blank">📄 ${escapeHtml(a.file_name || "View file")}</a>`;
+      }
+      return `
+        <tr class="row-link" onclick="window.location.href='hs-audit-detail.html?id=${a.id}'">
+          <td><strong>${monthLabel}</strong></td>
+          <td>${typeBadge(a.audit_type)}</td>
+          <td>${escapeHtml(a.conducted_by) || "—"}</td>
+          <td>${scoreCell}</td>
+          <td>${flaggedCell}</td>
+          <td>${formatDate(a.conducted_date)}</td>
+          <td onclick="event.stopPropagation()"><button class="btn btn-outline btn-sm" onclick="deleteAudit('${a.id}')">Delete</button></td>
+        </tr>
+      `;
+    }).join("");
+  }
+
+  async function deleteAudit(id) {
+    if (!confirm("Delete this H&S audit? This cannot be undone.")) return;
+    const { error } = await supabase.from("hs_audits").delete().eq("id", id);
+    if (error) { showError(errorBox, error); return; }
+    load();
+  }
+  window.deleteAudit = deleteAudit;
+
+  load();
+</script>
+</body>
+</html>

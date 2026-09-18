@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Documents – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title">Documents</div>
+      <div class="page-sub" id="projectSub"></div>
+    </div>
+    <button class="btn btn-amber" id="newDocBtn" style="display:none;">+ New Document</button>
+  </div>
+
+  <div id="errorBox" class="error-box"></div>
+
+  <div class="card" id="newDocCard" style="display:none; margin-bottom:1.5rem;">
+    <div id="newDocErrorBox" class="error-box"></div>
+    <form id="newDocForm">
+      <div class="form-grid">
+        <div class="field">
+          <label for="docType">Type *</label>
+          <select id="docType" required>
+            <option value="drawing">Drawing</option>
+            <option value="specification">Specification</option>
+            <option value="other" selected>Other</option>
+          </select>
+        </div>
+        <div class="field"><label for="docNumber">Document number (optional)</label><input type="text" id="docNumber" placeholder="e.g. A-101"></div>
+      </div>
+      <div class="field"><label for="docTitle">Title *</label><input type="text" id="docTitle" required placeholder="e.g. Ground Floor GA Plan"></div>
+      <div class="field"><label for="docFile">File *</label><input type="file" id="docFile" required></div>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-amber" id="saveDocBtn">Upload</button>
+        <button type="button" class="btn btn-outline" id="cancelDocBtn">Cancel</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card" style="margin-bottom:1.5rem;">
+    <div class="btn-row" style="flex-wrap:wrap; align-items:center; gap:0.8rem;">
+      <div class="field" style="margin:0;">
+        <select id="filterType" style="width:auto;">
+          <option value="">All types</option>
+          <option value="drawing">Drawing</option>
+          <option value="specification">Specification</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
+      <div class="field" style="margin:0;">
+        <select id="filterStatus" style="width:auto;">
+          <option value="">All statuses</option>
+          <option value="draft">Draft</option>
+          <option value="current">Current</option>
+          <option value="superseded">Superseded</option>
+          <option value="archived">Archived</option>
+        </select>
+      </div>
+      <label style="display:flex; align-items:center; gap:0.4rem; font-size:0.85rem; color:var(--ink-soft);">
+        <input type="checkbox" id="includeHistoryCheck"> Include revision history in export
+      </label>
+      <button class="btn btn-outline btn-sm" id="exportBtn" style="margin-left:auto;" disabled>Export Selected (ZIP)</button>
+    </div>
+    <p class="hint" id="exportHint" style="margin-top:0.4rem;"></p>
+  </div>
+
+  <div class="card">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:2rem;"><input type="checkbox" id="selectAllCheck"></th>
+            <th>Title</th><th>Type</th><th>Doc No.</th><th>Status</th><th>Current Rev.</th><th>Updated</th><th>Uploaded By</th>
+          </tr>
+        </thead>
+        <tbody id="docRows"></tbody>
+      </table>
+    </div>
+    <div id="emptyState" class="empty" style="display:none;">
+      <p>No documents yet for this site.</p>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, getMemberEmailMap, DOCUMENT_TYPE_LABEL, DOCUMENT_STATUS_LABEL, DOCUMENT_STATUS_BADGE, listDocuments, createDocument, exportDocumentsZip } from "./js/app.js";
+
+  await requireAuth();
+  const projectId = getParam("project");
+  if (!projectId) window.location.href = "dashboard.html";
+
+  const errorBox = document.getElementById("errorBox");
+  const newDocErrorBox = document.getElementById("newDocErrorBox");
+  let project = null;
+  let currentUserId = null;
+  let isEditor = false;
+  let documents = [];
+  let memberEmails = {};
+
+  document.getElementById("newDocBtn").addEventListener("click", () => {
+    document.getElementById("newDocCard").style.display = "block";
+  });
+  document.getElementById("cancelDocBtn").addEventListener("click", () => {
+    document.getElementById("newDocCard").style.display = "none";
+    document.getElementById("newDocForm").reset();
+    clearError(newDocErrorBox);
+  });
+
+  document.getElementById("newDocForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearError(newDocErrorBox);
+    const file = document.getElementById("docFile").files[0];
+    if (!file) return;
+    const btn = document.getElementById("saveDocBtn");
+    btn.disabled = true;
+    try {
+      await createDocument(projectId, {
+        documentType: document.getElementById("docType").value,
+        title: document.getElementById("docTitle").value.trim(),
+        docNumber: document.getElementById("docNumber").value.trim() || null,
+      }, file);
+      document.getElementById("cancelDocBtn").click();
+      await load();
+    } catch (err) {
+      showError(newDocErrorBox, err);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  document.getElementById("filterType").addEventListener("change", load);
+  document.getElementById("filterStatus").addEventListener("change", load);
+
+  function selectedDocumentIds() {
+    return Array.from(document.querySelectorAll(".doc-check:checked")).map((el) => el.dataset.id);
+  }
+
+  function updateExportButton() {
+    const count = selectedDocumentIds().length;
+    document.getElementById("exportBtn").disabled = count === 0;
+    document.getElementById("exportHint").textContent = count
+      ? `${count} document${count === 1 ? "" : "s"} selected. Export includes each document's current revision only, unless "include revision history" is checked.`
+      : "Select documents below to export them as a ZIP for Microsoft 365 / SharePoint.";
+  }
+
+  document.getElementById("selectAllCheck").addEventListener("change", (e) => {
+    document.querySelectorAll(".doc-check").forEach((el) => { el.checked = e.target.checked; });
+    updateExportButton();
+  });
+
+  document.getElementById("exportBtn").addEventListener("click", async () => {
+    clearError(errorBox);
+    const ids = new Set(selectedDocumentIds());
+    const selected = documents.filter((d) => ids.has(d.id));
+    const includeHistory = document.getElementById("includeHistoryCheck").checked;
+    const btn = document.getElementById("exportBtn");
+    btn.disabled = true;
+    const originalText = btn.textContent;
+    btn.textContent = "Preparing export…";
+    try {
+      // Revision history needs each selected document's full revision
+      // list, which listDocuments() doesn't fetch (only the current
+      // revision) — pulled here, on demand, only for what was selected.
+      const docsForExport = includeHistory
+        ? await Promise.all(selected.map(async (d) => {
+            const { data: revisions, error } = await supabase.from("document_revisions").select("*").eq("document_id", d.id).order("revision_number", { ascending: false });
+            if (error) throw error;
+            return { ...d, revisions: revisions || [] };
+          }))
+        : selected;
+      await exportDocumentsZip(project?.name || "Site", docsForExport, { includeHistory });
+    } catch (err) {
+      showError(errorBox, err);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalText;
+      updateExportButton();
+    }
+  });
+
+  function renderRows() {
+    const rows = document.getElementById("docRows");
+    if (!documents.length) {
+      rows.innerHTML = "";
+      document.getElementById("emptyState").style.display = "block";
+      document.getElementById("selectAllCheck").checked = false;
+      updateExportButton();
+      return;
+    }
+    document.getElementById("emptyState").style.display = "none";
+    rows.innerHTML = documents.map((d) => {
+      const rev = d.currentRevision;
+      const uploaderId = rev ? rev.uploaded_by : d.created_by;
+      const uploader = uploaderId ? (memberEmails[uploaderId] || "—") : "—";
+      const updated = (d.updated_at || d.created_at || "").slice(0, 10);
+      return `
+        <tr>
+          <td onclick="event.stopPropagation();"><input type="checkbox" class="doc-check" data-id="${d.id}"></td>
+          <td class="row-link" style="cursor:pointer;" onclick="window.location.href='document-detail.html?id=${d.id}'"><strong>${escapeHtml(d.title)}</strong></td>
+          <td>${DOCUMENT_TYPE_LABEL[d.document_type] || escapeHtml(d.document_type)}</td>
+          <td>${d.doc_number ? escapeHtml(d.doc_number) : "—"}</td>
+          <td><span class="badge ${DOCUMENT_STATUS_BADGE[d.status] || "badge-grey"}">${DOCUMENT_STATUS_LABEL[d.status] || escapeHtml(d.status)}</span></td>
+          <td>${rev ? `Rev ${rev.revision_number}` : "—"}</td>
+          <td>${updated ? formatDate(updated) : "—"}</td>
+          <td>${escapeHtml(uploader)}</td>
+        </tr>
+      `;
+    }).join("");
+    document.querySelectorAll(".doc-check").forEach((el) => el.addEventListener("change", updateExportButton));
+    document.getElementById("selectAllCheck").checked = false;
+    updateExportButton();
+  }
+
+  async function load() {
+    clearError(errorBox);
+    try {
+      documents = await listDocuments(projectId, {
+        documentType: document.getElementById("filterType").value || undefined,
+        status: document.getElementById("filterStatus").value || undefined,
+      });
+      const ids = [...new Set(documents.flatMap((d) => [d.created_by, d.currentRevision?.uploaded_by]).filter(Boolean))];
+      if (ids.length) memberEmails = await getMemberEmailMap([projectId]);
+      renderRows();
+    } catch (err) {
+      showError(errorBox, err);
+    }
+  }
+
+  async function init() {
+    const { data: { user } } = await supabase.auth.getUser();
+    currentUserId = user.id;
+
+    const [{ data: role }, { data: proj, error }] = await Promise.all([
+      supabase.rpc("get_my_role", { p_project_id: projectId }),
+      supabase.from("projects").select("name").eq("id", projectId).single(),
+    ]);
+    if (error) { document.getElementById("projectSub").textContent = "Site not found."; return; }
+    project = proj;
+    isEditor = role === "owner" || role === "collaborator";
+    document.getElementById("newDocBtn").style.display = isEditor ? "inline-flex" : "none";
+
+    renderHeader([
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project.name, href: `project.html?id=${projectId}` },
+      { label: "Documents" },
+    ]);
+    document.getElementById("projectSub").textContent = project.name;
+
+    await load();
+  }
+
+  init();
+</script>
+</body>
+</html>

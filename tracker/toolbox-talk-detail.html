@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Toolbox Talk – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+<style>
+  .tt-section h4 { font-family: var(--font-display); font-size: 0.95rem; margin: 0 0 0.5rem; }
+  .tt-section ul { margin: 0; padding-left: 1.2rem; line-height: 1.7; }
+  .tt-observations { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 640px) { .tt-observations { grid-template-columns: 1fr; } }
+  .tt-attendee-row { display: flex; align-items: center; justify-content: space-between; gap: 0.8rem; padding: 0.7rem 0; border-bottom: 1px solid var(--rule); }
+  .tt-attendee-row:last-child { border-bottom: none; }
+  #sigCanvas { border: 1px solid var(--rule); border-radius: 6px; touch-action: none; width: 100%; max-width: 480px; height: 180px; background: #fff; }
+</style>
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title" id="talkTitle">Toolbox Talk</div>
+      <div class="page-sub" id="talkSub"></div>
+    </div>
+    <div class="btn-row">
+      <button type="button" class="btn btn-outline btn-sm" id="generatePdfBtn" style="display:none;">Generate PDF</button>
+      <span class="badge" id="statusBadge"></span>
+    </div>
+  </div>
+  <div class="hint" id="pdfStatusText" style="text-align:right; margin-top:-0.6rem; margin-bottom:0.6rem;"></div>
+
+  <div id="pageErrorBox" class="error-box"></div>
+  <div class="card" id="noAccessCard" style="display:none;"><p>You don't have access to this Toolbox Talk.</p></div>
+
+  <div id="body" style="display:none;">
+    <div class="card" style="margin-bottom:1rem;">
+      <div class="form-grid">
+        <div><span class="hint">Delivered by</span><div id="deliveredByText">—</div></div>
+        <div><span class="hint">Started</span><div id="startedAtText">—</div></div>
+        <div><span class="hint">Source</span><div id="sourceText">—</div></div>
+      </div>
+    </div>
+
+    <div id="contentSections"></div>
+
+    <div class="card" style="margin-bottom:1rem;">
+      <h4 style="font-family:var(--font-display); font-size:0.95rem; margin:0 0 0.5rem;">Site-Specific Notes</h4>
+      <p class="hint" style="margin-bottom:0.6rem;">Today's conditions, specific hazards, anything discussed beyond the standard talk. Kept separate from the talk content above.</p>
+      <textarea id="siteNotesInput" rows="3"></textarea>
+      <div class="btn-row" style="margin-top:0.6rem;">
+        <button type="button" class="btn btn-outline btn-sm" id="saveSiteNotesBtn">Save Notes</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.6rem;">
+        <h3 style="font-family:var(--font-display); font-size:1rem; margin:0;">Attendance &amp; Signatures</h3>
+        <span id="progressText" class="hint"></span>
+      </div>
+      <div id="attendeeRows"></div>
+      <div id="attendeesEmptyState" class="empty" style="display:none;"><p>No attendees added yet.</p></div>
+
+      <div class="btn-row" style="margin-top:1rem;" id="addAttendeeRow">
+        <input type="text" id="newAttendeeName" placeholder="Name" style="flex:1; min-width:140px;">
+        <input type="text" id="newAttendeeCompany" placeholder="Company (optional)" style="flex:1; min-width:140px;">
+        <button type="button" class="btn btn-outline btn-sm" id="addAttendeeBtn">+ Add Attendee</button>
+      </div>
+
+      <div class="btn-row" style="margin-top:1.2rem;" id="talkActionsRow">
+        <button type="button" class="btn btn-amber" id="completeTalkBtn">Complete Talk</button>
+        <button type="button" class="btn btn-danger" id="cancelTalkBtn">Cancel Talk</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Signature capture -->
+<div class="modal-backdrop" id="signModal" style="display:none;">
+  <div class="modal-box" style="max-width:520px;">
+    <h3 style="font-family:var(--font-display); margin-top:0;" id="signModalTitle">Sign</h3>
+    <p class="hint" style="margin-bottom:0.8rem;">By signing, this attendee confirms they attended this toolbox talk and understood its content. This is attendance/acknowledgement evidence, not a legally binding e-signature.</p>
+    <canvas id="sigCanvas" width="480" height="180"></canvas>
+    <div class="btn-row" style="margin-top:0.6rem;">
+      <button type="button" class="btn btn-outline btn-sm" id="clearSigBtn">Clear</button>
+    </div>
+    <div class="field" style="margin-top:0.8rem;">
+      <label for="typedNameInput">Or type name to confirm (if unable to sign by touch)</label>
+      <input type="text" id="typedNameInput">
+    </div>
+    <div id="signModalError" class="error-box"></div>
+    <div class="btn-row" style="margin-top:0.8rem;">
+      <button type="button" class="btn btn-amber" id="submitSigBtn">Submit</button>
+      <button type="button" class="btn btn-outline" id="cancelSigBtn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Exception -->
+<div class="modal-backdrop" id="exceptionModal" style="display:none;">
+  <div class="modal-box">
+    <h3 style="font-family:var(--font-display); margin-top:0;">Cannot Sign</h3>
+    <div class="field"><label for="exceptionReasonInput">Reason (e.g. left site before the talk finished, unable to sign digitally)</label><textarea id="exceptionReasonInput" rows="3"></textarea></div>
+    <div id="exceptionModalError" class="error-box"></div>
+    <div class="btn-row">
+      <button type="button" class="btn btn-amber" id="submitExceptionBtn">Record Exception</button>
+      <button type="button" class="btn btn-outline" id="cancelExceptionBtn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Cancel talk -->
+<div class="modal-backdrop" id="cancelModal" style="display:none;">
+  <div class="modal-box">
+    <h3 style="font-family:var(--font-display); margin-top:0;">Cancel this Toolbox Talk</h3>
+    <div class="field"><label for="cancelReasonInput">Reason</label><textarea id="cancelReasonInput" rows="3"></textarea></div>
+    <div id="cancelModalError" class="error-box"></div>
+    <div class="btn-row">
+      <button type="button" class="btn btn-danger" id="confirmCancelBtn">Cancel Talk</button>
+      <button type="button" class="btn btn-outline" id="dismissCancelBtn">Back</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, getMyToolboxTalkRole, toolboxTalkCapabilities, getToolboxTalk, listToolboxTalkAttendees, addToolboxTalkAttendee, removeToolboxTalkAttendee, signToolboxTalkAttendee, recordToolboxTalkAttendeeException, updateToolboxTalkSiteNotes, completeToolboxTalk, cancelToolboxTalk, toolboxTalkSignatureProgress, getToolboxTalkTemplateVersion, getMemberEmailMap, TOOLBOX_TALK_STATUS_LABEL, TOOLBOX_TALK_STATUS_BADGE, generateToolboxTalkPdfBlob, saveFileToDevice, deviceSaveStatusLabel } from "./js/app.js";
+
+  const user = await requireAuth();
+  const talkId = getParam("id");
+  if (!talkId) window.location.href = "dashboard.html";
+
+  const pageErrorBox = document.getElementById("pageErrorBox");
+  let talk = null;
+  let attendees = [];
+  let caps = { canEdit: false };
+  let activeAttendeeId = null;
+
+  async function reload() {
+    clearError(pageErrorBox);
+    try {
+      [talk, attendees] = await Promise.all([getToolboxTalk(talkId), listToolboxTalkAttendees(talkId)]);
+    } catch (err) {
+      showError(pageErrorBox, err);
+      return;
+    }
+
+    let role;
+    try {
+      role = await getMyToolboxTalkRole(talk.project_id);
+    } catch (err) {
+      showError(pageErrorBox, err);
+      return;
+    }
+    caps = toolboxTalkCapabilities(role);
+    if (!caps.canView) {
+      document.getElementById("noAccessCard").style.display = "block";
+      return;
+    }
+    document.getElementById("body").style.display = "block";
+
+    document.getElementById("talkTitle").textContent = talk.title;
+    document.getElementById("statusBadge").className = `badge ${TOOLBOX_TALK_STATUS_BADGE[talk.status]}`;
+    document.getElementById("statusBadge").textContent = TOOLBOX_TALK_STATUS_LABEL[talk.status];
+    document.getElementById("startedAtText").textContent = formatDate(talk.started_at?.slice(0, 10));
+    document.getElementById("sourceText").textContent = talk.source_filename || "Custom talk";
+    document.getElementById("siteNotesInput").value = talk.site_notes || "";
+
+    const version = await getToolboxTalkTemplateVersion(talk.template_version_id).catch(() => null);
+    const subParts = [talk.reference, version ? `Version ${version.version_number}` : null].filter(Boolean);
+    document.getElementById("talkSub").textContent = subParts.join("   ·   ");
+
+    const emailMap = await getMemberEmailMap([talk.project_id]);
+    document.getElementById("deliveredByText").textContent = emailMap[talk.delivered_by] || "—";
+
+    renderContent(talk.content_snapshot || {});
+    renderAttendees();
+
+    const locked = talk.status !== "in_progress";
+    document.getElementById("addAttendeeRow").style.display = (caps.canEdit && !locked) ? "flex" : "none";
+    document.getElementById("talkActionsRow").style.display = (caps.canEdit && !locked) ? "flex" : "none";
+    document.getElementById("saveSiteNotesBtn").style.display = (caps.canEdit && !locked) ? "inline-flex" : "none";
+    document.getElementById("siteNotesInput").disabled = locked || !caps.canEdit;
+
+    // Only a completed talk has a final, immutable record to export —
+    // matches the database's own guard (buildToolboxTalkPdfDocument()
+    // refuses anything else) rather than trusting this check alone.
+    document.getElementById("generatePdfBtn").style.display = talk.status === "completed" ? "inline-flex" : "none";
+    document.getElementById("pdfStatusText").textContent = "";
+  }
+
+  function section(title, bodyHtml) {
+    return `<div class="card tt-section" style="margin-bottom:1rem;"><h4>${escapeHtml(title)}</h4>${bodyHtml}</div>`;
+  }
+  function listHtml(items) {
+    if (!items || !items.length) return `<p class="hint">—</p>`;
+    return `<ul>${items.map((i) => `<li>${escapeHtml(i)}</li>`).join("")}</ul>`;
+  }
+
+  function renderContent(c) {
+    const parts = [];
+    if (c.introduction) parts.push(section("Introduction", `<p>${escapeHtml(c.introduction)}</p>`));
+    if (c.key_message) parts.push(section("Key Message", `<p style="font-weight:600;">${escapeHtml(c.key_message)}</p>`));
+    if (c.key_points?.length) parts.push(section("Key Points to Cover", listHtml(c.key_points)));
+    if (c.site_observations && (c.site_observations.good_practice?.length || c.site_observations.warning_signs?.length)) {
+      parts.push(section("What to Look For on Site", `
+        <div class="tt-observations">
+          <div><strong>Good Practice</strong>${listHtml(c.site_observations.good_practice)}</div>
+          <div><strong>Warning Signs</strong>${listHtml(c.site_observations.warning_signs)}</div>
+        </div>
+      `));
+    }
+    if (c.discussion_questions?.length) parts.push(section("Discussion Questions", listHtml(c.discussion_questions)));
+    if (c.key_takeaways?.length) parts.push(section("Key Takeaways — What We All Agree To Do", listHtml(c.key_takeaways)));
+    if (c.pre_task_checks?.length) parts.push(section("Pre-Task Safety Check", listHtml(c.pre_task_checks)));
+    document.getElementById("contentSections").innerHTML = parts.join("");
+  }
+
+  function attendeeStatusBadge(a) {
+    if (a.signed_at) return `<span class="badge badge-green">Signed ${formatDate(a.signed_at.slice(0, 10))}</span>`;
+    if (a.exception_reason) return `<span class="badge badge-amber">Exception</span>`;
+    return `<span class="badge badge-grey">Pending</span>`;
+  }
+
+  function renderAttendees() {
+    const progress = toolboxTalkSignatureProgress(attendees);
+    document.getElementById("progressText").textContent = attendees.length ? `${progress.resolved} of ${progress.total} attendee(s) resolved` : "";
+    document.getElementById("attendeesEmptyState").style.display = attendees.length ? "none" : "block";
+
+    const locked = talk.status !== "in_progress";
+    document.getElementById("attendeeRows").innerHTML = attendees.map((a) => `
+      <div class="tt-attendee-row">
+        <div>
+          <div style="font-weight:600;">${escapeHtml(a.name)}${a.company ? ` <span class="hint">— ${escapeHtml(a.company)}</span>` : ""}</div>
+          ${a.exception_reason ? `<div class="hint">${escapeHtml(a.exception_reason)}</div>` : ""}
+        </div>
+        <div class="btn-row" style="gap:0.4rem;">
+          ${attendeeStatusBadge(a)}
+          ${(!locked && caps.canEdit && !a.signed_at && !a.exception_reason) ? `
+            <button class="btn btn-amber btn-sm" data-sign="${a.id}">Sign</button>
+            <button class="btn btn-outline btn-sm" data-exception="${a.id}">Cannot Sign</button>
+            <button class="btn btn-outline btn-sm" data-remove="${a.id}">Remove</button>
+          ` : ""}
+        </div>
+      </div>
+    `).join("");
+
+    document.getElementById("attendeeRows").querySelectorAll("button[data-sign]").forEach((btn) => {
+      btn.addEventListener("click", () => openSignModal(btn.dataset.sign));
+    });
+    document.getElementById("attendeeRows").querySelectorAll("button[data-exception]").forEach((btn) => {
+      btn.addEventListener("click", () => openExceptionModal(btn.dataset.exception));
+    });
+    document.getElementById("attendeeRows").querySelectorAll("button[data-remove]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        if (!confirm("Remove this attendee?")) return;
+        try { await removeToolboxTalkAttendee(btn.dataset.remove); await reload(); }
+        catch (err) { showError(pageErrorBox, err); }
+      });
+    });
+  }
+
+  document.getElementById("addAttendeeBtn").addEventListener("click", async () => {
+    const name = document.getElementById("newAttendeeName").value.trim();
+    if (!name) { showError(pageErrorBox, { message: "Attendee name is required." }); return; }
+    const company = document.getElementById("newAttendeeCompany").value.trim() || null;
+    try {
+      await addToolboxTalkAttendee(talkId, { name, company });
+      document.getElementById("newAttendeeName").value = "";
+      document.getElementById("newAttendeeCompany").value = "";
+      await reload();
+    } catch (err) {
+      showError(pageErrorBox, err);
+    }
+  });
+
+  document.getElementById("saveSiteNotesBtn").addEventListener("click", async () => {
+    try {
+      await updateToolboxTalkSiteNotes(talkId, document.getElementById("siteNotesInput").value.trim() || null);
+    } catch (err) {
+      showError(pageErrorBox, err);
+    }
+  });
+
+  // ─── Signature capture (touch/mouse canvas) ────────────────────
+  const signModal = document.getElementById("signModal");
+  const canvas = document.getElementById("sigCanvas");
+  const ctx = canvas.getContext("2d");
+  let drawing = false;
+  let hasStroke = false;
+
+  function canvasPoint(e) {
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
+  }
+  function startDraw(e) {
+    if (!ctx) return; // no 2D canvas support — the typed-name fallback still works
+    e.preventDefault();
+    drawing = true;
+    const p = canvasPoint(e);
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+  }
+  function moveDraw(e) {
+    if (!drawing || !ctx) return;
+    e.preventDefault();
+    const p = canvasPoint(e);
+    ctx.lineTo(p.x, p.y);
+    ctx.strokeStyle = "#0f1117";
+    ctx.lineWidth = 2;
+    ctx.lineCap = "round";
+    ctx.stroke();
+    hasStroke = true;
+  }
+  function endDraw() { drawing = false; }
+  canvas.addEventListener("pointerdown", startDraw);
+  canvas.addEventListener("pointermove", moveDraw);
+  canvas.addEventListener("pointerup", endDraw);
+  canvas.addEventListener("pointerleave", endDraw);
+
+  function clearCanvas() {
+    if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+    hasStroke = false;
+  }
+  document.getElementById("clearSigBtn").addEventListener("click", clearCanvas);
+
+  function openSignModal(attendeeId) {
+    activeAttendeeId = attendeeId;
+    const a = attendees.find((x) => x.id === attendeeId);
+    document.getElementById("signModalTitle").textContent = `Sign — ${a ? a.name : ""}`;
+    document.getElementById("typedNameInput").value = "";
+    clearError(document.getElementById("signModalError"));
+    clearCanvas();
+    signModal.style.display = "flex";
+  }
+  document.getElementById("cancelSigBtn").addEventListener("click", () => { signModal.style.display = "none"; });
+  signModal.addEventListener("click", (e) => { if (e.target === signModal) signModal.style.display = "none"; });
+
+  document.getElementById("submitSigBtn").addEventListener("click", async () => {
+    const errBox = document.getElementById("signModalError");
+    clearError(errBox);
+    const typedName = document.getElementById("typedNameInput").value.trim();
+    if (!hasStroke && !typedName) {
+      showError(errBox, { message: "Draw a signature or type a name to confirm." });
+      return;
+    }
+    try {
+      await signToolboxTalkAttendee(activeAttendeeId, {
+        signatureData: hasStroke ? canvas.toDataURL("image/png") : null,
+        typedName: typedName || null,
+      });
+      signModal.style.display = "none";
+      await reload();
+    } catch (err) {
+      showError(errBox, err);
+    }
+  });
+
+  // ─── Exception ───────────────────────────────────────────────────
+  const exceptionModal = document.getElementById("exceptionModal");
+  function openExceptionModal(attendeeId) {
+    activeAttendeeId = attendeeId;
+    document.getElementById("exceptionReasonInput").value = "";
+    clearError(document.getElementById("exceptionModalError"));
+    exceptionModal.style.display = "flex";
+  }
+  document.getElementById("cancelExceptionBtn").addEventListener("click", () => { exceptionModal.style.display = "none"; });
+  exceptionModal.addEventListener("click", (e) => { if (e.target === exceptionModal) exceptionModal.style.display = "none"; });
+  document.getElementById("submitExceptionBtn").addEventListener("click", async () => {
+    const errBox = document.getElementById("exceptionModalError");
+    const reason = document.getElementById("exceptionReasonInput").value.trim();
+    if (!reason) { showError(errBox, { message: "A reason is required." }); return; }
+    try {
+      await recordToolboxTalkAttendeeException(activeAttendeeId, reason);
+      exceptionModal.style.display = "none";
+      await reload();
+    } catch (err) {
+      showError(errBox, err);
+    }
+  });
+
+  // ─── PDF export ──────────────────────────────────────────────────
+  // Generates entirely client-side from this same, already-loaded
+  // completed record — no server round trip and no separate access
+  // check to keep in sync with the page's own (see generateToolboxTalkPdfBlob()
+  // in app.js). Sharing/saving reuses the exact Save to Device
+  // infrastructure already used for photos elsewhere in the app.
+  document.getElementById("generatePdfBtn").addEventListener("click", async () => {
+    const btn = document.getElementById("generatePdfBtn");
+    const statusEl = document.getElementById("pdfStatusText");
+    clearError(pageErrorBox);
+    btn.disabled = true;
+    statusEl.textContent = "Generating PDF…";
+    try {
+      const { blob, filename } = await generateToolboxTalkPdfBlob(talkId);
+      const result = await saveFileToDevice(blob, filename);
+      statusEl.textContent = deviceSaveStatusLabel(result.status);
+    } catch (err) {
+      statusEl.textContent = "";
+      showError(pageErrorBox, err);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // ─── Complete / Cancel ───────────────────────────────────────────
+  document.getElementById("completeTalkBtn").addEventListener("click", async () => {
+    clearError(pageErrorBox);
+    try {
+      await completeToolboxTalk(talkId);
+      await reload();
+    } catch (err) {
+      showError(pageErrorBox, err);
+    }
+  });
+
+  const cancelModal = document.getElementById("cancelModal");
+  document.getElementById("cancelTalkBtn").addEventListener("click", () => {
+    document.getElementById("cancelReasonInput").value = "";
+    clearError(document.getElementById("cancelModalError"));
+    cancelModal.style.display = "flex";
+  });
+  document.getElementById("dismissCancelBtn").addEventListener("click", () => { cancelModal.style.display = "none"; });
+  cancelModal.addEventListener("click", (e) => { if (e.target === cancelModal) cancelModal.style.display = "none"; });
+  document.getElementById("confirmCancelBtn").addEventListener("click", async () => {
+    const errBox = document.getElementById("cancelModalError");
+    const reason = document.getElementById("cancelReasonInput").value.trim();
+    if (!reason) { showError(errBox, { message: "A cancellation reason is required." }); return; }
+    try {
+      await cancelToolboxTalk(talkId, reason);
+      cancelModal.style.display = "none";
+      await reload();
+    } catch (err) {
+      showError(errBox, err);
+    }
+  });
+
+  async function init() {
+    renderHeader([{ label: "Dashboard", href: "dashboard.html" }, { label: "Toolbox Talk" }]);
+    await reload();
+    if (talk) {
+      const { data: project } = await supabase.from("projects").select("name").eq("id", talk.project_id).single();
+      renderHeader([
+        { label: "Dashboard", href: "dashboard.html" },
+        { label: project?.name || "Site", href: `project.html?id=${talk.project_id}` },
+        { label: "Toolbox Talks", href: `toolbox-talks.html?project=${talk.project_id}` },
+        { label: talk.title },
+      ]);
+    }
+  }
+
+  init();
+</script>
+</body>
+</html>

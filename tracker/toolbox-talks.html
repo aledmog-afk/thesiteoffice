@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Toolbox Talks – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title">Toolbox Talks</div>
+      <div class="page-sub" id="projectSub">Deliver a talk, confirm attendees, everyone signs.</div>
+    </div>
+    <div class="btn-row" id="headerActions" style="display:none;">
+      <button type="button" class="btn btn-amber" id="startTalkBtn" style="display:none;">+ Start Toolbox Talk</button>
+    </div>
+  </div>
+
+  <div id="pageErrorBox" class="error-box"></div>
+
+  <div class="card" id="noAccessCard" style="display:none;">
+    <p>You don't have Toolbox Talks access on this site. Ask the site owner to grant you a role if you need it.</p>
+  </div>
+
+  <div id="body" style="display:none;">
+    <div class="totals-bar" style="margin-bottom:2rem;">
+      <div class="totals-box"><div class="totals-label">Completed</div><div class="totals-value approved" id="completedCount">0</div></div>
+      <div class="totals-box"><div class="totals-label">In Progress</div><div class="totals-value pending" id="inProgressCount">0</div></div>
+      <div class="totals-box"><div class="totals-label">Awaiting Signatures</div><div class="totals-value pending" id="awaitingCount">0</div></div>
+      <div class="totals-box"><div class="totals-label">Cancelled</div><div class="totals-value" id="cancelledCount">0</div></div>
+    </div>
+
+    <div class="card">
+      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Recent Talks</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Title</th><th>Status</th><th>Started</th><th>Delivered By</th><th>Attendees</th></tr></thead>
+          <tbody id="talkRows"></tbody>
+        </table>
+      </div>
+      <div id="talksEmptyState" class="empty" style="display:none;"><p>No Toolbox Talks logged yet — start your first one above.</p></div>
+    </div>
+
+    <div class="card" id="templateLibraryCard" style="margin-top:2rem;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
+        <h3 style="font-family:var(--font-display); font-size:1rem; margin:0;">Our Organisation's Templates</h3>
+        <button type="button" class="btn btn-outline btn-sm" id="newTemplateBtn" style="display:none;">+ New Template</button>
+      </div>
+      <p class="hint" style="margin-bottom:1rem;">The standard library (shown when starting a talk) also includes talks provided with Site Tracker — this section is only your own organisation's custom ones.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Title</th><th>Version</th><th>Status</th><th></th></tr></thead>
+          <tbody id="templateRows"></tbody>
+        </table>
+      </div>
+      <div id="templatesEmptyState" class="empty" style="display:none;"><p>No custom templates yet.</p></div>
+    </div>
+  </div>
+</div>
+
+<!-- Start Talk: search/browse the library, pick one -->
+<div class="modal-backdrop" id="startModal" style="display:none;">
+  <div class="modal-box" style="max-width:560px;">
+    <h3 style="font-family:var(--font-display); margin-top:0;">Start a Toolbox Talk</h3>
+    <input type="text" id="templateSearchInput" placeholder="Search talks (e.g. Working at Height)" style="margin-bottom:0.8rem;">
+    <div id="templatePickerRows" style="max-height:400px; overflow-y:auto;"></div>
+    <div class="btn-row" style="margin-top:1rem;">
+      <button type="button" class="btn btn-outline" id="cancelStartBtn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- New Template / New Version: plain-text fields mapped to the same
+     content shape the imported library uses, so both render identically
+     in the delivery view. -->
+<div class="modal-backdrop" id="templateFormModal" style="display:none;">
+  <div class="modal-box" style="max-width:640px;">
+    <h3 style="font-family:var(--font-display); margin-top:0;" id="templateFormTitle">New Template</h3>
+    <div class="field"><label for="tfTitle">Title</label><input type="text" id="tfTitle"></div>
+    <div class="field"><label for="tfDescription">Description</label><input type="text" id="tfDescription"></div>
+    <div class="field"><label for="tfIntroduction">Introduction (read out at the start)</label><textarea id="tfIntroduction" rows="3"></textarea></div>
+    <div class="field"><label for="tfKeyMessage">Key Message (the one thing to remember)</label><textarea id="tfKeyMessage" rows="2"></textarea></div>
+    <div class="field"><label for="tfKeyPoints">Key Points to Cover (one per line)</label><textarea id="tfKeyPoints" rows="4"></textarea></div>
+    <div class="field"><label for="tfGoodPractice">Good Practice — what to look for on site (one per line)</label><textarea id="tfGoodPractice" rows="3"></textarea></div>
+    <div class="field"><label for="tfWarningSigns">Warning Signs — what to look for on site (one per line)</label><textarea id="tfWarningSigns" rows="3"></textarea></div>
+    <div class="field"><label for="tfDiscussionQuestions">Discussion Questions (one per line)</label><textarea id="tfDiscussionQuestions" rows="3"></textarea></div>
+    <div class="field"><label for="tfKeyTakeaways">Key Takeaways — what we all agree to do (one per line)</label><textarea id="tfKeyTakeaways" rows="3"></textarea></div>
+    <div class="field"><label for="tfPreTaskChecks">Pre-Task Safety Check items (one per line)</label><textarea id="tfPreTaskChecks" rows="3"></textarea></div>
+    <div id="templateFormError" class="error-box"></div>
+    <div class="btn-row">
+      <button type="button" class="btn btn-amber" id="saveTemplateBtn">Save</button>
+      <button type="button" class="btn btn-outline" id="cancelTemplateFormBtn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, getMyToolboxTalkRole, toolboxTalkCapabilities, canEditToolboxTalkTemplateLibrary, listToolboxTalks, listToolboxTalkTemplates, listToolboxTalkAttendees, startToolboxTalk, createToolboxTalkTemplate, addToolboxTalkTemplateVersion, getMemberEmailMap, TOOLBOX_TALK_STATUS_LABEL, TOOLBOX_TALK_STATUS_BADGE } from "./js/app.js";
+
+  await requireAuth();
+  const projectId = getParam("project");
+  if (!projectId) window.location.href = "dashboard.html";
+
+  const pageErrorBox = document.getElementById("pageErrorBox");
+  let orgId = null;
+  let canEditLibrary = false;
+  let allTemplates = [];
+  let orgTemplates = [];
+
+  document.getElementById("startTalkBtn").addEventListener("click", openStartModal);
+  document.getElementById("newTemplateBtn").addEventListener("click", () => openTemplateForm(null));
+
+  // ─── Start Talk ─────────────────────────────────────────────────
+  const startModal = document.getElementById("startModal");
+  function openStartModal() {
+    document.getElementById("templateSearchInput").value = "";
+    renderTemplatePicker();
+    startModal.style.display = "flex";
+  }
+  document.getElementById("cancelStartBtn").addEventListener("click", () => { startModal.style.display = "none"; });
+  startModal.addEventListener("click", (e) => { if (e.target === startModal) startModal.style.display = "none"; });
+
+  function renderTemplatePicker() {
+    const q = document.getElementById("templateSearchInput").value.trim().toLowerCase();
+    const rows = allTemplates.filter((t) => !q || t.title.toLowerCase().includes(q));
+    const wrap = document.getElementById("templatePickerRows");
+    if (!rows.length) {
+      wrap.innerHTML = `<p class="hint">No talks match your search.</p>`;
+      return;
+    }
+    wrap.innerHTML = rows.map((t) => `
+      <div class="card" style="margin-top:0.6rem; display:flex; align-items:center; justify-content:space-between; gap:1rem;">
+        <div>
+          <div style="font-weight:600;">${escapeHtml(t.title)}</div>
+          ${t.description ? `<div class="hint">${escapeHtml(t.description)}</div>` : ""}
+          <div class="hint">${t.org_id ? "Your organisation's talk" : "Standard talk"}</div>
+        </div>
+        <button type="button" class="btn btn-outline btn-sm" data-template-id="${t.id}" data-version-id="${t.current_version_id || ""}">Start Talk</button>
+      </div>
+    `).join("");
+    wrap.querySelectorAll("button[data-template-id]").forEach((btn) => {
+      btn.addEventListener("click", () => beginTalk(btn.dataset.templateId, btn.dataset.versionId, btn));
+    });
+  }
+  document.getElementById("templateSearchInput").addEventListener("input", renderTemplatePicker);
+
+  async function beginTalk(templateId, versionId, btn) {
+    if (!versionId) { showError(pageErrorBox, { message: "This template has no content version yet." }); return; }
+    btn.disabled = true;
+    try {
+      const talk = await startToolboxTalk(projectId, templateId, versionId);
+      window.location.href = `toolbox-talk-detail.html?id=${talk.id}`;
+    } catch (err) {
+      showError(pageErrorBox, err);
+      btn.disabled = false;
+    }
+  }
+
+  // ─── Template library management (org-owned templates only) ────
+  let editingTemplateId = null;
+  const templateFormModal = document.getElementById("templateFormModal");
+  function openTemplateForm(template) {
+    editingTemplateId = template ? template.id : null;
+    document.getElementById("templateFormTitle").textContent = template ? `New Version — ${template.title}` : "New Template";
+    document.getElementById("tfTitle").value = template ? template.title : "";
+    document.getElementById("tfTitle").disabled = !!template; // renaming isn't part of "new version"
+    document.getElementById("tfDescription").value = template ? (template.description || "") : "";
+    ["tfIntroduction", "tfKeyMessage", "tfKeyPoints", "tfGoodPractice", "tfWarningSigns", "tfDiscussionQuestions", "tfKeyTakeaways", "tfPreTaskChecks"].forEach((id) => { document.getElementById(id).value = ""; });
+    clearError(document.getElementById("templateFormError"));
+    templateFormModal.style.display = "flex";
+  }
+  document.getElementById("cancelTemplateFormBtn").addEventListener("click", () => { templateFormModal.style.display = "none"; });
+  templateFormModal.addEventListener("click", (e) => { if (e.target === templateFormModal) templateFormModal.style.display = "none"; });
+
+  function linesOf(id) {
+    return document.getElementById(id).value.split("\n").map((l) => l.trim()).filter(Boolean);
+  }
+
+  document.getElementById("saveTemplateBtn").addEventListener("click", async () => {
+    const errBox = document.getElementById("templateFormError");
+    clearError(errBox);
+    const content = {
+      introduction: document.getElementById("tfIntroduction").value.trim(),
+      key_message: document.getElementById("tfKeyMessage").value.trim(),
+      key_points: linesOf("tfKeyPoints"),
+      site_observations: { good_practice: linesOf("tfGoodPractice"), warning_signs: linesOf("tfWarningSigns") },
+      discussion_questions: linesOf("tfDiscussionQuestions"),
+      key_takeaways: linesOf("tfKeyTakeaways"),
+      pre_task_checks: linesOf("tfPreTaskChecks"),
+    };
+    try {
+      if (editingTemplateId) {
+        await addToolboxTalkTemplateVersion(editingTemplateId, content);
+      } else {
+        const title = document.getElementById("tfTitle").value.trim();
+        if (!title) { showError(errBox, { message: "Title is required." }); return; }
+        await createToolboxTalkTemplate(orgId, { title, description: document.getElementById("tfDescription").value.trim() || null, content });
+      }
+      templateFormModal.style.display = "none";
+      await loadAll();
+    } catch (err) {
+      showError(errBox, err);
+    }
+  });
+
+  function renderTemplateLibrary() {
+    document.getElementById("templatesEmptyState").style.display = orgTemplates.length ? "none" : "block";
+    document.getElementById("templateRows").innerHTML = orgTemplates.map((t) => `
+      <tr>
+        <td>${escapeHtml(t.title)}</td>
+        <td>v${t.version_number || "—"}</td>
+        <td><span class="badge ${t.is_active ? "badge-green" : "badge-grey"}">${t.is_active ? "Active" : "Inactive"}</span></td>
+        <td>${canEditLibrary ? `<button class="btn btn-outline btn-sm" data-edit-template="${t.id}">+ New Version</button>` : ""}</td>
+      </tr>
+    `).join("");
+    document.getElementById("templateRows").querySelectorAll("button[data-edit-template]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const t = orgTemplates.find((x) => x.id === btn.dataset.editTemplate);
+        openTemplateForm(t);
+      });
+    });
+  }
+
+  // ─── Recent talks + summary ─────────────────────────────────────
+  function renderTalks(talks, attendeeCounts, membersById) {
+    const counts = { completed: 0, in_progress: 0, cancelled: 0, awaiting: 0 };
+    talks.forEach((t) => {
+      counts[t.status] = (counts[t.status] || 0) + 1;
+      if (t.status === "in_progress") counts.awaiting++;
+    });
+    document.getElementById("completedCount").textContent = counts.completed;
+    document.getElementById("inProgressCount").textContent = counts.in_progress;
+    document.getElementById("awaitingCount").textContent = counts.awaiting;
+    document.getElementById("cancelledCount").textContent = counts.cancelled;
+
+    const recent = talks.slice(0, 25);
+    document.getElementById("talksEmptyState").style.display = recent.length ? "none" : "block";
+    document.getElementById("talkRows").innerHTML = recent.map((t) => `
+      <tr>
+        <td><a href="toolbox-talk-detail.html?id=${t.id}">${escapeHtml(t.title)}</a></td>
+        <td><span class="badge ${TOOLBOX_TALK_STATUS_BADGE[t.status]}">${TOOLBOX_TALK_STATUS_LABEL[t.status]}</span></td>
+        <td>${formatDate(t.started_at?.slice(0, 10))}</td>
+        <td>${escapeHtml(membersById[t.delivered_by] || "—")}</td>
+        <td>${attendeeCounts[t.id] || 0}</td>
+      </tr>
+    `).join("");
+  }
+
+  async function loadAll() {
+    clearError(pageErrorBox);
+    try {
+      const [talks, templates] = await Promise.all([
+        listToolboxTalks(projectId),
+        listToolboxTalkTemplates(),
+      ]);
+      allTemplates = templates;
+      orgTemplates = templates.filter((t) => t.org_id === orgId);
+
+      const [attendeeCountsArr, membersById] = await Promise.all([
+        Promise.all(talks.slice(0, 25).map((t) => listToolboxTalkAttendees(t.id).then((a) => [t.id, a.length]))),
+        getMemberEmailMap([projectId]),
+      ]);
+      const attendeeCounts = Object.fromEntries(attendeeCountsArr);
+
+      renderTalks(talks, attendeeCounts, membersById);
+      renderTemplateLibrary();
+    } catch (err) {
+      showError(pageErrorBox, err);
+    }
+  }
+
+  async function load() {
+    clearError(pageErrorBox);
+    let role;
+    try {
+      role = await getMyToolboxTalkRole(projectId);
+    } catch (err) {
+      showError(pageErrorBox, err);
+      return;
+    }
+    const caps = toolboxTalkCapabilities(role);
+    if (!caps.canView) {
+      document.getElementById("noAccessCard").style.display = "block";
+      return;
+    }
+    document.getElementById("headerActions").style.display = "flex";
+    document.getElementById("body").style.display = "block";
+    if (caps.canEdit) document.getElementById("startTalkBtn").style.display = "inline-flex";
+
+    const { data: project } = await supabase.from("projects").select("org_id").eq("id", projectId).single();
+    orgId = project?.org_id || null;
+    canEditLibrary = orgId ? await canEditToolboxTalkTemplateLibrary(orgId) : false;
+    document.getElementById("newTemplateBtn").style.display = canEditLibrary ? "inline-flex" : "none";
+
+    await loadAll();
+  }
+
+  async function init() {
+    const { data: project } = await supabase.from("projects").select("name").eq("id", projectId).single();
+    renderHeader([
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project?.name || "Site", href: `project.html?id=${projectId}` },
+      { label: "Toolbox Talks" },
+    ]);
+    document.getElementById("projectSub").textContent = project ? `${project.name} — toolbox talks and signed attendance.` : "";
+    load();
+  }
+
+  init();
+</script>
+</body>
+</html>

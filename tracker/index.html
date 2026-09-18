@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Site Tracker</title>
+</head>
+<body>
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  const { data: { session } } = await supabase.auth.getSession();
+  window.location.replace(session ? "dashboard.html" : "login.html");
+</script>
+<noscript>JavaScript is required. <a href="login.html">Continue to sign in</a>.</noscript>
+</body>
+</html>

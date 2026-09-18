@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Settings – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page" style="max-width:600px;">
+  <div class="page-head">
+    <div>
+      <div class="page-title">Settings</div>
+      <div class="page-sub">Your organisation and company logo — the logo appears on every printed weekly report and snagging sheet.</div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:1.5rem;">
+    <div id="orgErrorBox" class="error-box"></div>
+    <div class="field">
+      <label for="orgName">Organisation name</label>
+      <input type="text" id="orgName" placeholder="e.g. Acme Construction Ltd">
+    </div>
+    <div class="btn-row">
+      <button type="button" class="btn btn-amber" id="saveOrgNameBtn">Save</button>
+      <a href="onboarding.html" class="btn btn-outline btn-sm" style="margin-left:auto;">Join Another Organisation</a>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:1.5rem;">
+    <div id="errorBox" class="error-box"></div>
+    <div class="field">
+      <label>Company logo</label>
+      <div id="logoPreviewWrap" style="margin-bottom:1rem;">
+        <img id="logoPreview" class="logo-preview" style="display:none;">
+        <p id="noLogoText" style="color:var(--ink-soft); font-size:0.85rem;">No logo uploaded yet.</p>
+      </div>
+      <input type="file" id="logoInput" accept="image/*">
+      <p class="hint">PNG or JPG works best. It's shown small, so a wide logo (landscape) fits better than a tall one.</p>
+    </div>
+    <div class="btn-row">
+      <button type="button" class="btn btn-danger" id="removeBtn" style="display:none;">Remove Logo</button>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:1.5rem;">
+    <div id="membersErrorBox" class="error-box"></div>
+    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Organisation Members</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Email</th><th>Role</th><th>Joined</th></tr></thead>
+        <tbody id="memberRows"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card" id="pendingRequestsCard" style="display:none;">
+    <div id="requestsErrorBox" class="error-box"></div>
+    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.4rem;">Pending Requests</h3>
+    <p class="hint" style="margin-bottom:1rem;">People who have asked to join this organisation. Only admins can see and act on these.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Requester</th><th>Requested</th><th></th></tr></thead>
+        <tbody id="requestRows"></tbody>
+      </table>
+    </div>
+    <div id="requestsEmptyState" class="empty" style="display:none;"><p>No pending requests right now.</p></div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, showError, clearError, escapeHtml, formatDate, uploadPhoto, ensureOrganisation, getOrganisationMembers, getOrganisationMembershipRequests, approveOrganisationMembership, rejectOrganisationMembership } from "./js/app.js";
+
+  const currentUser = await requireAuth();
+  renderHeader([{ label: "Settings" }]);
+
+  // Settings manages the caller's "primary" organisation only — the same
+  // one ensureOrganisation() already resolves everywhere else in this
+  // app (their earliest membership). A user belonging to several
+  // organisations sees admin controls here for that one only; a full
+  // organisation switcher is deliberately out of scope for this phase
+  // (see the Phase 0 brief — "a sophisticated organisation switcher is
+  // NOT required").
+  const orgId = await ensureOrganisation();
+
+  const orgErrorBox = document.getElementById("orgErrorBox");
+  const orgNameInput = document.getElementById("orgName");
+  const errorBox = document.getElementById("errorBox");
+  const logoPreview = document.getElementById("logoPreview");
+  const noLogoText = document.getElementById("noLogoText");
+  const removeBtn = document.getElementById("removeBtn");
+  const logoInput = document.getElementById("logoInput");
+
+  async function loadOrg() {
+    const { data } = await supabase.from("organisations").select("name").eq("id", orgId).single();
+    orgNameInput.value = data?.name || "";
+  }
+
+  document.getElementById("saveOrgNameBtn").addEventListener("click", async () => {
+    clearError(orgErrorBox);
+    const name = orgNameInput.value.trim();
+    if (!name) { showError(orgErrorBox, { message: "Organisation name can't be empty." }); return; }
+    const { error } = await supabase.from("organisations").update({ name, updated_at: new Date().toISOString() }).eq("id", orgId);
+    if (error) showError(orgErrorBox, error);
+  });
+
+  function showLogo(url) {
+    if (url) {
+      logoPreview.src = url;
+      logoPreview.style.display = "block";
+      noLogoText.style.display = "none";
+      removeBtn.style.display = "inline-flex";
+    } else {
+      logoPreview.style.display = "none";
+      noLogoText.style.display = "block";
+      removeBtn.style.display = "none";
+    }
+  }
+
+  async function load() {
+    const { data } = await supabase.from("org_settings").select("logo_url").eq("org_id", orgId).maybeSingle();
+    showLogo(data?.logo_url || null);
+  }
+
+  logoInput.addEventListener("change", async () => {
+    const file = logoInput.files[0];
+    if (!file) return;
+    clearError(errorBox);
+    logoInput.disabled = true;
+    try {
+      const url = await uploadPhoto(file, "org-logo");
+      const { error } = await supabase.from("org_settings").upsert({ org_id: orgId, logo_url: url, updated_at: new Date().toISOString() }, { onConflict: "org_id" });
+      if (error) throw error;
+      showLogo(url);
+    } catch (err) {
+      showError(errorBox, err);
+    } finally {
+      logoInput.value = "";
+      logoInput.disabled = false;
+    }
+  });
+
+  removeBtn.addEventListener("click", async () => {
+    if (!confirm("Remove the company logo from all future printed reports?")) return;
+    const { error } = await supabase.from("org_settings").upsert({ org_id: orgId, logo_url: null, updated_at: new Date().toISOString() }, { onConflict: "org_id" });
+    if (error) { showError(errorBox, error); return; }
+    showLogo(null);
+  });
+
+  // ─── Organisation Members / Pending Requests ─────────────────────
+  const ROLE_LABEL = { admin: "Admin", member: "Member" };
+  const ROLE_BADGE = { admin: "badge-green", member: "badge-grey" };
+  const membersErrorBox = document.getElementById("membersErrorBox");
+  const requestsErrorBox = document.getElementById("requestsErrorBox");
+  const pendingRequestsCard = document.getElementById("pendingRequestsCard");
+
+  function renderMembers(members) {
+    document.getElementById("memberRows").innerHTML = members.map((m) => `
+      <tr>
+        <td>${escapeHtml(m.email)}${m.user_id === currentUser.id ? ` <span class="hint">(you)</span>` : ""}</td>
+        <td><span class="badge ${ROLE_BADGE[m.role]}">${ROLE_LABEL[m.role] || m.role}</span></td>
+        <td>${formatDate(m.joined_at?.slice(0, 10))}</td>
+      </tr>
+    `).join("");
+  }
+
+  function renderRequests(requests) {
+    const rows = document.getElementById("requestRows");
+    document.getElementById("requestsEmptyState").style.display = requests.length ? "none" : "block";
+    rows.innerHTML = requests.map((r) => `
+      <tr>
+        <td>${escapeHtml(r.email)}</td>
+        <td>${formatDate(r.requested_at?.slice(0, 10))}</td>
+        <td class="btn-row">
+          <button type="button" class="btn btn-outline btn-sm" data-approve="${r.id}">Approve</button>
+          <button type="button" class="btn btn-danger btn-sm" data-reject="${r.id}">Reject</button>
+        </td>
+      </tr>
+    `).join("");
+    rows.querySelectorAll("button[data-approve]").forEach((btn) => {
+      btn.addEventListener("click", () => approveRequest(btn.dataset.approve));
+    });
+    rows.querySelectorAll("button[data-reject]").forEach((btn) => {
+      btn.addEventListener("click", () => rejectRequest(btn.dataset.reject));
+    });
+  }
+
+  async function loadPendingRequests() {
+    clearError(requestsErrorBox);
+    try {
+      const requests = await getOrganisationMembershipRequests(orgId, "pending");
+      renderRequests(requests);
+    } catch (err) {
+      showError(requestsErrorBox, err);
+    }
+  }
+
+  async function approveRequest(requestId) {
+    clearError(requestsErrorBox);
+    try {
+      await approveOrganisationMembership(requestId);
+      await Promise.all([loadPendingRequests(), loadMembers()]);
+    } catch (err) {
+      showError(requestsErrorBox, err);
+    }
+  }
+
+  async function rejectRequest(requestId) {
+    const reason = prompt("Reason for rejecting (optional):", "") || null;
+    clearError(requestsErrorBox);
+    try {
+      await rejectOrganisationMembership(requestId, reason);
+      await loadPendingRequests();
+    } catch (err) {
+      showError(requestsErrorBox, err);
+    }
+  }
+
+  async function loadMembers() {
+    clearError(membersErrorBox);
+    try {
+      const members = await getOrganisationMembers(orgId);
+      renderMembers(members);
+      const isAdmin = members.some((m) => m.user_id === currentUser.id && m.role === "admin");
+      pendingRequestsCard.style.display = isAdmin ? "block" : "none";
+      if (isAdmin) loadPendingRequests();
+    } catch (err) {
+      showError(membersErrorBox, err);
+    }
+  }
+
+  loadOrg();
+  load();
+  loadMembers();
+</script>
+</body>
+</html>
