@@ -81,9 +81,11 @@
         <tbody>${list.map((i) => {
           if (typeof i === "string") return `<tr><td colspan="3">${escapeHtml(i)}</td><td>—</td></tr>`;
           const pct = typeof i.percent === "number" ? `${i.percent}%` : "—";
+          const milestoneTag = i.milestone ? `<span class="milestone-tag">${escapeHtml(i.milestone)}</span>` : "";
+          const tradeCell = [milestoneTag, i.text ? escapeHtml(i.text) : ""].filter(Boolean).join(" ") || "—";
           return `<tr>
             <td>${i.plot ? escapeHtml(i.plot) : "—"}</td>
-            <td>${i.milestone ? escapeHtml(i.milestone) : escapeHtml(i.text) || "—"}</td>
+            <td>${tradeCell}</td>
             <td>${pct}</td>
             <td>${escapeHtml(i.verification_notes) || "—"}</td>
           </tr>`;

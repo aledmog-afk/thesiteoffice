@@ -246,3 +246,31 @@ test("weekly-report-view.html: the status badge and doc both reflect the real re
   assert.equal(document.getElementById("statusBadge").textContent, "Issued");
   assert.ok(document.getElementById("doc").innerHTML.includes("Issued"), "the printable document itself must also show the real status");
 });
+
+// A progress item added via "Add an item…" can carry BOTH a milestone
+// (from the dropdown) and its own free-text description — the item-list
+// editor on the form shows both side by side. The "Verified Quality &
+// Works Audit" table on the view page used to show only the milestone,
+// silently dropping the typed description whenever a milestone was also
+// set — the exact case for e.g. several "Groundworks"-tagged items each
+// with their own distinct description ("Crane base", "Site entrance
+// work", "Muck away"), which all collapsed to the single word
+// "Groundworks" on the report with no way to tell them apart.
+test("weekly-report-view.html: a progress item with BOTH a milestone and typed text shows both on the Verified Quality & Works Audit table, not just the milestone", async () => {
+  const report = {
+    id: "r1", week_starting: "2026-09-07", week_ending: "2026-09-11", status: "issued",
+    programme_status: "on-track", projects: SAMPLE_PROJECT,
+    progress_items: [
+      { id: "1", plot: "", milestone: "Groundworks", text: "Crane base", percent: 0 },
+      { id: "2", plot: "", milestone: "Foundations (Foots)", text: "", percent: 0 },
+      { id: "3", plot: "", milestone: "", text: "Tarmac", percent: 100 },
+    ],
+  };
+  const { document } = await runView(report);
+  await wait(30);
+  const auditHtml = document.getElementById("doc").innerHTML;
+  assert.match(auditHtml, /Groundworks/, "the milestone must still show");
+  assert.match(auditHtml, /Crane base/, "the item's own typed description must ALSO show, not be replaced by the milestone");
+  assert.match(auditHtml, /Foundations \(Foots\)/, "a milestone-only item (no text) still renders correctly");
+  assert.match(auditHtml, /Tarmac/, "a text-only item (no milestone) still renders correctly");
+});
