@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>RFIs – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title">RFIs</div>
+      <div class="page-sub" id="projectSub">Requests For Information — observation, question, responsible person, response, close.</div>
+    </div>
+    <a class="btn btn-amber" id="newRfiBtn" href="#">+ New RFI</a>
+  </div>
+
+  <div id="pageErrorBox" class="error-box"></div>
+
+  <div class="card">
+    <div class="btn-row" style="margin-bottom:1rem; flex-wrap:wrap;">
+      <select id="statusFilter" style="width:auto;">
+        <option value="active">Active (open / answered)</option>
+        <option value="all">All</option>
+        <option value="open">Open</option>
+        <option value="answered">Answered</option>
+        <option value="closed">Closed</option>
+      </select>
+      <select id="priorityFilter" style="width:auto;">
+        <option value="all">All priorities</option>
+      </select>
+      <select id="assignedFilter" style="width:auto;">
+        <option value="all">Anyone assigned</option>
+        <option value="unassigned">Unassigned</option>
+      </select>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Reference</th><th>Title</th><th>Plot / Area</th><th>Priority</th><th>Status</th><th>Assigned To</th><th>Due</th><th>Created</th></tr>
+        </thead>
+        <tbody id="rfiRows"></tbody>
+      </table>
+    </div>
+    <div id="emptyState" class="empty" style="display:none;"><p>No RFIs yet.</p></div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, RFI_STATUS_LABEL, RFI_STATUS_BADGE, RFI_PRIORITIES, RFI_PRIORITY_LABEL, RFI_PRIORITY_BADGE, listRfis, comparePlotNumbers } from "./js/app.js";
+
+  await requireAuth();
+  const projectId = getParam("project");
+  if (!projectId) window.location.href = "dashboard.html";
+
+  document.getElementById("newRfiBtn").href = `rfi-detail.html?new=1&project=${projectId}`;
+
+  let allRfis = [];
+  let editors = []; // { user_id, email } — owner/collaborator only, the only legitimate assignees
+  let plotsById = {}; // plot.id -> plot_number, display only
+
+  let statusFilter = "active";
+  let priorityFilter = "all";
+  let assignedFilter = "all";
+
+  const pageErrorBox = document.getElementById("pageErrorBox");
+  const priorityFilterSelect = document.getElementById("priorityFilter");
+  const assignedFilterSelect = document.getElementById("assignedFilter");
+
+  priorityFilterSelect.innerHTML = `<option value="all">All priorities</option>` +
+    RFI_PRIORITIES.map((p) => `<option value="${p}">${RFI_PRIORITY_LABEL[p]}</option>`).join("");
+
+  function editorEmail(userId) {
+    return editors.find((m) => m.user_id === userId)?.email || "—";
+  }
+
+  // Deliberately minimal — three independent dropdown filters
+  // (status/priority/assigned), matching actions.html's own single
+  // status-filter shape rather than a generic query-builder. Project
+  // scope is the page itself (rfis.html?project=X), not a filter —
+  // same convention as every other project-scoped list in this app.
+  function visibleRfis() {
+    let rows = allRfis;
+    if (statusFilter === "active") rows = rows.filter((r) => ["open", "answered"].includes(r.status));
+    else if (statusFilter !== "all") rows = rows.filter((r) => r.status === statusFilter);
+    if (priorityFilter !== "all") rows = rows.filter((r) => r.priority === priorityFilter);
+    if (assignedFilter === "unassigned") rows = rows.filter((r) => !r.assigned_to);
+    else if (assignedFilter !== "all") rows = rows.filter((r) => r.assigned_to === assignedFilter);
+    return rows;
+  }
+
+  function render() {
+    const rows = visibleRfis();
+    document.getElementById("emptyState").style.display = rows.length ? "none" : "block";
+    document.getElementById("rfiRows").innerHTML = rows.map((r) => `
+      <tr onclick="location.href='rfi-detail.html?id=${r.id}'" style="cursor:pointer;">
+        <td><strong>${escapeHtml(r.reference)}</strong></td>
+        <td>${escapeHtml(r.title)}</td>
+        <td>${r.plot_id ? escapeHtml(plotsById[r.plot_id] || "—") : "—"}</td>
+        <td><span class="badge ${RFI_PRIORITY_BADGE[r.priority]}">${RFI_PRIORITY_LABEL[r.priority]}</span></td>
+        <td><span class="badge ${RFI_STATUS_BADGE[r.status]}">${RFI_STATUS_LABEL[r.status]}</span></td>
+        <td>${r.assigned_to ? escapeHtml(editorEmail(r.assigned_to)) : "Unassigned"}</td>
+        <td>${r.due_date ? formatDate(r.due_date) : "—"}</td>
+        <td>${formatDate(r.created_at)}</td>
+      </tr>
+    `).join("");
+  }
+
+  document.getElementById("statusFilter").addEventListener("change", (e) => { statusFilter = e.target.value; render(); });
+  priorityFilterSelect.addEventListener("change", (e) => { priorityFilter = e.target.value; render(); });
+  assignedFilterSelect.addEventListener("change", (e) => { assignedFilter = e.target.value; render(); });
+
+  async function loadEditors() {
+    const { data, error } = await supabase.rpc("get_project_members", { p_project_id: projectId });
+    if (error) { showError(pageErrorBox, error); return; }
+    editors = (data || []).filter((m) => m.role === "owner" || m.role === "collaborator");
+    assignedFilterSelect.innerHTML = `<option value="all">Anyone assigned</option><option value="unassigned">Unassigned</option>` +
+      editors.map((m) => `<option value="${m.user_id}">${escapeHtml(m.email)}</option>`).join("");
+  }
+
+  async function load() {
+    clearError(pageErrorBox);
+    try {
+      allRfis = await listRfis(projectId);
+    } catch (err) {
+      showError(pageErrorBox, err);
+      allRfis = [];
+    }
+    render();
+  }
+
+  async function init() {
+    const { data: project } = await supabase.from("projects").select("name").eq("id", projectId).single();
+    renderHeader([
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project?.name || "Site", href: `project.html?id=${projectId}` },
+      { label: "RFIs" },
+    ]);
+    document.getElementById("projectSub").textContent = project ? `${project.name} — Requests For Information.` : "";
+    const { data: plots } = await supabase.from("plots").select("id, plot_number").eq("project_id", projectId);
+    (plots || []).slice().sort((a, b) => comparePlotNumbers(a.plot_number, b.plot_number)).forEach((p) => { plotsById[p.id] = p.plot_number; });
+    await loadEditors();
+    load();
+  }
+
+  init();
+</script>
+</body>
+</html>

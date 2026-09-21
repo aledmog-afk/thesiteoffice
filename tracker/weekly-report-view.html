@@ -30,7 +30,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, getOrgLogoUrl, formatGBP, showError, clearError, PHOTO_COMPLIANCE_BADGE, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_BADGE, STATUTORY_OUTCOME_BADGE, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, validWeeklyReportStatusTransitions, reviewWeeklyReport, approveWeeklyReport, issueWeeklyReport, reviseWeeklyReport, CONTROL_LEVEL_BADGE } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, getOrgLogoUrl, formatGBP, showError, clearError, PHOTO_COMPLIANCE_BADGE, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_BADGE, STATUTORY_OUTCOME_BADGE, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, validWeeklyReportStatusTransitions, reviewWeeklyReport, approveWeeklyReport, issueWeeklyReport, reviseWeeklyReport, CONTROL_LEVEL_BADGE, getRfiLinksForWeeklyReport, normalisePlotToken } from "./js/app.js";
 
   await requireAuth();
   const reportId = getParam("id");
@@ -153,7 +153,25 @@
     </div>`;
   }
 
-  function photoGallerySection(photos) {
+  // Raise-RFI link building for a single photo — matches
+  // weekly-report-form.html's rfiActionHtml() exactly (same
+  // "no duplicate via an existing rfi_evidence_links row" check, same
+  // "no id yet" fallback for a report saved before RFI-1's photo-id
+  // normalisation and not yet revised/re-saved since).
+  function rfiActionHtml(p, projectId, reportId, rfiLinksByPhotoId, plotIdByName) {
+    if (rfiLinksByPhotoId[p.id]) {
+      const link = rfiLinksByPhotoId[p.id];
+      return `<a class="badge badge-amber" style="align-self:flex-start;" href="rfi-detail.html?id=${link.rfiId}" title="Open this RFI">RFI Raised — ${escapeHtml(link.reference || "")}</a>`;
+    }
+    if (p.compliance_status !== "RFI Required") return "";
+    if (!p.id) return `<p class="hint" style="margin:0;">Revise and re-save this report to raise an RFI for this photo.</p>`;
+    const params = new URLSearchParams({ new: "1", project: projectId, weekly_report_id: reportId, photo_id: p.id, photo_url: p.url, category: p.category || "", caption: p.caption || "" });
+    const matchedPlotId = p.plot_area ? plotIdByName.get(normalisePlotToken(p.plot_area)) : null;
+    if (matchedPlotId) params.set("plot", matchedPlotId);
+    return `<a class="btn btn-outline btn-sm" style="align-self:flex-start;" href="rfi-detail.html?${params.toString()}">Raise RFI</a>`;
+  }
+
+  function photoGallerySection(photos, projectId, reportId, rfiLinksByPhotoId, plotIdByName) {
     const list = Array.isArray(photos) ? photos : [];
     if (!list.length) return "";
     return `<div class="doc-section">
@@ -168,6 +186,7 @@
               ${p.compliance_status ? `<span class="badge ${PHOTO_COMPLIANCE_BADGE[p.compliance_status] || "badge-grey"}" style="align-self:flex-start;">${escapeHtml(p.compliance_status)}</span>` : ""}
               ${p.caption ? `<p class="photo-card-caption">${escapeHtml(p.caption)}</p>` : ""}
               ${p.snag_item_id ? `<a class="badge badge-green" style="align-self:flex-start;" href="snag-list-edit.html?id=${p.snag_list_id}">✓ Snag Raised</a>` : ""}
+              ${rfiActionHtml(p, projectId, reportId, rfiLinksByPhotoId, plotIdByName)}
             </div>
           </div>
         `).join("")}
@@ -358,6 +377,21 @@
     const photos = Array.isArray(r.photos) ? r.photos : [];
     const logoUrl = await getOrgLogoUrl(project.org_id);
 
+    // Both best-effort only — an empty/failed lookup just means the
+    // Raise RFI link falls back to no pre-matched plot, or shows
+    // (harmlessly) as if no RFI has been raised yet; it never blocks
+    // rendering the rest of the report.
+    let rfiLinksByPhotoId = {};
+    let plotIdByName = new Map();
+    try {
+      const [links, { data: plots }] = await Promise.all([
+        getRfiLinksForWeeklyReport(r.id),
+        supabase.from("plots").select("id, plot_number").eq("project_id", r.project_id),
+      ]);
+      rfiLinksByPhotoId = links;
+      plotIdByName = new Map((plots || []).map((p) => [normalisePlotToken(p.plot_number), p.id]));
+    } catch { /* best-effort, see above */ }
+
     document.getElementById("doc").innerHTML = `
       <div class="doc-head">
         <div>
@@ -402,7 +436,7 @@
       ${itemSection("Plan for Next Week", r.next_week_items, r.next_week_plan)}
       ${section("Other Comments", r.other_comments || r.deliveries_materials)}
 
-      ${photoGallerySection(photos)}
+      ${photoGallerySection(photos, r.project_id, r.id, rfiLinksByPhotoId, plotIdByName)}
     `;
   }
 

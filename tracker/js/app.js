@@ -2823,8 +2823,11 @@ export function mountItemListEditor(container, initialItems, onChange, { withPer
 // Compliance status tagged onto each site photo, alongside a Plot/Area
 // and Inspection Category/Element caption — see PHOTO_COMPLIANCE_BADGE
 // and the photo gallery in weekly-report-form.html/weekly-report-view.html.
-export const PHOTO_COMPLIANCE_STATUS = ["Approved / Compliant", "Action Required", "Info Only"];
-export const PHOTO_COMPLIANCE_BADGE = { "Approved / Compliant": "badge-green", "Action Required": "badge-red", "Info Only": "badge-blue" };
+// "RFI Required" (RFI-2) is additive — the existing three values and
+// their behaviour (in particular "Action Required"'s auto-raised-snag
+// side effect) are completely unchanged.
+export const PHOTO_COMPLIANCE_STATUS = ["Approved / Compliant", "Action Required", "Info Only", "RFI Required"];
+export const PHOTO_COMPLIANCE_BADGE = { "Approved / Compliant": "badge-green", "Action Required": "badge-red", "Info Only": "badge-blue", "RFI Required": "badge-amber" };
 
 // Resource adequacy rating on the Labour & Site Resource Tracker.
 export const RESOURCE_ADEQUACY = ["Adequate", "Low / Risk to Programme"];
@@ -2846,6 +2849,148 @@ export const RISK_OWNER_SUGGESTIONS = ["Main Contractor", "Employer's Agent", "U
 export const STATUTORY_MILESTONE_TYPES = ["Air Permeability Test", "Sound Test", "Drainage Pressure Test", "Building Control Inspection", "NHBC / Premier Warranty Inspection", "Other"];
 export const STATUTORY_OUTCOMES = ["Pass", "Fail", "Pending", "Signed Off"];
 export const STATUTORY_OUTCOME_BADGE = { Pass: "badge-green", Fail: "badge-red", Pending: "badge-amber", "Signed Off": "badge-blue" };
+
+// ─── RFI (Requests For Information) — RFI-2 UI/workflow ────────────
+// Mirrors the Actions Engine's own shape and conventions exactly
+// (listX/getX/createX/updateX, STATUS/PRIORITY constants + LABEL/BADGE
+// maps, a valid*StatusTransitions() helper duplicating the database
+// trigger's own transition table for immediate UI feedback only — see
+// validActionStatusTransitions() above for the identical pattern). The
+// database (rfis_before_write(), sql/schema.sql v51) remains the sole
+// authority; nothing here re-implements org_id derivation, reference
+// numbering, or transition validation — it only mirrors the transition
+// table so the UI can offer sensible next-status options, and defers
+// to the server's own rejection (with its real error message) for
+// anything this client-side copy gets wrong. No client-side
+// capability/role check is added anywhere below, matching actions.html's
+// own existing convention exactly: RLS is the only gate, the UI just
+// surfaces whatever error it returns.
+
+export const RFI_STATUSES = ["open", "answered", "closed"];
+export const RFI_STATUS_LABEL = { open: "Open", answered: "Answered", closed: "Closed" };
+export const RFI_STATUS_BADGE = { open: "badge-red", answered: "badge-amber", closed: "badge-green" };
+
+export const RFI_PRIORITIES = ["low", "medium", "high", "critical"];
+export const RFI_PRIORITY_LABEL = { low: "Low", medium: "Medium", high: "High", critical: "Critical" };
+export const RFI_PRIORITY_BADGE = { low: "badge-grey", medium: "badge-blue", high: "badge-amber", critical: "badge-red" };
+
+// Mirrors valid_rfi_status_transition() in sql/schema.sql (v51)
+// exactly: open->answered, answered->closed, and the one reopen path
+// closed->open (mirroring actions' own single completed->open edge).
+const RFI_STATUS_TRANSITIONS = {
+  open: ["answered"],
+  answered: ["closed"],
+  closed: ["open"],
+};
+export function validRfiStatusTransitions(fromStatus) {
+  return RFI_STATUS_TRANSITIONS[fromStatus] || [];
+}
+
+export async function listRfis(projectId) {
+  const { data, error } = await supabase.from("rfis").select("*").eq("project_id", projectId).order("created_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function getRfi(rfiId) {
+  const { data, error } = await supabase.from("rfis").select("*, projects(name)").eq("id", rfiId).single();
+  if (error) throw error;
+  return data;
+}
+
+export async function createRfi(projectId, { title, question, priority = "medium", assignedTo = null, dueDate = null, plotId = null }) {
+  const { data, error } = await supabase.from("rfis").insert({
+    project_id: projectId,
+    title,
+    question,
+    priority,
+    assigned_to: assignedTo,
+    due_date: dueDate,
+    plot_id: plotId,
+  }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateRfi(rfiId, fields) {
+  const { data, error } = await supabase.from("rfis").update(fields).eq("id", rfiId).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function answerRfi(rfiId, response) {
+  return updateRfi(rfiId, { status: "answered", response });
+}
+
+export async function closeRfi(rfiId) {
+  return updateRfi(rfiId, { status: "closed" });
+}
+
+// Preserves response/answered_at/answered_by exactly as the database
+// trigger itself does (rfis_before_write() only clears closed_at on a
+// closed->open transition) — this function deliberately never touches
+// those fields, so a client can't accidentally clear them either.
+export async function reopenRfi(rfiId) {
+  return updateRfi(rfiId, { status: "open" });
+}
+
+// ─── rfi_evidence_links ──────────────────────────────────────────
+// Deliberately thin — RFI-2 only builds the weekly-report-photo path
+// end to end (see createRfiFromWeeklyReportPhoto() below); the other
+// three source types RFI-1 already validates server-side
+// (snag_item / inspection_finding / document) have no creation UI yet,
+// matching the brief's explicit "clean UI for the evidence that is
+// actually being used" scope.
+
+export async function getRfiEvidence(rfiId) {
+  const { data, error } = await supabase.from("rfi_evidence_links").select("*").eq("rfi_id", rfiId).order("linked_at", { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+
+// One bulk lookup covering every photo in a single weekly report,
+// keyed by photo_id — weekly-report-form.html and
+// weekly-report-view.html both use this to decide, per photo, whether
+// to show "Raise RFI" or "RFI Raised — RFI-00N" without a per-photo
+// query. This IS the existing-relationship check the brief asks for
+// before inventing any client-side duplicate-prevention rule: a photo
+// already linked here already has its RFI — no new rule needed.
+export async function getRfiLinksForWeeklyReport(weeklyReportId) {
+  const { data, error } = await supabase
+    .from("rfi_evidence_links")
+    .select("photo_id, rfi_id, rfis(reference, status)")
+    .eq("weekly_report_id", weeklyReportId)
+    .eq("source_type", "weekly_report_photo");
+  if (error) throw error;
+  const byPhotoId = {};
+  (data || []).forEach((link) => { byPhotoId[link.photo_id] = { rfiId: link.rfi_id, reference: link.rfis?.reference, status: link.rfis?.status }; });
+  return byPhotoId;
+}
+
+// Creates the RFI, then links it to the exact photo it was raised
+// from — mirroring createActionFromFinding()'s own two-step "create
+// then link back" shape exactly. Uses the photo's own stable id
+// (normalise_weekly_report_photo_ids(), sql/schema.sql v51) as the
+// evidence identity, never the photo's url. project_id/org_id
+// validation for both the RFI and the link are entirely server-side
+// (rfis_before_write() / rfi_evidence_links_before_write()) — this
+// function trusts neither the caller's projectId nor plotId beyond
+// what those triggers independently re-derive and check.
+export async function createRfiFromWeeklyReportPhoto(
+  { projectId, weeklyReportId, photoId, caption = null, plotId = null },
+  { title, question, priority = "medium", assignedTo = null, dueDate = null }
+) {
+  const rfi = await createRfi(projectId, { title, question, priority, assignedTo, dueDate, plotId });
+  const { data: link, error } = await supabase.from("rfi_evidence_links").insert({
+    rfi_id: rfi.id,
+    source_type: "weekly_report_photo",
+    weekly_report_id: weeklyReportId,
+    photo_id: photoId,
+    caption,
+  }).select().single();
+  if (error) throw error;
+  return { rfi, evidenceLink: link };
+}
 
 // Generic add/edit/delete table-shaped editor, sharing the same
 // interaction pattern as mountCommercialEditor but driven by a

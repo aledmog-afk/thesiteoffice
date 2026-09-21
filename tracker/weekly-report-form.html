@@ -121,7 +121,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, mountTableEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions, comparePlotNumbers, normalisePlotToken, syncGateStatusFromMilestones, EXTERNAL_WORKS_TAG, PHOTO_COMPLIANCE_STATUS, RESOURCE_ADEQUACY, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_LEVELS, RISK_IMPACT_BADGE, RISK_OWNER_SUGGESTIONS, STATUTORY_MILESTONE_TYPES, STATUTORY_OUTCOMES, STATUTORY_OUTCOME_BADGE, getWeeklyReportPosition, isWeeklyReportLocked, reviseWeeklyReport, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, CONTROL_LEVEL_BADGE, FINDING_SEVERITY_LABEL, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, mountTableEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions, comparePlotNumbers, normalisePlotToken, syncGateStatusFromMilestones, EXTERNAL_WORKS_TAG, PHOTO_COMPLIANCE_STATUS, RESOURCE_ADEQUACY, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_LEVELS, RISK_IMPACT_BADGE, RISK_OWNER_SUGGESTIONS, STATUTORY_MILESTONE_TYPES, STATUTORY_OUTCOMES, STATUTORY_OUTCOME_BADGE, getWeeklyReportPosition, isWeeklyReportLocked, reviseWeeklyReport, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, CONTROL_LEVEL_BADGE, FINDING_SEVERITY_LABEL, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel, getRfiLinksForWeeklyReport } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -682,6 +682,14 @@
   });
 
   let photos = [];
+  // photo.id -> { rfiId, reference, status } for any weekly_report_photo
+  // evidence link already raised against THIS report — populated once,
+  // on load, only for an existing (already-saved) report; a brand-new
+  // report has no id yet, so this stays empty (no photo could possibly
+  // have a link yet either). This IS the existing-relationship check
+  // that prevents a duplicate "Raise RFI" rather than inventing a new
+  // client-side rule — see getRfiLinksForWeeklyReport() in js/app.js.
+  let rfiLinksByPhotoId = {};
   const photoGallery = document.getElementById("photoGallery");
   const photoInput = document.getElementById("photoInput");
   const errorBox = document.getElementById("errorBox");
@@ -695,6 +703,29 @@
   // offers no Save to Device control (its original File doesn't survive
   // a page reload — nothing on the server or in local storage keeps it).
   const photoDeviceState = new WeakMap(); // photo -> { file, status }
+
+  // "RFI Required" is the same idea as "Action Required"'s auto-raised
+  // snag, but the actual create step is always an explicit user click
+  // (raising an RFI needs real title/question/priority content that
+  // can't be sensibly defaulted the way a snag's description can be) —
+  // never a silent side effect of saving. A photo only gets a real
+  // (stable) id once it's been through at least one save
+  // (normalise_weekly_report_photo_ids(), sql/schema.sql v51), so a
+  // just-uploaded, not-yet-saved photo can't be linked to an RFI yet;
+  // the hint below says so plainly rather than the button silently
+  // doing nothing or erroring.
+  function rfiActionHtml(p, i) {
+    if (rfiLinksByPhotoId[p.id]) {
+      const link = rfiLinksByPhotoId[p.id];
+      return `<a class="badge badge-amber" href="rfi-detail.html?id=${link.rfiId}" title="Open this RFI">RFI Raised — ${escapeHtml(link.reference || "")}</a>`;
+    }
+    if (p.compliance_status !== "RFI Required") return "";
+    if (!p.id) return `<span class="hint">Save the report to raise an RFI for this photo.</span>`;
+    const params = new URLSearchParams({ new: "1", project: projectId, weekly_report_id: reportId, photo_id: p.id, photo_url: p.url, category: p.category || "", caption: p.caption || "" });
+    const matchedPlotId = p.plot_area ? plotIdByName.get(normalisePlotToken(p.plot_area)) : null;
+    if (matchedPlotId) params.set("plot", matchedPlotId);
+    return `<a class="btn btn-outline btn-sm" href="rfi-detail.html?${params.toString()}">Raise RFI</a>`;
+  }
 
   // Each photo is { url, plot_area, category, compliance_status, caption }
   // — all four fields directly editable in place on its card, rather
@@ -721,6 +752,7 @@
           </select>
           <input type="text" class="pc-caption" data-i="${i}" placeholder="Caption / observation notes" value="${escapeHtml(p.caption)}">
           ${p.snag_item_id ? `<span class="badge badge-green" title="A snag was raised for this photo when the report was last saved">✓ Snag Raised</span>` : (p.compliance_status === "Action Required" ? `<span class="hint">A snag will be raised for this automatically when you save.</span>` : "")}
+          ${rfiActionHtml(p, i)}
         </div>
         ${saveHtml}
       </div>
@@ -843,6 +875,7 @@
     statutoryEditor = mountTableEditor(document.getElementById("statutoryItems"), r.statutory_milestones, () => {}, { columns: statutoryColumns });
 
     photos = (Array.isArray(r.photos) ? r.photos : []).map((p) => ({
+      id: p.id || null, // stable photo id (RFI-1) — undefined/absent for a photo saved before that migration, until this report's next editable save re-normalises it
       url: p.url,
       plot_area: p.plot_area || "",
       category: p.category || "",
@@ -852,6 +885,16 @@
       snag_list_id: p.snag_list_id || null,
     }));
     renderPhotos();
+    try {
+      rfiLinksByPhotoId = await getRfiLinksForWeeklyReport(reportId);
+      renderPhotos();
+    } catch {
+      // Best-effort only — if this lookup fails, photos tagged RFI
+      // Required just fall back to showing "Raise RFI" as normal; the
+      // create flow's own insert would still fail loudly on a genuine
+      // duplicate attempt via the evidence link's own validation, it
+      // just wouldn't be pre-empted in the UI.
+    }
 
     // Show whatever position was last saved — never silently re-fetch a
     // fresh one on load, even while still draft, so opening a report

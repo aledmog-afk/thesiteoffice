@@ -398,3 +398,102 @@ test("resolved_at: a finding inserted directly as 'resolved' still gets a real r
     await ownerA.end();
   }
 });
+
+// ─── photos: stable per-photo id (RFI-1) ─────────────────────────────
+// See tests/security/rfi_evidence_links.test.mjs for the RFI-side of
+// this — an evidence link identifies a photo by
+// (weekly_report_id, photo_id). These tests cover the normalisation
+// mechanism itself, independent of RFI.
+
+test("photos: a freshly-saved report gives every photo a stable id, without touching any other field", async () => {
+  const ownerA = await userClient(DB, OWNER_A);
+  try {
+    const r = await createReport(ownerA, fx.projA1, {
+      photos: JSON.stringify([
+        { url: "https://example.com/a.jpg", caption: "First" },
+        { url: "https://example.com/b.jpg", caption: "Second" },
+      ]),
+    });
+    assert.equal(r.photos.length, 2);
+    assert.ok(r.photos[0].id, "photo 0 must have an id");
+    assert.ok(r.photos[1].id, "photo 1 must have an id");
+    assert.notEqual(r.photos[0].id, r.photos[1].id, "each photo must get its OWN distinct id");
+    assert.equal(r.photos[0].url, "https://example.com/a.jpg");
+    assert.equal(r.photos[0].caption, "First");
+    assert.equal(r.photos[1].url, "https://example.com/b.jpg");
+  } finally {
+    await ownerA.end();
+  }
+});
+
+test("photos: an id, once assigned, never changes across later saves", async () => {
+  const ownerA = await userClient(DB, OWNER_A);
+  try {
+    const r = await createReport(ownerA, fx.projA1, { photos: JSON.stringify([{ url: "https://example.com/stable.jpg" }]) });
+    const firstId = r.photos[0].id;
+    const resaved = await ownerA.query("update public.weekly_reports set weather = 'Sunny' where id = $1 returning photos", [r.id]);
+    assert.equal(resaved.rows[0].photos[0].id, firstId);
+    const resavedAgain = await ownerA.query("update public.weekly_reports set weather = 'Rain' where id = $1 returning photos", [r.id]);
+    assert.equal(resavedAgain.rows[0].photos[0].id, firstId);
+  } finally {
+    await ownerA.end();
+  }
+});
+
+test("photos: adding a new photo to an already-normalised report gives ONLY the new one a fresh id", async () => {
+  const ownerA = await userClient(DB, OWNER_A);
+  try {
+    const r = await createReport(ownerA, fx.projA1, { photos: JSON.stringify([{ url: "https://example.com/old.jpg" }]) });
+    const oldId = r.photos[0].id;
+    const updated = await ownerA.query(
+      "update public.weekly_reports set photos = $1::jsonb where id = $2 returning photos",
+      [JSON.stringify([r.photos[0], { url: "https://example.com/new.jpg" }]), r.id]
+    );
+    assert.equal(updated.rows[0].photos[0].id, oldId, "the existing photo's id must be preserved exactly");
+    assert.ok(updated.rows[0].photos[1].id, "the newly-added photo must get its own id");
+    assert.notEqual(updated.rows[0].photos[1].id, oldId);
+  } finally {
+    await ownerA.end();
+  }
+});
+
+test("Backwards compatibility: a pre-migration-shaped report (photos with no id at all) still reads and saves correctly", async () => {
+  const admin = adminClient(DB);
+  await admin.connect();
+  let reportId;
+  try {
+    // Simulates a row saved before this migration existed — the
+    // trigger is temporarily disabled for this one insert so the photo
+    // genuinely has no id, matching real historical production rows.
+    await admin.query("alter table public.weekly_reports disable trigger trg_weekly_reports_before_write");
+    const created = await admin.query(
+      `insert into public.weekly_reports (project_id, week_starting, week_ending, photos, created_by)
+       values ($1,'2026-05-01','2026-05-05', $2::jsonb, $3) returning id, photos`,
+      [fx.projA1, JSON.stringify([{ url: "https://example.com/legacy.jpg", plot_area: "Plot 3", category: "Groundworks", compliance_status: "", caption: "", snag_item_id: null, snag_list_id: null }]), OWNER_A]
+    );
+    await admin.query("alter table public.weekly_reports enable trigger trg_weekly_reports_before_write");
+    reportId = created.rows[0].id;
+    assert.equal(created.rows[0].photos[0].id, undefined, "the legacy row genuinely has no photo id");
+  } finally {
+    await admin.end();
+  }
+
+  // Reading it back (as an ordinary editor) must work exactly as
+  // before — nothing about the missing id breaks a plain read.
+  const ownerA = await userClient(DB, OWNER_A);
+  try {
+    const read = await ownerA.query("select photos from public.weekly_reports where id = $1", [reportId]);
+    assert.equal(read.rows[0].photos[0].url, "https://example.com/legacy.jpg");
+
+    // The next EDITABLE save normalises it, preserving every other
+    // field and never touching the url.
+    const resaved = await ownerA.query("update public.weekly_reports set weather = 'Overcast' where id = $1 returning photos", [reportId]);
+    const photo = resaved.rows[0].photos[0];
+    assert.ok(photo.id, "the legacy photo must be given a stable id on its next editable save");
+    assert.equal(photo.url, "https://example.com/legacy.jpg", "the url must never change");
+    assert.equal(photo.plot_area, "Plot 3", "other pre-existing fields must be preserved exactly");
+    assert.equal(photo.category, "Groundworks");
+  } finally {
+    await ownerA.end();
+  }
+});

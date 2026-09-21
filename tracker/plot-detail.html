@@ -77,7 +77,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, uploadImage, suggestPlotProgress, recalculateActualProgress, checkAndMarkPlotHandedOver, getPlotHandoverReadiness, PLOT_READINESS_LABEL, PLOT_READINESS_BADGE } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, uploadImage, suggestPlotProgress, recalculateActualProgress, checkAndMarkPlotHandedOver, getPlotHandoverReadiness, PLOT_READINESS_LABEL, PLOT_READINESS_BADGE, RFI_STATUS_BADGE } from "./js/app.js";
 
   await requireAuth();
   const plotId = getParam("id");
@@ -210,10 +210,11 @@
   async function loadLinkedItems() {
     const wrap = document.getElementById("linkedItemsWrap");
     try {
-      const [{ data: actions }, { data: findings }, { data: list }] = await Promise.all([
+      const [{ data: actions }, { data: findings }, { data: list }, { data: rfis }] = await Promise.all([
         supabase.from("actions").select("id, title, status, priority").eq("plot_id", plotId),
         supabase.from("inspection_findings").select("id, title, severity, status, inspection_id").eq("plot_id", plotId),
         supabase.from("snag_lists").select("id").eq("plot_id", plotId).maybeSingle(),
+        supabase.from("rfis").select("id, reference, title, status").eq("plot_id", plotId),
       ]);
       const { data: directTagged } = await supabase.from("snag_items").select("id, description, status, snag_list_id").eq("plot_id", plotId);
       const { data: byList } = list?.id
@@ -227,6 +228,7 @@
         ["Actions", actions || [], (a) => linkedItemRowHtml(a.title, `actions.html?project=${plot.project_id}`, `<span class="badge ${a.status === "completed" ? "badge-green" : a.status === "blocked" ? "badge-red" : "badge-grey"}">${escapeHtml(a.status)}</span>`)],
         ["Inspection Findings", findings || [], (f) => linkedItemRowHtml(f.title, `inspection-detail.html?id=${f.inspection_id}`, `<span class="badge ${f.severity === "critical" || f.severity === "high" ? "badge-red" : "badge-grey"}">${escapeHtml(f.status)}</span>`)],
         ["Snags", snags, (s) => linkedItemRowHtml(s.description, `snag-list-edit.html?id=${s.snag_list_id}`, `<span class="badge ${s.status === "open" ? "badge-red" : "badge-green"}">${escapeHtml(s.status)}</span>`)],
+        ["RFIs", rfis || [], (r) => linkedItemRowHtml(`${r.reference} — ${r.title}`, `rfi-detail.html?id=${r.id}`, `<span class="badge ${RFI_STATUS_BADGE[r.status]}">${escapeHtml(r.status)}</span>`)],
       ];
 
       wrap.innerHTML = sections.map(([label, rows, rowFn]) => `

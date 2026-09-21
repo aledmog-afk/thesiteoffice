@@ -222,7 +222,7 @@ test("Audit trail: the v28 migration block (table, triggers, policies) is idempo
     const triggers = await client.query(`
       select count(*)::int as n from pg_trigger where tgname like 'trg_audit_%'
     `);
-    assert.equal(triggers.rows[0].n, 27, "exactly 27 audit triggers must exist after repeated re-application (the original 8 from Priority 4, actions from Priority 5, inspections + inspection_findings from Priority 7, documents + document_revisions from Priority 10, programmes + programme_activities from Priority 11, project_module_roles + commercial_events + variations + dayworks + commercial_line_items + variation_dayworks + commercial_evidence_links + commercial_signatures from the Commercial Module Phase 0, toolbox_talks + toolbox_talk_attendees + toolbox_talk_templates from Toolbox Talks, and commercial_approval_requests from P18b's External Client Approval workflow), never duplicated");
+    assert.equal(triggers.rows[0].n, 29, "exactly 29 audit triggers must exist after repeated re-application (the original 8 from Priority 4, actions from Priority 5, inspections + inspection_findings from Priority 7, documents + document_revisions from Priority 10, programmes + programme_activities from Priority 11, project_module_roles + commercial_events + variations + dayworks + commercial_line_items + variation_dayworks + commercial_evidence_links + commercial_signatures from the Commercial Module Phase 0, toolbox_talks + toolbox_talk_attendees + toolbox_talk_templates from Toolbox Talks, commercial_approval_requests from P18b's External Client Approval workflow, and rfis + rfi_evidence_links from RFI-1), never duplicated");
     await client.end();
   } finally {
     await dropTestDatabase(db);
@@ -770,6 +770,107 @@ test("Programme Control: a fresh install has zero programmes/activities — ther
     assert.equal(programmes.rows[0].n, 0);
     const activities = await client.query("select count(*)::int as n from public.programme_activities");
     assert.equal(activities.rows[0].n, 0);
+
+    await client.end();
+  } finally {
+    await dropTestDatabase(db);
+  }
+});
+
+// ─── RFI-1 (v51) ────────────────────────────────────────────────────
+
+test("RFI-1: rfis/rfi_evidence_links tables, indexes, triggers and RLS policies are idempotent across repeated re-application", async () => {
+  const db = "tracker_test_rfi_idempotent";
+  await createTestDatabase(db);
+  try {
+    const client = adminClient(db);
+    await client.connect();
+    await runSqlFile(client, MOCK_SETUP);
+    for (let i = 0; i < 3; i++) {
+      await runSqlFile(client, CURRENT_SCHEMA);
+    }
+
+    const tables = await client.query("select count(*)::int as n from information_schema.tables where table_schema = 'public' and table_name in ('rfis', 'rfi_evidence_links')");
+    assert.equal(tables.rows[0].n, 2);
+
+    const rfisTriggers = await client.query("select count(*)::int as n from pg_trigger where tgrelid = 'public.rfis'::regclass and tgname like 'trg_%'");
+    assert.equal(rfisTriggers.rows[0].n, 2, "exactly 2 triggers on rfis (before-write + audit), never duplicated");
+
+    const evidenceTriggers = await client.query("select count(*)::int as n from pg_trigger where tgrelid = 'public.rfi_evidence_links'::regclass and tgname like 'trg_%'");
+    assert.equal(evidenceTriggers.rows[0].n, 2, "exactly 2 triggers on rfi_evidence_links (before-write + audit), never duplicated");
+
+    const rfisPolicies = await client.query("select count(*)::int as n from pg_policies where tablename = 'rfis'");
+    assert.equal(rfisPolicies.rows[0].n, 3, "select/insert/update only, no delete policy");
+
+    const evidencePolicies = await client.query("select count(*)::int as n from pg_policies where tablename = 'rfi_evidence_links'");
+    assert.equal(evidencePolicies.rows[0].n, 3, "select/insert/delete only, no update policy");
+
+    const rfisIndexes = await client.query("select count(*)::int as n from pg_indexes where tablename = 'rfis' and indexname like '%_idx'");
+    assert.equal(rfisIndexes.rows[0].n, 5, "never duplicated across re-application");
+
+    const evidenceIndexes = await client.query("select count(*)::int as n from pg_indexes where tablename = 'rfi_evidence_links' and indexname like '%_idx'");
+    assert.equal(evidenceIndexes.rows[0].n, 4, "never duplicated across re-application");
+
+    const uniqueConstraint = await client.query(
+      `select count(*)::int as n from pg_constraint where conrelid = 'public.rfis'::regclass and contype = 'u' and conname = 'rfis_project_reference_unique'`
+    );
+    assert.equal(uniqueConstraint.rows[0].n, 1, "the reference-numbering safety-net unique constraint must exist exactly once, never duplicated");
+
+    const checkConstraints = await client.query(
+      `select count(*)::int as n from pg_constraint where conrelid = 'public.rfi_evidence_links'::regclass and contype = 'c'`
+    );
+    assert.equal(checkConstraints.rows[0].n, 2, "source_type allow-list + per-type shape constraints, never duplicated");
+
+    await client.end();
+  } finally {
+    await dropTestDatabase(db);
+  }
+});
+
+test("RFI-1: a fresh install has zero RFIs — there is no legacy predecessor to backfill from", async () => {
+  const db = "tracker_test_rfi_no_backfill";
+  await createTestDatabase(db);
+  try {
+    const client = adminClient(db);
+    await client.connect();
+    await runSqlFile(client, MOCK_SETUP);
+    await runSqlFile(client, CURRENT_SCHEMA);
+
+    const rfis = await client.query("select count(*)::int as n from public.rfis");
+    assert.equal(rfis.rows[0].n, 0);
+    const links = await client.query("select count(*)::int as n from public.rfi_evidence_links");
+    assert.equal(links.rows[0].n, 0);
+
+    await client.end();
+  } finally {
+    await dropTestDatabase(db);
+  }
+});
+
+test("RFI-1: existing weekly_reports rows (pre-dating photo-id normalisation) survive the migration untouched", async () => {
+  const db = "tracker_test_rfi_weekly_reports_survive";
+  await createTestDatabase(db);
+  try {
+    const client = adminClient(db);
+    await client.connect();
+    await runSqlFile(client, MOCK_SETUP);
+    await runSqlFile(client, OLD_SCHEMA);
+    await runSqlFile(client, SEED);
+
+    const projectRow = await client.query("select id from public.projects order by name limit 1");
+    const reportId = "88888888-0000-0000-0000-000000000001";
+    await client.query(
+      `insert into public.weekly_reports (id, project_id, week_starting, week_ending, photos, created_by)
+       values ($1,$2,'2025-01-06','2025-01-10', $3::jsonb, '11111111-1111-1111-1111-111111111111')`,
+      [reportId, projectRow.rows[0].id, JSON.stringify([{ url: "https://example.com/pre-existing.jpg", caption: "Before RFI-1 existed" }])]
+    );
+
+    await runSqlFile(client, CURRENT_SCHEMA); // the actual migration under test
+
+    const report = await client.query("select photos from public.weekly_reports where id = $1", [reportId]);
+    assert.equal(report.rowCount, 1, "the pre-existing report must survive the migration");
+    assert.equal(report.rows[0].photos[0].url, "https://example.com/pre-existing.jpg", "the migration itself must never touch existing photo data (normalisation only happens on the report's own next save, not as part of applying the migration)");
+    assert.equal(report.rows[0].photos[0].caption, "Before RFI-1 existed");
 
     await client.end();
   } finally {

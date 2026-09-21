@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>RFI – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+<style>
+  .rfi-source-card { display: flex; gap: 0.8rem; align-items: flex-start; flex-wrap: wrap; }
+  .rfi-source-card img { width: 96px; height: 96px; object-fit: cover; border-radius: 6px; border: 1px solid var(--rule); flex: 0 0 auto; }
+  .rfi-evidence-item { display: flex; gap: 0.8rem; align-items: flex-start; flex-wrap: wrap; border: 1px solid var(--rule); border-radius: 8px; padding: 0.8rem; margin-bottom: 0.6rem; }
+  .rfi-evidence-item img { width: 84px; height: 84px; object-fit: cover; border-radius: 6px; border: 1px solid var(--rule); flex: 0 0 auto; }
+  .rfi-meta-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0.6rem 1rem; margin-bottom: 1rem; }
+  .rfi-meta-grid div strong { display: block; font-size: 0.78rem; color: var(--ink-soft, #6b6b6b); font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em; }
+</style>
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page" style="max-width:800px;">
+  <div class="page-head">
+    <div>
+      <div class="page-title" id="pageTitle">Loading…</div>
+      <div class="page-sub" id="projectSub"></div>
+    </div>
+    <div class="btn-row">
+      <span class="badge" id="priorityBadge" style="display:none;"></span>
+      <span class="badge" id="statusBadge" style="display:none;"></span>
+    </div>
+  </div>
+
+  <div id="errorBox" class="error-box"></div>
+
+  <div class="card" id="sourceCard" style="display:none; margin-bottom:1.5rem;">
+    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.8rem;">Source: Weekly Report Photo</h3>
+    <div class="rfi-source-card">
+      <img id="sourcePhotoImg" src="" alt="">
+      <div>
+        <p class="hint" id="sourceReportLine" style="margin:0 0 0.3rem;"></p>
+        <p class="hint" id="sourceCategoryLine" style="margin:0 0 0.3rem;"></p>
+        <p class="hint" id="sourceCaptionLine" style="margin:0;"></p>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="detailsCard" style="margin-bottom:1.5rem;">
+    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;" id="detailsCardHeading">RFI Details</h3>
+    <div class="rfi-meta-grid" id="readOnlyMeta" style="display:none;">
+      <div><strong>Reference</strong><span id="metaReference">—</span></div>
+      <div><strong>Raised by</strong><span id="metaRaisedBy">—</span></div>
+      <div><strong>Raised date</strong><span id="metaRaisedDate">—</span></div>
+    </div>
+    <form id="detailsForm">
+      <div class="field"><label for="title">Title *</label><input type="text" id="title" required placeholder="e.g. Beam detail clash at gridline C4"></div>
+      <div class="field"><label for="question">Question *</label><textarea id="question" rows="3" required placeholder="What exactly needs to be confirmed/clarified?"></textarea></div>
+      <div class="form-grid">
+        <div class="field">
+          <label for="priority">Priority</label>
+          <select id="priority"></select>
+        </div>
+        <div class="field">
+          <label for="dueDate">Due date</label>
+          <input type="date" id="dueDate">
+        </div>
+      </div>
+      <div class="form-grid">
+        <div class="field">
+          <label for="assignedTo">Assigned to</label>
+          <select id="assignedTo"><option value="">Unassigned</option></select>
+        </div>
+        <div class="field">
+          <label for="plot">Plot / Area <span class="hint">(optional)</span></label>
+          <select id="plot"><option value="">Not plot-specific</option></select>
+        </div>
+      </div>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-amber" id="saveBtn">Create RFI</button>
+        <button type="button" class="btn btn-outline" id="cancelBtn" style="display:none;">Cancel</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card" id="lifecycleCard" style="display:none; margin-bottom:1.5rem;">
+    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Response &amp; Decision</h3>
+    <div id="responseDisplay" style="display:none;">
+      <p class="hint" style="margin:0 0 0.3rem;">Response</p>
+      <p id="responseText" style="margin:0 0 0.8rem;"></p>
+      <p class="hint" id="answeredByLine" style="margin:0;"></p>
+      <p class="hint" id="closedAtLine" style="margin:0.3rem 0 0;"></p>
+    </div>
+    <form id="respondForm" style="display:none;">
+      <div class="field"><label for="responseInput">Response *</label><textarea id="responseInput" rows="4" required placeholder="The answer to the question raised above"></textarea></div>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-amber" id="answerBtn">Mark Answered</button>
+      </div>
+    </form>
+    <div class="btn-row" id="lifecycleActions" style="margin-top:0.8rem;"></div>
+  </div>
+
+  <div class="card" id="evidenceCard" style="display:none;">
+    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Evidence</h3>
+    <div id="evidenceWrap"></div>
+    <div id="evidenceEmpty" class="empty" style="display:none;"><p>No evidence linked yet.</p></div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, comparePlotNumbers, RFI_STATUS_LABEL, RFI_STATUS_BADGE, RFI_PRIORITIES, RFI_PRIORITY_LABEL, RFI_PRIORITY_BADGE, validRfiStatusTransitions, getRfi, createRfi, updateRfi, answerRfi, closeRfi, reopenRfi, createRfiFromWeeklyReportPhoto, getRfiEvidence } from "./js/app.js";
+
+  await requireAuth();
+  const rfiId = getParam("id");
+  const isNew = getParam("new") === "1";
+  if (!rfiId && !isNew) window.location.href = "dashboard.html";
+
+  // Present only in creation mode, when launched from a weekly-report
+  // photo's "Raise RFI" button — carries the exact context the photo
+  // gallery already knows so the user never re-enters it. See
+  // getRfiSourceContext() in js/app.js's caller (weekly-report-form.html
+  // / weekly-report-view.html) for how these are built.
+  const sourceContext = isNew && getParam("weekly_report_id") ? {
+    projectId: getParam("project"),
+    weeklyReportId: getParam("weekly_report_id"),
+    photoId: getParam("photo_id"),
+    photoUrl: getParam("photo_url") || "",
+    category: getParam("category") || "",
+    caption: getParam("caption") || "",
+  } : null;
+
+  const projectId = isNew ? getParam("project") : null; // resolved from the loaded RFI itself once it exists
+  if (isNew && !projectId) window.location.href = "dashboard.html";
+
+  const errorBox = document.getElementById("errorBox");
+  let rfi = null; // null in creation mode
+  let editors = [];
+  let plotsById = {};
+
+  const prioritySelect = document.getElementById("priority");
+  const assignedToSelect = document.getElementById("assignedTo");
+  const plotSelect = document.getElementById("plot");
+  prioritySelect.innerHTML = RFI_PRIORITIES.map((p) => `<option value="${p}">${RFI_PRIORITY_LABEL[p]}</option>`).join("");
+  prioritySelect.value = "medium";
+
+  function renderTitleAndBadges() {
+    document.getElementById("pageTitle").textContent = rfi ? `${rfi.reference} — ${rfi.title}` : "New RFI";
+    const priorityBadge = document.getElementById("priorityBadge");
+    const statusBadge = document.getElementById("statusBadge");
+    if (rfi) {
+      priorityBadge.style.display = "inline-flex";
+      priorityBadge.className = `badge ${RFI_PRIORITY_BADGE[rfi.priority]}`;
+      priorityBadge.textContent = RFI_PRIORITY_LABEL[rfi.priority];
+      statusBadge.style.display = "inline-flex";
+      statusBadge.className = `badge ${RFI_STATUS_BADGE[rfi.status]}`;
+      statusBadge.textContent = RFI_STATUS_LABEL[rfi.status];
+    }
+  }
+
+  function fillDetailsForm() {
+    document.getElementById("title").value = rfi.title;
+    document.getElementById("question").value = rfi.question;
+    prioritySelect.value = rfi.priority;
+    document.getElementById("dueDate").value = rfi.due_date || "";
+    assignedToSelect.value = rfi.assigned_to || "";
+    plotSelect.value = rfi.plot_id || "";
+  }
+
+  function renderReadOnlyMeta() {
+    document.getElementById("readOnlyMeta").style.display = "grid";
+    document.getElementById("metaReference").textContent = rfi.reference;
+    document.getElementById("metaRaisedBy").textContent = editorEmail(rfi.created_by);
+    document.getElementById("metaRaisedDate").textContent = formatDate(rfi.created_at);
+  }
+
+  function editorEmail(userId) {
+    return editors.find((m) => m.user_id === userId)?.email || (userId ? "—" : "—");
+  }
+
+  // ─── Lifecycle: Respond / Close / Reopen ───────────────────────
+  // The database (rfis_before_write(), sql/schema.sql v51) is the sole
+  // authority on which transitions are valid — validRfiStatusTransitions()
+  // here only decides which buttons to SHOW; if the database ever
+  // rejects one anyway (a stale page, a race with another editor), the
+  // real error from the server is what's actually displayed below, not
+  // a client-invented one.
+  function renderLifecycle() {
+    if (!rfi) return;
+    document.getElementById("lifecycleCard").style.display = "block";
+    const responseDisplay = document.getElementById("responseDisplay");
+    const respondForm = document.getElementById("respondForm");
+    const actions = document.getElementById("lifecycleActions");
+
+    if (rfi.status === "open") {
+      responseDisplay.style.display = "none";
+      respondForm.style.display = "block";
+      document.getElementById("responseInput").value = "";
+      actions.innerHTML = "";
+    } else {
+      respondForm.style.display = "none";
+      responseDisplay.style.display = "block";
+      document.getElementById("responseText").textContent = rfi.response || "—";
+      document.getElementById("answeredByLine").textContent = rfi.answered_by
+        ? `Answered by ${editorEmail(rfi.answered_by)} on ${formatDate(rfi.answered_at)}`
+        : "";
+      document.getElementById("closedAtLine").textContent = rfi.closed_at ? `Closed on ${formatDate(rfi.closed_at)}` : "";
+
+      const next = validRfiStatusTransitions(rfi.status);
+      const buttons = [];
+      if (next.includes("closed")) buttons.push(`<button type="button" class="btn btn-amber btn-sm" id="closeBtn">Close RFI</button>`);
+      if (next.includes("open")) buttons.push(`<button type="button" class="btn btn-outline btn-sm" id="reopenBtn">Reopen RFI</button>`);
+      actions.innerHTML = buttons.join("");
+      const closeBtn = document.getElementById("closeBtn");
+      if (closeBtn) closeBtn.addEventListener("click", () => doTransition(() => closeRfi(rfi.id)));
+      const reopenBtn = document.getElementById("reopenBtn");
+      if (reopenBtn) reopenBtn.addEventListener("click", () => doTransition(() => reopenRfi(rfi.id)));
+    }
+  }
+
+  async function doTransition(fn) {
+    clearError(errorBox);
+    const buttons = document.querySelectorAll("#lifecycleActions button, #answerBtn");
+    buttons.forEach((b) => { b.disabled = true; });
+    try {
+      rfi = await fn();
+      renderTitleAndBadges();
+      renderLifecycle();
+    } catch (err) {
+      showError(errorBox, err);
+    } finally {
+      buttons.forEach((b) => { b.disabled = false; });
+    }
+  }
+
+  document.getElementById("respondForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const text = document.getElementById("responseInput").value.trim();
+    if (!text) return;
+    await doTransition(() => answerRfi(rfi.id, text));
+  });
+
+  // ─── Evidence ───────────────────────────────────────────────────
+  function evidenceItemHtml(link) {
+    if (link.source_type === "weekly_report_photo") {
+      const reportLine = link.weekly_reports
+        ? `<a href="weekly-report-view.html?id=${link.weekly_report_id}">Weekly report — week starting ${formatDate(link.weekly_reports.week_starting)}</a>`
+        : `<a href="weekly-report-view.html?id=${link.weekly_report_id}">Weekly report</a>`;
+      return `
+        <div class="rfi-evidence-item">
+          ${link.photo_url ? `<img src="${link.photo_url}" alt="">` : ""}
+          <div>
+            <p style="margin:0 0 0.3rem;">${reportLine}</p>
+            ${link.category ? `<p class="hint" style="margin:0 0 0.2rem;">${escapeHtml(link.category)}</p>` : ""}
+            ${link.caption ? `<p class="hint" style="margin:0;">${escapeHtml(link.caption)}</p>` : ""}
+          </div>
+        </div>`;
+    }
+    // Other source types (RFI-1 already validates them server-side; no
+    // dedicated UI for creating these yet, but an existing link must
+    // still render legibly rather than being silently dropped).
+    const labelByType = { snag_item: "Linked Snag", inspection_finding: "Linked Inspection Finding", document: "Linked Document" };
+    return `<div class="rfi-evidence-item"><div><p style="margin:0;">${labelByType[link.source_type] || link.source_type}</p></div></div>`;
+  }
+
+  async function loadEvidence() {
+    document.getElementById("evidenceCard").style.display = "block";
+    let links;
+    try {
+      links = await getRfiEvidence(rfi.id);
+    } catch (err) {
+      showError(errorBox, err);
+      return;
+    }
+    // Photo url/category/caption/report week live on the SOURCE
+    // records (weekly_reports.photos jsonb / weekly_reports itself),
+    // not on rfi_evidence_links — resolved here rather than widening
+    // the link table with denormalised copies of data that already
+    // has a single source of truth.
+    const photoLinks = links.filter((l) => l.source_type === "weekly_report_photo");
+    const reportIds = [...new Set(photoLinks.map((l) => l.weekly_report_id))];
+    let reportsById = {};
+    if (reportIds.length) {
+      const { data: reports } = await supabase.from("weekly_reports").select("id, week_starting, photos").in("id", reportIds);
+      (reports || []).forEach((r) => { reportsById[r.id] = r; });
+    }
+    const enriched = links.map((l) => {
+      if (l.source_type !== "weekly_report_photo") return l;
+      const report = reportsById[l.weekly_report_id];
+      const photo = report ? (report.photos || []).find((p) => p.id === l.photo_id) : null;
+      return { ...l, weekly_reports: report, photo_url: photo?.url || null };
+    });
+    document.getElementById("evidenceEmpty").style.display = enriched.length ? "none" : "block";
+    document.getElementById("evidenceWrap").innerHTML = enriched.map(evidenceItemHtml).join("");
+  }
+
+  // ─── Details form (create + edit) ────────────────────────────────
+  document.getElementById("detailsForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearError(errorBox);
+    const saveBtn = document.getElementById("saveBtn");
+    saveBtn.disabled = true;
+    const fields = {
+      title: document.getElementById("title").value.trim(),
+      question: document.getElementById("question").value.trim(),
+      priority: prioritySelect.value,
+      assignedTo: assignedToSelect.value || null,
+      dueDate: document.getElementById("dueDate").value || null,
+      plotId: plotSelect.value || null,
+    };
+    try {
+      if (rfi) {
+        rfi = await updateRfi(rfi.id, {
+          title: fields.title, question: fields.question, priority: fields.priority,
+          assigned_to: fields.assignedTo, due_date: fields.dueDate, plot_id: fields.plotId,
+        });
+        renderTitleAndBadges();
+      } else if (sourceContext) {
+        const { rfi: created } = await createRfiFromWeeklyReportPhoto(
+          { projectId: sourceContext.projectId, weeklyReportId: sourceContext.weeklyReportId, photoId: sourceContext.photoId, caption: sourceContext.caption || null, plotId: fields.plotId },
+          fields
+        );
+        window.location.href = `rfi-detail.html?id=${created.id}`;
+        return;
+      } else {
+        const created = await createRfi(projectId, fields);
+        window.location.href = `rfi-detail.html?id=${created.id}`;
+        return;
+      }
+    } catch (err) {
+      showError(errorBox, err);
+    } finally {
+      saveBtn.disabled = false;
+    }
+  });
+
+  document.getElementById("cancelBtn").addEventListener("click", () => { if (rfi) fillDetailsForm(); });
+
+  function applySourceContext() {
+    if (!sourceContext) return;
+    document.getElementById("sourceCard").style.display = "block";
+    if (sourceContext.photoUrl) document.getElementById("sourcePhotoImg").src = sourceContext.photoUrl;
+    document.getElementById("sourceCategoryLine").textContent = sourceContext.category ? `Category: ${sourceContext.category}` : "";
+    document.getElementById("sourceCaptionLine").textContent = sourceContext.caption ? `Caption: ${sourceContext.caption}` : "";
+    supabase.from("weekly_reports").select("week_starting").eq("id", sourceContext.weeklyReportId).single().then(({ data }) => {
+      document.getElementById("sourceReportLine").innerHTML = data
+        ? `From: <a href="weekly-report-view.html?id=${sourceContext.weeklyReportId}">Weekly report — week starting ${formatDate(data.week_starting)}</a>`
+        : "";
+    });
+  }
+
+  async function loadEditorsAndPlots(pid) {
+    const [{ data: members }, { data: plots }] = await Promise.all([
+      supabase.rpc("get_project_members", { p_project_id: pid }),
+      supabase.from("plots").select("id, plot_number").eq("project_id", pid),
+    ]);
+    editors = (members || []).filter((m) => m.role === "owner" || m.role === "collaborator");
+    assignedToSelect.innerHTML = `<option value="">Unassigned</option>` + editors.map((m) => `<option value="${m.user_id}">${escapeHtml(m.email)}</option>`).join("");
+    const sortedPlots = (plots || []).slice().sort((a, b) => comparePlotNumbers(a.plot_number, b.plot_number));
+    sortedPlots.forEach((p) => { plotsById[p.id] = p.plot_number; });
+    plotSelect.innerHTML = `<option value="">Not plot-specific</option>` + sortedPlots.map((p) => `<option value="${p.id}">${escapeHtml(p.plot_number)}</option>`).join("");
+  }
+
+  async function init() {
+    if (isNew) {
+      document.getElementById("detailsCardHeading").textContent = sourceContext ? "New RFI — from weekly report photo" : "New RFI";
+      applySourceContext();
+      const { data: project } = await supabase.from("projects").select("name").eq("id", projectId).single();
+      renderHeader([
+        { label: "Dashboard", href: "dashboard.html" },
+        { label: project?.name || "Site", href: `project.html?id=${projectId}` },
+        { label: "RFIs", href: `rfis.html?project=${projectId}` },
+        { label: "New RFI" },
+      ]);
+      document.getElementById("projectSub").textContent = project?.name || "";
+      renderTitleAndBadges();
+      await loadEditorsAndPlots(projectId);
+      if (sourceContext?.category && !document.getElementById("title").value) {
+        document.getElementById("title").value = sourceContext.category;
+      }
+      // A plot pre-matched by the caller (weekly-report-form.html /
+      // weekly-report-view.html's own plotIdByName match against the
+      // photo's free-text plot_area) — only ever a suggested starting
+      // value the user can still change, never trusted as validated;
+      // the real validation is entirely server-side
+      // (rfis_before_write(), sql/schema.sql v51).
+      const preselectedPlot = getParam("plot");
+      if (preselectedPlot) plotSelect.value = preselectedPlot;
+      return;
+    }
+
+    try {
+      rfi = await getRfi(rfiId);
+    } catch (err) {
+      document.getElementById("pageTitle").textContent = "RFI not found";
+      return;
+    }
+    const project = rfi.projects;
+    renderHeader([
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project?.name || "Site", href: `project.html?id=${rfi.project_id}` },
+      { label: "RFIs", href: `rfis.html?project=${rfi.project_id}` },
+      { label: rfi.reference },
+    ]);
+    document.getElementById("projectSub").textContent = project?.name || "";
+    document.getElementById("detailsCardHeading").textContent = "RFI Details";
+    document.getElementById("saveBtn").textContent = "Save Changes";
+    document.getElementById("cancelBtn").style.display = "inline-flex";
+
+    await loadEditorsAndPlots(rfi.project_id);
+    renderTitleAndBadges();
+    renderReadOnlyMeta();
+    fillDetailsForm();
+    renderLifecycle();
+    await loadEvidence();
+  }
+
+  init();
+</script>
+</body>
+</html>

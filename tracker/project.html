@@ -124,6 +124,11 @@
       <div class="tile-name">Inspections</div>
       <div class="tile-stats"><div><strong id="findingsOpenCount">–</strong>open findings</div></div>
     </a>
+    <a class="tile" href="rfis.html?project=" id="rfisTile">
+      <div class="tile-icon">❓</div>
+      <div class="tile-name">RFIs</div>
+      <div class="tile-stats"><div><strong id="rfisOpenCount">–</strong>open</div></div>
+    </a>
     <a class="tile" href="drawings.html?project=" id="drawingsTile">
       <div class="tile-icon">📐</div>
       <div class="tile-name">Drawings &amp; Layouts</div>
@@ -267,6 +272,7 @@
   document.getElementById("programmeTile").href = `programme.html?project=${projectId}`;
   document.getElementById("actionsTile").href = `actions.html?project=${projectId}`;
   document.getElementById("inspectionsTile").href = `inspections.html?project=${projectId}`;
+  document.getElementById("rfisTile").href = `rfis.html?project=${projectId}`;
 
   let project = null;
   let plotsCount = 0;
@@ -773,7 +779,7 @@
     document.getElementById("controlCard").style.display = "none";
     document.getElementById("detailsCard").style.display = "none";
     document.getElementById("collaboratorsCard").style.display = "none";
-    ["reportsTile", "monthlyReportsTile", "plotHandoversTile", "hsAuditsTile", "commercialsTile", "commercialModuleTile", "toolboxTalksTile", "drawingsTile", "actionsTile", "inspectionsTile", "programmeTile"].forEach((id) => {
+    ["reportsTile", "monthlyReportsTile", "plotHandoversTile", "hsAuditsTile", "commercialsTile", "commercialModuleTile", "toolboxTalksTile", "drawingsTile", "actionsTile", "inspectionsTile", "rfisTile", "programmeTile"].forEach((id) => {
       document.getElementById(id).style.display = "none";
     });
   }
@@ -844,7 +850,7 @@
     loadCommercialModuleTile();
     loadToolboxTalksTile();
 
-    const [{ count: reportCount }, { count: monthlyReportCount }, { data: snags }, { count: fetchedPlotsCount }, { data: gates }, { data: commercials }, { count: drawingsCount }, { data: hsAudits }, { data: actions }, { data: findings }, { count: documentsCount }, { count: programmeActivitiesCount }] = await Promise.all([
+    const [{ count: reportCount }, { count: monthlyReportCount }, { data: snags }, { count: fetchedPlotsCount }, { data: gates }, { data: commercials }, { count: drawingsCount }, { data: hsAudits }, { data: actions }, { data: findings }, { data: rfis }, { count: documentsCount }, { count: programmeActivitiesCount }] = await Promise.all([
       supabase.from("weekly_reports").select("id", { count: "exact", head: true }).eq("project_id", projectId),
       supabase.from("monthly_reports").select("id", { count: "exact", head: true }).eq("project_id", projectId),
       supabase.from("snag_items").select("status, due_date, priority").eq("project_id", projectId),
@@ -855,6 +861,7 @@
       supabase.from("hs_audits").select("month").eq("project_id", projectId),
       supabase.from("actions").select("status").eq("project_id", projectId),
       supabase.from("inspection_findings").select("status").eq("project_id", projectId),
+      supabase.from("rfis").select("status").eq("project_id", projectId),
       supabase.from("documents").select("id", { count: "exact", head: true }).eq("project_id", projectId),
       supabase.from("programme_activities").select("id", { count: "exact", head: true }).eq("project_id", projectId),
     ]);
@@ -873,6 +880,7 @@
     document.getElementById("hsAuditFlag").style.display = (hsAudits || []).some(a => a.month === monthStartISO()) ? "none" : "inline-flex";
     document.getElementById("actionsOpenCount").textContent = (actions || []).filter(a => ["open", "in_progress", "blocked"].includes(a.status)).length;
     document.getElementById("findingsOpenCount").textContent = (findings || []).filter(isFindingOutstanding).length;
+    document.getElementById("rfisOpenCount").textContent = (rfis || []).filter(r => ["open", "answered"].includes(r.status)).length;
     document.getElementById("documentsCount").textContent = documentsCount ?? 0;
     document.getElementById("programmeActivitiesCount").textContent = programmeActivitiesCount ?? 0;
     updateGeneratePlotsButton();

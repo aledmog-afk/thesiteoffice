@@ -3525,6 +3525,9 @@ $$;
 -- with any write) — new columns added to weekly_reports later are
 -- automatically covered by this comparison with no trigger change
 -- needed, same dynamic-jsonb approach write_audit_log() already uses.
+-- Full replacement of weekly_reports_before_write() — same behaviour
+-- throughout, with photo-id normalisation added (v51/RFI-1 below). See
+-- normalise_weekly_report_photo_ids()'s own comment for why this exists.
 create or replace function public.weekly_reports_before_write()
 returns trigger
 language plpgsql
@@ -3537,6 +3540,7 @@ begin
     new.created_at := now();
     new.updated_at := now();
     new.status := 'draft'; -- a report can never be created pre-approved/issued
+    new.photos := public.normalise_weekly_report_photo_ids(new.photos);
     return new;
   end if;
 
@@ -3546,6 +3550,19 @@ begin
 
   if new.status <> old.status and not public.valid_weekly_report_status_transition(old.status, new.status) then
     raise exception 'Invalid weekly report status transition: % -> %', old.status, new.status;
+  end if;
+
+  -- Photo ids are only ever added while the report is still editable.
+  -- Normalising an approved/issued report's photos here — even just
+  -- adding an id, nothing else — would itself trip the content-lock
+  -- check immediately below (old.photos would then differ from the
+  -- freshly-normalised new.photos), incorrectly blocking an otherwise
+  -- unrelated save (e.g. the very reviewed->approved transition
+  -- itself). Deferred until the report is next Revised back to draft
+  -- and saved — matching "next normalised/saved" exactly, and never
+  -- mutating a report whose content is supposed to be frozen.
+  if new.status not in ('approved', 'issued') then
+    new.photos := public.normalise_weekly_report_photo_ids(new.photos);
   end if;
 
   if new.status in ('approved', 'issued') then
@@ -8948,3 +8965,419 @@ end;
 $$;
 revoke all on function public.reject_commercial_approval_request(text, text, text) from public;
 grant execute on function public.reject_commercial_approval_request(text, text, text) to anon, authenticated;
+
+-- ─── v51 ADDITIONS: RFI V1 — database/security foundation ──────────
+-- RFI-1: database, relationships, security, lifecycle, numbering,
+-- audit and evidence architecture ONLY — no UI, no Weekly Report
+-- integration, no dashboard signal (those are later phases). Every
+-- pattern below is copied from an existing, already-verified one
+-- rather than invented: actions/inspection_findings (RLS shape,
+-- assignment validation, plot cross-project validation), commercial_events
+-- (org_id derivation, reference-numbering trigger shape),
+-- commercial_evidence_links (polymorphic evidence-link shape), and
+-- write_audit_log()'s existing generic project_id-shaped "else" branch
+-- (zero changes needed there). Two deliberate departures from the
+-- patterns copied, both explained where they happen below: reference
+-- numbering adds an advisory-lock + unique-constraint safety net the
+-- existing DW-/VAR-/TT- convention lacks, and identity fields
+-- (project_id/org_id/reference/created_by) are explicitly re-pinned on
+-- UPDATE rather than left implicitly untouched.
+
+-- ─── rfis ────────────────────────────────────────────────────────
+create table if not exists public.rfis (
+  id uuid primary key default gen_random_uuid(),
+  -- Always trigger-derived from project_id, never trusted from the
+  -- client — same principle as actions.org_id.
+  org_id uuid not null references public.organisations(id),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  plot_id uuid references public.plots(id) on delete set null,
+  reference text not null,
+  title text not null,
+  question text not null,
+  status text not null default 'open' check (status in ('open', 'answered', 'closed')),
+  priority text not null default 'medium' check (priority in ('low', 'medium', 'high', 'critical')),
+  assigned_to uuid references auth.users(id) on delete set null,
+  due_date date,
+  -- created_by/answered_by nullable with ON DELETE SET NULL, matching
+  -- every other created_by/actor column in this schema (actions,
+  -- documents, weekly_reports, etc.) exactly — deleting a user must
+  -- never cascade-delete or be blocked by an RFI they touched. This is
+  -- the one field where this migration deliberately does NOT follow a
+  -- literal "not null" spec in favour of the schema's own established,
+  -- deliberate convention.
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  answered_at timestamptz,
+  answered_by uuid references auth.users(id) on delete set null,
+  response text,
+  closed_at timestamptz,
+  -- Hard backstop behind the advisory-lock numbering below — see
+  -- rfis_before_write()'s comment. Neither DW-/VAR-/TT- has this.
+  constraint rfis_project_reference_unique unique (project_id, reference)
+);
+
+create index if not exists rfis_project_status_idx on public.rfis (project_id, status);
+create index if not exists rfis_project_due_date_idx on public.rfis (project_id, due_date);
+create index if not exists rfis_assigned_status_idx on public.rfis (assigned_to, status);
+create index if not exists rfis_org_id_idx on public.rfis (org_id);
+create index if not exists rfis_plot_id_idx on public.rfis (plot_id) where plot_id is not null;
+
+-- Deliberately simple fixed transition table, mirroring
+-- valid_action_status_transition()'s own shape and philosophy exactly:
+-- one explicit "reopen" path (closed -> open, mirroring actions' own
+-- completed -> open), not a workflow engine. Same-status "changes"
+-- (re-saving other fields without touching status) never reach this
+-- function at all — see rfis_before_write() below.
+create or replace function public.valid_rfi_status_transition(p_from text, p_to text)
+returns boolean
+language sql
+immutable
+set search_path = public
+as $$
+  select (p_from, p_to) in (
+    ('open', 'answered'),
+    ('answered', 'closed'),
+    ('closed', 'open')
+  );
+$$;
+
+create or replace function public.rfis_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_org_id uuid;
+  v_plot_project_id uuid;
+  v_next_seq integer;
+begin
+  if TG_OP = 'UPDATE' then
+    -- Identity fields are immutable regardless of payload — pinned
+    -- back to their real values BEFORE any validation below runs, so
+    -- a client can never smuggle a plot/assignee check past
+    -- validation by first changing project_id in the same payload.
+    -- (commercial_events_before_write, the pattern this trigger is
+    -- otherwise copied from, does not explicitly re-pin project_id on
+    -- UPDATE; doing so here is a deliberate hardening, not an
+    -- oversight to reconcile.)
+    new.project_id := old.project_id;
+    new.org_id := old.org_id;
+    new.reference := old.reference;
+    new.created_by := old.created_by;
+    new.created_at := old.created_at;
+  end if;
+
+  select org_id into v_org_id from public.projects where id = new.project_id;
+  if v_org_id is null then
+    raise exception 'rfis.project_id must reference an existing project with an organisation';
+  end if;
+  new.org_id := v_org_id;
+
+  if new.plot_id is not null then
+    select project_id into v_plot_project_id from public.plots where id = new.plot_id;
+    if v_plot_project_id is null then
+      raise exception 'rfis.plot_id must reference an existing plot';
+    end if;
+    if v_plot_project_id <> new.project_id then
+      raise exception 'plot_id must belong to the same project as the RFI';
+    end if;
+  end if;
+
+  if new.assigned_to is not null and not public.is_project_editor_user(new.project_id, new.assigned_to) then
+    raise exception 'assigned_to must be a project editor (owner or collaborator) for this project';
+  end if;
+
+  if TG_OP = 'INSERT' then
+    new.created_by := auth.uid();
+    new.created_at := now();
+    new.updated_at := now();
+    new.status := 'open'; -- an RFI can never be created pre-answered/closed
+    new.answered_at := null; new.answered_by := null; new.response := null;
+    new.closed_at := null;
+
+    -- Reference numbering: DW-/VAR-/TT- (schema.sql, commercial_events
+    -- / toolbox_talks) all use an unguarded
+    -- max(trailing-digits)+1 with NO unique constraint behind it and
+    -- NO lock around the read — two concurrent inserts for the same
+    -- project can both read the same "next" number before either
+    -- commits, and both succeed, silently producing a duplicate
+    -- reference. That's a real, pre-existing gap in this codebase
+    -- (confirmed: no unique index on any *.reference column), not
+    -- something to reproduce here. RFI improves on it with two layers:
+    -- a transaction-scoped advisory lock keyed on project_id, which
+    -- serialises concurrent RFI inserts for the SAME project only
+    -- (inserts for different projects are never blocked by each
+    -- other, aside from the negligible chance of an unrelated
+    -- hashtext() collision) — released automatically at commit/
+    -- rollback, no cleanup needed — plus rfis_project_reference_unique
+    -- above as a hard backstop: if a reference were ever computed
+    -- twice regardless, the second insert is rejected outright instead
+    -- of silently duplicating. Never overwrites an explicitly-supplied
+    -- reference, matching the existing convention exactly.
+    if new.reference is null then
+      perform pg_advisory_xact_lock(hashtext(new.project_id::text));
+      select coalesce(max(substring(reference from '(\d+)$')::int), 0) + 1
+        into v_next_seq
+        from public.rfis
+        where project_id = new.project_id;
+      new.reference := 'RFI-' || lpad(v_next_seq::text, 3, '0');
+    end if;
+
+    return new;
+  end if;
+
+  -- UPDATE
+  new.updated_at := now();
+
+  if new.status <> old.status then
+    if not public.valid_rfi_status_transition(old.status, new.status) then
+      raise exception 'Invalid RFI status transition: % -> %', old.status, new.status;
+    end if;
+    if old.status = 'open' and new.status = 'answered' then
+      new.answered_at := now();
+      new.answered_by := auth.uid();
+    elsif new.status = 'closed' then
+      new.closed_at := now();
+    elsif new.status = 'open' then
+      -- Reopened from closed: clear the closed stamp only. The prior
+      -- answered_at/answered_by/response is kept intact — a reopen is
+      -- a correction to the OUTCOME, not an erasure of what was
+      -- genuinely answered before.
+      new.closed_at := null;
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_rfis_before_write on public.rfis;
+create trigger trg_rfis_before_write
+  before insert or update on public.rfis
+  for each row execute function public.rfis_before_write();
+
+alter table public.rfis enable row level security;
+
+-- Editor-only (owner/collaborator), matching Actions/Inspection
+-- Findings — the closest existing analogues (formal, assignable,
+-- status-tracked records), not the member-level exception snag_items
+-- deliberately carves out.
+drop policy if exists "editors read rfis" on public.rfis;
+create policy "editors read rfis" on public.rfis for select using (public.is_project_editor(project_id));
+
+drop policy if exists "editors insert rfis" on public.rfis;
+create policy "editors insert rfis" on public.rfis for insert with check (
+  public.is_project_editor(project_id)
+  and (assigned_to is null or public.is_project_editor_user(project_id, assigned_to))
+);
+
+drop policy if exists "editors update rfis" on public.rfis;
+create policy "editors update rfis" on public.rfis for update using (
+  public.is_project_editor(project_id)
+) with check (
+  public.is_project_editor(project_id)
+  and (assigned_to is null or public.is_project_editor_user(project_id, assigned_to))
+);
+
+-- No DELETE policy, unlike Actions (which does allow editor delete):
+-- an RFI is a formal record of a question asked and (eventually)
+-- answered — kept as a permanent auditable record rather than
+-- deletable, per this phase's explicit brief. RLS is enabled with no
+-- delete policy for any client role, so Postgres denies it by default
+-- (same "insert/keep-only" idiom already used by commercial_signatures
+-- and module_roles).
+
+-- Audit integration: write_audit_log()'s existing generic "else"
+-- branch (a plain project_id column, uuid id) already covers rfis with
+-- zero changes needed, and rfis falls into can_read_audit_row()'s
+-- existing editor-level default bucket exactly (no change needed
+-- there either, matching Actions' own reasoning). INSERT/UPDATE only —
+-- DELETE is never possible for any client role (no RLS policy for it
+-- above), so there's nothing for a delete branch to ever capture;
+-- toolbox_talk_templates uses this exact same insert/update-only shape
+-- for the same reason.
+drop trigger if exists trg_audit_rfis on public.rfis;
+create trigger trg_audit_rfis
+  after insert or update on public.rfis
+  for each row execute function public.write_audit_log();
+
+-- ─── rfi_evidence_links ──────────────────────────────────────────
+-- Deliberately NOT a reuse of commercial_evidence_links (which is
+-- hard-scoped to commercial_event_id, not a generic table) and
+-- deliberately NOT an unrestricted "any table name" polymorphic
+-- design — only the four source_type values below are accepted, and
+-- each one is fully validated server-side in
+-- rfi_evidence_links_before_write() (see below), never left to the
+-- client's word alone.
+--
+-- weekly_report_photo is the odd one out: weekly_reports.photos is an
+-- embedded jsonb array with (until now) no stable per-photo identity.
+-- normalise_weekly_report_photo_ids() (below) gives every photo a
+-- stable uuid id, so this table can identify one by
+-- (weekly_report_id, photo_id) rather than by url — a url is real but
+-- a poor foreign-key-shaped identity, and nothing about it proves
+-- which report it belongs to. The other three source types
+-- (snag_item / inspection_finding / document) are real rows with
+-- their own uuid id, referenced directly via source_id.
+create table if not exists public.rfi_evidence_links (
+  id uuid primary key default gen_random_uuid(),
+  rfi_id uuid not null references public.rfis(id) on delete cascade,
+  -- Denormalized, trigger-populated — same write_audit_log()/RLS
+  -- compatibility reasoning as commercial_evidence_links.project_id.
+  project_id uuid not null references public.projects(id) on delete cascade,
+  source_type text not null check (source_type in ('weekly_report_photo', 'snag_item', 'inspection_finding', 'document')),
+  source_id uuid,
+  weekly_report_id uuid references public.weekly_reports(id) on delete cascade,
+  photo_id uuid,
+  caption text,
+  linked_by uuid references auth.users(id) on delete set null,
+  linked_at timestamptz not null default now(),
+  -- Keeps the table honest about which columns are meaningful for
+  -- which source_type — a weekly_report_photo link can never carry a
+  -- source_id, and a row-based link can never carry
+  -- weekly_report_id/photo_id, so there is no ambiguous half-filled
+  -- state to misinterpret later.
+  constraint rfi_evidence_links_source_shape check (
+    (source_type = 'weekly_report_photo' and weekly_report_id is not null and photo_id is not null and source_id is null)
+    or
+    (source_type in ('snag_item', 'inspection_finding', 'document') and source_id is not null and weekly_report_id is null and photo_id is null)
+  )
+);
+
+create index if not exists rfi_evidence_links_rfi_idx on public.rfi_evidence_links (rfi_id);
+create index if not exists rfi_evidence_links_project_idx on public.rfi_evidence_links (project_id);
+create index if not exists rfi_evidence_links_weekly_report_idx on public.rfi_evidence_links (weekly_report_id) where weekly_report_id is not null;
+create index if not exists rfi_evidence_links_source_idx on public.rfi_evidence_links (source_type, source_id) where source_id is not null;
+
+create or replace function public.rfi_evidence_links_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_rfi_project_id uuid;
+  v_source_project_id uuid;
+  v_photo_found boolean;
+begin
+  select project_id into v_rfi_project_id from public.rfis where id = new.rfi_id;
+  if v_rfi_project_id is null then
+    raise exception 'rfi_evidence_links.rfi_id must reference an existing rfis row';
+  end if;
+  new.project_id := v_rfi_project_id;
+
+  if new.source_type = 'weekly_report_photo' then
+    select project_id into v_source_project_id from public.weekly_reports where id = new.weekly_report_id;
+    if v_source_project_id is null then
+      raise exception 'rfi_evidence_links.weekly_report_id must reference an existing weekly_reports row';
+    end if;
+    if v_source_project_id <> v_rfi_project_id then
+      raise exception 'Evidence must belong to the same project as the RFI';
+    end if;
+    select exists (
+      select 1
+      from public.weekly_reports wr, jsonb_array_elements(wr.photos) p
+      where wr.id = new.weekly_report_id and p->>'id' = new.photo_id::text
+    ) into v_photo_found;
+    if not v_photo_found then
+      raise exception 'photo_id % was not found in weekly report %''s photos', new.photo_id, new.weekly_report_id;
+    end if;
+
+  elsif new.source_type = 'snag_item' then
+    select project_id into v_source_project_id from public.snag_items where id = new.source_id;
+    if v_source_project_id is null then
+      raise exception 'rfi_evidence_links.source_id must reference an existing snag_items row';
+    end if;
+    if v_source_project_id <> v_rfi_project_id then
+      raise exception 'Evidence must belong to the same project as the RFI';
+    end if;
+
+  elsif new.source_type = 'inspection_finding' then
+    select project_id into v_source_project_id from public.inspection_findings where id = new.source_id;
+    if v_source_project_id is null then
+      raise exception 'rfi_evidence_links.source_id must reference an existing inspection_findings row';
+    end if;
+    if v_source_project_id <> v_rfi_project_id then
+      raise exception 'Evidence must belong to the same project as the RFI';
+    end if;
+
+  elsif new.source_type = 'document' then
+    select project_id into v_source_project_id from public.documents where id = new.source_id;
+    if v_source_project_id is null then
+      raise exception 'rfi_evidence_links.source_id must reference an existing documents row';
+    end if;
+    if v_source_project_id <> v_rfi_project_id then
+      raise exception 'Evidence must belong to the same project as the RFI';
+    end if;
+
+  else
+    raise exception 'Unsupported rfi_evidence_links.source_type: %', new.source_type;
+  end if;
+
+  new.linked_by := auth.uid();
+  new.linked_at := now();
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_rfi_evidence_links_before_write on public.rfi_evidence_links;
+create trigger trg_rfi_evidence_links_before_write
+  before insert on public.rfi_evidence_links
+  for each row execute function public.rfi_evidence_links_before_write();
+
+alter table public.rfi_evidence_links enable row level security;
+
+drop policy if exists "editors read rfi_evidence_links" on public.rfi_evidence_links;
+create policy "editors read rfi_evidence_links" on public.rfi_evidence_links for select using (public.is_project_editor(project_id));
+
+drop policy if exists "editors insert rfi_evidence_links" on public.rfi_evidence_links;
+create policy "editors insert rfi_evidence_links" on public.rfi_evidence_links for insert with check (public.is_project_editor(project_id));
+
+drop policy if exists "editors delete rfi_evidence_links" on public.rfi_evidence_links;
+create policy "editors delete rfi_evidence_links" on public.rfi_evidence_links for delete using (public.is_project_editor(project_id));
+-- No update policy — an evidence link is replaced by deleting and
+-- re-adding, same convention as inspection_finding_photos.
+
+-- Audited like commercial_evidence_links (not like
+-- inspection_finding_photos, which is deliberately NOT audited) — an
+-- RFI is a formal record, and what evidence was attached to it, by
+-- whom and when, is exactly the kind of thing worth an audit trail for.
+drop trigger if exists trg_audit_rfi_evidence_links on public.rfi_evidence_links;
+create trigger trg_audit_rfi_evidence_links
+  after insert or delete on public.rfi_evidence_links
+  for each row execute function public.write_audit_log();
+
+-- ─── weekly_reports.photos: stable per-photo id ─────────────────────
+-- Gives every weekly-report photo a stable id, added lazily the next
+-- time an editable report is saved (see weekly_reports_before_write()
+-- above) rather than backfilled by this migration — no existing row is
+-- ever touched outside its own normal write path, no photo url is
+-- ever changed, and a report that's never saved again simply keeps
+-- working exactly as before (its photos just have no id yet, which
+-- rfi_evidence_links_before_write() above already handles correctly —
+-- a photo_id lookup against an un-normalised report's photos simply
+-- finds no match and is rejected like any other invalid photo_id,
+-- rather than erroring).
+create or replace function public.normalise_weekly_report_photo_ids(p_photos jsonb)
+returns jsonb
+language sql
+set search_path = public
+as $$
+  select coalesce(
+    (
+      select jsonb_agg(
+        case
+          when (elem ? 'id') and (elem->>'id') is not null and (elem->>'id') <> ''
+            then elem
+          else elem || jsonb_build_object('id', gen_random_uuid()::text)
+        end
+        order by ord
+      )
+      from jsonb_array_elements(coalesce(p_photos, '[]'::jsonb)) with ordinality as t(elem, ord)
+    ),
+    '[]'::jsonb
+  );
+$$;
