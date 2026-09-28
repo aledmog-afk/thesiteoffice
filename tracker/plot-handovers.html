@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Plot Handovers – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title">Plot Handovers</div>
+      <div class="page-sub" id="projectSub">Quality gates and statutory documents, tracked per plot — or per apartment block.</div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-outline" id="exportTrackersBtn">📊 Export Trackers</button>
+      <button class="btn btn-outline" id="newBlockBtn">+ Block</button>
+      <button class="btn btn-amber" id="newPlotBtn">+ Plot</button>
+    </div>
+  </div>
+
+  <div id="blocksSection" style="display:none;">
+    <h3 style="font-family:var(--font-display); font-size:1.1rem; margin-bottom:1rem;">Apartment Blocks</h3>
+    <div class="card" style="margin-bottom:2rem;">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Block</th><th>Flats</th><th>Progress</th><th>Quality Gates</th><th>Handover Docs</th><th>Added</th><th></th></tr>
+          </thead>
+          <tbody id="blockRows"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <h3 id="plotsHeading" style="font-family:var(--font-display); font-size:1.1rem; margin-bottom:1rem; display:none;">Plots</h3>
+  <div id="readinessFilterWrap" class="btn-row" style="margin-bottom:0.8rem; display:none;">
+    <span class="hint" style="align-self:center; margin-right:0.4rem;">Which plots currently require attention before handover:</span>
+    <button type="button" class="btn btn-outline btn-sm" data-readiness-filter="all">All</button>
+    <button type="button" class="btn btn-outline btn-sm" data-readiness-filter="not_ready">Not Ready</button>
+    <button type="button" class="btn btn-outline btn-sm" data-readiness-filter="at_risk">At Risk</button>
+    <button type="button" class="btn btn-outline btn-sm" data-readiness-filter="ready">Ready</button>
+    <button type="button" class="btn btn-outline btn-sm" data-readiness-filter="handed_over">Handed Over</button>
+  </div>
+  <div class="card">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Plot</th><th>Progress</th><th>Readiness</th><th>Blockers</th><th>Warnings</th><th>Programme</th><th>Quality Gates</th><th>Handover Docs</th><th>Added</th><th></th></tr>
+        </thead>
+        <tbody id="plotRows"></tbody>
+      </table>
+    </div>
+    <div id="emptyState" class="empty" style="display:none;">
+      <p>No plots or apartment blocks yet. Add a standalone house with <strong>+ Plot</strong>, or an apartment building with <strong>+ Block</strong> (its flats then live inside the block).</p>
+      <div class="btn-row" style="justify-content:center;">
+        <button class="btn btn-outline" id="emptyNewBlockBtn">+ Block</button>
+        <button class="btn btn-amber" id="emptyNewPlotBtn">+ Plot</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, comparePlotNumbers, generateFlatsFromSpec, getProjectPlotReadiness, PLOT_READINESS_LABEL, PLOT_READINESS_BADGE, PLOT_READINESS_ORDER } from "./js/app.js";
+
+  await requireAuth();
+  const projectId = getParam("project");
+  if (!projectId) window.location.href = "dashboard.html";
+
+  async function createPlot() {
+    const plotNumber = prompt("Plot number / name:", "Plot ");
+    if (!plotNumber || !plotNumber.trim()) return;
+    const { data: { user } } = await supabase.auth.getUser();
+    const { data, error } = await supabase
+      .from("plots")
+      .insert({ project_id: projectId, plot_number: plotNumber.trim(), created_by: user.id })
+      .select()
+      .single();
+    if (error) { alert(`Could not create plot: ${error.message}`); return; }
+    window.location.href = `plot-detail.html?id=${data.id}`;
+  }
+  document.getElementById("newPlotBtn").addEventListener("click", createPlot);
+  document.getElementById("emptyNewPlotBtn")?.addEventListener("click", createPlot);
+
+  async function createBlock() {
+    const blockName = prompt("Block name:", "Building ");
+    if (!blockName || !blockName.trim()) return;
+    const flatSpec = prompt("Flat plot numbers (optional) — a range like 23-30, a comma list like 23,25,28, or leave blank to add them one at a time later:", "");
+
+    const { data: { user } } = await supabase.auth.getUser();
+    const { data, error } = await supabase
+      .from("blocks")
+      .insert({ project_id: projectId, block_name: blockName.trim(), created_by: user.id })
+      .select()
+      .single();
+    if (error) { alert(`Could not create block: ${error.message}`); return; }
+
+    if (flatSpec && flatSpec.trim()) {
+      try {
+        await generateFlatsFromSpec(projectId, data.id, flatSpec);
+      } catch (err) {
+        alert(`Block created, but couldn't auto-create its flats: ${err.message}`);
+      }
+    }
+    window.location.href = `block-detail.html?id=${data.id}`;
+  }
+  document.getElementById("newBlockBtn").addEventListener("click", createBlock);
+  document.getElementById("emptyNewBlockBtn")?.addEventListener("click", createBlock);
+
+  async function deletePlot(id, name) {
+    if (!confirm(`Delete "${name}" and all its quality gates and handover documents? This cannot be undone.`)) return;
+    await supabase.from("plots").delete().eq("id", id);
+    load();
+  }
+  window.deletePlot = deletePlot;
+
+  async function deleteBlock(id, name) {
+    if (!confirm(`Delete "${name}", all its flats, and every flat's quality gates and handover documents? This cannot be undone.`)) return;
+    await supabase.from("blocks").delete().eq("id", id);
+    load();
+  }
+  window.deleteBlock = deleteBlock;
+
+  function fileDateStamp() {
+    const d = new Date();
+    return `${d.getDate()}.${d.getMonth() + 1}.${String(d.getFullYear()).slice(-2)}`;
+  }
+
+  // Pure row-builders — take already-fetched data, return plain arrays of
+  // arrays ready for XLSX.utils.aoa_to_sheet(). Kept separate from
+  // exportTrackers() below so they're testable without touching Supabase
+  // or the dynamically-imported SheetJS module at all.
+  function buildOverallRows(project, plots, blocks) {
+    const blockNameById = new Map((blocks || []).map((b) => [b.id, b.block_name]));
+    const rows = [["Plot / Block", "Type", "Progress %"]];
+    plots.forEach((p) => rows.push([p.plot_number, p.block_id ? `Flat (${blockNameById.get(p.block_id) || "block"})` : "Plot", p.progress_pct || 0]));
+    [...(blocks || [])].sort((a, b) => comparePlotNumbers(a.block_name, b.block_name)).forEach((b) => rows.push([b.block_name, "Block", b.progress_pct || 0]));
+    rows.push([]);
+    rows.push(["Site Actual Progress %", "", project?.actual_progress_pct ?? ""]);
+    rows.push(["Baseline Progress %", "", project?.baseline_progress_pct ?? ""]);
+    rows.push(["External / Engineering Works %", "", project?.external_works_pct ?? ""]);
+    return rows;
+  }
+
+  // Laid out to match the client-supplied "Internal Works" tracker
+  // templates this feature was reverse-engineered from: a project-title
+  // header block, a "Plots X-Y" label, then a header row starting
+  // "Plots", then data grouped under a plain-text section row per block
+  // (the same role "Block 1-4" rows played in the original sheets) with
+  // standalone plots listed first under no section row. Milestone
+  // columns are whichever stages this project's plots actually have,
+  // in their sort_order — so a site using the 16-stage set doesn't grow
+  // two blank columns it never seeded.
+  function buildInternalRows(project, plots, milestones, blocks) {
+    const blockNameById = new Map((blocks || []).map((b) => [b.id, b.block_name]));
+    const milestonesByPlot = new Map();
+    const milestoneMeta = new Map();
+    (milestones || []).forEach((m) => {
+      if (!milestonesByPlot.has(m.plot_id)) milestonesByPlot.set(m.plot_id, new Map());
+      milestonesByPlot.get(m.plot_id).set(m.milestone_key, m.percent);
+      const existing = milestoneMeta.get(m.milestone_key);
+      if (!existing || m.sort_order < existing.sort_order) milestoneMeta.set(m.milestone_key, { title: m.title, sort_order: m.sort_order });
+    });
+    const orderedKeys = [...milestoneMeta.entries()].sort((a, b) => a[1].sort_order - b[1].sort_order).map(([key]) => key);
+    const titles = orderedKeys.map((k) => `${milestoneMeta.get(k).title} (%)`);
+
+    const groups = new Map();
+    plots.forEach((p) => {
+      const label = p.block_id ? (blockNameById.get(p.block_id) || "Block") : "Plots";
+      if (!groups.has(label)) groups.set(label, []);
+      groups.get(label).push(p);
+    });
+    const groupLabels = [...groups.keys()].sort((a, b) => (a === "Plots" ? -1 : b === "Plots" ? 1 : a.localeCompare(b)));
+
+    const firstPlot = plots[0]?.plot_number || "";
+    const lastPlot = plots[plots.length - 1]?.plot_number || "";
+
+    const rows = [];
+    rows.push(["Project title:", "", project?.name || ""]);
+    rows.push(["Generated:", "", fileDateStamp()]);
+    rows.push([]);
+    rows.push([`Internal Works Plots ${firstPlot}-${lastPlot}`]);
+    rows.push([]);
+    rows.push(["Plots", ...titles]);
+    groupLabels.forEach((label) => {
+      if (label !== "Plots") rows.push([label]);
+      [...groups.get(label)].sort((a, b) => comparePlotNumbers(a.plot_number, b.plot_number)).forEach((p) => {
+        const plotMilestones = milestonesByPlot.get(p.id);
+        rows.push([p.plot_number, ...orderedKeys.map((k) => (plotMilestones?.has(k) ? plotMilestones.get(k) : ""))]);
+      });
+    });
+    return rows;
+  }
+
+  // Regenerates the client-supplied progress trackers (a plot-by-milestone
+  // Internal Works breakdown, plus an Overall Progress summary) straight
+  // from the site's own live data — the reverse of how those spreadsheets
+  // originally got imported into this app. SheetJS is loaded on demand
+  // (not a top-level import) since most visits to this page never use it.
+  // "Not tracked for this plot" (e.g. Timber Frame on a flat) is left
+  // blank, distinct from a genuine 0% — see the Internal Works Milestones
+  // README note on why flats don't get every stage.
+  async function exportTrackers() {
+    const btn = document.getElementById("exportTrackersBtn");
+    btn.disabled = true;
+    const originalText = btn.textContent;
+    btn.textContent = "Generating…";
+    try {
+      const XLSX = await import("https://esm.sh/xlsx@0.18.5");
+      const [{ data: project }, { data: allPlots }, { data: blocks }, { data: milestones }] = await Promise.all([
+        supabase.from("projects").select("name, baseline_progress_pct, actual_progress_pct, external_works_pct").eq("id", projectId).single(),
+        supabase.from("plots").select("id, plot_number, block_id, progress_pct").eq("project_id", projectId),
+        supabase.from("blocks").select("id, block_name, progress_pct").eq("project_id", projectId),
+        supabase.from("internal_milestones").select("plot_id, milestone_key, title, percent, sort_order").eq("project_id", projectId),
+      ]);
+
+      if (!allPlots?.length && !blocks?.length) {
+        alert("No plots or blocks on this site yet — nothing to export.");
+        return;
+      }
+
+      const plots = [...(allPlots || [])].sort((a, b) => comparePlotNumbers(a.plot_number, b.plot_number));
+      const overallRows = buildOverallRows(project, plots, blocks);
+      const internalRows = buildInternalRows(project, plots, milestones, blocks);
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(overallRows), "Overall Progress");
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(internalRows), "Internal Works");
+      XLSX.writeFile(wb, `${project?.name || "Site"} - Trackers - ${fileDateStamp()}.xlsx`);
+    } catch (err) {
+      alert(`Could not generate trackers: ${err.message}`);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalText;
+    }
+  }
+  document.getElementById("exportTrackersBtn").addEventListener("click", exportTrackers);
+
+  // Plot-level readiness (Priority 12, Phase 1) is deliberately scoped
+  // to plots only, not blocks — a block's own shared structural gates/
+  // documents are a genuinely different aggregation (across all its
+  // flats plus its own block-scoped rows) that this phase doesn't
+  // attempt; see the Phase 1 report's "Known Limitations".
+  let readinessByPlotId = new Map();
+  let readinessFilter = "all";
+  let currentPlotsForRender = [];
+
+  async function loadReadiness() {
+    try {
+      const rows = await getProjectPlotReadiness(projectId);
+      readinessByPlotId = new Map(rows.map((r) => [r.plot.id, r.readiness]));
+    } catch (err) {
+      // Non-fatal — the existing gate/document columns still work even
+      // if the readiness call fails; just leave the new columns blank
+      // rather than breaking the whole page.
+      readinessByPlotId = new Map();
+    }
+  }
+
+  document.querySelectorAll('[data-readiness-filter]').forEach((btn) => {
+    btn.addEventListener("click", () => {
+      readinessFilter = btn.dataset.readinessFilter;
+      document.querySelectorAll('[data-readiness-filter]').forEach((b) => b.classList.toggle("btn-amber", b === btn));
+      renderPlotRows(currentPlotsForRender);
+    });
+  });
+  document.querySelector('[data-readiness-filter="all"]')?.classList.add("btn-amber");
+
+  async function load() {
+    const { data: project } = await supabase.from("projects").select("name").eq("id", projectId).single();
+    renderHeader([
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project?.name || "Site", href: `project.html?id=${projectId}` },
+      { label: "Plot Handovers" },
+    ]);
+    document.getElementById("projectSub").textContent = project ? `${project.name} — quality gates and statutory documents, tracked per plot or per apartment block.` : "";
+
+    const [{ data: allPlots }, { data: blocks }, { data: gates }, { data: docs }] = await Promise.all([
+      supabase.from("plots").select("*").eq("project_id", projectId),
+      supabase.from("blocks").select("*").eq("project_id", projectId),
+      supabase.from("quality_gates").select("plot_id, block_id, status").eq("project_id", projectId),
+      supabase.from("handover_documents").select("plot_id, block_id, status").eq("project_id", projectId),
+    ]);
+    await loadReadiness();
+
+    const plots = (allPlots || []).filter((p) => !p.block_id);
+    const flatsByBlock = {};
+    (allPlots || []).filter((p) => p.block_id).forEach((p) => {
+      flatsByBlock[p.block_id] = (flatsByBlock[p.block_id] || 0) + 1;
+    });
+
+    if (!plots.length && !(blocks || []).length) {
+      document.getElementById("emptyState").style.display = "block";
+      document.getElementById("plotsHeading").style.display = "none";
+      return;
+    }
+
+    plots.sort((a, b) => comparePlotNumbers(a.plot_number, b.plot_number));
+    (blocks || []).sort((a, b) => comparePlotNumbers(a.block_name, b.block_name));
+
+    const gatesByScope = {};
+    (gates || []).forEach((g) => {
+      if (g.status === "not_applicable") return;
+      const key = g.plot_id || `block:${g.block_id}`;
+      gatesByScope[key] = gatesByScope[key] || { approved: 0, total: 0 };
+      gatesByScope[key].total++;
+      if (g.status === "approved") gatesByScope[key].approved++;
+    });
+    const docsByScope = {};
+    (docs || []).forEach((d) => {
+      const key = d.plot_id || `block:${d.block_id}`;
+      docsByScope[key] = docsByScope[key] || { ready: 0, total: 0 };
+      docsByScope[key].total++;
+      if (d.status === "approved_final") docsByScope[key].ready++;
+    });
+
+    if ((blocks || []).length) {
+      document.getElementById("blocksSection").style.display = "block";
+      document.getElementById("blockRows").innerHTML = blocks.map((b) => {
+        const g = gatesByScope[`block:${b.id}`] || { approved: 0, total: 0 };
+        const d = docsByScope[`block:${b.id}`] || { ready: 0, total: 0 };
+        return `
+          <tr class="row-link" onclick="window.location.href='block-detail.html?id=${b.id}'">
+            <td><strong>${escapeHtml(b.block_name)}</strong></td>
+            <td>${flatsByBlock[b.id] || 0}</td>
+            <td><span class="badge ${b.progress_pct >= 100 ? "badge-green" : "badge-amber"}">${b.progress_pct || 0}%</span></td>
+            <td><span class="badge ${g.approved === g.total ? "badge-green" : "badge-amber"}">${g.approved} / ${g.total} approved${g.total === 0 ? " (N/A)" : ""}</span></td>
+            <td><span class="badge ${d.ready === d.total && d.total > 0 ? "badge-green" : "badge-amber"}">${d.ready} / ${d.total} ready</span></td>
+            <td>${formatDate(b.created_at?.slice(0, 10))}</td>
+            <td onclick="event.stopPropagation()"><button class="btn btn-outline btn-sm" onclick="deleteBlock('${b.id}', '${escapeHtml(b.block_name).replace(/'/g, "\\'")}')">Delete</button></td>
+          </tr>
+        `;
+      }).join("");
+    }
+
+    if (plots.length) {
+      document.getElementById("plotsHeading").style.display = "block";
+      document.getElementById("readinessFilterWrap").style.display = "flex";
+      currentPlotsForRender = plots.map((p) => ({ plot: p, g: gatesByScope[p.id] || { approved: 0, total: 0 }, d: docsByScope[p.id] || { ready: 0, total: 0 } }));
+      renderPlotRows(currentPlotsForRender);
+    }
+  }
+
+  function renderPlotRows(rows) {
+    // Worst-first by readiness (Not Ready, At Risk, Restricted, Ready,
+    // Handed Over — see PLOT_READINESS_ORDER), then by plot number —
+    // the same "worst-status-wins" convention dashboard.html's own
+    // portfolio control list already uses.
+    const sorted = [...rows].sort((a, b) => {
+      const ra = readinessByPlotId.get(a.plot.id)?.status;
+      const rb = readinessByPlotId.get(b.plot.id)?.status;
+      const oa = ra ? PLOT_READINESS_ORDER[ra] : 5;
+      const ob = rb ? PLOT_READINESS_ORDER[rb] : 5;
+      return oa - ob || comparePlotNumbers(a.plot.plot_number, b.plot.plot_number);
+    });
+    const filtered = readinessFilter === "all" ? sorted : sorted.filter((r) => readinessByPlotId.get(r.plot.id)?.status === readinessFilter);
+
+    document.getElementById("plotRows").innerHTML = filtered.map(({ plot: p, g, d }) => {
+      const readiness = readinessByPlotId.get(p.id);
+      const readinessCell = readiness
+        ? `<span class="badge ${PLOT_READINESS_BADGE[readiness.status]}" title="${escapeHtml((readiness.blockers.concat(readiness.warnings)).map((r) => r.label).join("; ") || "No known blockers or warnings")}">${PLOT_READINESS_LABEL[readiness.status]}</span>`
+        : `<span class="hint">—</span>`;
+      const blockersCell = readiness ? (readiness.blockers.length || "—") : "—";
+      const warningsCell = readiness ? (readiness.warnings.length || "—") : "—";
+      const progCell = readiness?.programme?.hasActivities
+        ? `Overdue ${readiness.programme.overdueProgrammeActivities + readiness.programme.overdueProgrammeMilestones} · Late ${readiness.programme.materialForecastLateProgrammeActivities + readiness.programme.forecastLateProgrammeMilestones}`
+        : `<span class="hint">—</span>`;
+      return `
+        <tr class="row-link" onclick="window.location.href='plot-detail.html?id=${p.id}'">
+          <td><strong>${escapeHtml(p.plot_number)}</strong></td>
+          <td><span class="badge ${p.progress_pct >= 100 ? "badge-green" : "badge-amber"}">${p.progress_pct || 0}%</span></td>
+          <td>${readinessCell}</td>
+          <td>${blockersCell}</td>
+          <td>${warningsCell}</td>
+          <td>${progCell}</td>
+          <td><span class="badge ${g.approved === g.total ? "badge-green" : "badge-amber"}">${g.approved} / ${g.total} approved${g.total === 0 ? " (N/A)" : ""}</span></td>
+          <td><span class="badge ${d.ready === d.total && d.total > 0 ? "badge-green" : "badge-amber"}">${d.ready} / ${d.total} ready</span></td>
+          <td>${formatDate(p.created_at?.slice(0, 10))}</td>
+          <td onclick="event.stopPropagation()"><button class="btn btn-outline btn-sm" onclick="deletePlot('${p.id}', '${escapeHtml(p.plot_number).replace(/'/g, "\\'")}')">Delete</button></td>
+        </tr>
+      `;
+    }).join("");
+  }
+
+  load();
+</script>
+</body>
+</html>

@@ -1,0 +1,919 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Variation – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title" id="pageTitle">New Variation</div>
+      <div class="page-sub" id="projectSub"></div>
+    </div>
+    <div class="btn-row">
+      <button type="button" class="btn btn-outline btn-sm" id="generatePdfBtn" style="display:none;">Generate PDF</button>
+      <span class="badge" id="statusBadge" style="display:none;"></span>
+    </div>
+  </div>
+  <div class="hint" id="pdfStatusText" style="text-align:right; margin-top:-0.6rem; margin-bottom:0.6rem;"></div>
+
+  <div id="pageErrorBox" class="error-box"></div>
+
+  <div class="card" id="noAccessCard" style="display:none;">
+    <p>You don't have Dayworks &amp; Variations access on this site.</p>
+  </div>
+
+  <!-- ─── CREATE MODE ─────────────────────────────────────────── -->
+  <div class="card" id="createCard" style="display:none;">
+    <form id="createForm">
+      <div class="field"><label for="cTitle">Title / description *</label><input type="text" id="cTitle" required placeholder="e.g. Revised drainage route around plot 6"></div>
+      <div class="field"><label for="cReason">Reason / notes</label><textarea id="cReason" rows="2" placeholder="Why is this Variation needed? Any additional context."></textarea></div>
+      <div class="form-grid">
+        <div class="field"><label for="cDate">Date identified</label><input type="date" id="cDate"></div>
+        <div class="field"><label for="cPlot">Plot / location</label><select id="cPlot"><option value="">No specific plot</option></select></div>
+      </div>
+      <div class="field"><label for="cInstructionRef">Instruction / reference</label><input type="text" id="cInstructionRef" placeholder="e.g. CI-014, Client email 12/03"></div>
+      <p class="hint">Create the Variation now, then add pricing, linked Dayworks and evidence on the next screen. The reference number is assigned automatically.</p>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-amber" id="createBtn">Create Variation</button>
+        <button type="button" class="btn btn-outline" id="cancelCreateBtn">Cancel</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- ─── DETAIL MODE ─────────────────────────────────────────── -->
+  <div id="detailBody" style="display:none;">
+    <div class="card" id="headerCard" style="margin-bottom:1.5rem;">
+      <dl class="doc-facts" id="headerFacts"></dl>
+      <form id="editHeaderForm" style="display:none; margin-top:1rem;">
+        <div class="field"><label for="eTitle">Title / description *</label><input type="text" id="eTitle" required></div>
+        <div class="field"><label for="eReason">Reason / notes</label><textarea id="eReason" rows="2"></textarea></div>
+        <div class="form-grid">
+          <div class="field"><label for="eDate">Date identified</label><input type="date" id="eDate"></div>
+          <div class="field"><label for="ePlot">Plot / location</label><select id="ePlot"><option value="">No specific plot</option></select></div>
+        </div>
+        <div class="field"><label for="eInstructionRef">Instruction / reference</label><input type="text" id="eInstructionRef"></div>
+        <div class="btn-row">
+          <button type="submit" class="btn btn-amber btn-sm">Save Changes</button>
+          <button type="button" class="btn btn-outline btn-sm" id="cancelEditHeaderBtn">Cancel</button>
+        </div>
+      </form>
+      <div class="btn-row" style="margin-top:0.8rem;">
+        <button type="button" class="btn btn-outline btn-sm" id="editHeaderBtn" style="display:none;">Edit Details</button>
+      </div>
+    </div>
+
+    <div class="card" id="pricingCard" style="margin-bottom:1.5rem;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem;">
+        <h3 style="font-family:var(--font-display); font-size:1rem; margin:0;">Direct Pricing</h3>
+      </div>
+      <div id="tbcWarning" class="hint" style="display:none; color:var(--amber); margin-bottom:0.8rem;"></div>
+      <ul class="item-list" id="lineItemList"></ul>
+      <div class="item-add-row" id="lineItemAddRow" style="display:none; flex-wrap:wrap; margin-top:0.8rem;">
+        <select id="liType" style="flex:0 0 140px;"></select>
+        <input type="text" id="liDescription" placeholder="Description" style="flex:1 1 220px;">
+        <input type="text" id="liTrade" placeholder="Trade (optional)" style="flex:0 0 140px;">
+        <input type="number" id="liQuantity" placeholder="Qty" value="1" min="0" step="0.01" inputmode="decimal" style="flex:0 0 90px;">
+        <input type="text" id="liUnit" placeholder="Unit" style="flex:0 0 90px;">
+        <input type="number" id="liRate" placeholder="Rate £ (blank = TBC)" step="0.0001" inputmode="decimal" style="flex:0 0 160px;">
+        <span class="hint" id="liPreview" style="flex:0 0 auto; align-self:center;"></span>
+        <button type="button" class="btn btn-outline btn-sm" id="addLineItemBtn">+ Add Line</button>
+      </div>
+      <p class="hint" style="margin-top:0.6rem;">Direct subtotal: <strong id="directSubtotal">£0.00</strong></p>
+    </div>
+
+    <div class="card" id="dayworksCard" style="margin-bottom:1.5rem;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem;">
+        <h3 style="font-family:var(--font-display); font-size:1rem; margin:0;">Linked Dayworks</h3>
+        <button type="button" class="btn btn-outline btn-sm" id="addDayworkBtn" style="display:none;">+ Add Daywork</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Reference</th><th>Date</th><th>Description</th><th>Value</th><th>Status</th><th></th></tr></thead>
+          <tbody id="linkedDayworkRows"></tbody>
+        </table>
+      </div>
+      <div id="noDayworksLinked" class="hint" style="display:none;">No Dayworks linked yet.</div>
+      <p class="hint" style="margin-top:0.6rem;">Linked Dayworks subtotal: <strong id="dayworksSubtotal">£0.00</strong></p>
+    </div>
+
+    <div class="card" id="markupCard" style="margin-bottom:1.5rem;">
+      <div style="display:flex; align-items:center; justify-content:space-between;">
+        <h3 style="font-family:var(--font-display); font-size:1rem; margin:0;">Markup &amp; Total</h3>
+        <strong id="grandTotal" style="font-family:var(--font-display); font-size:1.2rem;">£0.00</strong>
+      </div>
+      <div class="field" style="margin-top:0.8rem; max-width:200px;" id="markupField">
+        <label for="markupInput">Markup (%)</label>
+        <input type="number" id="markupInput" step="0.01" min="0">
+      </div>
+      <button type="button" class="btn btn-outline btn-sm" id="saveMarkupBtn" style="display:none;">Save Markup</button>
+      <p class="hint" id="markupReadonly" style="display:none;">Markup: <strong id="markupReadonlyValue"></strong></p>
+    </div>
+
+    <div class="card" id="evidenceCard" style="margin-bottom:1.5rem;">
+      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Evidence</h3>
+      <div id="evidenceGrid"></div>
+      <div id="evidenceEmpty" class="hint" style="display:none;">No evidence attached yet.</div>
+      <div class="btn-row" id="addEvidenceRow" style="margin-top:0.8rem; display:none;">
+        <label class="btn btn-outline btn-sm" style="cursor:pointer;">📎 Add Evidence
+          <input type="file" accept="application/pdf,image/*" style="display:none;" id="evidenceFileInput">
+        </label>
+      </div>
+    </div>
+
+    <div class="card" id="workflowCard">
+      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Status &amp; Approval</h3>
+      <div id="workflowDetails" style="margin-bottom:1rem;"></div>
+      <div class="btn-row" id="workflowActions"></div>
+    </div>
+
+    <div class="card" id="approvalCard" style="display:none;">
+      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Client Approval</h3>
+      <div id="approvalDetails" style="margin-bottom:1rem;"></div>
+      <div class="btn-row" id="approvalActions"></div>
+      <div id="approvalLinkBox" style="display:none; margin-top:1rem; padding-top:1rem; border-top:1px solid var(--border);">
+        <p class="hint" style="margin-bottom:0.6rem;">This link works once — copy or send it now. It can't be shown again after you leave this page.</p>
+        <div class="field"><input type="text" id="approvalLinkValue" readonly></div>
+        <div class="btn-row" style="margin-top:0.6rem;">
+          <button type="button" class="btn btn-outline btn-sm" id="copyApprovalLinkBtn">Copy Link</button>
+          <a class="btn btn-outline btn-sm" id="emailApprovalLinkBtn" href="#" target="_blank" rel="noopener">Email Client</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="rejectModal" style="display:none;">
+  <div class="modal-box">
+    <h3 style="font-family:var(--font-display); margin-top:0;">Reject this Variation</h3>
+    <div class="field"><label for="rejectReason">Reason (optional, visible to the person who submitted it)</label><textarea id="rejectReason" rows="3"></textarea></div>
+    <div class="btn-row">
+      <button type="button" class="btn btn-danger" id="confirmRejectBtn">Reject</button>
+      <button type="button" class="btn btn-outline" id="cancelRejectBtn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Sign & Approve -->
+<div class="modal-backdrop" id="signApproveModal" style="display:none;">
+  <div class="modal-box" style="max-width:520px;">
+    <h3 style="font-family:var(--font-display); margin-top:0;">Sign &amp; Approve</h3>
+    <p class="hint" style="margin-bottom:0.8rem;">By signing, you confirm you have reviewed the pricing and evidence above and accept this record as final. Once approved, it becomes permanently locked — nobody, including you, will be able to edit it again.</p>
+    <canvas id="sigCanvas" width="480" height="180"></canvas>
+    <div class="btn-row" style="margin-top:0.6rem;">
+      <button type="button" class="btn btn-outline btn-sm" id="clearSigBtn">Clear</button>
+    </div>
+    <div class="field" style="margin-top:0.8rem;">
+      <label for="typedNameInput">Or type name to confirm (if unable to sign by touch)</label>
+      <input type="text" id="typedNameInput">
+    </div>
+    <div id="signModalError" class="error-box"></div>
+    <div class="btn-row" style="margin-top:0.8rem;">
+      <button type="button" class="btn btn-amber" id="submitSigBtn">Approve</button>
+      <button type="button" class="btn btn-outline" id="cancelSigBtn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="addDayworkModal" style="display:none;">
+  <div class="modal-box">
+    <h3 style="font-family:var(--font-display); margin-top:0;">Link a Daywork</h3>
+    <input type="text" id="dayworkSearchInput" placeholder="Search by reference or title" style="margin-bottom:0.8rem;">
+    <div class="table-wrap" style="max-height:340px; overflow-y:auto;">
+      <table>
+        <thead><tr><th>Reference</th><th>Title</th><th>Value</th><th>Status</th><th></th></tr></thead>
+        <tbody id="eligibleDayworkRows"></tbody>
+      </table>
+    </div>
+    <div id="noEligibleDayworks" class="hint" style="display:none;">No eligible Dayworks on this project (they may already be linked, or none exist yet).</div>
+    <div class="btn-row" style="margin-top:1rem;">
+      <button type="button" class="btn btn-outline" id="cancelAddDayworkBtn">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Request Client Approval -->
+<div class="modal-backdrop" id="requestApprovalModal" style="display:none;">
+  <div class="modal-box" style="max-width:480px;">
+    <h3 style="font-family:var(--font-display); margin-top:0;">Request Client Approval</h3>
+    <p class="hint" style="margin-bottom:0.8rem;">Sends a one-time link to a client who doesn't need a Site Tracker account. They'll see this record's items, total, and evidence, and can approve or reject it.</p>
+    <div class="field"><label for="reqEmail">Client email *</label><input type="email" id="reqEmail" required></div>
+    <div class="field"><label for="reqName">Client name (optional)</label><input type="text" id="reqName"></div>
+    <div class="field"><label for="reqCompany">Client company (optional)</label><input type="text" id="reqCompany"></div>
+    <div class="field"><label for="reqExpiry">Link expires after</label>
+      <select id="reqExpiry">
+        <option value="24">24 hours</option>
+        <option value="72">3 days</option>
+        <option value="168" selected>7 days</option>
+        <option value="336">14 days</option>
+        <option value="720">30 days</option>
+      </select>
+    </div>
+    <div id="requestApprovalError" class="error-box"></div>
+    <div class="btn-row">
+      <button type="button" class="btn btn-amber" id="submitRequestApprovalBtn">Send Request</button>
+      <button type="button" class="btn btn-outline" id="cancelRequestApprovalBtn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showCommercialError, clearError, getMyCommercialRole, commercialCapabilities, createVariation, getVariation, updateVariation, listEligibleDayworksForLinking, getLinkedDayworks, linkDaywork, unlinkDaywork, getCommercialLineItems, addCommercialLineItem, deleteCommercialLineItem, getCommercialEvidence, addCommercialEvidencePhoto, removeCommercialEvidenceLink, getCommercialSignatures, submitCommercialEvent, approveCommercialEvent, rejectCommercialEvent, reopenCommercialEvent, previewLineTotal, previewVariationTotal, formatCommercialGBP, getMemberEmailMap, getDocumentFileUrl, todayISO, comparePlotNumbers, COMMERCIAL_STATUS_LABEL, COMMERCIAL_STATUS_BADGE, COMMERCIAL_LINE_TYPES, COMMERCIAL_LINE_TYPE_LABEL, generateCommercialEventPdfBlob, saveFileToDevice, deviceSaveStatusLabel, getCommercialApprovalRequests, requestCommercialApproval, revokeCommercialApprovalRequest, buildCommercialApprovalUrl, COMMERCIAL_APPROVAL_STATUS_LABEL, COMMERCIAL_APPROVAL_STATUS_BADGE } from "./js/app.js";
+
+  await requireAuth();
+  const eventId = getParam("id");
+  let projectId = getParam("project");
+
+  const pageErrorBox = document.getElementById("pageErrorBox");
+  let caps = commercialCapabilities(null);
+  let plots = [];
+  let event = null;
+  let lineItems = [];
+  let linkedDayworks = [];
+  let evidence = [];
+  let approvalRequests = [];
+  let membersById = {};
+  let currentUserId = null;
+
+  function plotOptionsHtml(selectedId) {
+    return `<option value="">No specific plot</option>` +
+      plots.map((p) => `<option value="${p.id}" ${p.id === selectedId ? "selected" : ""}>${escapeHtml(p.plot_number)}</option>`).join("");
+  }
+
+  // ─── CREATE MODE ────────────────────────────────────────────────
+  async function initCreateMode() {
+    if (!projectId) { window.location.href = "dashboard.html"; return; }
+    const role = await getMyCommercialRole(projectId).catch(() => null);
+    caps = commercialCapabilities(role);
+    if (!caps.canView) { document.getElementById("noAccessCard").style.display = "block"; return; }
+    if (!caps.canEdit) {
+      showCommercialError(pageErrorBox, { message: "You have view-only Commercial access — only a Contributor or Approver can create a Variation." });
+      return;
+    }
+    const { data: plotRows } = await supabase.from("plots").select("id, plot_number").eq("project_id", projectId);
+    plots = (plotRows || []).slice().sort((a, b) => comparePlotNumbers(a.plot_number, b.plot_number));
+    document.getElementById("cPlot").innerHTML = plotOptionsHtml(null);
+    document.getElementById("cDate").value = todayISO();
+    document.getElementById("createCard").style.display = "block";
+  }
+
+  document.getElementById("cancelCreateBtn").addEventListener("click", () => {
+    window.location.href = `variations.html?project=${projectId}`;
+  });
+
+  document.getElementById("createForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearError(pageErrorBox);
+    const btn = document.getElementById("createBtn");
+    btn.disabled = true;
+    try {
+      const created = await createVariation(projectId, {
+        title: document.getElementById("cTitle").value.trim(),
+        reason: document.getElementById("cReason").value.trim() || null,
+        dateIdentified: document.getElementById("cDate").value || null,
+        plotId: document.getElementById("cPlot").value || null,
+        instructionReference: document.getElementById("cInstructionRef").value.trim() || null,
+      });
+      window.location.href = `variation-detail.html?id=${created.id}`;
+    } catch (err) {
+      showCommercialError(pageErrorBox, err);
+      btn.disabled = false;
+    }
+  });
+
+  // ─── DETAIL MODE ────────────────────────────────────────────────
+  function unlocked() {
+    return caps.canEdit && (event.status === "draft" || event.status === "rejected");
+  }
+
+  function renderHeaderFacts() {
+    document.getElementById("pageTitle").textContent = event.reference ? `${event.reference} — ${event.title}` : event.title;
+    const badge = document.getElementById("statusBadge");
+    badge.style.display = "inline-block";
+    badge.className = `badge ${COMMERCIAL_STATUS_BADGE[event.status]}`;
+    badge.textContent = COMMERCIAL_STATUS_LABEL[event.status];
+    document.getElementById("generatePdfBtn").style.display = (event.status === "submitted" || event.status === "approved") ? "inline-flex" : "none";
+    document.getElementById("pdfStatusText").textContent = "";
+
+    document.getElementById("headerFacts").innerHTML = `
+      <div><dt>Reference</dt><dd>${escapeHtml(event.reference) || "—"}</dd></div>
+      <div><dt>Date Identified</dt><dd>${event.date_identified ? formatDate(event.date_identified) : "—"}</dd></div>
+      <div><dt>Plot / Location</dt><dd>${event.plot_id ? escapeHtml((plots.find((p) => p.id === event.plot_id) || {}).plot_number || "—") : "—"}</dd></div>
+      <div><dt>Instruction / Reference</dt><dd>${escapeHtml(event.instruction_reference) || "—"}</dd></div>
+      <div><dt>Reason / Notes</dt><dd>${escapeHtml(event.reason) || "—"}</dd></div>
+      <div><dt>Total Value</dt><dd>${formatCommercialGBP(event.total_value) || "£0.00"}</dd></div>
+      <div><dt>Created By</dt><dd>${escapeHtml(membersById[event.created_by] || "—")}</dd></div>
+      <div><dt>Created</dt><dd>${formatDate(event.created_at?.slice(0, 10))}</dd></div>
+    `;
+    document.getElementById("grandTotal").textContent = formatCommercialGBP(event.total_value) || "£0.00";
+
+    const u = unlocked();
+    document.getElementById("editHeaderBtn").style.display = u ? "inline-flex" : "none";
+    document.getElementById("lineItemAddRow").style.display = u ? "flex" : "none";
+    document.getElementById("addEvidenceRow").style.display = u ? "flex" : "none";
+    document.getElementById("addDayworkBtn").style.display = u ? "inline-flex" : "none";
+    document.getElementById("markupField").style.display = u ? "block" : "none";
+    document.getElementById("saveMarkupBtn").style.display = u ? "inline-flex" : "none";
+    document.getElementById("markupReadonly").style.display = u ? "none" : "block";
+    document.getElementById("markupReadonlyValue").textContent = `${Number(event.markup_pct)}%`;
+    document.getElementById("markupInput").value = event.markup_pct;
+  }
+
+  function openEditHeader() {
+    document.getElementById("eTitle").value = event.title;
+    document.getElementById("eReason").value = event.reason || "";
+    document.getElementById("eDate").value = event.date_identified || "";
+    document.getElementById("ePlot").innerHTML = plotOptionsHtml(event.plot_id);
+    document.getElementById("eInstructionRef").value = event.instruction_reference || "";
+    document.getElementById("headerFacts").style.display = "none";
+    document.getElementById("editHeaderBtn").style.display = "none";
+    document.getElementById("editHeaderForm").style.display = "block";
+  }
+  document.getElementById("editHeaderBtn").addEventListener("click", openEditHeader);
+  document.getElementById("cancelEditHeaderBtn").addEventListener("click", () => {
+    document.getElementById("headerFacts").style.display = "grid";
+    document.getElementById("editHeaderForm").style.display = "none";
+    renderHeaderFacts();
+  });
+  document.getElementById("editHeaderForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearError(pageErrorBox);
+    try {
+      event = await updateVariation(eventId, {
+        title: document.getElementById("eTitle").value.trim(),
+        reason: document.getElementById("eReason").value.trim() || null,
+        dateIdentified: document.getElementById("eDate").value || null,
+        plotId: document.getElementById("ePlot").value || null,
+        instructionReference: document.getElementById("eInstructionRef").value.trim() || null,
+      });
+      document.getElementById("headerFacts").style.display = "grid";
+      document.getElementById("editHeaderForm").style.display = "none";
+      renderHeaderFacts();
+    } catch (err) {
+      showCommercialError(pageErrorBox, err);
+    }
+  });
+
+  document.getElementById("saveMarkupBtn").addEventListener("click", async () => {
+    clearError(pageErrorBox);
+    try {
+      event = await updateVariation(eventId, { markupPct: document.getElementById("markupInput").value });
+      await reloadEvent();
+    } catch (err) {
+      showCommercialError(pageErrorBox, err);
+    }
+  });
+
+  // ─── Direct line items (identical pattern to daywork-detail.html) ──
+  function renderLineItems() {
+    const tbcCount = lineItems.filter((li) => li.rate === null).length;
+    const tbcWarning = document.getElementById("tbcWarning");
+    if (tbcCount) {
+      tbcWarning.style.display = "block";
+      tbcWarning.textContent = `⚠ ${tbcCount} direct line item${tbcCount === 1 ? "" : "s"} still ${tbcCount === 1 ? "has" : "have"} TBC (to-be-confirmed) pricing — this Variation can still be submitted, but the price won't be final until every line is priced.`;
+    } else {
+      tbcWarning.style.display = "none";
+    }
+
+    const u = unlocked();
+    document.getElementById("lineItemList").innerHTML = lineItems.map((li) => `
+      <li class="item-row">
+        <span class="badge badge-grey" style="flex:0 0 auto;">${COMMERCIAL_LINE_TYPE_LABEL[li.line_type]}</span>
+        <span style="flex:1 1 200px;">${escapeHtml(li.description)}${li.trade ? ` <span class="hint">(${escapeHtml(li.trade)})</span>` : ""}</span>
+        <span class="hint" style="flex:0 0 auto; white-space:nowrap;">${Number(li.quantity)}${li.unit ? " " + escapeHtml(li.unit) : ""} × ${li.rate === null ? "TBC" : formatCommercialGBP(li.rate)}</span>
+        <strong style="flex:0 0 90px; text-align:right;">${li.line_total === null ? "TBC" : formatCommercialGBP(li.line_total)}</strong>
+        ${u ? `<button type="button" class="btn btn-sm btn-danger" data-delete-line="${li.id}">Delete</button>` : ""}
+      </li>
+    `).join("");
+    document.querySelectorAll("[data-delete-line]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        if (!confirm("Delete this line item?")) return;
+        clearError(pageErrorBox);
+        try { await deleteCommercialLineItem(btn.dataset.deleteLine); await reloadEvent(); }
+        catch (err) { showCommercialError(pageErrorBox, err); }
+      });
+    });
+
+    const directTotal = lineItems.reduce((sum, li) => sum + (li.line_total === null ? 0 : Number(li.line_total)), 0);
+    document.getElementById("directSubtotal").textContent = formatCommercialGBP(directTotal) || "£0.00";
+  }
+
+  function updateLinePreview() {
+    const preview = previewLineTotal(document.getElementById("liQuantity").value, document.getElementById("liRate").value);
+    document.getElementById("liPreview").textContent = preview === null ? "= TBC" : `= ${formatCommercialGBP(preview)}`;
+  }
+  document.getElementById("liQuantity").addEventListener("input", updateLinePreview);
+  document.getElementById("liRate").addEventListener("input", updateLinePreview);
+
+  document.getElementById("addLineItemBtn").addEventListener("click", async () => {
+    clearError(pageErrorBox);
+    const description = document.getElementById("liDescription").value.trim();
+    if (!description) { showCommercialError(pageErrorBox, { message: "Enter a description for the line item first." }); return; }
+    const rateVal = document.getElementById("liRate").value;
+    const btn = document.getElementById("addLineItemBtn");
+    btn.disabled = true;
+    try {
+      await addCommercialLineItem(eventId, {
+        lineType: document.getElementById("liType").value,
+        description,
+        trade: document.getElementById("liTrade").value.trim() || null,
+        quantity: document.getElementById("liQuantity").value || 1,
+        unit: document.getElementById("liUnit").value.trim() || null,
+        rate: rateVal === "" ? null : rateVal,
+      });
+      document.getElementById("liDescription").value = "";
+      document.getElementById("liTrade").value = "";
+      document.getElementById("liQuantity").value = "1";
+      document.getElementById("liUnit").value = "";
+      document.getElementById("liRate").value = "";
+      updateLinePreview();
+      await reloadEvent();
+    } catch (err) {
+      showCommercialError(pageErrorBox, err);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // ─── Linked Dayworks ────────────────────────────────────────────
+  function renderLinkedDayworks() {
+    document.getElementById("noDayworksLinked").style.display = linkedDayworks.length ? "none" : "block";
+    const u = unlocked();
+    document.getElementById("linkedDayworkRows").innerHTML = linkedDayworks.map((l) => {
+      const d = l.daywork;
+      if (!d) return "";
+      return `
+        <tr>
+          <td><a href="daywork-detail.html?id=${d.id}">${escapeHtml(d.reference) || "—"}</a></td>
+          <td>${formatDate(d.created_at?.slice(0, 10))}</td>
+          <td>${escapeHtml(d.title)}</td>
+          <td>${formatCommercialGBP(d.total_value) || "£0.00"}</td>
+          <td><span class="badge ${COMMERCIAL_STATUS_BADGE[d.status]}">${COMMERCIAL_STATUS_LABEL[d.status]}</span></td>
+          <td>${u ? `<button type="button" class="btn btn-sm btn-danger" data-unlink="${d.id}">Remove</button>` : ""}</td>
+        </tr>
+      `;
+    }).join("");
+    document.querySelectorAll("[data-unlink]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        if (!confirm("Remove this linked Daywork from the Variation? The Daywork itself is not deleted.")) return;
+        clearError(pageErrorBox);
+        try { await unlinkDaywork(eventId, btn.dataset.unlink); await reloadEvent(); }
+        catch (err) { showCommercialError(pageErrorBox, err); }
+      });
+    });
+
+    const dayworksTotal = linkedDayworks.reduce((sum, l) => sum + (l.daywork ? Number(l.daywork.total_value) || 0 : 0), 0);
+    document.getElementById("dayworksSubtotal").textContent = formatCommercialGBP(dayworksTotal) || "£0.00";
+  }
+
+  const addDayworkModal = document.getElementById("addDayworkModal");
+  async function openAddDaywork() {
+    document.getElementById("dayworkSearchInput").value = "";
+    await renderEligibleDayworks();
+    addDayworkModal.style.display = "flex";
+  }
+  async function renderEligibleDayworks() {
+    clearError(pageErrorBox);
+    try {
+      const eligible = await listEligibleDayworksForLinking(projectId, eventId);
+      const search = document.getElementById("dayworkSearchInput").value.trim().toLowerCase();
+      const filtered = search ? eligible.filter((d) => `${d.reference || ""} ${d.title}`.toLowerCase().includes(search)) : eligible;
+      document.getElementById("noEligibleDayworks").style.display = filtered.length ? "none" : "block";
+      document.getElementById("eligibleDayworkRows").innerHTML = filtered.map((d) => `
+        <tr>
+          <td>${escapeHtml(d.reference) || "—"}</td>
+          <td>${escapeHtml(d.title)}</td>
+          <td>${formatCommercialGBP(d.total_value) || "£0.00"}</td>
+          <td><span class="badge ${COMMERCIAL_STATUS_BADGE[d.status]}">${COMMERCIAL_STATUS_LABEL[d.status]}</span></td>
+          <td><button type="button" class="btn btn-sm btn-amber" data-link="${d.id}">Link</button></td>
+        </tr>
+      `).join("");
+      document.querySelectorAll("[data-link]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          clearError(pageErrorBox);
+          try {
+            await linkDaywork(eventId, btn.dataset.link);
+            addDayworkModal.style.display = "none";
+            await reloadEvent();
+          } catch (err) {
+            showCommercialError(pageErrorBox, err);
+          }
+        });
+      });
+    } catch (err) {
+      showCommercialError(pageErrorBox, err);
+    }
+  }
+  document.getElementById("addDayworkBtn").addEventListener("click", openAddDaywork);
+  document.getElementById("dayworkSearchInput").addEventListener("input", renderEligibleDayworks);
+  document.getElementById("cancelAddDayworkBtn").addEventListener("click", () => { addDayworkModal.style.display = "none"; });
+  addDayworkModal.addEventListener("click", (e) => { if (e.target === addDayworkModal) addDayworkModal.style.display = "none"; });
+
+  // ─── Evidence (identical pattern to daywork-detail.html) ───────────
+  async function renderEvidence() {
+    document.getElementById("evidenceEmpty").style.display = evidence.length ? "none" : "block";
+    const u = unlocked();
+    const grid = document.getElementById("evidenceGrid");
+    grid.innerHTML = evidence.map((ev) => `
+      <div style="display:inline-block; vertical-align:top; margin:0 0.6rem 0.6rem 0; text-align:center;">
+        <div class="hint" style="max-width:140px; word-break:break-word;">${escapeHtml(ev.document?.title || ev.caption || "Evidence")}</div>
+        <a href="#" data-open-evidence="${ev.id}" class="hint">Open</a>
+        ${u ? ` · <a href="#" data-remove-evidence="${ev.id}" class="hint" style="color:var(--red);">Remove</a>` : ""}
+      </div>
+    `).join("");
+    grid.querySelectorAll("[data-open-evidence]").forEach((a) => {
+      a.addEventListener("click", async (e) => {
+        e.preventDefault();
+        const ev = evidence.find((x) => x.id === a.dataset.openEvidence);
+        if (!ev?.document?.currentRevision) return;
+        try { window.open(await getDocumentFileUrl(ev.document.currentRevision), "_blank"); }
+        catch (err) { showCommercialError(pageErrorBox, err); }
+      });
+    });
+    grid.querySelectorAll("[data-remove-evidence]").forEach((a) => {
+      a.addEventListener("click", async (e) => {
+        e.preventDefault();
+        if (!confirm("Remove this evidence link? The underlying document itself is kept.")) return;
+        clearError(pageErrorBox);
+        try { await removeCommercialEvidenceLink(a.dataset.removeEvidence); evidence = await getCommercialEvidence(eventId); await renderEvidence(); }
+        catch (err) { showCommercialError(pageErrorBox, err); }
+      });
+    });
+  }
+  document.getElementById("evidenceFileInput").addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    clearError(pageErrorBox);
+    e.target.disabled = true;
+    try { await addCommercialEvidencePhoto(eventId, projectId, file); evidence = await getCommercialEvidence(eventId); await renderEvidence(); }
+    catch (err) { showCommercialError(pageErrorBox, err); }
+    finally { e.target.disabled = false; e.target.value = ""; }
+  });
+
+  // ─── Workflow (identical pattern to daywork-detail.html) ───────────
+  function attestationText(action, userEmail) {
+    if (action === "submitted") return `Submit this Variation for approval?\n\nBy continuing, you confirm the pricing, linked Dayworks and details above are accurate to the best of your knowledge. This will be recorded against your account (${userEmail}) with a timestamp, and the record cannot be edited again once submitted.\n\nThis is an internal confirmation within Site Tracker, not a legally binding external signature.`;
+    return "";
+  }
+
+  function renderWorkflow() {
+    const details = document.getElementById("workflowDetails");
+    const rows = [];
+    if (event.submitted_by) rows.push(`<div><dt>Submitted by</dt><dd>${escapeHtml(membersById[event.submitted_by] || "—")} — ${formatDate(event.submitted_at?.slice(0, 10))}</dd></div>`);
+    if (event.approved_by) rows.push(`<div><dt>Approved by</dt><dd>${escapeHtml(membersById[event.approved_by] || "—")} — ${formatDate(event.approved_at?.slice(0, 10))}</dd></div>`);
+    if (event.rejected_by) rows.push(`<div><dt>Rejected by</dt><dd>${escapeHtml(membersById[event.rejected_by] || "—")} — ${formatDate(event.rejected_at?.slice(0, 10))}</dd></div>`);
+    if (event.rejection_reason) rows.push(`<div><dt>Rejection reason</dt><dd>${escapeHtml(event.rejection_reason)}</dd></div>`);
+    details.innerHTML = rows.length ? `<dl class="doc-facts">${rows.join("")}</dl>` : `<p class="hint">No workflow activity yet — this Variation is still in Draft.</p>`;
+
+    if (event.status === "approved") {
+      details.innerHTML += `<p class="hint" style="margin-top:0.8rem;">This record is approved and permanently locked. If a correction is genuinely needed, contact your Dayworks &amp; Variations approver — a formal revision/supersession workflow is planned for a later phase, so for now any correction has to be handled outside Site Tracker.</p>`;
+    }
+
+    const actions = document.getElementById("workflowActions");
+    actions.innerHTML = "";
+    const add = (label, cls, handler) => {
+      const btn = document.createElement("button");
+      btn.type = "button"; btn.className = `btn ${cls}`; btn.textContent = label;
+      btn.addEventListener("click", handler);
+      actions.appendChild(btn);
+    };
+
+    if (event.status === "draft" && caps.canSubmit) {
+      add("Submit for Approval", "btn-amber", async () => {
+        if (!lineItems.length && !linkedDayworks.length) { showCommercialError(pageErrorBox, { message: "Add at least one direct line item or link a Daywork before submitting." }); return; }
+        if (!confirm(attestationText("submitted", membersById[currentUserId] || "you"))) return;
+        clearError(pageErrorBox);
+        try { await submitCommercialEvent(eventId); await reloadEvent(); }
+        catch (err) { showCommercialError(pageErrorBox, err); }
+      });
+    }
+    if (event.status === "submitted" && caps.canApprove) {
+      add("Sign & Approve", "btn-amber", () => { openSignApproveModal(); });
+      add("Reject", "btn-danger", () => {
+        document.getElementById("rejectReason").value = "";
+        document.getElementById("rejectModal").style.display = "flex";
+      });
+    }
+    if (event.status === "rejected" && caps.canEdit) {
+      add("Return to Draft", "btn-outline", async () => {
+        clearError(pageErrorBox);
+        try { await reopenCommercialEvent(eventId); await reloadEvent(); }
+        catch (err) { showCommercialError(pageErrorBox, err); }
+      });
+    }
+  }
+
+  // ─── Client Approval (P18b) ────────────────────────────────────────
+  // The card shows the most recent request (if any) plus its full
+  // status — a client link is never re-shown after creation (only its
+  // hash is stored server-side), so "Resend" here means "start a new
+  // request", pre-filled with the same recipient details rather than
+  // literally resending an unrecoverable secret.
+  let lastRequestPrefill = null;
+  function renderApproval() {
+    document.getElementById("approvalLinkBox").style.display = "none";
+    const card = document.getElementById("approvalCard");
+    const latest = approvalRequests[0] || null;
+    const canRequestFresh = event.status === "submitted" && caps.canEdit && (!latest || !["pending", "viewed"].includes(latest.status));
+    const showCard = approvalRequests.length > 0 || canRequestFresh;
+    card.style.display = showCard ? "block" : "none";
+    if (!showCard) return;
+
+    const details = document.getElementById("approvalDetails");
+    if (!latest) {
+      details.innerHTML = `<p class="hint">No client approval has been requested yet.</p>`;
+    } else {
+      const rows = [];
+      rows.push(`<div><dt>Status</dt><dd><span class="badge ${COMMERCIAL_APPROVAL_STATUS_BADGE[latest.status]}">${COMMERCIAL_APPROVAL_STATUS_LABEL[latest.status]}</span></dd></div>`);
+      rows.push(`<div><dt>Recipient</dt><dd>${escapeHtml(latest.recipient_name || latest.recipient_email)}${latest.recipient_company ? " — " + escapeHtml(latest.recipient_company) : ""}</dd></div>`);
+      rows.push(`<div><dt>Requested</dt><dd>${formatDate(latest.created_at?.slice(0, 10))}</dd></div>`);
+      if (["pending", "viewed"].includes(latest.status)) rows.push(`<div><dt>Expires</dt><dd>${formatDate(latest.expires_at?.slice(0, 10))}</dd></div>`);
+      if (latest.viewed_at) rows.push(`<div><dt>Viewed</dt><dd>${formatDate(latest.viewed_at.slice(0, 10))}</dd></div>`);
+      if (latest.status === "approved") rows.push(`<div><dt>Approved by</dt><dd>${escapeHtml(latest.signer_name || "—")} — ${formatDate(latest.approved_at?.slice(0, 10))}</dd></div>`);
+      if (latest.status === "rejected") {
+        rows.push(`<div><dt>Rejected by</dt><dd>${escapeHtml(latest.signer_name || "—")} — ${formatDate(latest.rejected_at?.slice(0, 10))}</dd></div>`);
+        if (latest.rejection_reason) rows.push(`<div><dt>Reason</dt><dd>${escapeHtml(latest.rejection_reason)}</dd></div>`);
+      }
+      details.innerHTML = `<dl class="doc-facts">${rows.join("")}</dl>`;
+    }
+
+    const actions = document.getElementById("approvalActions");
+    actions.innerHTML = "";
+    const add = (label, cls, handler) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = `btn ${cls}`;
+      btn.textContent = label;
+      btn.addEventListener("click", handler);
+      actions.appendChild(btn);
+    };
+
+    if (latest && ["pending", "viewed"].includes(latest.status)) {
+      add("Revoke", "btn-danger", async () => {
+        if (!confirm("Revoke this approval request? The link will stop working immediately.")) return;
+        clearError(pageErrorBox);
+        try { await revokeCommercialApprovalRequest(latest.id); await reloadEvent(); }
+        catch (err) { showCommercialError(pageErrorBox, err); }
+      });
+      add("Resend", "btn-outline", async () => {
+        if (!confirm("Revoke the current link and start a new request?")) return;
+        clearError(pageErrorBox);
+        try {
+          await revokeCommercialApprovalRequest(latest.id);
+          lastRequestPrefill = { email: latest.recipient_email, name: latest.recipient_name, company: latest.recipient_company };
+          openRequestApprovalModal();
+        } catch (err) { showCommercialError(pageErrorBox, err); }
+      });
+    } else if (canRequestFresh) {
+      add("Request Client Approval", "btn-amber", () => { lastRequestPrefill = null; openRequestApprovalModal(); });
+    }
+  }
+
+  function openRequestApprovalModal() {
+    clearError(document.getElementById("requestApprovalError"));
+    document.getElementById("reqEmail").value = lastRequestPrefill?.email || "";
+    document.getElementById("reqName").value = lastRequestPrefill?.name || "";
+    document.getElementById("reqCompany").value = lastRequestPrefill?.company || "";
+    document.getElementById("reqExpiry").value = "168";
+    document.getElementById("requestApprovalModal").style.display = "flex";
+  }
+  document.getElementById("cancelRequestApprovalBtn").addEventListener("click", () => {
+    document.getElementById("requestApprovalModal").style.display = "none";
+  });
+  document.getElementById("requestApprovalModal").addEventListener("click", (e) => {
+    if (e.target === document.getElementById("requestApprovalModal")) document.getElementById("requestApprovalModal").style.display = "none";
+  });
+  document.getElementById("submitRequestApprovalBtn").addEventListener("click", async () => {
+    const errBox = document.getElementById("requestApprovalError");
+    clearError(errBox);
+    const email = document.getElementById("reqEmail").value.trim();
+    if (!email) { showCommercialError(errBox, { message: "A client email is required." }); return; }
+    const btn = document.getElementById("submitRequestApprovalBtn");
+    btn.disabled = true;
+    try {
+      const result = await requestCommercialApproval(eventId, {
+        recipientEmail: email,
+        recipientName: document.getElementById("reqName").value.trim() || null,
+        recipientCompany: document.getElementById("reqCompany").value.trim() || null,
+        expiryHours: Number(document.getElementById("reqExpiry").value),
+      });
+      document.getElementById("requestApprovalModal").style.display = "none";
+      await reloadEvent();
+      const link = buildCommercialApprovalUrl(result.token);
+      document.getElementById("approvalLinkValue").value = link;
+      const subject = encodeURIComponent(`Approval requested: ${event.reference || ""} ${event.title}`.trim());
+      const body = encodeURIComponent(`Hi,\n\nPlease review and approve/reject this ${event.type === "variation" ? "Variation" : "Daywork"} using the link below. No account is needed.\n\n${link}\n\nThis link expires ${formatDate(result.expires_at?.slice(0, 10))} and can only be used once.\n\nRegards,`);
+      document.getElementById("emailApprovalLinkBtn").href = `mailto:${email}?subject=${subject}&body=${body}`;
+      document.getElementById("approvalLinkBox").style.display = "block";
+    } catch (err) {
+      showCommercialError(errBox, err);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+  document.getElementById("copyApprovalLinkBtn").addEventListener("click", async () => {
+    const input = document.getElementById("approvalLinkValue");
+    try {
+      await navigator.clipboard.writeText(input.value);
+      const btn = document.getElementById("copyApprovalLinkBtn");
+      const original = btn.textContent;
+      btn.textContent = "Copied!";
+      setTimeout(() => { btn.textContent = original; }, 1500);
+    } catch {
+      input.select();
+    }
+  });
+
+  document.getElementById("cancelRejectBtn").addEventListener("click", () => { document.getElementById("rejectModal").style.display = "none"; });
+  document.getElementById("confirmRejectBtn").addEventListener("click", async () => {
+    clearError(pageErrorBox);
+    try {
+      await rejectCommercialEvent(eventId, document.getElementById("rejectReason").value.trim() || null);
+      document.getElementById("rejectModal").style.display = "none";
+      await reloadEvent();
+    } catch (err) { showCommercialError(pageErrorBox, err); }
+  });
+  document.getElementById("rejectModal").addEventListener("click", (e) => {
+    if (e.target === document.getElementById("rejectModal")) document.getElementById("rejectModal").style.display = "none";
+  });
+
+  // ─── Sign & Approve (touch/mouse canvas signature) ────────────────
+  const signApproveModal = document.getElementById("signApproveModal");
+  const sigCanvas = document.getElementById("sigCanvas");
+  const sigCtx = sigCanvas.getContext("2d");
+  let sigDrawing = false;
+  let sigHasStroke = false;
+
+  function sigCanvasPoint(e) {
+    const rect = sigCanvas.getBoundingClientRect();
+    const scaleX = sigCanvas.width / rect.width;
+    const scaleY = sigCanvas.height / rect.height;
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
+  }
+  function sigStartDraw(e) {
+    if (!sigCtx) return; // no 2D canvas support — the typed-name fallback still works
+    e.preventDefault();
+    sigDrawing = true;
+    const p = sigCanvasPoint(e);
+    sigCtx.beginPath();
+    sigCtx.moveTo(p.x, p.y);
+  }
+  function sigMoveDraw(e) {
+    if (!sigDrawing || !sigCtx) return;
+    e.preventDefault();
+    const p = sigCanvasPoint(e);
+    sigCtx.lineTo(p.x, p.y);
+    sigCtx.strokeStyle = "#0f1117";
+    sigCtx.lineWidth = 2;
+    sigCtx.lineCap = "round";
+    sigCtx.stroke();
+    sigHasStroke = true;
+  }
+  function sigEndDraw() { sigDrawing = false; }
+  sigCanvas.addEventListener("pointerdown", sigStartDraw);
+  sigCanvas.addEventListener("pointermove", sigMoveDraw);
+  sigCanvas.addEventListener("pointerup", sigEndDraw);
+  sigCanvas.addEventListener("pointerleave", sigEndDraw);
+
+  function sigClearCanvas() {
+    if (sigCtx) sigCtx.clearRect(0, 0, sigCanvas.width, sigCanvas.height);
+    sigHasStroke = false;
+  }
+  document.getElementById("clearSigBtn").addEventListener("click", sigClearCanvas);
+
+  function openSignApproveModal() {
+    document.getElementById("typedNameInput").value = "";
+    clearError(document.getElementById("signModalError"));
+    sigClearCanvas();
+    signApproveModal.style.display = "flex";
+  }
+  document.getElementById("cancelSigBtn").addEventListener("click", () => { signApproveModal.style.display = "none"; });
+  signApproveModal.addEventListener("click", (e) => { if (e.target === signApproveModal) signApproveModal.style.display = "none"; });
+
+  document.getElementById("submitSigBtn").addEventListener("click", async () => {
+    const errBox = document.getElementById("signModalError");
+    clearError(errBox);
+    const typedName = document.getElementById("typedNameInput").value.trim();
+    if (!sigHasStroke && !typedName) {
+      showCommercialError(errBox, { message: "Draw a signature or type a name to confirm." });
+      return;
+    }
+    try {
+      await approveCommercialEvent(eventId, {
+        signatureData: sigHasStroke ? sigCanvas.toDataURL("image/png") : null,
+        typedName: typedName || null,
+      });
+      signApproveModal.style.display = "none";
+      await reloadEvent();
+    } catch (err) {
+      showCommercialError(errBox, err);
+    }
+  });
+
+  // ─── PDF export ─────────────────────────────────────────────────
+  // Generates entirely client-side from this same, already-loaded
+  // submitted/approved record — no server round trip and no separate
+  // access check to keep in sync with the page's own (see
+  // generateCommercialEventPdfBlob() in app.js). Sharing/saving reuses
+  // the exact Save to Device infrastructure already used elsewhere.
+  document.getElementById("generatePdfBtn").addEventListener("click", async () => {
+    const btn = document.getElementById("generatePdfBtn");
+    const statusEl = document.getElementById("pdfStatusText");
+    clearError(pageErrorBox);
+    btn.disabled = true;
+    statusEl.textContent = "Generating PDF…";
+    try {
+      const { blob, filename } = await generateCommercialEventPdfBlob(eventId, "variation");
+      const result = await saveFileToDevice(blob, filename);
+      statusEl.textContent = deviceSaveStatusLabel(result.status);
+    } catch (err) {
+      statusEl.textContent = "";
+      showCommercialError(pageErrorBox, err);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  async function reloadEvent() {
+    event = await getVariation(eventId);
+    [lineItems, linkedDayworks, evidence, approvalRequests] = await Promise.all([
+      getCommercialLineItems(eventId),
+      getLinkedDayworks(eventId),
+      getCommercialEvidence(eventId),
+      getCommercialApprovalRequests(eventId),
+    ]);
+    renderHeaderFacts();
+    renderLineItems();
+    renderLinkedDayworks();
+    await renderEvidence();
+    renderWorkflow();
+    renderApproval();
+  }
+
+  async function initDetailMode() {
+    document.getElementById("liType").innerHTML = COMMERCIAL_LINE_TYPES.map((t) => `<option value="${t}">${COMMERCIAL_LINE_TYPE_LABEL[t]}</option>`).join("");
+
+    let baseEvent;
+    try {
+      baseEvent = await getVariation(eventId);
+    } catch (err) {
+      showCommercialError(pageErrorBox, err);
+      return;
+    }
+    projectId = baseEvent.project_id;
+    const role = await getMyCommercialRole(projectId).catch(() => null);
+    caps = commercialCapabilities(role);
+    if (!caps.canView) { document.getElementById("noAccessCard").style.display = "block"; return; }
+
+    const { data: { user } } = await supabase.auth.getUser();
+    currentUserId = user.id;
+
+    const [{ data: plotRows }, emailMap] = await Promise.all([
+      supabase.from("plots").select("id, plot_number").eq("project_id", projectId),
+      getMemberEmailMap([projectId]),
+    ]);
+    plots = (plotRows || []).slice().sort((a, b) => comparePlotNumbers(a.plot_number, b.plot_number));
+    membersById = emailMap;
+
+    document.getElementById("detailBody").style.display = "block";
+    await reloadEvent();
+    updateLinePreview();
+  }
+
+  async function init() {
+    let crumbProjectId = null;
+    if (eventId) {
+      await initDetailMode();
+      crumbProjectId = projectId;
+    } else {
+      await initCreateMode();
+      crumbProjectId = projectId;
+    }
+    if (crumbProjectId) {
+      const { data: project } = await supabase.from("projects").select("name").eq("id", crumbProjectId).single();
+      renderHeader([
+        { label: "Dashboard", href: "dashboard.html" },
+        { label: project?.name || "Site", href: `project.html?id=${crumbProjectId}` },
+        { label: "Dayworks & Variations", href: `commercial-dashboard.html?project=${crumbProjectId}` },
+        { label: "Variations", href: `variations.html?project=${crumbProjectId}` },
+        { label: eventId ? (event?.reference || "Variation") : "New Variation" },
+      ]);
+      document.getElementById("projectSub").textContent = project ? project.name : "";
+    }
+  }
+
+  init();
+</script>
+</body>
+</html>
