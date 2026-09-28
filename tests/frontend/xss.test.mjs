@@ -176,6 +176,47 @@ test("snag-list-edit.html: malicious snag description/location/trade render as i
   assertRenderedSafely(rows, SCRIPT_PAYLOAD, "snag-list-edit.html location/trade");
 });
 
+// ─── snag-list-view.html: photo round-up caption (location/description) ─
+test("snag-list-view.html: malicious location/description in the Photo Round-Up render as inert text", async () => {
+  const htmlPath = new URL("../../tracker/snag-list-view.html", import.meta.url).pathname;
+  const snag = {
+    id: "s1", item_no: 1, location: SCRIPT_PAYLOAD, description: IMG_PAYLOAD,
+    trade: "General", status: "open", photo_url: "https://example.com/photo.jpg",
+    raised_date: "2026-01-01", delay_flag: false, delay_reason: null,
+  };
+  const snagList = { id: "l1", plot_id: null, title: "General", projects: { id: "p1", name: "Site", org_id: "org1", main_contractor_email: null, main_contractor_name: null, contract_ref: null }, plots: null };
+  const supabase = {
+    from(table) {
+      const api = {
+        select() { return api; }, eq() { return api; }, order() { return api; },
+        single: async () => (table === "snag_lists" ? { data: snagList, error: null } : { data: null, error: null }),
+        then(resolve) {
+          if (table === "snag_items") resolve({ data: [snag], error: null });
+          else resolve({ data: [], error: null });
+        },
+      };
+      return api;
+    },
+  };
+  const { document } = await runPage(htmlPath, extractScript(htmlPath), {
+    __url: "https://example.com/snag-list-view.html?id=l1",
+    supabase,
+    requireAuth: async () => ({ id: "u1" }),
+    renderHeader: () => {},
+    getParam: () => "l1",
+    escapeHtml,
+    formatDate: (d) => d || "",
+    todayISO: () => "2026-01-01",
+    getOrgLogoUrl: async () => null,
+    isSnagOutstanding: (s) => !["closed", "rejected"].includes(s.status),
+    SNAG_STATUS_LABEL, SNAG_STATUS_BADGE,
+  });
+  await wait(30);
+  const doc = document.getElementById("doc");
+  assertRenderedSafely(doc, IMG_PAYLOAD, "snag-list-view.html round-up description");
+  assertRenderedSafely(doc, SCRIPT_PAYLOAD, "snag-list-view.html round-up location");
+});
+
 // ─── settings.html: organisation name goes through a safe sink by
 // construction (an <input>'s .value property), never innerHTML ──────
 test("settings.html: a malicious organisation name is set via .value (never interpreted as HTML)", async () => {

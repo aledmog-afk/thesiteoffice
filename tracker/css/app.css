@@ -164,6 +164,10 @@ tr:hover td { background: var(--off); }
 .photo-card-category { font-size: 0.78rem; color: var(--ink-soft); }
 .photo-card-caption { font-size: 0.82rem; white-space: pre-wrap; }
 
+/* ─── PHOTO ROUND-UP (snag list appendix, 4 large photos/page) ─ */
+.photo-roundup-group { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1.2rem; margin-bottom: 1.5rem; }
+.photo-roundup-group .photo-card img { aspect-ratio: 4 / 3; }
+
 /* ─── AUTH PAGES ─────────────────────────────────── */
 .auth-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 2rem; }
 .auth-card { width: 100%; max-width: 380px; background: var(--white); border: 1px solid var(--rule); border-radius: 8px; padding: 2.2rem; }
@@ -326,4 +330,9 @@ tr:hover td { background: var(--off); }
   .photo-card, .doc table tr { break-inside: avoid; page-break-inside: avoid; }
   .doc table thead { display: table-header-row-group; }
   .photo-gallery { grid-template-columns: repeat(2, 1fr); }
+
+  /* Each group is exactly 4 photos (2x2) — force a fresh page per group
+     so the round-up always lands 4-to-a-page when printed. */
+  .photo-roundup-group { break-inside: avoid; page-break-inside: avoid; }
+  .photo-roundup-group:not(:last-child) { break-after: page; page-break-after: always; }
 }

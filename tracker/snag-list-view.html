@@ -68,6 +68,30 @@
 
     const logoUrl = await getOrgLogoUrl(project.org_id);
 
+    const photoSnags = (snags || []).filter(s => s.photo_url);
+    const photoGroups = [];
+    for (let i = 0; i < photoSnags.length; i += 4) photoGroups.push(photoSnags.slice(i, i + 4));
+
+    const roundupHtml = photoGroups.length ? `
+      <div class="doc-section" style="margin-top:2rem;">
+        <h3>Photo Round-Up</h3>
+        ${photoGroups.map(group => `
+          <div class="photo-roundup-group">
+            ${group.map(s => `
+              <div class="photo-card">
+                <img src="${s.photo_url}" alt="">
+                <div class="photo-card-body">
+                  <div class="photo-card-tag">#${s.item_no} — ${escapeHtml(s.location)}</div>
+                  <span class="badge ${SNAG_STATUS_BADGE[s.status]}">${escapeHtml(SNAG_STATUS_LABEL[s.status] || s.status)}</span>
+                  ${s.description ? `<p class="photo-card-caption">${escapeHtml(s.description)}</p>` : ""}
+                </div>
+              </div>
+            `).join("")}
+          </div>
+        `).join("")}
+      </div>
+    ` : "";
+
     document.getElementById("doc").innerHTML = `
       <div class="doc-head">
         <div>
@@ -105,6 +129,7 @@
           </tbody>
         </table>
       </div>
+      ${roundupHtml}
     `;
   }
 
