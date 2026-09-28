@@ -103,6 +103,11 @@ test("Snagging-only member: can read plots and manage snag items", async () => {
       [fx.proj, fx.plotSnagList]
     );
     assert.equal(item.rowCount, 1, "snagging member should be able to raise a snag item");
+    // v52: closing a snag directly (no review) requires a completion
+    // photo already attached (in snag_photos) — unrelated to this
+    // test's actual point (that a snagging-only member has write access
+    // to snag_items at all), so one is just added to keep the write legal.
+    await snagger.query("insert into public.snag_photos (snag_id, kind, photo_url) values ($1,'completion','https://example.com/fixed.jpg')", [item.rows[0].id]);
     const closeIt = await snagger.query("update public.snag_items set status = 'closed' where id = $1", [item.rows[0].id]);
     assert.equal(closeIt.rowCount, 1, "snagging member should be able to close a snag item");
   } finally {

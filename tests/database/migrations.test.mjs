@@ -877,3 +877,65 @@ test("RFI-1: existing weekly_reports rows (pre-dating photo-id normalisation) su
     await dropTestDatabase(db);
   }
 });
+
+test("v52: snag_photos table, indexes, trigger, RLS policies and the snag_items status/review_note additions are idempotent across repeated re-application", async () => {
+  const db = "tracker_test_snag_photos_idempotent";
+  await createTestDatabase(db);
+  try {
+    const client = adminClient(db);
+    await client.connect();
+    await runSqlFile(client, MOCK_SETUP);
+    for (let i = 0; i < 3; i++) {
+      await runSqlFile(client, CURRENT_SCHEMA);
+    }
+
+    const tables = await client.query("select count(*)::int as n from information_schema.tables where table_schema = 'public' and table_name = 'snag_photos'");
+    assert.equal(tables.rows[0].n, 1);
+
+    const triggers = await client.query("select count(*)::int as n from pg_trigger where tgrelid = 'public.snag_photos'::regclass and tgname like 'trg_%'");
+    assert.equal(triggers.rows[0].n, 1, "exactly 1 trigger (before-write, project_id derivation) — no audit trigger, matching inspection_finding_photos' own deliberate exclusion");
+
+    const policies = await client.query("select count(*)::int as n from pg_policies where tablename = 'snag_photos'");
+    assert.equal(policies.rows[0].n, 3, "select/insert/delete only, no update policy, never duplicated across re-application");
+
+    const indexes = await client.query("select count(*)::int as n from pg_indexes where tablename = 'snag_photos' and indexname like '%_idx'");
+    assert.equal(indexes.rows[0].n, 2, "never duplicated across re-application");
+
+    const kindCheck = await client.query(
+      `select count(*)::int as n from pg_constraint where conrelid = 'public.snag_photos'::regclass and contype = 'c' and conname = 'snag_photos_kind_check'`
+    );
+    assert.equal(kindCheck.rows[0].n, 1, "the problem/completion kind constraint must exist exactly once, never duplicated");
+
+    const statusCheck = await client.query(
+      `select pg_get_constraintdef(oid) as def from pg_constraint where conrelid = 'public.snag_items'::regclass and conname = 'snag_items_status_check'`
+    );
+    assert.match(statusCheck.rows[0].def, /pending_review/, "the widened status constraint (adding pending_review) must be the one actually in effect after repeated re-application, not a stale duplicate");
+
+    const reviewNoteColumn = await client.query(
+      `select count(*)::int as n from information_schema.columns where table_schema = 'public' and table_name = 'snag_items' and column_name = 'review_note'`
+    );
+    assert.equal(reviewNoteColumn.rows[0].n, 1);
+
+    await client.end();
+  } finally {
+    await dropTestDatabase(db);
+  }
+});
+
+test("v52: a fresh install has zero snag_photos — there is no legacy predecessor to backfill from", async () => {
+  const db = "tracker_test_snag_photos_no_backfill";
+  await createTestDatabase(db);
+  try {
+    const client = adminClient(db);
+    await client.connect();
+    await runSqlFile(client, MOCK_SETUP);
+    await runSqlFile(client, CURRENT_SCHEMA);
+
+    const photos = await client.query("select count(*)::int as n from public.snag_photos");
+    assert.equal(photos.rows[0].n, 0);
+
+    await client.end();
+  } finally {
+    await dropTestDatabase(db);
+  }
+});

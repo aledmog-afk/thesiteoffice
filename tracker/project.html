@@ -253,7 +253,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, geocodePostcode, recalculateActualProgress, generateMissingPlots, suggestPlotProgress, EXTERNAL_WORKS_TAG, monthStartISO, getProjectControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, isFindingOutstanding, categoriseSnag, getProjectPlotReadiness, getMyCommercialRole, commercialCapabilities, getMyToolboxTalkRole, toolboxTalkCapabilities, getModuleRolesCatalog, getProjectModuleRoles, setProjectModuleRole } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, geocodePostcode, recalculateActualProgress, generateMissingPlots, suggestPlotProgress, EXTERNAL_WORKS_TAG, monthStartISO, getProjectControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, isFindingOutstanding, categoriseSnag, isSnagOutstanding, getProjectPlotReadiness, getMyCommercialRole, commercialCapabilities, getMyToolboxTalkRole, toolboxTalkCapabilities, getModuleRolesCatalog, getProjectModuleRoles, setProjectModuleRole } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("id");
@@ -838,7 +838,7 @@
         supabase.from("snag_items").select("status, due_date, priority").eq("project_id", projectId),
         supabase.from("documents").select("id", { count: "exact", head: true }).eq("project_id", projectId),
       ]);
-      document.getElementById("openSnagCount").textContent = (snags || []).filter(s => s.status === "open").length;
+      document.getElementById("openSnagCount").textContent = (snags || []).filter(s => isSnagOutstanding(s)).length;
       document.getElementById("closedSnagCount").textContent = (snags || []).filter(s => s.status === "closed").length;
       document.getElementById("overdueSnagCount").textContent = (snags || []).filter(s => categoriseSnag(s).overdue).length;
       document.getElementById("documentsCount").textContent = documentsCount ?? 0;
@@ -867,7 +867,7 @@
     ]);
     document.getElementById("reportCount").textContent = reportCount ?? 0;
     document.getElementById("monthlyReportCount").textContent = monthlyReportCount ?? 0;
-    document.getElementById("openSnagCount").textContent = (snags || []).filter(s => s.status === "open").length;
+    document.getElementById("openSnagCount").textContent = (snags || []).filter(s => isSnagOutstanding(s)).length;
     document.getElementById("closedSnagCount").textContent = (snags || []).filter(s => s.status === "closed").length;
     document.getElementById("overdueSnagCount").textContent = (snags || []).filter(s => categoriseSnag(s).overdue).length;
     plotsCount = fetchedPlotsCount ?? 0;

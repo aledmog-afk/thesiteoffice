@@ -77,7 +77,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, uploadImage, suggestPlotProgress, recalculateActualProgress, checkAndMarkPlotHandedOver, getPlotHandoverReadiness, PLOT_READINESS_LABEL, PLOT_READINESS_BADGE, RFI_STATUS_BADGE } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, uploadImage, suggestPlotProgress, recalculateActualProgress, checkAndMarkPlotHandedOver, getPlotHandoverReadiness, PLOT_READINESS_LABEL, PLOT_READINESS_BADGE, RFI_STATUS_BADGE, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE } from "./js/app.js";
 
   await requireAuth();
   const plotId = getParam("id");
@@ -227,7 +227,7 @@
       const sections = [
         ["Actions", actions || [], (a) => linkedItemRowHtml(a.title, `actions.html?project=${plot.project_id}`, `<span class="badge ${a.status === "completed" ? "badge-green" : a.status === "blocked" ? "badge-red" : "badge-grey"}">${escapeHtml(a.status)}</span>`)],
         ["Inspection Findings", findings || [], (f) => linkedItemRowHtml(f.title, `inspection-detail.html?id=${f.inspection_id}`, `<span class="badge ${f.severity === "critical" || f.severity === "high" ? "badge-red" : "badge-grey"}">${escapeHtml(f.status)}</span>`)],
-        ["Snags", snags, (s) => linkedItemRowHtml(s.description, `snag-list-edit.html?id=${s.snag_list_id}`, `<span class="badge ${s.status === "open" ? "badge-red" : "badge-green"}">${escapeHtml(s.status)}</span>`)],
+        ["Snags", snags, (s) => linkedItemRowHtml(s.description, `snag-list-edit.html?id=${s.snag_list_id}`, `<span class="badge ${SNAG_STATUS_BADGE[s.status]}">${escapeHtml(SNAG_STATUS_LABEL[s.status] || s.status)}</span>`)],
         ["RFIs", rfis || [], (r) => linkedItemRowHtml(`${r.reference} — ${r.title}`, `rfi-detail.html?id=${r.id}`, `<span class="badge ${RFI_STATUS_BADGE[r.status]}">${escapeHtml(r.status)}</span>`)],
       ];
 

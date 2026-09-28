@@ -120,7 +120,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, ensureOrganisation, getPortfolioControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE } from "./js/app.js";
+  import { requireAuth, renderHeader, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, ensureOrganisation, getPortfolioControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, isSnagOutstanding } from "./js/app.js";
 
   await requireAuth();
   renderHeader([{ label: "Dashboard" }]);
@@ -286,7 +286,7 @@
 
     const openSnagCount = {};
     (snags || []).forEach((s) => {
-      if (s.status === "open") openSnagCount[s.project_id] = (openSnagCount[s.project_id] || 0) + 1;
+      if (isSnagOutstanding(s)) openSnagCount[s.project_id] = (openSnagCount[s.project_id] || 0) + 1;
     });
     const lastReport = {};
     (reports || []).forEach((r) => {

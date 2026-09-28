@@ -737,12 +737,29 @@ export const SNAG_PRIORITIES = ["low", "medium", "high"];
 export const SNAG_PRIORITY_LABEL = { low: "Low", medium: "Medium", high: "High" };
 export const SNAG_PRIORITY_BADGE = { low: "badge-grey", medium: "badge-blue", high: "badge-amber" };
 
-export const SNAG_STATUSES = ["open", "closed", "rejected"];
-export const SNAG_STATUS_LABEL = { open: "Open", closed: "Closed", rejected: "Rejected" };
-export const SNAG_STATUS_BADGE = { open: "badge-red", closed: "badge-green", rejected: "badge-grey" };
+export const SNAG_STATUSES = ["open", "pending_review", "closed", "rejected"];
+export const SNAG_STATUS_LABEL = { open: "Open", pending_review: "Pending Review", closed: "Closed", rejected: "Rejected" };
+export const SNAG_STATUS_BADGE = { open: "badge-red", pending_review: "badge-amber", closed: "badge-green", rejected: "badge-grey" };
 
 export function isSnagOutstanding(snag) {
   return !["closed", "rejected"].includes(snag.status);
+}
+
+// v52: completion evidence. A snag can only be closed directly by
+// attaching a completion photo (self-evident, no reviewer needed); with
+// no photo it goes to 'pending_review' first, which only a project
+// editor can resolve. Pure UI-hint mirror of the real gate enforced in
+// snag_items_before_write() (sql/schema.sql, v52) — the database is
+// always the real authority, and attempting an illegal move here is
+// always re-rejected server-side regardless of what this returns.
+export function validSnagStatusTransitions(status) {
+  const SNAG_TRANSITIONS = {
+    open: ["pending_review", "closed", "rejected"],
+    pending_review: ["closed", "open"],
+    closed: ["open", "rejected"],
+    rejected: ["open", "closed"],
+  };
+  return SNAG_TRANSITIONS[status] || [];
 }
 
 export async function listSnags(projectId) {
@@ -767,12 +784,85 @@ export async function assignSnag(snagId, userId) {
   return updateSnag(snagId, { assigned_to: userId });
 }
 
-// "Resolve" in the sense this module uses it — moves status to
-// 'closed'. Kept as its own function name (matching the app-wide
-// convention of a named verb per lifecycle step) even though it's a
-// thin wrapper, so pages never hand-write the status string.
-export async function resolveSnag(snagId) {
+// v52: photos attached to a snag beyond the single legacy photo_url
+// column — both additional problem photos (several angles of the
+// defect) and completion evidence (one or more photos proving the
+// fix). snag_photos itself is the real authority for project_id
+// (trigger-derived) and for the "does this snag have completion
+// evidence" gate snag_items_before_write() enforces; these are thin
+// query/mutation wrappers, same convention as every other table here.
+export async function getSnagPhotos(snagId) {
+  const { data, error } = await supabase.from("snag_photos").select("*").eq("snag_id", snagId).order("created_at", { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function addSnagPhoto(snagId, photoUrl, kind) {
+  const { data, error } = await supabase.from("snag_photos").insert({ snag_id: snagId, kind, photo_url: photoUrl }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function deleteSnagPhoto(photoId) {
+  const { error } = await supabase.from("snag_photos").delete().eq("id", photoId);
+  if (error) throw error;
+}
+
+// Bulk lookup for a list view — one query for every snag's completion-
+// photo COUNT (not the photos themselves), so a row can decide whether
+// "Complete" already has evidence attached without an N+1 fetch. Mirrors
+// getRfiLinksForWeeklyReport()'s own bulk-lookup-for-a-list shape.
+export async function getSnagCompletionPhotoCounts(snagIds) {
+  if (!snagIds.length) return {};
+  const { data, error } = await supabase.from("snag_photos").select("snag_id").in("snag_id", snagIds).eq("kind", "completion");
+  if (error) throw error;
+  const counts = {};
+  for (const row of data || []) counts[row.snag_id] = (counts[row.snag_id] || 0) + 1;
+  return counts;
+}
+
+// v52: the two ways a snag actually gets to 'closed' — mirrors
+// resolveCommercialEvent()-style named verbs per lifecycle step rather
+// than a page hand-writing the status/field combination itself. Both
+// are re-validated server-side (snag_items_before_write()) regardless
+// of what's sent here.
+//
+// completeSnagWithPhoto() is the quick single-photo path: attach the
+// one photo just uploaded AND close, in one call — for someone who
+// only has one photo and wants to finish in a single step. Someone who
+// wants to attach several photos over time uses addSnagPhoto()
+// (repeatable, doesn't close) followed by closeSnagWithEvidence() once
+// ready — the server accepts either shape identically, since the gate
+// only ever checks "does at least one completion photo already exist"
+// at the moment status actually flips to closed.
+export async function completeSnagWithPhoto(snagId, photoUrl) {
+  await addSnagPhoto(snagId, photoUrl, "completion");
   return updateSnag(snagId, { status: "closed" });
+}
+
+// Closes a snag whose completion evidence was already attached via
+// addSnagPhoto() — the trigger rejects this with a clear error if no
+// completion photo actually exists yet, so there's no separate client-
+// side check duplicating that rule here.
+export async function closeSnagWithEvidence(snagId) {
+  return updateSnag(snagId, { status: "closed" });
+}
+
+export async function submitSnagForReview(snagId) {
+  return updateSnag(snagId, { status: "pending_review" });
+}
+
+// Editor-only server-side — approves a pending-review snag exactly as
+// if they'd independently verified it (verified_at/by are set by the
+// trigger, not here).
+export async function approveSnagReview(snagId) {
+  return updateSnag(snagId, { status: "closed" });
+}
+
+// Editor-only server-side — sends a pending-review snag back to the
+// assignee for rework, with an optional reason.
+export async function rejectSnagReview(snagId, note = null) {
+  return updateSnag(snagId, { status: "open", review_note: note });
 }
 
 // Editor-only server-side (enforced by the trigger, not just here) —
@@ -1345,7 +1435,9 @@ export async function getProjectSupportingSignals(projectId) {
     supabase.from("commercial_items").select("status").eq("project_id", projectId),
   ]);
   return {
-    openSnags: (snags || []).filter((s) => s.status === "open").length,
+    // v52: a snag awaiting review is still outstanding work, same
+    // rule isSnagOutstanding() already applies everywhere else.
+    openSnags: (snags || []).filter((s) => isSnagOutstanding(s)).length,
     outstandingGates: (gates || []).filter((g) => !["approved", "not_applicable"].includes(g.status)).length,
     pendingCommercial: (commercial || []).filter((c) => c.status === "pending_client_review").length,
   };

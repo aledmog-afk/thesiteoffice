@@ -94,6 +94,15 @@ async function createSnag(client, overrides = {}) {
   return rows[0];
 }
 
+// v52: closing a snag directly now requires a completion photo to
+// already exist in snag_photos (see tests/security/snag_photos.test.mjs
+// for that table's own dedicated coverage) — used here purely as setup
+// for tests that are actually about something else (verification,
+// closed_date, audit), so the exact photo url is never meaningful.
+async function addCompletionPhoto(client, snagId, url = "https://example.com/fixed.jpg") {
+  await client.query("insert into public.snag_photos (snag_id, kind, photo_url) values ($1,'completion',$2)", [snagId, url]);
+}
+
 // ─── Assignee validation ────────────────────────────────────────────
 
 test("assigned_to: any legitimate project member (including snagging-only) can be assigned", async () => {
@@ -199,6 +208,7 @@ test("verification: a snagging-only member cannot verify a snag, even one they c
   const snagA = await userClient(DB, SNAG_A);
   try {
     const snag = await createSnag(snagA, { created_by: SNAG_A });
+    await addCompletionPhoto(snagA, snag.id);
     await snagA.query("update public.snag_items set status = 'closed' where id = $1", [snag.id]);
     await assert.rejects(
       snagA.query("update public.snag_items set verified_at = now() where id = $1", [snag.id]),
@@ -215,6 +225,7 @@ test("verification: an owner/collaborator can verify a closed snag, and verified
   const collabA = await userClient(DB, COLLAB_A);
   try {
     const snag = await createSnag(ownerA);
+    await addCompletionPhoto(ownerA, snag.id);
     await ownerA.query("update public.snag_items set status = 'closed' where id = $1", [snag.id]);
     const verified = await collabA.query("update public.snag_items set verified_at = now() where id = $1 returning verified_at, verified_by", [snag.id]);
     assert.ok(verified.rows[0].verified_at, "verified_at must be set");
@@ -243,6 +254,7 @@ test("verification: reopening a verified snag auto-clears verification, and any 
   const snagA = await userClient(DB, SNAG_A);
   try {
     const snag = await createSnag(ownerA);
+    await addCompletionPhoto(ownerA, snag.id);
     await ownerA.query("update public.snag_items set status = 'closed' where id = $1", [snag.id]);
     await ownerA.query("update public.snag_items set verified_at = now() where id = $1", [snag.id]);
 
@@ -264,6 +276,7 @@ test("verification: an editor can explicitly unverify (clear verification) witho
   const ownerA = await userClient(DB, OWNER_A);
   try {
     const snag = await createSnag(ownerA);
+    await addCompletionPhoto(ownerA, snag.id);
     await ownerA.query("update public.snag_items set status = 'closed' where id = $1", [snag.id]);
     await ownerA.query("update public.snag_items set verified_at = now() where id = $1", [snag.id]);
     const unverified = await ownerA.query("update public.snag_items set verified_at = null where id = $1 returning verified_at, verified_by, status", [snag.id]);
@@ -280,6 +293,7 @@ test("closed_date: auto-filled to today when the client omits it on close, and a
   try {
     const snag = await createSnag(ownerA);
     const today = new Date().toISOString().slice(0, 10);
+    await addCompletionPhoto(ownerA, snag.id);
     const closed = await ownerA.query("update public.snag_items set status = 'closed' where id = $1 returning closed_date", [snag.id]);
     assert.equal(closed.rows[0].closed_date.toISOString().slice(0, 10), today, "an omitted closed_date must be auto-filled with today's date");
     const reopened = await ownerA.query("update public.snag_items set status = 'open' where id = $1 returning closed_date", [snag.id]);
@@ -334,6 +348,7 @@ test("audit: snag_items writes are already captured by the existing generic audi
   const ownerA = await userClient(DB, OWNER_A);
   try {
     const snag = await createSnag(ownerA);
+    await addCompletionPhoto(ownerA, snag.id);
     await ownerA.query("update public.snag_items set status = 'closed' where id = $1", [snag.id]);
     await ownerA.query("update public.snag_items set verified_at = now() where id = $1", [snag.id]);
 
@@ -386,5 +401,266 @@ test("audit: a rejected cross-project action link fabricates no audit row", asyn
     assert.equal(audit.rows.length, 0, "a write that was rejected server-side must never leave an audit trail behind, as if it had happened");
   } finally {
     await ownerA.end();
+  }
+});
+
+// ─── v52: completion evidence (photo close / pending review) ────────
+// Closing a snag now requires either at least one completion photo
+// (self-evident, no reviewer) — see tests/security/snag_photos.test.mjs
+// for that table's own dedicated coverage (RLS, project_id derivation,
+// kind constraint, cross-project isolation) — or, with no photo, a trip
+// through 'pending_review' that only a project editor can resolve. All
+// enforced in snag_items_before_write() (sql/schema.sql, v52).
+// closed <-> rejected and open -> rejected remain deliberately
+// unrestricted, exactly as they always have been — not retested here,
+// since nothing about them changed.
+
+test("completion evidence: closing directly with no completion photo attached is rejected", async () => {
+  const ownerA = await userClient(DB, OWNER_A);
+  try {
+    const snag = await createSnag(ownerA);
+    await assert.rejects(
+      ownerA.query("update public.snag_items set status = 'closed' where id = $1", [snag.id]),
+      /can only be closed directly with at least one completion photo/
+    );
+  } finally {
+    await ownerA.end();
+  }
+});
+
+test("completion evidence: attaching a completion photo THEN closing directly succeeds and leaves verified_at null — the photo is the evidence, not an editor's independent verification", async () => {
+  const snagA = await userClient(DB, SNAG_A);
+  try {
+    const snag = await createSnag(snagA, { assigned_to: SNAG_A });
+    await addCompletionPhoto(snagA, snag.id);
+    const closed = await snagA.query(
+      "update public.snag_items set status = 'closed' where id = $1 returning status, verified_at, closed_date",
+      [snag.id]
+    );
+    assert.equal(closed.rows[0].status, "closed");
+    assert.equal(closed.rows[0].verified_at, null);
+    assert.ok(closed.rows[0].closed_date, "closed_date is still auto-filled exactly as before");
+  } finally {
+    await snagA.end();
+  }
+});
+
+test("completion evidence: 'add more' — several completion photos can be attached, and any one of them satisfies the close gate", async () => {
+  const ownerA = await userClient(DB, OWNER_A);
+  try {
+    const snag = await createSnag(ownerA);
+    await addCompletionPhoto(ownerA, snag.id, "https://example.com/1.jpg");
+    await addCompletionPhoto(ownerA, snag.id, "https://example.com/2.jpg");
+    await addCompletionPhoto(ownerA, snag.id, "https://example.com/3.jpg");
+    const photos = await ownerA.query("select id from public.snag_photos where snag_id = $1 and kind = 'completion'", [snag.id]);
+    assert.equal(photos.rows.length, 3);
+    const closed = await ownerA.query("update public.snag_items set status = 'closed' where id = $1 returning status", [snag.id]);
+    assert.equal(closed.rows[0].status, "closed");
+  } finally {
+    await ownerA.end();
+  }
+});
+
+test("completion evidence: any member (including snagging-only) can submit a snag for review from Open", async () => {
+  const snagA = await userClient(DB, SNAG_A);
+  try {
+    const snag = await createSnag(snagA);
+    const r = await snagA.query("update public.snag_items set status = 'pending_review' where id = $1 returning status", [snag.id]);
+    assert.equal(r.rows[0].status, "pending_review");
+  } finally {
+    await snagA.end();
+  }
+});
+
+test("completion evidence: a snag can only enter pending_review from Open, not from closed or rejected", async () => {
+  const ownerA = await userClient(DB, OWNER_A);
+  try {
+    const closedSnag = await createSnag(ownerA);
+    await addCompletionPhoto(ownerA, closedSnag.id);
+    await ownerA.query("update public.snag_items set status = 'closed' where id = $1", [closedSnag.id]);
+    await assert.rejects(
+      ownerA.query("update public.snag_items set status = 'pending_review' where id = $1", [closedSnag.id]),
+      /can only be submitted for review from Open/
+    );
+
+    const rejectedSnag = await createSnag(ownerA);
+    await ownerA.query("update public.snag_items set status = 'rejected' where id = $1", [rejectedSnag.id]);
+    await assert.rejects(
+      ownerA.query("update public.snag_items set status = 'pending_review' where id = $1", [rejectedSnag.id]),
+      /can only be submitted for review from Open/
+    );
+  } finally {
+    await ownerA.end();
+  }
+});
+
+test("completion evidence: a snag can never be CREATED already pending_review — silently reset to Open, same idiom as verified_at/closed_date", async () => {
+  const ownerA = await userClient(DB, OWNER_A);
+  try {
+    const snag = await createSnag(ownerA, { status: "pending_review" });
+    assert.equal(snag.status, "open");
+  } finally {
+    await ownerA.end();
+  }
+});
+
+test("completion evidence: a snagging-only member (non-editor) cannot approve or reject a snag pending review", async () => {
+  const snagA = await userClient(DB, SNAG_A);
+  try {
+    const snag = await createSnag(snagA);
+    await snagA.query("update public.snag_items set status = 'pending_review' where id = $1", [snag.id]);
+    await assert.rejects(
+      snagA.query("update public.snag_items set status = 'closed' where id = $1", [snag.id]),
+      /only a project editor.*can approve or reject/,
+      "approving without a photo must require editor privilege, same bar as independent verification"
+    );
+    await assert.rejects(
+      snagA.query("update public.snag_items set status = 'open' where id = $1", [snag.id]),
+      /only a project editor.*can approve or reject/
+    );
+  } finally {
+    await snagA.end();
+  }
+});
+
+test("completion evidence: an editor can approve a pending-review snag — closes it and sets verified_at/by to the real actor, no photo required", async () => {
+  const snagA = await userClient(DB, SNAG_A);
+  const collabA = await userClient(DB, COLLAB_A);
+  try {
+    const snag = await createSnag(snagA);
+    await snagA.query("update public.snag_items set status = 'pending_review' where id = $1", [snag.id]);
+    const approved = await collabA.query(
+      "update public.snag_items set status = 'closed' where id = $1 returning status, verified_at, verified_by",
+      [snag.id]
+    );
+    assert.equal(approved.rows[0].status, "closed");
+    assert.ok(approved.rows[0].verified_at, "approval is equivalent to an editor's own independent verification");
+    assert.equal(approved.rows[0].verified_by, COLLAB_A, "verified_by must be the real approving actor, not client-suppliable");
+    const photos = await collabA.query("select 1 from public.snag_photos where snag_id = $1 and kind = 'completion'", [snag.id]);
+    assert.equal(photos.rows.length, 0, "no photo was ever supplied on this path");
+  } finally {
+    await snagA.end();
+    await collabA.end();
+  }
+});
+
+test("completion evidence: an editor can reject a pending-review snag — sends it back to Open with a review_note, verification stays clear", async () => {
+  const snagA = await userClient(DB, SNAG_A);
+  const ownerA = await userClient(DB, OWNER_A);
+  try {
+    const snag = await createSnag(snagA);
+    await snagA.query("update public.snag_items set status = 'pending_review' where id = $1", [snag.id]);
+    const rejected = await ownerA.query(
+      "update public.snag_items set status = 'open', review_note = $1 where id = $2 returning status, review_note, verified_at, verified_by",
+      ["photo missing, please attach one or redo the fix", snag.id]
+    );
+    assert.equal(rejected.rows[0].status, "open");
+    assert.equal(rejected.rows[0].review_note, "photo missing, please attach one or redo the fix");
+    assert.equal(rejected.rows[0].verified_at, null);
+    assert.equal(rejected.rows[0].verified_by, null);
+  } finally {
+    await snagA.end();
+    await ownerA.end();
+  }
+});
+
+test("completion evidence: an editor can only approve (closed) or reject (open) a pending-review snag — cannot jump it straight to rejected", async () => {
+  const ownerA = await userClient(DB, OWNER_A);
+  try {
+    const snag = await createSnag(ownerA);
+    await ownerA.query("update public.snag_items set status = 'pending_review' where id = $1", [snag.id]);
+    await assert.rejects(
+      ownerA.query("update public.snag_items set status = 'rejected' where id = $1", [snag.id]),
+      /can only be approved \(closed\) or sent back to Open/
+    );
+  } finally {
+    await ownerA.end();
+  }
+});
+
+test("completion evidence: reopening a photo-closed snag DELETES its completion photos (but keeps problem photos), not just clears verification — stale 'before' evidence must not linger", async () => {
+  const ownerA = await userClient(DB, OWNER_A);
+  try {
+    const snag = await createSnag(ownerA);
+    await ownerA.query("insert into public.snag_photos (snag_id, kind, photo_url) values ($1,'problem','https://example.com/problem.jpg')", [snag.id]);
+    await addCompletionPhoto(ownerA, snag.id);
+    await ownerA.query("update public.snag_items set status = 'closed' where id = $1", [snag.id]);
+    await ownerA.query("update public.snag_items set status = 'open' where id = $1", [snag.id]);
+    const completion = await ownerA.query("select 1 from public.snag_photos where snag_id = $1 and kind = 'completion'", [snag.id]);
+    const problem = await ownerA.query("select 1 from public.snag_photos where snag_id = $1 and kind = 'problem'", [snag.id]);
+    assert.equal(completion.rows.length, 0, "reopen must delete every completion photo");
+    assert.equal(problem.rows.length, 1, "reopen must never touch problem photos — they document the persistent defect");
+    // And re-closing directly must now need FRESH evidence again.
+    await assert.rejects(
+      ownerA.query("update public.snag_items set status = 'closed' where id = $1", [snag.id]),
+      /can only be closed directly with at least one completion photo/
+    );
+  } finally {
+    await ownerA.end();
+  }
+});
+
+test("completion evidence: resubmitting for review after a rejection clears the stale review_note before the new cycle", async () => {
+  const snagA = await userClient(DB, SNAG_A);
+  const ownerA = await userClient(DB, OWNER_A);
+  try {
+    const snag = await createSnag(snagA);
+    await snagA.query("update public.snag_items set status = 'pending_review' where id = $1", [snag.id]);
+    await ownerA.query("update public.snag_items set status = 'open', review_note = 'not good enough' where id = $1", [snag.id]);
+    const resubmitted = await snagA.query("update public.snag_items set status = 'pending_review' where id = $1 returning review_note", [snag.id]);
+    assert.equal(resubmitted.rows[0].review_note, null, "a fresh review cycle must not carry a stale rejection reason from the PRIOR cycle");
+  } finally {
+    await snagA.end();
+    await ownerA.end();
+  }
+});
+
+test("completion evidence: an existing loose transition (rejected -> closed) still works, now gated only by the same photo-evidence rule as any other direct close", async () => {
+  const ownerA = await userClient(DB, OWNER_A);
+  try {
+    const snag = await createSnag(ownerA);
+    await ownerA.query("update public.snag_items set status = 'rejected' where id = $1", [snag.id]);
+    await addCompletionPhoto(ownerA, snag.id);
+    const closed = await ownerA.query(
+      "update public.snag_items set status = 'closed' where id = $1 returning status",
+      [snag.id]
+    );
+    assert.equal(closed.rows[0].status, "closed", "closed <-> rejected was never restricted before this feature and stays available, just now sharing the same evidence gate as any other direct close");
+  } finally {
+    await ownerA.end();
+  }
+});
+
+test("completion evidence: cross-org — a stranger's attempted approve/reject on an inaccessible pending-review snag affects zero rows, not an error", async () => {
+  const ownerA = await userClient(DB, OWNER_A);
+  const stranger = await userClient(DB, STRANGER);
+  try {
+    const snag = await createSnag(ownerA);
+    await ownerA.query("update public.snag_items set status = 'pending_review' where id = $1", [snag.id]);
+    const attempt = await stranger.query("update public.snag_items set status = 'closed' where id = $1", [snag.id]);
+    assert.equal(attempt.rowCount, 0, "RLS must return zero affected rows for an inaccessible snag, not leak its existence via a different error");
+  } finally {
+    await ownerA.end();
+    await stranger.end();
+  }
+});
+
+test("completion evidence: audit trail captures the pending_review submission and the approval as separate UPDATE rows", async () => {
+  const snagA = await userClient(DB, SNAG_A);
+  const collabA = await userClient(DB, COLLAB_A);
+  try {
+    const snag = await createSnag(snagA);
+    await snagA.query("update public.snag_items set status = 'pending_review' where id = $1", [snag.id]);
+    await collabA.query("update public.snag_items set status = 'closed' where id = $1", [snag.id]);
+    const audit = await snagA.query(
+      "select old_data->>'status' as old_status, new_data->>'status' as new_status from public.audit_log where table_name = 'snag_items' and record_id = $1 and action = 'UPDATE' order by created_at",
+      [snag.id]
+    );
+    assert.equal(audit.rows.length, 2);
+    assert.deepEqual([audit.rows[0].old_status, audit.rows[0].new_status], ["open", "pending_review"]);
+    assert.deepEqual([audit.rows[1].old_status, audit.rows[1].new_status], ["pending_review", "closed"]);
+  } finally {
+    await snagA.end();
+    await collabA.end();
   }
 });

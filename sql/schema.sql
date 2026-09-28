@@ -3381,6 +3381,9 @@ declare
   v_finding_project_id uuid;
   v_client_changed_verification boolean;
   v_reopened boolean;
+  v_entering_pending_review boolean;
+  v_leaving_pending_review boolean;
+  v_direct_close boolean;
 begin
   if new.assigned_to is not null and not public.is_project_member_user(new.project_id, new.assigned_to) then
     raise exception 'assigned_to must be a member of this project';
@@ -3409,9 +3412,17 @@ begin
   if TG_OP = 'INSERT' then
     -- A snag can never be created pre-verified, or pre-closed with a
     -- backdated closed_date — both are always derived from a real
-    -- status transition, never trusted from the client.
+    -- status transition, never trusted from the client. Likewise it can
+    -- never be created already 'pending_review' (v52 below) — that
+    -- state only means anything as the result of a real "submit for
+    -- review" action on an existing open snag, so a client attempting
+    -- it at insert time is simply reset to 'open', same idiom as the
+    -- fields above.
     new.verified_at := null;
     new.verified_by := null;
+    if new.status = 'pending_review' then
+      new.status := 'open';
+    end if;
     new.closed_date := case when new.status = 'closed' then coalesce(new.closed_date, current_date) else null end;
     return new;
   end if;
@@ -3427,6 +3438,50 @@ begin
   v_client_changed_verification := new.verified_at is distinct from old.verified_at;
   v_reopened := old.status = 'closed' and new.status <> 'closed';
 
+  -- v52: completion evidence. A snag can be closed two ways — attach a
+  -- photo and close directly (self-evident, no reviewer needed), or, if
+  -- there's no photo, submit it for review and have a project editor
+  -- approve (-> closed) or reject (-> back to open) it. 'pending_review'
+  -- is a brand-new state with no prior loose behaviour to preserve, so
+  -- both its entry and exit are validated outright here — unlike
+  -- open/closed/rejected, whose existing free transitions (e.g.
+  -- closed <-> rejected) are deliberately left exactly as loose as they
+  -- have always been.
+  v_entering_pending_review := new.status = 'pending_review' and old.status <> 'pending_review';
+  v_leaving_pending_review := old.status = 'pending_review' and new.status <> 'pending_review';
+  v_direct_close := new.status = 'closed' and old.status not in ('closed', 'pending_review');
+
+  if v_entering_pending_review and old.status <> 'open' then
+    raise exception 'a snag can only be submitted for review from Open';
+  end if;
+  if v_entering_pending_review then
+    -- A fresh review cycle starts clean — a leftover reason from a
+    -- PRIOR rejection would otherwise confuse the reviewer looking at
+    -- this resubmission.
+    new.review_note := null;
+  end if;
+
+  if v_leaving_pending_review then
+    if not public.is_project_editor(new.project_id) then
+      raise exception 'only a project editor (owner or collaborator) can approve or reject a snag pending review';
+    end if;
+    if new.status not in ('closed', 'open') then
+      raise exception 'a snag pending review can only be approved (closed) or sent back to Open';
+    end if;
+  end if;
+
+  if v_direct_close and not exists (
+    select 1 from public.snag_photos where snag_id = old.id and kind = 'completion'
+  ) then
+    raise exception 'a snag can only be closed directly with at least one completion photo attached — submit it for review instead if there is no photo';
+  end if;
+  if v_direct_close then
+    -- Same reasoning as the pending_review entry above — a photo-close
+    -- is a fresh, self-evident completion, not the outcome of whatever
+    -- review cycle (if any) came before it.
+    new.review_note := null;
+  end if;
+
   if new.status = 'closed' and old.status <> 'closed' then
     new.closed_date := coalesce(new.closed_date, current_date);
   elsif new.status <> 'closed' then
@@ -3434,6 +3489,27 @@ begin
   end if;
 
   if v_reopened then
+    new.verified_at := null;
+    new.verified_by := null;
+    -- Stale "before" completion evidence would otherwise misleadingly
+    -- suggest the reopened defect is still fixed — cleared so the NEXT
+    -- close (of either kind) needs genuinely fresh evidence. Problem
+    -- photos (kind = 'problem') are untouched — they document the
+    -- persistent defect and stay relevant across reopen cycles.
+    delete from public.snag_photos where snag_id = old.id and kind = 'completion';
+  elsif v_leaving_pending_review and new.status = 'closed' then
+    -- Approval — equivalent to an editor independently verifying it,
+    -- just reached via the review queue instead of the standalone
+    -- Verify button. Client-supplied verified_at/by is never trusted
+    -- either way.
+    new.verified_at := now();
+    new.verified_by := auth.uid();
+    new.review_note := null;
+  elsif v_leaving_pending_review and new.status = 'open' then
+    -- Rejection — sent back to the assignee for rework. review_note
+    -- (the reason) is whatever the client supplies in this same write;
+    -- not enforced non-null here, matching delay_reason's own existing
+    -- optional-reason convention on this table.
     new.verified_at := null;
     new.verified_by := null;
   elsif v_client_changed_verification then
@@ -9381,3 +9457,94 @@ as $$
     '[]'::jsonb
   );
 $$;
+
+-- ─── v52 ADDITIONS: Snag completion evidence ────────────────────────
+-- Closing a snag now requires evidence, not just a status flip: either
+-- one or more completion photos (self-evident, closes immediately — no
+-- reviewer needed) or, when there's no photo, a new 'pending_review'
+-- state that only a project editor can resolve (approve -> closed, or
+-- reject -> back to open for rework). All real enforcement lives in
+-- snag_items_before_write() (edited in place above, v32's original
+-- location). RLS on snag_items itself is untouched (still member-level,
+-- exactly as it has always been); the gate is a business rule, not a
+-- row-visibility rule, same split every other module in this schema
+-- already uses.
+alter table public.snag_items drop constraint if exists snag_items_status_check;
+alter table public.snag_items add constraint snag_items_status_check
+  check (status in ('open', 'pending_review', 'closed', 'rejected'));
+
+-- The reviewing editor's reason when rejecting a pending-review snag
+-- back to the assignee — overwritten each review cycle, same
+-- flag-plus-reason pairing this table already uses for delay_flag/
+-- delay_reason.
+alter table public.snag_items add column if not exists review_note text;
+
+-- ─── snag_photos ─────────────────────────────────────────────────
+-- Multiple photos per snag, both the original problem (several angles
+-- of the defect, supplementing the single legacy photo_url column
+-- rather than replacing it — photo_url carries real production data
+-- and stays exactly as-is, untouched, as the "primary" photo) and the
+-- completion evidence (several photos proving the fix, which the gate
+-- below checks for by existence rather than a single column). Mirrors
+-- inspection_finding_photos' own "multiple photos per parent record"
+-- shape, with one deliberate hardening: project_id is trigger-derived
+-- from snag_id here rather than trusted from the client, matching this
+-- session's own established IDOR-closing convention (rfi_evidence_links,
+-- snag_items.action_id/inspection_finding_id) rather than reproducing
+-- inspection_finding_photos' looser client-trusted project_id.
+create table if not exists public.snag_photos (
+  id uuid primary key default gen_random_uuid(),
+  snag_id uuid not null references public.snag_items(id) on delete cascade,
+  project_id uuid not null references public.projects(id) on delete cascade,
+  kind text not null check (kind in ('problem', 'completion')),
+  photo_url text not null,
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+create index if not exists snag_photos_snag_idx on public.snag_photos (snag_id);
+create index if not exists snag_photos_snag_kind_idx on public.snag_photos (snag_id, kind);
+
+create or replace function public.snag_photos_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_project_id uuid;
+begin
+  select project_id into v_project_id from public.snag_items where id = new.snag_id;
+  if v_project_id is null then
+    raise exception 'snag_photos.snag_id must reference an existing snag';
+  end if;
+  new.project_id := v_project_id;
+  new.created_by := auth.uid();
+  new.created_at := now();
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_snag_photos_before_write on public.snag_photos;
+create trigger trg_snag_photos_before_write
+  before insert on public.snag_photos
+  for each row execute function public.snag_photos_before_write();
+
+alter table public.snag_photos enable row level security;
+
+-- Member-level (snagging-only included), matching snag_items' own RLS
+-- exactly — a snagging-only contractor is exactly who needs to attach
+-- both problem and completion photos, same reasoning as assigned_to
+-- deliberately not being editor-restricted on snag_items itself.
+drop policy if exists "members read snag_photos" on public.snag_photos;
+create policy "members read snag_photos" on public.snag_photos for select using (public.is_project_member(project_id));
+drop policy if exists "members insert snag_photos" on public.snag_photos;
+create policy "members insert snag_photos" on public.snag_photos for insert with check (public.is_project_member(project_id));
+drop policy if exists "members delete snag_photos" on public.snag_photos;
+create policy "members delete snag_photos" on public.snag_photos for delete using (public.is_project_member(project_id));
+-- No update policy — a photo is replaced by deleting and re-adding,
+-- same convention as inspection_finding_photos.
+
+-- Not audited — same reasoning inspection_finding_photos already
+-- documents: a supplementary photo attachment, not a formal
+-- approval/evidence record like rfi_evidence_links or
+-- commercial_evidence_links.

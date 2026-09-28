@@ -59,11 +59,35 @@
         <input type="file" id="photoInput" accept="image/*">
         <div class="photo-grid" id="photoGrid"></div>
       </div>
+      <!-- v52: only meaningful once a snag actually exists (snag_photos
+           rows need a real snag_id) — hidden while adding a brand-new
+           item, shown once editing an existing one. -->
+      <div id="extraPhotosWrap" style="display:none;">
+        <div class="field">
+          <label>Additional Photos <span class="hint">(more angles of the problem)</span></label>
+          <input type="file" id="problemPhotoInput" accept="image/*">
+          <div class="photo-grid" id="problemPhotoGrid"></div>
+        </div>
+        <div class="field">
+          <label>Completion Evidence <span class="hint">(photos proving the fix — attach one or more, then use Complete on the list below)</span></label>
+          <input type="file" id="completionEvidenceInput" accept="image/*">
+          <div class="photo-grid" id="completionEvidenceGrid"></div>
+        </div>
+      </div>
       <div class="btn-row">
         <button type="submit" class="btn btn-amber" id="saveBtn">Add Item</button>
         <button type="button" class="btn btn-outline" id="cancelBtn">Cancel</button>
       </div>
     </form>
+  </div>
+
+  <div class="card" id="bulkBar" style="display:none; margin-bottom:1rem;">
+    <div class="btn-row" style="align-items:center; flex-wrap:wrap;">
+      <strong id="bulkCount"></strong>
+      <select id="bulkAssignSelect" style="width:auto;"><option value="">Unassigned</option></select>
+      <button type="button" class="btn btn-amber btn-sm" id="bulkAssignBtn">Assign</button>
+      <button type="button" class="btn btn-outline btn-sm" id="bulkClearBtn">Clear selection</button>
+    </div>
   </div>
 
   <div class="card">
@@ -79,9 +103,15 @@
   </div>
 </div>
 
+<!-- v52: a single shared, hidden file input for "Complete with Photo" —
+     completingSnagId (below) tracks which row triggered it, since the
+     table's rows are re-rendered from state rather than each owning
+     their own persistent input. -->
+<input type="file" id="completionPhotoInput" accept="image/*" style="display:none;">
+
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, uploadImage, todayISO, comparePlotNumbers, SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_PRIORITY_BADGE, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE, categoriseSnag, assignSnag, verifySnag, unverifySnag, createActionFromSnag, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, uploadImage, todayISO, comparePlotNumbers, SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_PRIORITY_BADGE, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE, categoriseSnag, assignSnag, verifySnag, unverifySnag, completeSnagWithPhoto, closeSnagWithEvidence, submitSnagForReview, approveSnagReview, rejectSnagReview, getSnagPhotos, addSnagPhoto, deleteSnagPhoto, getSnagCompletionPhotoCounts, createActionFromSnag, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel } from "./js/app.js";
 
   await requireAuth();
   const listId = getParam("id");
@@ -106,6 +136,9 @@
   let members = []; // { user_id, email, role } — every project member is a legitimate snag assignee
   let actionsById = {}; // linked actions.id -> {status, due_date} for the badge, keyed once per load
   let myRole = null; // owner/collaborator/snagging — verification is editor-only
+  let completionPhotoCounts = {}; // snag id -> number of completion-kind snag_photos, bulk-loaded once per list load
+  let extraPhotos = { problem: [], completion: [] }; // the CURRENTLY-EDITED snag's snag_photos rows, split by kind
+  let selectedIds = new Set(); // bulk-assign selection, cleared on every load/assign
 
   const errorBox = document.getElementById("errorBox");
   const snagCard = document.getElementById("snagCard");
@@ -141,6 +174,34 @@
     }
   }
 
+  // v52: renders the "Additional Photos" or "Completion Evidence"
+  // gallery from in-memory state (extraPhotos[kind]) — each thumbnail
+  // gets its own remove button, calling deleteSnagPhoto() then
+  // refreshing this one grid only (the other kind's grid, and the main
+  // photoGrid, are untouched).
+  function renderExtraPhotoGrid(kind) {
+    const grid = document.getElementById(kind === "problem" ? "problemPhotoGrid" : "completionEvidenceGrid");
+    grid.innerHTML = extraPhotos[kind].map((p) => `
+      <div class="photo-thumb" style="position:relative;">
+        <img src="${p.photo_url}">
+        <button type="button" class="btn btn-danger btn-sm" style="position:absolute; top:2px; right:2px;" onclick="removeExtraPhoto('${p.id}', '${kind}')">×</button>
+      </div>
+    `).join("");
+  }
+
+  async function removeExtraPhoto(photoId, kind) {
+    if (!confirm("Remove this photo?")) return;
+    try {
+      await deleteSnagPhoto(photoId);
+      extraPhotos[kind] = extraPhotos[kind].filter((p) => p.id !== photoId);
+      renderExtraPhotoGrid(kind);
+      if (kind === "completion") loadSnags(); // the row's attached-photo count may now need updating
+    } catch (err) {
+      alert("Couldn't remove that photo: " + err.message);
+    }
+  }
+  window.removeExtraPhoto = removeExtraPhoto;
+
   function openForAdd() {
     snagForm.reset();
     document.getElementById("editingId").value = "";
@@ -151,10 +212,14 @@
     originalPhotoFile = null;
     deviceSaveStatus = null;
     renderPhotoGrid();
+    // A snag has to exist (a real id) before snag_photos rows can
+    // reference it — additional photos are only manageable once saved.
+    document.getElementById("extraPhotosWrap").style.display = "none";
+    extraPhotos = { problem: [], completion: [] };
     document.getElementById("saveBtn").textContent = "Add Item";
     snagCard.style.display = "block";
   }
-  function openForEdit(s) {
+  async function openForEdit(s) {
     document.getElementById("editingId").value = s.id;
     if (isGeneralList) document.getElementById("itemPlot").value = s.plot_id || "";
     document.getElementById("location").value = s.location || "";
@@ -170,10 +235,44 @@
     originalPhotoFile = null;
     deviceSaveStatus = null;
     renderPhotoGrid();
+    document.getElementById("extraPhotosWrap").style.display = "block";
+    try {
+      const photos = await getSnagPhotos(s.id);
+      extraPhotos = { problem: photos.filter((p) => p.kind === "problem"), completion: photos.filter((p) => p.kind === "completion") };
+    } catch (err) {
+      extraPhotos = { problem: [], completion: [] };
+      showError(errorBox, err);
+    }
+    renderExtraPhotoGrid("problem");
+    renderExtraPhotoGrid("completion");
     document.getElementById("saveBtn").textContent = "Save Changes";
     snagCard.style.display = "block";
   }
   window.editSnag = (id) => { const s = allSnags.find(x => x.id === id); if (s) openForEdit(s); };
+
+  function makeExtraPhotoHandler(inputId, kind) {
+    const input = document.getElementById(inputId);
+    input.addEventListener("change", async () => {
+      const file = input.files[0];
+      const editingId = document.getElementById("editingId").value;
+      if (!file || !editingId) return;
+      input.disabled = true;
+      try {
+        const url = await uploadImage(file, `${snagList.project_id}/snags`);
+        const photo = await addSnagPhoto(editingId, url, kind);
+        extraPhotos[kind] = [...extraPhotos[kind], photo];
+        renderExtraPhotoGrid(kind);
+        if (kind === "completion") loadSnags(); // keep the row's attached-photo count in sync
+      } catch (err) {
+        alert("Couldn't add that photo: " + err.message);
+      } finally {
+        input.disabled = false;
+        input.value = "";
+      }
+    });
+  }
+  makeExtraPhotoHandler("problemPhotoInput", "problem");
+  makeExtraPhotoHandler("completionEvidenceInput", "completion");
 
   document.getElementById("newSnagBtn").addEventListener("click", openForAdd);
   document.getElementById("cancelBtn").addEventListener("click", () => { snagCard.style.display = "none"; });
@@ -240,21 +339,147 @@
     }
   });
 
+  // v52: raw status changes the database still allows unrestricted
+  // (reopening from closed/rejected, or marking Not Applicable) — the
+  // gated "close a snag" paths (photo / submit-for-review / approve /
+  // reject) each have their own explicit handler below instead, since
+  // a plain status dropdown can no longer express them (closing
+  // directly needs a photo attached in the same write).
   async function setStatus(id, newStatus) {
-    // closed_date/verified_at clearing on reopen is now handled server-side
-    // (sql/schema.sql snag_items_before_write trigger) — this just sends
-    // the status change itself.
     const { error } = await supabase.from("snag_items").update({ status: newStatus }).eq("id", id);
     if (error) alert("Couldn't save that status change: " + error.message);
     loadSnags();
   }
   window.setStatus = setStatus;
 
+  let completingSnagId = null;
+  const completionPhotoInput = document.getElementById("completionPhotoInput");
+
+  function startCompleteWithPhoto(id) {
+    completingSnagId = id;
+    completionPhotoInput.value = "";
+    completionPhotoInput.click();
+  }
+  window.startCompleteWithPhoto = startCompleteWithPhoto;
+
+  completionPhotoInput.addEventListener("change", async () => {
+    const file = completionPhotoInput.files[0];
+    const id = completingSnagId;
+    if (!file || !id) return;
+    completionPhotoInput.disabled = true;
+    try {
+      const url = await uploadImage(file, `${snagList.project_id}/snags`);
+      await completeSnagWithPhoto(id, url);
+      loadSnags();
+    } catch (err) {
+      alert("Couldn't complete that snag: " + err.message);
+    } finally {
+      completionPhotoInput.disabled = false;
+      completingSnagId = null;
+    }
+  });
+
+  // v52: closes a snag whose completion evidence was already attached
+  // via the Edit form's "Completion Evidence" gallery (one or more
+  // photos, added ahead of time) — no upload here, the server just
+  // checks those already-attached photos exist.
+  async function markComplete(id) {
+    try {
+      await closeSnagWithEvidence(id);
+      loadSnags();
+    } catch (err) {
+      alert("Couldn't complete that snag: " + err.message);
+    }
+  }
+  window.markComplete = markComplete;
+
+  async function submitForReview(id) {
+    if (!confirm("Submit this snag for review with no photo? A project editor will need to approve or reject it before it counts as closed.")) return;
+    try {
+      await submitSnagForReview(id);
+      loadSnags();
+    } catch (err) {
+      alert("Couldn't submit that snag for review: " + err.message);
+    }
+  }
+  window.submitForReview = submitForReview;
+
+  async function approveReview(id) {
+    try {
+      await approveSnagReview(id);
+      loadSnags();
+    } catch (err) {
+      alert("Couldn't approve that snag: " + err.message);
+    }
+  }
+  window.approveReview = approveReview;
+
+  async function rejectReview(id) {
+    const note = prompt("Why is this being sent back? (the assignee will see this)", "");
+    if (note === null) return;
+    try {
+      await rejectSnagReview(id, note.trim() || null);
+      loadSnags();
+    } catch (err) {
+      alert("Couldn't reject that snag: " + err.message);
+    }
+  }
+  window.rejectReview = rejectReview;
+
   async function quickAssign(id, userId) {
     try { await assignSnag(id, userId || null); loadSnags(); }
     catch (err) { alert("Couldn't save that assignment: " + err.message); }
   }
   window.quickAssign = quickAssign;
+
+  // Bulk assign — the same server-validated assignSnag() call quickAssign()
+  // already uses (assignee must be a real project member, enforced by
+  // snag_items_before_write() regardless of how many calls are made), just
+  // looped over a selection instead of one row at a time.
+  function updateBulkBar() {
+    const bar = document.getElementById("bulkBar");
+    const selectAll = document.getElementById("selectAllCheckbox");
+    if (selectedIds.size === 0) {
+      bar.style.display = "none";
+    } else {
+      bar.style.display = "block";
+      document.getElementById("bulkCount").textContent = `${selectedIds.size} selected`;
+    }
+    if (selectAll) {
+      selectAll.checked = allSnags.length > 0 && selectedIds.size === allSnags.length;
+      selectAll.indeterminate = selectedIds.size > 0 && selectedIds.size < allSnags.length;
+    }
+  }
+
+  function toggleSelect(id, checked) {
+    if (checked) selectedIds.add(id); else selectedIds.delete(id);
+    updateBulkBar();
+  }
+  window.toggleSelect = toggleSelect;
+
+  function toggleSelectAll(checked) {
+    selectedIds = new Set(checked ? allSnags.map((s) => s.id) : []);
+    render();
+  }
+  window.toggleSelectAll = toggleSelectAll;
+
+  document.getElementById("bulkClearBtn").addEventListener("click", () => {
+    selectedIds = new Set();
+    render();
+  });
+
+  document.getElementById("bulkAssignBtn").addEventListener("click", async () => {
+    const userId = document.getElementById("bulkAssignSelect").value || null;
+    const ids = [...selectedIds];
+    if (!ids.length) return;
+    const results = await Promise.allSettled(ids.map((id) => assignSnag(id, userId)));
+    const failed = results.filter((r) => r.status === "rejected").length;
+    selectedIds = new Set();
+    await loadSnags();
+    if (failed > 0) {
+      alert(`${failed} of ${ids.length} snag(s) couldn't be reassigned: ${results.find((r) => r.status === "rejected").reason?.message || ""}`);
+    }
+  });
 
   async function toggleVerify(id, currentlyVerified) {
     try {
@@ -309,11 +534,59 @@
 
   const isEditor = () => myRole === "owner" || myRole === "collaborator";
 
+  // v52: the status cell's action set, entirely driven by the snag's
+  // own current status — the database (snag_items_before_write()) is
+  // still the real authority for every one of these; this only decides
+  // which buttons make sense to offer right now.
+  function statusCellHtml(s) {
+    const verified = !!s.verified_at;
+    const badge = `<span class="badge ${SNAG_STATUS_BADGE[s.status]}">${SNAG_STATUS_LABEL[s.status]}</span>`;
+    let actions = "";
+    if (s.status === "open") {
+      // v52: "add more" — evidence can be attached ahead of time via
+      // Edit's Completion Evidence gallery (repeatable), in which case
+      // Mark Complete just closes with what's already attached; with
+      // nothing attached yet, 📷 Complete stays the fast single-photo
+      // upload-and-close shortcut.
+      const photoCount = completionPhotoCounts[s.id] || 0;
+      actions = `
+        <div class="btn-row" style="margin-top:0.3rem;">
+          ${photoCount > 0
+            ? `<button type="button" class="btn btn-outline btn-sm" onclick="markComplete('${s.id}')">Mark Complete</button>`
+            : `<button type="button" class="btn btn-outline btn-sm" onclick="startCompleteWithPhoto('${s.id}')">📷 Complete</button>`}
+          <button type="button" class="btn btn-outline btn-sm" onclick="submitForReview('${s.id}')">Submit for Review</button>
+        </div>
+        ${photoCount > 0 ? `<div class="hint" style="margin-top:0.3rem;">${photoCount} evidence photo${photoCount > 1 ? "s" : ""} attached (Edit to add more)</div>` : ""}
+        ${s.review_note ? `<div class="hint" style="margin-top:0.3rem;">Sent back: ${escapeHtml(s.review_note)}</div>` : ""}
+        <button type="button" class="btn btn-outline btn-sm" style="margin-top:0.3rem;" onclick="setStatus('${s.id}', 'rejected')">Not Applicable</button>
+      `;
+    } else if (s.status === "pending_review") {
+      actions = isEditor()
+        ? `<div class="btn-row" style="margin-top:0.3rem;">
+             <button type="button" class="btn btn-outline btn-sm" onclick="approveReview('${s.id}')">Approve</button>
+             <button type="button" class="btn btn-outline btn-sm" onclick="rejectReview('${s.id}')">Reject</button>
+           </div>`
+        : `<div class="hint" style="margin-top:0.3rem;">Awaiting editor review</div>`;
+    } else if (s.status === "closed") {
+      const photoCount = completionPhotoCounts[s.id] || 0;
+      actions = `
+        <div class="badge ${verified ? "badge-green" : "badge-grey"}" style="margin-top:0.3rem;">${verified ? "✔ Verified" : "Not verified"}</div>
+        ${photoCount > 0 ? `<div class="hint" style="margin-top:0.3rem;">📷 ${photoCount} evidence photo${photoCount > 1 ? "s" : ""} (Edit to view)</div>` : ""}
+        ${isEditor() ? `<button type="button" class="btn btn-outline btn-sm" style="margin-top:0.3rem;" onclick="toggleVerify('${s.id}', ${verified})">${verified ? "Unverify" : "Verify"}</button>` : ""}
+        <button type="button" class="btn btn-outline btn-sm" style="margin-top:0.3rem;" onclick="setStatus('${s.id}', 'open')">Reopen</button>
+      `;
+    } else if (s.status === "rejected") {
+      actions = `<button type="button" class="btn btn-outline btn-sm" style="margin-top:0.3rem;" onclick="setStatus('${s.id}', 'open')">Reopen</button>`;
+    }
+    return `${badge}${actions}`;
+  }
+
   function render() {
+    const selectAllTh = `<th><input type="checkbox" id="selectAllCheckbox" title="Select all" onchange="toggleSelectAll(this.checked)"></th>`;
     if (isGeneralList) {
-      document.getElementById("tableHead").innerHTML = `<tr><th>#</th><th>Plot</th><th>Location</th><th>Description</th><th>Trade</th><th>Priority</th><th>Assigned</th><th>Due</th><th>Status</th><th></th></tr>`;
+      document.getElementById("tableHead").innerHTML = `<tr>${selectAllTh}<th>#</th><th>Plot</th><th>Location</th><th>Description</th><th>Trade</th><th>Priority</th><th>Assigned</th><th>Due</th><th>Status</th><th></th></tr>`;
     } else {
-      document.getElementById("tableHead").innerHTML = `<tr><th>#</th><th>Location</th><th>Description</th><th>Trade</th><th>Priority</th><th>Assigned</th><th>Due</th><th>Status</th><th></th></tr>`;
+      document.getElementById("tableHead").innerHTML = `<tr>${selectAllTh}<th>#</th><th>Location</th><th>Description</th><th>Trade</th><th>Priority</th><th>Assigned</th><th>Due</th><th>Status</th><th></th></tr>`;
     }
     document.getElementById("emptyState").style.display = allSnags.length ? "none" : "block";
     document.getElementById("snagRows").innerHTML = allSnags.map((s) => {
@@ -321,7 +594,6 @@
       const dueBadge = cats.overdue ? '<span class="badge badge-red" style="margin-left:0.4rem;">Overdue</span>'
         : cats.dueToday ? '<span class="badge badge-amber" style="margin-left:0.4rem;">Due today</span>'
         : cats.dueSoon ? '<span class="badge badge-amber" style="margin-left:0.4rem;">Due soon</span>' : "";
-      const verified = !!s.verified_at;
       const actionBadge = s.action_id
         ? ` <a href="actions.html?project=${snagList.project_id}" class="badge ${ACTION_STATUS_BADGE[actionsById[s.action_id]?.status] || "badge-grey"}" title="Linked Action">📌 Action${actionsById[s.action_id] ? `: ${ACTION_STATUS_LABEL[actionsById[s.action_id].status]}` : ""}</a>`
         : "";
@@ -330,6 +602,7 @@
         : "";
       return `
       <tr>
+        <td><input type="checkbox" ${selectedIds.has(s.id) ? "checked" : ""} onchange="toggleSelect('${s.id}', this.checked)"></td>
         <td>${s.item_no}</td>
         ${isGeneralList ? `<td>${s.plot_id ? escapeHtml(plotsById[s.plot_id] || "—") : "External / Site-wide"}</td>` : ""}
         <td>${escapeHtml(s.location)}</td>
@@ -344,25 +617,20 @@
         </td>
         <td>${s.due_date ? formatDate(s.due_date) : "—"}${dueBadge}</td>
         <td>
-          <select class="status-select ${SNAG_STATUS_BADGE[s.status]}" style="width:auto;" onchange="setStatus('${s.id}', this.value)">
-            <option value="open" ${s.status === "open" ? "selected" : ""}>${SNAG_STATUS_LABEL.open}</option>
-            <option value="closed" ${s.status === "closed" ? "selected" : ""}>${SNAG_STATUS_LABEL.closed}</option>
-            <option value="rejected" ${s.status === "rejected" ? "selected" : ""}>${SNAG_STATUS_LABEL.rejected}</option>
-          </select>
-          ${s.status === "closed" ? `<div class="badge ${verified ? "badge-green" : "badge-grey"}" style="margin-top:0.3rem;">${verified ? "✔ Verified" : "Not verified"}</div>` : ""}
+          ${statusCellHtml(s)}
           ${s.delay_flag ? `<div class="badge badge-amber" style="margin-top:0.3rem; white-space:normal;" title="Flagged as delaying completion">⚠️ Delayed${s.delay_reason ? `: ${escapeHtml(s.delay_reason)}` : ""}</div>` : ""}
           ${actionBadge}
         </td>
         <td class="btn-row">
           <button class="btn btn-outline btn-sm" onclick="editSnag('${s.id}')">Edit</button>
           ${!s.action_id ? `<button class="btn btn-outline btn-sm" onclick="quickCreateAction('${s.id}')">Create Action</button>` : ""}
-          ${isEditor() && s.status === "closed" ? `<button class="btn btn-outline btn-sm" onclick="toggleVerify('${s.id}', ${verified})">${verified ? "Unverify" : "Verify"}</button>` : ""}
           <button class="btn btn-outline btn-sm" onclick="toggleDelayFlag('${s.id}', ${s.delay_flag})">${s.delay_flag ? "Clear Flag" : "Flag Delay"}</button>
           <button class="btn btn-danger btn-sm" onclick="deleteSnag('${s.id}')">Delete</button>
         </td>
       </tr>
     `;
     }).join("");
+    updateBulkBar();
   }
 
   async function loadSnags() {
@@ -372,6 +640,11 @@
       .eq("snag_list_id", listId)
       .order("item_no", { ascending: true });
     if (!error) allSnags = data || [];
+    // A snag selected for bulk-assign that's since been deleted (by this
+    // page or elsewhere) must not silently inflate the selection count —
+    // its checkbox can no longer even render for the user to un-tick it.
+    const stillExisting = new Set(allSnags.map((s) => s.id));
+    selectedIds = new Set([...selectedIds].filter((id) => stillExisting.has(id)));
     const actionIds = allSnags.map((s) => s.action_id).filter(Boolean);
     if (actionIds.length) {
       const { data: linkedActions } = await supabase.from("actions").select("id, status, due_date").in("id", actionIds);
@@ -379,6 +652,11 @@
       (linkedActions || []).forEach((a) => { actionsById[a.id] = a; });
     } else {
       actionsById = {};
+    }
+    try {
+      completionPhotoCounts = await getSnagCompletionPhotoCounts(allSnags.map((s) => s.id));
+    } catch {
+      completionPhotoCounts = {}; // best-effort — a failed count lookup just falls back to the single-photo quick-close path
     }
     render();
   }
@@ -425,6 +703,8 @@
     members = memberRows || [];
     myRole = role;
     assignedToSelect.innerHTML = `<option value="">Unassigned</option>` +
+      members.map((m) => `<option value="${m.user_id}">${escapeHtml(m.email)}</option>`).join("");
+    document.getElementById("bulkAssignSelect").innerHTML = `<option value="">Unassigned</option>` +
       members.map((m) => `<option value="${m.user_id}">${escapeHtml(m.email)}</option>`).join("");
 
     loadSnags();
