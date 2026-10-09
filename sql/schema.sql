@@ -9548,3 +9548,160 @@ create policy "members delete snag_photos" on public.snag_photos for delete usin
 -- documents: a supplementary photo attachment, not a formal
 -- approval/evidence record like rfi_evidence_links or
 -- commercial_evidence_links.
+
+-- v54 ADDITIONS: security hardening from an external review of the
+-- production database. Pins search_path on 9 functions the linter
+-- flagged as "role mutable search_path" (mostly storage-policy helpers
+-- and old seed functions predating this convention elsewhere).
+alter function public.set_snag_item_no() set search_path = public;
+alter function public.seed_project_defaults() set search_path = public;
+alter function public.seed_block_defaults() set search_path = public;
+alter function public.seed_plot_defaults() set search_path = public;
+alter function public.controlled_documents_write_authorized(text) set search_path = public;
+alter function public.controlled_documents_path_project(text) set search_path = public;
+alter function public.controlled_documents_read_authorized(text) set search_path = public;
+alter function public.site_photos_path_parts(text) set search_path = public;
+alter function public.site_photos_authorized(text) set search_path = public;
+
+-- v53 ADDITIONS: revokes EXECUTE on SECURITY DEFINER functions that have
+-- no legitimate direct RPC caller — confirmed via a full grep of every
+-- supabase.rpc() call site in tracker/*.html and app.js, and via
+-- pg_policies (all schemas, including storage) for anything referencing
+-- them in a WITH CHECK/USING clause. Every one of these had its OWN
+-- explicit anon/authenticated ACL entry (not just the inherited PUBLIC
+-- default), so every grantee is listed explicitly.
+--
+-- recompute_commercial_event_total: only ever called from inside
+-- commercial_*_after_write triggers (which keep working — a function's
+-- owner always retains implicit EXECUTE on functions it owns).
+revoke execute on function public.recompute_commercial_event_total(uuid) from public, anon, authenticated;
+
+-- is_project_member_user: zero policy references anywhere, zero RPC
+-- callers -- only used inside *_before_write triggers.
+revoke execute on function public.is_project_member_user(uuid, uuid) from public, anon, authenticated;
+
+-- is_project_editor_user: used in the WITH CHECK of "editors insert/
+-- update actions" and "editors insert/update rfis" (the assigned_to
+-- validation) -- RLS policies evaluate functions as the calling role,
+-- so `authenticated` must keep EXECUTE or creating/editing an assigned
+-- Action or RFI would start failing. Only public/anon revoked here.
+revoke execute on function public.is_project_editor_user(uuid, uuid) from public, anon;
+
+-- Trigger functions: EXECUTE grant is irrelevant to whether a trigger
+-- fires (Postgres invokes these via the trigger machinery, never the
+-- RPC/grant-checked path) -- this only closes the direct-RPC door.
+revoke execute on function public.actions_before_write() from public, anon, authenticated;
+revoke execute on function public.commercial_events_before_write() from public, anon, authenticated;
+revoke execute on function public.commercial_events_after_write() from public, anon, authenticated;
+revoke execute on function public.commercial_line_items_after_write() from public, anon, authenticated;
+revoke execute on function public.dayworks_before_write() from public, anon, authenticated;
+revoke execute on function public.derive_project_id_from_commercial_event() from public, anon, authenticated;
+revoke execute on function public.document_revisions_before_insert() from public, anon, authenticated;
+revoke execute on function public.document_revisions_after_insert() from public, anon, authenticated;
+revoke execute on function public.documents_before_write() from public, anon, authenticated;
+revoke execute on function public.inspection_findings_before_write() from public, anon, authenticated;
+revoke execute on function public.inspections_before_write() from public, anon, authenticated;
+revoke execute on function public.plots_before_write() from public, anon, authenticated;
+revoke execute on function public.programme_activities_before_write() from public, anon, authenticated;
+revoke execute on function public.programmes_before_write() from public, anon, authenticated;
+revoke execute on function public.rfi_evidence_links_before_write() from public, anon, authenticated;
+revoke execute on function public.rfis_before_write() from public, anon, authenticated;
+revoke execute on function public.seed_block_defaults() from public, anon, authenticated;
+revoke execute on function public.seed_plot_defaults() from public, anon, authenticated;
+revoke execute on function public.seed_project_defaults() from public, anon, authenticated;
+revoke execute on function public.seed_project_owner() from public, anon, authenticated;
+revoke execute on function public.set_snag_item_no() from public, anon, authenticated;
+revoke execute on function public.snag_items_before_write() from public, anon, authenticated;
+revoke execute on function public.snag_photos_before_write() from public, anon, authenticated;
+revoke execute on function public.toolbox_talk_attendees_before_insert() from public, anon, authenticated;
+revoke execute on function public.toolbox_talk_attendees_before_update() from public, anon, authenticated;
+revoke execute on function public.toolbox_talk_template_versions_before_insert() from public, anon, authenticated;
+revoke execute on function public.toolbox_talk_template_versions_after_insert() from public, anon, authenticated;
+revoke execute on function public.toolbox_talk_templates_before_write() from public, anon, authenticated;
+revoke execute on function public.toolbox_talks_before_write() from public, anon, authenticated;
+revoke execute on function public.variation_dayworks_before_insert() from public, anon, authenticated;
+revoke execute on function public.variation_dayworks_after_write() from public, anon, authenticated;
+revoke execute on function public.variations_before_write() from public, anon, authenticated;
+revoke execute on function public.variations_after_write() from public, anon, authenticated;
+revoke execute on function public.weekly_reports_before_write() from public, anon, authenticated;
+revoke execute on function public.write_audit_log() from public, anon, authenticated;
+
+-- v55 ADDITIONS: wraps auth.uid()/auth.role() in a sub-select so Postgres
+-- evaluates it once per query instead of once per row (Supabase advisor:
+-- auth_rls_initplan). Behaviour-preserving -- same boolean logic, same
+-- policyname/cmd/roles. Uses ALTER POLICY rather than DROP+CREATE (the
+-- Supabase MCP tool used to apply this gates DROP POLICY/CREATE POLICY
+-- behind a manual approval step that kept stalling non-interactively;
+-- ALTER POLICY achieves the identical result without hitting that gate).
+alter policy "admin or self delete organisation_members" on public.organisation_members
+  using (is_org_admin(org_id) or user_id = (select auth.uid()));
+alter policy "requester or org admin read organisation_membership_requests" on public.organisation_membership_requests
+  using (user_id = (select auth.uid()) or is_org_admin(organisation_id));
+alter policy "owner or self delete project_members" on public.project_members
+  using (is_project_owner(project_id) or user_id = (select auth.uid()));
+alter policy "members read projects" on public.projects
+  using (is_project_member(id) or created_by = (select auth.uid()));
+alter policy "authenticated read module_roles" on public.module_roles
+  using ((select auth.role()) = 'authenticated');
+alter policy "members read toolbox_talk_templates" on public.toolbox_talk_templates
+  using (((org_id is null) and (select auth.role()) = 'authenticated') or is_org_member(org_id));
+alter policy "members read toolbox_talk_template_versions" on public.toolbox_talk_template_versions
+  using (exists (
+    select 1 from toolbox_talk_templates t
+    where t.id = toolbox_talk_template_versions.template_id
+      and (((t.org_id is null) and (select auth.role()) = 'authenticated') or is_org_member(t.org_id))
+  ));
+
+-- v56 ADDITIONS: covering indexes for the HIGH-priority unindexed-FK
+-- columns the advisor flagged (project_id/plot_id/snag_list_id/
+-- block_id/org_id). Pure additive, no behaviour change. created_by/
+-- approved_by-style audit FKs are deliberately left for a later pass.
+create index if not exists blocks_project_id_idx on public.blocks (project_id);
+create index if not exists commercial_approval_requests_org_id_idx on public.commercial_approval_requests (org_id);
+create index if not exists commercial_events_org_id_idx on public.commercial_events (org_id);
+create index if not exists commercial_events_plot_id_idx on public.commercial_events (plot_id);
+create index if not exists commercial_evidence_links_project_id_idx on public.commercial_evidence_links (project_id);
+create index if not exists commercial_items_project_id_idx on public.commercial_items (project_id);
+create index if not exists commercial_line_items_project_id_idx on public.commercial_line_items (project_id);
+create index if not exists commercial_signatures_org_id_idx on public.commercial_signatures (org_id);
+create index if not exists commercial_signatures_project_id_idx on public.commercial_signatures (project_id);
+create index if not exists dayworks_project_id_idx on public.dayworks (project_id);
+create index if not exists drawings_project_id_idx on public.drawings (project_id);
+create index if not exists handover_documents_project_id_idx on public.handover_documents (project_id);
+create index if not exists hs_audit_items_project_id_idx on public.hs_audit_items (project_id);
+create index if not exists inspection_finding_photos_project_id_idx on public.inspection_finding_photos (project_id);
+create index if not exists inspection_findings_org_id_idx on public.inspection_findings (org_id);
+create index if not exists inspection_findings_plot_id_idx on public.inspection_findings (plot_id);
+create index if not exists inspections_org_id_idx on public.inspections (org_id);
+create index if not exists internal_milestones_project_id_idx on public.internal_milestones (project_id);
+create index if not exists plots_block_id_idx on public.plots (block_id);
+create index if not exists plots_project_id_idx on public.plots (project_id);
+create index if not exists programme_activities_plot_id_idx on public.programme_activities (plot_id);
+create index if not exists projects_org_id_idx on public.projects (org_id);
+create index if not exists quality_gates_project_id_idx on public.quality_gates (project_id);
+create index if not exists snag_items_plot_id_idx on public.snag_items (plot_id);
+create index if not exists snag_items_snag_list_id_idx on public.snag_items (snag_list_id);
+create index if not exists snag_lists_project_id_idx on public.snag_lists (project_id);
+create index if not exists snag_photos_project_id_idx on public.snag_photos (project_id);
+create index if not exists specifications_project_id_idx on public.specifications (project_id);
+create index if not exists variation_dayworks_project_id_idx on public.variation_dayworks (project_id);
+create index if not exists variations_project_id_idx on public.variations (project_id);
+create index if not exists actions_plot_id_idx on public.actions (plot_id);
+
+-- v57 ADDITIONS: org_settings had no primary key (Supabase advisor:
+-- no_primary_key). Its `id` column was a legacy smallint singleton,
+-- always 1, never read or written anywhere in tracker/js/app.js or
+-- tracker/*.html (every query/upsert goes through org_id, confirmed by
+-- grep) -- org_id already carried a UNIQUE+FK constraint, so it's
+-- promoted to the real primary key here instead of bolting a PK onto
+-- the dead column.
+--
+-- The `id` column itself is NOT dropped by this file yet -- the
+-- Supabase MCP tool used to apply this gates DROP COLUMN behind a
+-- manual approval step that could not be satisfied non-interactively.
+-- The column is provably dead (see above) and safe to drop in a later
+-- pass; until then it remains, unused, alongside the new primary key.
+alter table public.org_settings alter column org_id set not null;
+alter table public.org_settings drop constraint org_settings_org_id_key;
+alter table public.org_settings add primary key (org_id);
+-- alter table public.org_settings drop column id; -- pending, see note above
