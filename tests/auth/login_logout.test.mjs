@@ -15,7 +15,7 @@ function extractFunction(name) {
   const match = APP_JS.match(re);
   assert.ok(match, `${name} not found in app.js`);
   const body = match[0].replace(new RegExp(`^export async function ${name}\\(\\)\\s*\\{`), "").replace(/\}$/, "");
-  return new Function(`return async function ${name}(window, supabase) {\n${body}\n}`)();
+  return new Function(`return async function ${name}(window, supabase, startSitePhotoHydration = () => {}) {\n${body}\n}`)();
 }
 
 const requireAuth = extractFunction("requireAuth");
@@ -24,18 +24,22 @@ const signOut = extractFunction("signOut");
 test("requireAuth(): no session -> redirects to login.html and returns null", async () => {
   const window = { location: { href: "" } };
   const supabase = { auth: { getSession: async () => ({ data: { session: null } }) } };
-  const result = await requireAuth(window, supabase);
+  let hydrationStarted = false;
+  const result = await requireAuth(window, supabase, () => { hydrationStarted = true; });
   assert.equal(result, null);
   assert.equal(window.location.href, "login.html", "an unauthenticated visitor must be sent to the sign-in page");
+  assert.equal(hydrationStarted, false, "no private-photo signing is attempted without a session (v58)");
 });
 
 test("requireAuth(): a real session -> returns the user, no redirect", async () => {
   const window = { location: { href: "" } };
   const user = { id: "u1", email: "user@example.com" };
   const supabase = { auth: { getSession: async () => ({ data: { session: { user } } }) } };
-  const result = await requireAuth(window, supabase);
+  let hydrationStarted = false;
+  const result = await requireAuth(window, supabase, () => { hydrationStarted = true; });
   assert.deepEqual(result, user);
   assert.equal(window.location.href, "", "an authenticated visitor must not be redirected anywhere");
+  assert.equal(hydrationStarted, true, "every protected page must start signing private site-photos references (v58)");
 });
 
 test("signOut(): clears the Supabase session and redirects to login.html", async () => {

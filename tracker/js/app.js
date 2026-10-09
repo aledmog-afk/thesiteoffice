@@ -9,6 +9,7 @@ export async function requireAuth() {
     window.location.href = "login.html";
     return null;
   }
+  startSitePhotoHydration();
   return session.user;
 }
 
@@ -114,8 +115,11 @@ const ALLOWED_UPLOAD_MIME_TYPES = new Set([
   "text/plain", "text/csv",
 ]);
 
-// Uploads a File to the public "site-photos" bucket under the given path
-// and returns its public URL.
+// Uploads a File to the (private, since v58) "site-photos" bucket under
+// the given path and returns its object PATH — never a URL. A stored
+// path is turned into a short-lived signed URL at display time by
+// hydrateSitePhotos()/getSitePhotoUrls() below; a stored signed URL
+// would just expire, and the old public URL form no longer serves.
 export async function uploadPhoto(file, path) {
   if (file.size > MAX_UPLOAD_BYTES) {
     throw new Error(`"${file.name}" is ${(file.size / 1024 / 1024).toFixed(1)} MB — the limit is 50 MB.`);
@@ -133,8 +137,162 @@ export async function uploadPhoto(file, path) {
     upsert: false,
   });
   if (error) throw error;
-  const { data } = supabase.storage.from("site-photos").getPublicUrl(key);
-  return data.publicUrl;
+  return key;
+}
+
+// ─── Private site-photos: references → signed URLs (v58) ──────────
+// Since v58 the "site-photos" bucket is private (sql/schema.sql — the
+// anon key could previously LIST and fetch every object). The database
+// holds two shapes of reference, and both keep working with NO data
+// migration:
+//   - new rows: a bare object path, as returned by uploadPhoto() above
+//     ("<project_id>/<area>/<uuid>.<ext>", "drawings/<project_id>/...",
+//     or "org-logo/<uuid>.<ext>");
+//   - rows written before v58: the full public URL
+//     ".../storage/v1/object/public/site-photos/<path>", which no longer
+//     serves anything but still carries the path.
+// sitePhotoPath() normalises either to the path (mirrored server-side
+// by site_photos_ref_to_path()), and getSitePhotoUrls() batch-signs
+// paths with ONE createSignedUrls() call. Access is still decided by
+// the storage.objects SELECT policy ("project members read
+// site-photos"): signing a path you can't read fails, it never leaks.
+//
+// Pages don't need to know any of this: requireAuth() starts a single
+// MutationObserver (startSitePhotoHydration) that rewrites any
+// <img src>/<a href>/<source src> holding a site-photos reference to a
+// signed URL as soon as it appears in the DOM. Code that fetches a photo
+// itself (PDF logo embedding, document download) calls
+// getSitePhotoUrl() explicitly.
+export const SITE_PHOTOS_BUCKET = "site-photos";
+// Long enough that a printable report left open for a while still
+// prints with its photos (already-loaded images are not re-fetched).
+export const SITE_PHOTO_URL_TTL_SECONDS = 3600;
+const SITE_PHOTO_PUBLIC_MARKER = "/storage/v1/object/public/site-photos/";
+const SITE_PHOTO_BARE_PATH_RE =
+  /^(?:(?:drawings\/)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/[^/?#]+(?:\/[^/?#]+)*|org-logo\/[^/?#]+)$/i;
+
+// Returns the bare object path for a site-photos reference (a bare path
+// or a legacy public URL), or null for anything else — data: URLs,
+// already-signed URLs, other buckets, ordinary page links.
+export function sitePhotoPath(ref) {
+  if (typeof ref !== "string" || !ref) return null;
+  const markerAt = ref.indexOf(SITE_PHOTO_PUBLIC_MARKER);
+  if (markerAt !== -1) {
+    const rest = ref.slice(markerAt + SITE_PHOTO_PUBLIC_MARKER.length).split(/[?#]/)[0];
+    try {
+      return decodeURIComponent(rest) || null;
+    } catch {
+      return rest || null;
+    }
+  }
+  if (/^[a-z][a-z0-9+.-]*:/i.test(ref) || ref.startsWith("/")) return null;
+  return SITE_PHOTO_BARE_PATH_RE.test(ref) ? ref : null;
+}
+
+const sitePhotoSignedCache = new Map(); // path -> { url, expiresAt }
+const sitePhotoDenied = new Map(); // path -> retryAfter (ms epoch)
+const SITE_PHOTO_DENIED_RETRY_MS = 60 * 1000;
+const SITE_PHOTO_SIGN_BATCH = 100;
+
+// Resolves many references at once. Returns a Map(ref -> signed URL);
+// a reference that couldn't be signed (not a site-photos ref, no access,
+// object missing) is simply absent from the Map.
+export async function getSitePhotoUrls(refs, client = supabase) {
+  const out = new Map();
+  const now = Date.now();
+  const toSign = new Set();
+  for (const ref of refs || []) {
+    const path = sitePhotoPath(ref);
+    if (!path) continue;
+    const cached = sitePhotoSignedCache.get(path);
+    if (cached && cached.expiresAt - 60 * 1000 > now) continue;
+    const deniedUntil = sitePhotoDenied.get(path);
+    if (deniedUntil && deniedUntil > now) continue;
+    toSign.add(path);
+  }
+  const paths = [...toSign];
+  for (let i = 0; i < paths.length; i += SITE_PHOTO_SIGN_BATCH) {
+    const chunk = paths.slice(i, i + SITE_PHOTO_SIGN_BATCH);
+    const { data, error } = await client.storage.from(SITE_PHOTOS_BUCKET).createSignedUrls(chunk, SITE_PHOTO_URL_TTL_SECONDS);
+    if (error) {
+      for (const p of chunk) sitePhotoDenied.set(p, now + SITE_PHOTO_DENIED_RETRY_MS);
+      continue;
+    }
+    const signed = new Set();
+    for (const row of data || []) {
+      if (row && row.signedUrl && !row.error) {
+        sitePhotoSignedCache.set(row.path, { url: row.signedUrl, expiresAt: now + SITE_PHOTO_URL_TTL_SECONDS * 1000 });
+        signed.add(row.path);
+      }
+    }
+    for (const p of chunk) if (!signed.has(p)) sitePhotoDenied.set(p, now + SITE_PHOTO_DENIED_RETRY_MS);
+  }
+  for (const ref of refs || []) {
+    const path = sitePhotoPath(ref);
+    const cached = path && sitePhotoSignedCache.get(path);
+    if (cached) out.set(ref, cached.url);
+  }
+  return out;
+}
+
+// Single-reference convenience. A value that isn't a site-photos
+// reference at all (data: URL, external URL) is returned unchanged; a
+// site-photos reference that can't be signed returns null.
+export async function getSitePhotoUrl(ref, client = supabase) {
+  if (!sitePhotoPath(ref)) return ref || null;
+  const map = await getSitePhotoUrls([ref], client);
+  return map.get(ref) || null;
+}
+
+const SITE_PHOTO_HYDRATE_SELECTOR = "img[src], source[src], a[href]";
+
+// Rewrites every site-photos reference under `root` to a signed URL, in
+// one batched signing call. The original reference is kept in
+// data-site-photo-ref for debugging/tests.
+export async function hydrateSitePhotos(root = document, client = supabase) {
+  if (!root) return;
+  const targets = [];
+  const consider = (el) => {
+    for (const attr of ["src", "href"]) {
+      const value = el.getAttribute && el.getAttribute(attr);
+      if (value && sitePhotoPath(value)) targets.push([el, attr, value]);
+    }
+  };
+  if (root.matches && root.matches(SITE_PHOTO_HYDRATE_SELECTOR)) consider(root);
+  if (root.querySelectorAll) root.querySelectorAll(SITE_PHOTO_HYDRATE_SELECTOR).forEach(consider);
+  if (!targets.length) return;
+  const urls = await getSitePhotoUrls(targets.map((t) => t[2]), client);
+  for (const [el, attr, value] of targets) {
+    const signed = urls.get(value);
+    if (signed && el.getAttribute(attr) === value) {
+      el.setAttribute("data-site-photo-ref", value);
+      el.setAttribute(attr, signed);
+    }
+  }
+}
+
+let sitePhotoObserverStarted = false;
+let sitePhotoHydrateQueued = false;
+export function startSitePhotoHydration(doc = typeof document !== "undefined" ? document : null, client = supabase) {
+  if (sitePhotoObserverStarted || !doc || !doc.documentElement) return;
+  const MO = doc.defaultView && doc.defaultView.MutationObserver;
+  if (!MO) return;
+  sitePhotoObserverStarted = true;
+  const schedule = () => {
+    if (sitePhotoHydrateQueued) return;
+    sitePhotoHydrateQueued = true;
+    Promise.resolve().then(() => {
+      sitePhotoHydrateQueued = false;
+      hydrateSitePhotos(doc, client).catch(() => {});
+    });
+  };
+  new MO(schedule).observe(doc.documentElement, {
+    subtree: true,
+    childList: true,
+    attributes: true,
+    attributeFilter: ["src", "href"],
+  });
+  schedule();
 }
 
 // ─── Image compression ──────────────────────────────────────────
@@ -3699,15 +3857,21 @@ export async function archiveDocument(documentId) {
 }
 
 // Resolves a revision's file to something actually openable. Legacy
-// migrated rows (storage_bucket = 'site-photos') already hold a full,
-// directly-usable public URL, exactly as drawings.drawing_url always
-// was — returned as-is. Everything else lives in the private
+// migrated rows (storage_bucket = 'site-photos') hold the old public URL
+// of a now-private object (v58) and are signed via getSitePhotoUrl().
+// Everything else lives in the private
 // 'controlled-documents' bucket and is resolved to a short-lived
 // signed URL on demand, never persisted (a stored signed URL would
 // just expire) — this IS the real access-control boundary for
 // controlled documents, not the URL's obscurity.
 export async function getDocumentFileUrl(revision) {
-  if (revision.storage_bucket === "site-photos") return revision.file_url;
+  if (revision.storage_bucket === "site-photos") {
+    // Legacy rows store the old public URL; the bucket is private since
+    // v58, so it's signed on demand like everything else.
+    const url = await getSitePhotoUrl(revision.file_url);
+    if (!url) throw new Error(`Could not open "${revision.file_name || "this file"}" — you may not have access to it.`);
+    return url;
+  }
   const { data, error } = await supabase.storage.from("controlled-documents").createSignedUrl(revision.file_url, 300);
   if (error) throw error;
   return data.signedUrl;
@@ -3721,9 +3885,11 @@ export async function getDocumentFileUrl(revision) {
 // already open individually.
 export async function downloadDocumentFile(revision) {
   if (revision.storage_bucket === "site-photos") {
-    const res = await fetch(revision.file_url);
-    if (!res.ok) throw new Error(`Could not download "${revision.file_name}" (${res.status})`);
-    return res.blob();
+    const path = sitePhotoPath(revision.file_url);
+    if (!path) throw new Error(`Could not download "${revision.file_name}"`);
+    const { data, error } = await supabase.storage.from(SITE_PHOTOS_BUCKET).download(path);
+    if (error) throw error;
+    return data;
   }
   const { data, error } = await supabase.storage.from("controlled-documents").download(revision.file_url);
   if (error) throw error;
@@ -5672,6 +5838,9 @@ export function buildToolboxTalkPdfDocument({ jsPDFCtor, talk, projectName, orgN
 // fails the export. Browser-only (fetch + Image + canvas).
 async function loadImageDataUrl(url) {
   try {
+    // A stored org logo is a site-photos reference (private since v58).
+    if (sitePhotoPath(url)) url = await getSitePhotoUrl(url);
+    if (!url) return null;
     const res = await fetch(url);
     if (!res.ok) return null;
     const blob = await res.blob();

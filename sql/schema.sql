@@ -113,13 +113,13 @@ drop policy if exists "authenticated delete snag_items" on public.snag_items;
 create policy "authenticated delete snag_items" on public.snag_items for delete using (auth.role() = 'authenticated');
 
 -- ─── STORAGE (photos for reports & snags) ────────────────────────
+-- Private since v58 (was public = true). See the v58 section at the end
+-- of this file for the read policy that replaced "public read site-photos".
 insert into storage.buckets (id, name, public)
-values ('site-photos', 'site-photos', true)
+values ('site-photos', 'site-photos', false)
 on conflict (id) do nothing;
 
 drop policy if exists "public read site-photos" on storage.objects;
-create policy "public read site-photos" on storage.objects
-  for select using (bucket_id = 'site-photos');
 
 drop policy if exists "authenticated upload site-photos" on storage.objects;
 create policy "authenticated upload site-photos" on storage.objects
@@ -2622,11 +2622,12 @@ grant execute on function public.site_photos_authorized(text) to authenticated;
 -- "public bucket, private-by-obscurity" model this app already uses
 -- throughout — tightening this would break printable report/snag-sheet
 -- views and shared links that aren't always loaded in an authenticated
--- session). Re-created here only so re-running this file stays
--- idempotent.
+-- session).
+-- SUPERSEDED by v58: that obscurity never held (the anon key could LIST
+-- the bucket), so the public read policy is no longer re-created here
+-- — re-running this whole file must not re-open the bucket even
+-- briefly. See the v58 section for the authenticated read policy.
 drop policy if exists "public read site-photos" on storage.objects;
-create policy "public read site-photos" on storage.objects
-  for select using (bucket_id = 'site-photos');
 
 drop policy if exists "authenticated upload site-photos" on storage.objects;
 drop policy if exists "project editors upload site-photos" on storage.objects;
@@ -9712,3 +9713,197 @@ begin
   end if;
 end $$;
 -- alter table public.org_settings drop column id; -- pending, see note above
+
+-- ─── v58 ADDITIONS: site-photos becomes a PRIVATE bucket ──────────────
+-- The "site-photos" bucket (v1, tightened for WRITES in v27) was still
+-- public for READS: `public = true` on the bucket, plus a
+-- "public read site-photos" SELECT policy on storage.objects with no
+-- role restriction. The v27 comment justified that as "unguessable
+-- UUID paths" — but a SELECT policy on storage.objects is exactly what
+-- Supabase Storage's LIST endpoint evaluates too, so the anon key could
+-- list every object name in the bucket (every org/project folder,
+-- reports, hs-audits, handover, snags, drawings, org-logo) and then
+-- fetch each one from its public URL. Confirmed against the live
+-- project before this migration was written. Obscurity was never
+-- actually in force.
+--
+-- This migration:
+--   1. Flips the bucket to public = false, so the
+--      /storage/v1/object/public/site-photos/... URL form stops
+--      serving anything at all (old stored URLs included).
+--   2. Drops "public read site-photos" and replaces it with an
+--      authenticated-only SELECT policy that re-derives the real
+--      project from the object's own path — the same path-derived,
+--      never-trust-the-client principle v27 established for writes, and
+--      the same read rule controlled-documents (v34) already uses: any
+--      member of the owning project. Read is deliberately a little wider
+--      than v27's write rule (member, not editor, for non-snag areas):
+--      a weekly-report photo or inspection-finding photo is reused as
+--      the photo on the snag it raises (weekly-report-form.html
+--      syncActionRequiredSnags, Create Snag from a finding), and a
+--      snagging-only member must be able to see their own snags'
+--      photos. Membership is still project-scoped, so nothing crosses a
+--      project or organisation boundary.
+--   3. Company logos ("org-logo/<uuid>.<ext>" — the path carries no
+--      org id) are readable only by a member of an organisation whose
+--      org_settings.logo_url actually points at that object, or by a
+--      member of any project in that organisation (so a printed
+--      report/PDF still shows the logo for everyone who can open it).
+--   4. Re-creates resolve_commercial_approval_evidence() so legacy
+--      Documents rows (storage_bucket = 'site-photos', migrated from
+--      drawings/specifications by v34) return an object PATH rather than
+--      the full public URL they store. The commercial-approval-evidence
+--      Edge Function signs whatever path this returns with the service
+--      role — it previously passed a full https URL to createSignedUrl(),
+--      which could never have worked. No Edge Function change/redeploy is
+--      needed; the fix is entirely in this SQL.
+--
+-- Frontend (tracker/js/app.js, same commit): new uploads store the
+-- object PATH, not a URL. Every <img src>/<a href> holding a
+-- site-photos reference — a new path OR an old stored public URL — is
+-- rewritten to a short-lived signed URL (batched createSignedUrls) by
+-- hydrateSitePhotos(). No data migration is required: existing rows'
+-- public URLs are converted to paths at read time by
+-- site_photos_ref_to_path() here and sitePhotoPath() in app.js.
+--
+-- Rollback: `update storage.buckets set public = true where id =
+-- 'site-photos';` and re-create the v27 "public read site-photos"
+-- policy. Rows written after this migration store bare paths, which
+-- the new frontend resolves either way; only the OLD frontend would
+-- fail to display them.
+
+-- Turns either reference shape this app has ever stored into a bare
+-- object path: a bare path is returned unchanged; a full
+-- ".../storage/v1/object/public/site-photos/<path>" (or the signed
+-- "/object/sign/site-photos/<path>?token=..." form) has everything up to
+-- and including the bucket segment, and any query string, removed.
+-- Returns null for anything that isn't a site-photos reference at all.
+create or replace function public.site_photos_ref_to_path(p_ref text)
+returns text
+language plpgsql immutable
+set search_path = public
+as $$
+declare
+  marker_pos int;
+  rest text;
+begin
+  if p_ref is null or p_ref = '' then
+    return null;
+  end if;
+  if p_ref !~* '^[a-z][a-z0-9+.-]*:' then
+    return split_part(split_part(p_ref, '?', 1), '#', 1);
+  end if;
+  marker_pos := position('/storage/v1/object/public/site-photos/' in p_ref);
+  if marker_pos > 0 then
+    rest := substr(p_ref, marker_pos + length('/storage/v1/object/public/site-photos/'));
+  else
+    marker_pos := position('/storage/v1/object/sign/site-photos/' in p_ref);
+    if marker_pos = 0 then
+      return null;
+    end if;
+    rest := substr(p_ref, marker_pos + length('/storage/v1/object/sign/site-photos/'));
+  end if;
+  rest := split_part(split_part(rest, '?', 1), '#', 1);
+  return nullif(rest, '');
+end;
+$$;
+grant execute on function public.site_photos_ref_to_path(text) to authenticated;
+
+-- SECURITY DEFINER so the org-logo branch can check org_settings /
+-- projects without depending on (and recursing through) those tables'
+-- own RLS; every branch is still keyed on auth.uid(), never on a
+-- caller-supplied id. Only ever evaluated inside the storage.objects
+-- SELECT policy below, which is itself restricted to `authenticated`.
+create or replace function public.site_photos_read_authorized(object_name text)
+returns boolean
+language plpgsql stable
+security definer
+set search_path = public
+as $$
+declare
+  parts record;
+  v_uid uuid := auth.uid();
+begin
+  if v_uid is null or object_name is null then
+    return false;
+  end if;
+
+  if (storage.foldername(object_name))[1] = 'org-logo' then
+    return exists (
+      select 1
+      from public.org_settings os
+      where public.site_photos_ref_to_path(os.logo_url) = object_name
+        and (
+          exists (select 1 from public.organisation_members om
+                  where om.org_id = os.org_id and om.user_id = v_uid)
+          or exists (select 1 from public.projects p
+                     join public.project_members pm on pm.project_id = p.id
+                     where p.org_id = os.org_id and pm.user_id = v_uid)
+        )
+    );
+  end if;
+
+  select * into parts from public.site_photos_path_parts(object_name);
+  if parts.project_id is null then
+    return false;
+  end if;
+
+  return public.is_project_member(parts.project_id);
+end;
+$$;
+revoke execute on function public.site_photos_read_authorized(text) from public, anon;
+grant execute on function public.site_photos_read_authorized(text) to authenticated;
+
+update storage.buckets set public = false where id = 'site-photos';
+
+drop policy if exists "public read site-photos" on storage.objects;
+drop policy if exists "project members read site-photos" on storage.objects;
+create policy "project members read site-photos" on storage.objects
+  for select to authenticated
+  using (bucket_id = 'site-photos' and public.site_photos_read_authorized(name));
+
+-- Unchanged authorisation logic from v50 — the ONLY change is the
+-- returned object_path for a legacy site-photos revision (see point 4
+-- in this migration's header).
+create or replace function public.resolve_commercial_approval_evidence(p_token text, p_evidence_link_id uuid)
+returns table (storage_bucket text, object_path text)
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_req public.commercial_approval_requests%rowtype;
+begin
+  if p_token is null or trim(p_token) = '' or p_evidence_link_id is null then
+    raise exception 'Invalid request.';
+  end if;
+
+  select * into v_req from public.commercial_approval_requests
+    where token_hash = public.commercial_approval_token_hash(p_token);
+  if v_req.id is null then
+    raise exception 'Invalid request.';
+  end if;
+
+  -- See the v50 definition for why no status write happens here.
+  if v_req.status in ('pending', 'viewed') and v_req.expires_at <= now() then
+    raise exception 'This approval link has expired.';
+  end if;
+  if v_req.status not in ('pending', 'viewed', 'approved', 'rejected') then
+    raise exception 'This approval link is no longer valid.';
+  end if;
+
+  return query
+    select dr.storage_bucket,
+           case when dr.storage_bucket = 'site-photos'
+                then public.site_photos_ref_to_path(dr.file_url)
+                else dr.file_url
+           end
+    from public.commercial_evidence_links el
+    join public.documents d on d.id = el.source_id and el.source_table = 'documents'
+    join public.document_revisions dr on dr.id = d.current_revision_id
+    where el.id = p_evidence_link_id
+      and el.commercial_event_id = v_req.commercial_event_id;
+end;
+$$;
+revoke all on function public.resolve_commercial_approval_evidence(text, uuid) from public;
+grant execute on function public.resolve_commercial_approval_evidence(text, uuid) to anon, authenticated;
