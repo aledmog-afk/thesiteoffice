@@ -9702,6 +9702,13 @@ create index if not exists actions_plot_id_idx on public.actions (plot_id);
 -- The column is provably dead (see above) and safe to drop in a later
 -- pass; until then it remains, unused, alongside the new primary key.
 alter table public.org_settings alter column org_id set not null;
-alter table public.org_settings drop constraint org_settings_org_id_key;
-alter table public.org_settings add primary key (org_id);
+alter table public.org_settings drop constraint if exists org_settings_org_id_key;
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conrelid = 'public.org_settings'::regclass and contype = 'p'
+  ) then
+    alter table public.org_settings add primary key (org_id);
+  end if;
+end $$;
 -- alter table public.org_settings drop column id; -- pending, see note above
