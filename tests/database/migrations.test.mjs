@@ -267,7 +267,7 @@ test("Actions Engine: table, indexes, triggers and RLS policy are idempotent acr
     assert.equal(triggers.rows[0].n, 2, "exactly 2 triggers on actions (before-write + audit), never duplicated");
 
     const indexes = await client.query("select count(*)::int as n from pg_indexes where tablename = 'actions' and indexname like 'actions_%_idx'");
-    assert.equal(indexes.rows[0].n, 4, "exactly 4 named indexes on actions, never duplicated");
+    assert.equal(indexes.rows[0].n, 5, "4 original named indexes plus actions_plot_id_idx (external DB review, v56), never duplicated");
 
     const policies = await client.query("select count(*)::int as n from pg_policies where tablename = 'actions'");
     assert.equal(policies.rows[0].n, 4, "exactly 4 RLS policies on actions (select/insert/update/delete), never duplicated");
@@ -357,7 +357,7 @@ test("Inspections: tables, indexes, triggers and RLS policies are idempotent acr
     assert.equal(photoPolicies.rows[0].n, 3, "inspection_finding_photos has select/insert/delete only, no update policy");
 
     const indexes = await client.query("select count(*)::int as n from pg_indexes where tablename in ('inspections', 'inspection_findings', 'inspection_finding_photos') and indexname like '%_idx'");
-    assert.equal(indexes.rows[0].n, 7, "2 on inspections + 4 on inspection_findings + 1 on inspection_finding_photos, never duplicated");
+    assert.equal(indexes.rows[0].n, 11, "3 on inspections + 6 on inspection_findings + 2 on inspection_finding_photos (external DB review, v56, added org_id_idx/plot_id_idx/project_id_idx), never duplicated");
 
     await client.end();
   } finally {
@@ -450,7 +450,7 @@ test("Defects / Snagging: new columns, indexes, helper function and trigger are 
     assert.equal(columns.rowCount, 6, "all 6 new columns must exist exactly once");
 
     const indexes = await client.query("select count(*)::int as n from pg_indexes where tablename = 'snag_items' and indexname like 'snag_items_%_idx'");
-    assert.equal(indexes.rows[0].n, 4, "exactly 4 new named indexes on snag_items, never duplicated");
+    assert.equal(indexes.rows[0].n, 6, "4 original named indexes plus plot_id_idx/snag_list_id_idx (external DB review, v56), never duplicated");
 
     const triggers = await client.query("select count(*)::int as n from pg_trigger where tgrelid = 'public.snag_items'::regclass and tgname like 'trg_%'");
     assert.equal(triggers.rows[0].n, 3, "exactly 3 triggers on snag_items (pre-existing item-numbering + pre-existing audit + the new before-write trigger), never duplicated");
@@ -734,13 +734,13 @@ test("Programme Control: tables, indexes, triggers, RLS policies and the one-act
     // Note: SQL LIKE's "_" is a single-character WILDCARD, not a literal
     // underscore — "%_idx" therefore also matches
     // programme_activities_external_id_uidx (its last 4 characters,
-    // "uidx", satisfy "_idx" with "_" matching "u"). That's 7 genuinely
-    // "*_idx"-named indexes (2 on programmes, 5 on programme_activities
-    // — the 4 from Phase 2 plus programme_activities_action_idx added
-    // in Phase 4's v37) plus this one incidental match, counted
-    // separately below.
+    // "uidx", satisfy "_idx" with "_" matching "u"). That's 8 genuinely
+    // "*_idx"-named indexes (2 on programmes, 6 on programme_activities
+    // — the 4 from Phase 2, programme_activities_action_idx added in
+    // Phase 4's v37, and plot_id_idx added by the external DB review,
+    // v56) plus this one incidental match, counted separately below.
     const indexes = await client.query("select count(*)::int as n from pg_indexes where tablename in ('programmes', 'programme_activities') and indexname like '%_idx'");
-    assert.equal(indexes.rows[0].n, 8, "7 genuinely *_idx-named indexes (2 on programmes + 5 on programme_activities) plus the incidental LIKE-wildcard match on *_uidx, never duplicated");
+    assert.equal(indexes.rows[0].n, 9, "8 genuinely *_idx-named indexes (2 on programmes + 6 on programme_activities, the 6th being plot_id_idx added by the external DB review, v56) plus the incidental LIKE-wildcard match on *_uidx, never duplicated");
 
     const oneActiveIndex = await client.query("select count(*)::int as n from pg_indexes where tablename = 'programmes' and indexname = 'programmes_one_active_per_project'");
     assert.equal(oneActiveIndex.rows[0].n, 1, "the one-active-programme-per-project partial unique index must exist exactly once");
@@ -899,7 +899,7 @@ test("v52: snag_photos table, indexes, trigger, RLS policies and the snag_items 
     assert.equal(policies.rows[0].n, 3, "select/insert/delete only, no update policy, never duplicated across re-application");
 
     const indexes = await client.query("select count(*)::int as n from pg_indexes where tablename = 'snag_photos' and indexname like '%_idx'");
-    assert.equal(indexes.rows[0].n, 2, "never duplicated across re-application");
+    assert.equal(indexes.rows[0].n, 3, "2 original plus project_id_idx (external DB review, v56), never duplicated across re-application");
 
     const kindCheck = await client.query(
       `select count(*)::int as n from pg_constraint where conrelid = 'public.snag_photos'::regclass and contype = 'c' and conname = 'snag_photos_kind_check'`
