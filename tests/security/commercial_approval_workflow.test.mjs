@@ -340,6 +340,35 @@ test("Token security 15: evidence remains accessible AFTER a successful approval
   await anon.end();
 });
 
+test("Token security 15b (v58): a LEGACY site-photos evidence revision (full public URL stored) resolves to a bare object PATH the Edge Function can actually sign", async () => {
+  const contributor = await userClient(DB, CONTRIBUTOR);
+  const { eventId, evidenceLinkId: evidenceLink } = await createSubmittedEventWithEvidence(contributor);
+  const req = await requestApproval(contributor, eventId);
+  await contributor.end();
+
+  // Legacy rows (v34's drawings/specifications backfill) are written by
+  // the migration itself, never by a client — so this is set up as the
+  // superuser, exactly like that backfill.
+  const admin = adminClient(DB);
+  await admin.connect();
+  await admin.query(
+    `update public.document_revisions dr
+        set storage_bucket = 'site-photos',
+            file_url = 'https://nkrgzmxwvydoridmiskl.supabase.co/storage/v1/object/public/site-photos/drawings/' || d.project_id || '/drawings/legacy.pdf'
+       from public.documents d, public.commercial_evidence_links el
+      where el.id = $1 and d.id = el.source_id and dr.id = d.current_revision_id`,
+    [evidenceLink]
+  );
+  await admin.end();
+
+  const anon = await anonClient(DB);
+  const { rows } = await anon.query(`select * from public.resolve_commercial_approval_evidence($1,$2)`, [req.token, evidenceLink]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].storage_bucket, "site-photos");
+  assert.equal(rows[0].object_path, `drawings/${fx.projA}/drawings/legacy.pdf`);
+  await anon.end();
+});
+
 test("Token security 16: evidence remains accessible AFTER a rejection too", async () => {
   const contributor = await userClient(DB, CONTRIBUTOR);
   const { eventId, evidenceLinkId: evidenceLink } = await createSubmittedEventWithEvidence(contributor);

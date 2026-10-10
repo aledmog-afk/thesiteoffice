@@ -13,12 +13,16 @@
 // rejected upload — see tests/uploads/client.test.mjs for the
 // client-side half of that same control.
 //
-// Storage reads are deliberately still public in this app (unguessable
-// UUID paths, same model used throughout) — this file asserts that
-// intended behaviour rather than "fixing" it.
+// Storage READS: since v58 the bucket is private. The anon key could
+// previously LIST every object (the old "public read site-photos" policy
+// had no role restriction, and Storage's list endpoint is governed by
+// exactly that SELECT policy). Reads are now authenticated-only and
+// re-derive the owning project (or, for org-logo, the organisation
+// whose org_settings row points at the file) from the path — see
+// site_photos_read_authorized() in sql/schema.sql.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { createTestDatabase, dropTestDatabase, setupSchema, adminClient, userClient, isRlsError } from "../lib/db.mjs";
+import { createTestDatabase, dropTestDatabase, setupSchema, adminClient, userClient, anonClient, isRlsError } from "../lib/db.mjs";
 
 const DB = "tracker_test_storage";
 
@@ -158,12 +162,170 @@ test("Snagging-only member CAN upload snag photos but CANNOT upload to editor-on
   }
 });
 
-test("Storage reads remain public (intended — unguessable UUID paths), same as before Priority 2", async () => {
-  const anon = await userClient(DB, null);
+// ─── v58: private reads ─────────────────────────────────────────────
+
+const LEGACY_PREFIX = "https://nkrgzmxwvydoridmiskl.supabase.co/storage/v1/object/public/site-photos/";
+
+async function adminInsertObjects(names) {
+  const admin = adminClient(DB);
+  await admin.connect();
+  try {
+    for (const name of names) {
+      await admin.query(
+        "insert into storage.objects (bucket_id, name) select 'site-photos', $1 where not exists (select 1 from storage.objects where bucket_id='site-photos' and name=$1)",
+        [name]
+      );
+    }
+  } finally {
+    await admin.end();
+  }
+}
+
+async function visibleNames(client, names) {
+  const { rows } = await client.query(
+    "select name from storage.objects where bucket_id = 'site-photos' and name = any($1::text[]) order by name",
+    [names]
+  );
+  return rows.map((r) => r.name);
+}
+
+test("v58: the site-photos bucket is no longer public", async () => {
+  const admin = adminClient(DB);
+  await admin.connect();
+  try {
+    const { rows } = await admin.query("select public from storage.buckets where id = 'site-photos'");
+    assert.equal(rows[0].public, false);
+    const pol = await admin.query("select policyname, roles::text[] as roles from pg_policies where schemaname='storage' and tablename='objects' and cmd='SELECT' and qual like '%site-photos%'");
+    assert.deepEqual(pol.rows.map((r) => r.policyname), ["project members read site-photos"], "the old public read policy must be gone");
+    assert.deepEqual(pol.rows[0].roles, ["authenticated"]);
+  } finally {
+    await admin.end();
+  }
+});
+
+test("v58: the anon role can no longer list or read ANY site-photos object (the confirmed live leak)", async () => {
+  await adminInsertObjects([`${fx.projA}/reports/anon-check.jpg`, `${fx.projA}/hs-audits/anon-check.jpg`, "org-logo/anon-check.png"]);
+  const anon = await anonClient(DB);
   try {
     const { rowCount } = await anon.query("select 1 from storage.objects where bucket_id = 'site-photos'");
-    assert.ok(rowCount > 0, "unauthenticated read access should still see existing objects — this is intended, not a bug");
+    assert.equal(rowCount, 0);
   } finally {
     await anon.end();
+  }
+  const noSub = await userClient(DB, null);
+  try {
+    const { rowCount } = await noSub.query("select 1 from storage.objects where bucket_id = 'site-photos'");
+    assert.equal(rowCount, 0, "an authenticated role with no identity sees nothing either");
+  } finally {
+    await noSub.end();
+  }
+});
+
+test("v58: a project member can read every area of their own project (including drawings/ paths)", async () => {
+  const names = [
+    `${fx.projA}/reports/r.jpg`, `${fx.projA}/snags/s.jpg`, `${fx.projA}/handover/h.jpg`,
+    `${fx.projA}/hs-audits/a.jpg`, `${fx.projA}/inspections/i.jpg`, `drawings/${fx.projA}/drawings/d.webp`,
+  ];
+  await adminInsertObjects(names);
+  const a = await userClient(DB, USER_A);
+  try {
+    assert.deepEqual(await visibleNames(a, names), [...names].sort());
+  } finally {
+    await a.end();
+  }
+});
+
+test("v58: a snagging-only member can read their project's photos (snags reuse report/finding photos) but never another org's", async () => {
+  const own = [`${fx.projA}/snags/s2.jpg`, `${fx.projA}/reports/r2.jpg`];
+  const other = [`${fx.projB}/snags/b-s.jpg`, `${fx.projB}/reports/b-r.jpg`];
+  await adminInsertObjects([...own, ...other]);
+  const snagger = await userClient(DB, SNAGGER);
+  try {
+    assert.deepEqual(await visibleNames(snagger, [...own, ...other]), [...own].sort());
+  } finally {
+    await snagger.end();
+  }
+});
+
+test("v58: cross-organisation reads (and LISTING) are denied — a user only ever sees their own projects' objects", async () => {
+  const bNames = [`${fx.projB}/reports/secret.jpg`, `drawings/${fx.projB}/site-layout/secret.webp`, `${fx.projB}/hs-audits/secret.jpg`];
+  await adminInsertObjects(bNames);
+  const a = await userClient(DB, USER_A);
+  try {
+    assert.deepEqual(await visibleNames(a, bNames), []);
+    const { rows } = await a.query("select name from storage.objects where bucket_id = 'site-photos'");
+    for (const { name } of rows) {
+      assert.ok(!name.includes(fx.projB), `User A must not be able to list Org B's object ${name}`);
+    }
+  } finally {
+    await a.end();
+  }
+});
+
+test("v58: malformed / non-project paths are never readable", async () => {
+  const names = ["11111111-1111-1111-1111-111111111111/reports/x.jpg", "random/thing.jpg", "drawings/not-a-uuid/x.webp"];
+  await adminInsertObjects(names);
+  const a = await userClient(DB, USER_A);
+  try {
+    assert.deepEqual(await visibleNames(a, names), []);
+  } finally {
+    await a.end();
+  }
+});
+
+test("v58: an org logo is readable by its own org's members (legacy full-URL logo_url AND new bare-path logo_url), never by another org", async () => {
+  await adminInsertObjects(["org-logo/logo-a.png", "org-logo/logo-b.png", "org-logo/orphan.png"]);
+  const admin = adminClient(DB);
+  await admin.connect();
+  try {
+    await admin.query("insert into public.org_settings (org_id, logo_url) values ($1, $2) on conflict (org_id) do update set logo_url = excluded.logo_url", [fx.orgA, `${LEGACY_PREFIX}org-logo/logo-a.png`]);
+    await admin.query("insert into public.org_settings (org_id, logo_url) values ($1, $2) on conflict (org_id) do update set logo_url = excluded.logo_url", [fx.orgB, "org-logo/logo-b.png"]);
+  } finally {
+    await admin.end();
+  }
+  const all = ["org-logo/logo-a.png", "org-logo/logo-b.png", "org-logo/orphan.png"];
+
+  const a = await userClient(DB, USER_A);
+  try { assert.deepEqual(await visibleNames(a, all), ["org-logo/logo-a.png"]); } finally { await a.end(); }
+
+  const b = await userClient(DB, USER_B);
+  try { assert.deepEqual(await visibleNames(b, all), ["org-logo/logo-b.png"]); } finally { await b.end(); }
+
+  // The snagging-only member of Org A's project sees Org A's logo on a
+  // printed snag list, regardless of whether they're an org member.
+  const snagger = await userClient(DB, SNAGGER);
+  try { assert.deepEqual(await visibleNames(snagger, all), ["org-logo/logo-a.png"]); } finally { await snagger.end(); }
+});
+
+test("v58: site_photos_read_authorized is not callable by anon", async () => {
+  const anon = await anonClient(DB);
+  try {
+    await assert.rejects(() => anon.query("select public.site_photos_read_authorized('x/y.jpg')"), /permission denied/i);
+  } finally {
+    await anon.end();
+  }
+});
+
+test("v58: site_photos_ref_to_path() converts every stored reference shape to a bare object path", async () => {
+  const admin = adminClient(DB);
+  await admin.connect();
+  try {
+    const cases = [
+      [`${LEGACY_PREFIX}abc/reports/x.jpg`, "abc/reports/x.jpg"],
+      [`${LEGACY_PREFIX}drawings/abc/drawings/x.webp?v=1`, "drawings/abc/drawings/x.webp"],
+      ["https://x.supabase.co/storage/v1/object/sign/site-photos/abc/snags/y.jpg?token=t", "abc/snags/y.jpg"],
+      ["abc/snags/y.jpg", "abc/snags/y.jpg"],
+      ["org-logo/l.png", "org-logo/l.png"],
+      ["https://x.supabase.co/storage/v1/object/public/other-bucket/abc.jpg", null],
+      ["data:image/png;base64,AAAA", null],
+      ["", null],
+      [null, null],
+    ];
+    for (const [input, expected] of cases) {
+      const { rows } = await admin.query("select public.site_photos_ref_to_path($1) as p", [input]);
+      assert.equal(rows[0].p, expected, `site_photos_ref_to_path(${JSON.stringify(input)})`);
+    }
+  } finally {
+    await admin.end();
   }
 });

@@ -48,7 +48,7 @@ function fakeSupabase() {
       from() {
         return {
           upload: async (key, file, opts) => { calls.push({ key, file, opts }); return { error: null }; },
-          getPublicUrl: (key) => ({ data: { publicUrl: `https://example.com/${key}` } }),
+          getPublicUrl: () => { throw new Error("uploadPhoto must not build a public URL — site-photos is private since v58"); },
         };
       },
     },
@@ -61,9 +61,12 @@ test(`MAX_UPLOAD_BYTES matches the 50MB bucket limit documented in sql/schema.sq
 
 test("uploadPhoto(): a normally-sized, allowed file uploads successfully", async () => {
   const supabase = fakeSupabase();
-  const url = await uploadPhoto(fakeFile({ size: 2 * 1024 * 1024, type: "image/jpeg" }), "proj1/reports", supabase, crypto);
+  const ref = await uploadPhoto(fakeFile({ size: 2 * 1024 * 1024, type: "image/jpeg" }), "proj1/reports", supabase, crypto);
   assert.equal(supabase.calls.length, 1);
-  assert.ok(url.startsWith("https://example.com/proj1/reports/"));
+  // v58: the bucket is private, so the stored reference is the object
+  // PATH (signed at display time), never a public URL.
+  assert.match(ref, /^proj1\/reports\/[0-9a-f-]{36}\.jpg$/);
+  assert.equal(ref, supabase.calls[0].key);
 });
 
 for (const type of ["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif", "application/pdf", "application/msword", "text/csv"]) {
