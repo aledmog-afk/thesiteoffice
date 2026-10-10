@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Approval Request – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+<style>
+  /* touch-action: none is what actually stops the browser from treating a
+     finger-drag on the canvas as a page-pan gesture — without it, the
+     compositor can hijack the gesture before any JS (even preventDefault())
+     gets a chance to act, which is what caused the reported "page moves /
+     only a dot gets drawn" bug. Scoped to the canvas alone, not any
+     ancestor, so the rest of the page keeps scrolling normally. */
+  #sigCanvas {
+    display: block;
+    width: 100%;
+    max-width: 480px;
+    height: 180px;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    background: #fff;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+    cursor: crosshair;
+  }
+</style>
+</head>
+<body>
+<!--
+  Deliberately no #site-header / nav — this page is opened by an
+  external client or developer with no Site Tracker account at all
+  (see the P18b spec). It never imports requireAuth() or anything
+  else that assumes a logged-in session; the Supabase client it uses
+  carries only the public anon key, and every request/response is
+  scoped entirely by the single-use token in the URL, verified fresh
+  server-side on every call.
+-->
+<div class="page" style="max-width:760px;">
+  <div class="page-head">
+    <div>
+      <div class="page-title">Approval Request</div>
+      <div class="page-sub" id="orgProjectSub"></div>
+    </div>
+    <span class="badge" id="statusBadge" style="display:none;"></span>
+  </div>
+
+  <div id="pageErrorBox" class="error-box"></div>
+
+  <div id="loadingNotice" class="hint">Loading…</div>
+
+  <div id="content" style="display:none;">
+    <div class="card">
+      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.6rem;" id="eventHeading"></h3>
+      <dl class="doc-facts" id="eventFacts"></dl>
+    </div>
+
+    <div class="card" id="linkedCard" style="display:none;">
+      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.8rem;">Related Dayworks</h3>
+      <table><tbody id="linkedRows"></tbody></table>
+    </div>
+
+    <div class="card">
+      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.8rem;">Items</h3>
+      <ul class="item-list" id="lineItemList" style="list-style:none; padding:0; margin:0;"></ul>
+      <div style="display:flex; justify-content:flex-end; margin-top:0.8rem; padding-top:0.8rem; border-top:1px solid var(--border);">
+        <strong style="font-size:1.1rem;">Total: <span id="grandTotal"></span></strong>
+      </div>
+    </div>
+
+    <div class="card" id="evidenceCard">
+      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.8rem;">Evidence</h3>
+      <div id="evidenceList"></div>
+      <div id="evidenceEmpty" class="hint" style="display:none;">No evidence attached.</div>
+    </div>
+
+    <div class="card" id="decisionCard" style="display:none;">
+      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.6rem;">Your Decision</h3>
+      <p class="hint" style="margin-bottom:0.8rem;">You are reviewing this on behalf of <strong id="recipientEmailLabel"></strong>. By approving, you confirm you have reviewed the items and evidence above and accept this record as final — it becomes permanently locked once approved. Rejecting sends it back to the contractor with your reason.</p>
+
+      <div class="field"><label for="signerName">Your name *</label><input type="text" id="signerName"></div>
+      <div class="field"><label for="signerCompany">Company (optional)</label><input type="text" id="signerCompany"></div>
+
+      <div id="approveSection">
+        <label style="display:block; margin-bottom:0.4rem; font-weight:600; font-size:0.9rem;">Signature (optional — leave blank and your typed name above will be used instead)</label>
+        <p class="hint" style="margin-bottom:0.4rem;">Draw your signature below using your finger or a mouse</p>
+        <canvas id="sigCanvas"></canvas>
+        <div class="btn-row" style="margin-top:0.6rem;">
+          <button type="button" class="btn btn-outline btn-sm" id="clearSigBtn">Clear</button>
+        </div>
+      </div>
+
+      <div id="decisionError" class="error-box"></div>
+      <div class="btn-row" style="margin-top:1rem;">
+        <button type="button" class="btn btn-amber" id="approveBtn">Approve</button>
+        <button type="button" class="btn btn-danger" id="rejectBtn">Reject</button>
+      </div>
+    </div>
+
+    <div class="card" id="rejectReasonCard" style="display:none;">
+      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.6rem;">Reason for Rejection</h3>
+      <div class="field"><label for="rejectReason">Reason *</label><textarea id="rejectReason" rows="3"></textarea></div>
+      <div id="rejectError" class="error-box"></div>
+      <div class="btn-row">
+        <button type="button" class="btn btn-danger" id="confirmRejectBtn">Confirm Rejection</button>
+        <button type="button" class="btn btn-outline" id="cancelRejectBtn">Back</button>
+      </div>
+    </div>
+
+    <div class="card" id="doneCard" style="display:none;">
+      <p id="doneMessage"></p>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { SUPABASE_URL } from "./js/config.js";
+  import { escapeHtml, formatCommercialGBP, formatDate } from "./js/app.js";
+
+  const STATUS_LABEL = {
+    pending: "Awaiting your review",
+    viewed: "Awaiting your review",
+    approved: "Approved",
+    rejected: "Rejected",
+    expired: "Link expired",
+    revoked: "Link revoked",
+  };
+  const STATUS_BADGE = {
+    pending: "badge-amber",
+    viewed: "badge-amber",
+    approved: "badge-green",
+    rejected: "badge-red",
+    expired: "badge-grey",
+    revoked: "badge-grey",
+  };
+
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get("token") || "";
+
+  const pageErrorBox = document.getElementById("pageErrorBox");
+  const loadingNotice = document.getElementById("loadingNotice");
+  const content = document.getElementById("content");
+
+  function showFatalError(message) {
+    loadingNotice.style.display = "none";
+    pageErrorBox.textContent = message;
+    pageErrorBox.style.display = "block";
+  }
+
+  function renderRequest(req) {
+    const badge = document.getElementById("statusBadge");
+    badge.style.display = "inline-block";
+    badge.className = `badge ${STATUS_BADGE[req.status] || "badge-grey"}`;
+    badge.textContent = STATUS_LABEL[req.status] || req.status;
+
+    document.getElementById("orgProjectSub").textContent = `${req.org_name || ""} — ${req.project_name || ""}`;
+
+    const ev = req.event;
+    const typeLabel = ev.type === "variation" ? "Variation" : "Daywork";
+    document.getElementById("eventHeading").textContent = `${typeLabel}${ev.reference ? " " + ev.reference : ""} — ${ev.title}`;
+
+    const facts = [];
+    if (ev.type === "variation") {
+      if (ev.reason) facts.push(`<div><dt>Reason</dt><dd>${escapeHtml(ev.reason)}</dd></div>`);
+      if (ev.instruction_reference) facts.push(`<div><dt>Instruction Reference</dt><dd>${escapeHtml(ev.instruction_reference)}</dd></div>`);
+      if (ev.markup_pct !== null && ev.markup_pct !== undefined) facts.push(`<div><dt>Markup</dt><dd>${Number(ev.markup_pct)}%</dd></div>`);
+    } else if (ev.date_undertaken) {
+      facts.push(`<div><dt>Date Undertaken</dt><dd>${formatDate(ev.date_undertaken)}</dd></div>`);
+    }
+    document.getElementById("eventFacts").innerHTML = facts.join("");
+
+    const linkedCard = document.getElementById("linkedCard");
+    if (req.linked_dayworks && req.linked_dayworks.length) {
+      linkedCard.style.display = "block";
+      document.getElementById("linkedRows").innerHTML = req.linked_dayworks.map((d) => `
+        <tr><td>${escapeHtml(d.reference) || "—"}</td><td>${escapeHtml(d.title)}</td><td>${formatCommercialGBP(d.total_value) || "—"}</td></tr>
+      `).join("");
+    } else {
+      linkedCard.style.display = "none";
+    }
+
+    document.getElementById("lineItemList").innerHTML = req.line_items.map((li) => `
+      <li class="item-row">
+        <span style="flex:1 1 200px;">${escapeHtml(li.description)}${li.trade ? ` <span class="hint">(${escapeHtml(li.trade)})</span>` : ""}</span>
+        <span class="hint" style="flex:0 0 auto; white-space:nowrap;">${Number(li.quantity)}${li.unit ? " " + escapeHtml(li.unit) : ""} × ${li.rate === null ? "TBC" : formatCommercialGBP(li.rate)}</span>
+        <strong style="flex:0 0 90px; text-align:right;">${li.line_total === null ? "TBC" : formatCommercialGBP(li.line_total)}</strong>
+      </li>
+    `).join("");
+    document.getElementById("grandTotal").textContent = formatCommercialGBP(ev.total_value) || "£0.00";
+
+    const evidenceList = document.getElementById("evidenceList");
+    const evidenceEmpty = document.getElementById("evidenceEmpty");
+    if (req.evidence && req.evidence.length) {
+      evidenceEmpty.style.display = "none";
+      evidenceList.innerHTML = req.evidence.map((e) => `
+        <div class="item-row">
+          <span style="flex:1 1 auto;">${escapeHtml(e.title || e.file_name || "Evidence")}${e.caption ? ` <span class="hint">— ${escapeHtml(e.caption)}</span>` : ""}</span>
+          <button type="button" class="btn btn-outline btn-sm" data-view-evidence="${e.evidence_link_id}">View</button>
+        </div>
+      `).join("");
+      evidenceList.querySelectorAll("[data-view-evidence]").forEach((btn) => {
+        btn.addEventListener("click", () => viewEvidence(btn.dataset.viewEvidence, btn));
+      });
+    } else {
+      evidenceList.innerHTML = "";
+      evidenceEmpty.style.display = "block";
+    }
+
+    const decisionCard = document.getElementById("decisionCard");
+    const doneCard = document.getElementById("doneCard");
+    if (req.status === "pending" || req.status === "viewed") {
+      decisionCard.style.display = "block";
+      doneCard.style.display = "none";
+      document.getElementById("recipientEmailLabel").textContent = req.recipient_email || "";
+      if (req.recipient_name) document.getElementById("signerName").value = req.recipient_name;
+      if (req.recipient_company) document.getElementById("signerCompany").value = req.recipient_company;
+      // The canvas is inside a display:none container until this
+      // point, so getBoundingClientRect() would report zero width any
+      // earlier — size it only once it's actually laid out.
+      resizeSigCanvasIfNeeded();
+    } else {
+      decisionCard.style.display = "none";
+      doneCard.style.display = "block";
+      const doneMsg = document.getElementById("doneMessage");
+      if (req.status === "approved") {
+        doneMsg.textContent = `This record was approved${req.signer_name ? " by " + req.signer_name : ""}${req.approved_at ? " on " + formatDate(req.approved_at.slice(0, 10)) : ""}. No further action is needed.`;
+      } else if (req.status === "rejected") {
+        doneMsg.textContent = `This record was rejected${req.signer_name ? " by " + req.signer_name : ""}${req.rejection_reason ? ": " + req.rejection_reason : ""}. The contractor has been notified.`;
+      } else if (req.status === "expired") {
+        doneMsg.textContent = "This approval link has expired. Please contact the contractor for a new link.";
+      } else if (req.status === "revoked") {
+        doneMsg.textContent = "This approval link has been revoked. Please contact the contractor if you believe this is a mistake.";
+      }
+    }
+  }
+
+  async function viewEvidence(evidenceLinkId, btn) {
+    btn.disabled = true;
+    const original = btn.textContent;
+    btn.textContent = "Opening…";
+    try {
+      const resp = await fetch(`${SUPABASE_URL}/functions/v1/commercial-approval-evidence`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, evidence_link_id: evidenceLinkId }),
+      });
+      const body = await resp.json();
+      if (!resp.ok || !body.signed_url) throw new Error(body.error || "Could not open this evidence.");
+      window.open(body.signed_url, "_blank", "noopener");
+    } catch (err) {
+      showFatalError(err.message || "Could not open this evidence.");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+  }
+
+  // ─── Signature canvas (P18c mobile stability fix) ──────────────────
+  // The original version of this page reused the internal Sign &
+  // Approve modal's drawing logic verbatim but — unlike that modal —
+  // never got the accompanying #sigCanvas CSS (touch-action: none is
+  // already established elsewhere in this codebase, e.g.
+  // toolbox-talk-detail.html). Without it, a finger-drag on the canvas
+  // is free to be interpreted by the browser as a page-pan gesture; the
+  // browser can hijack the gesture (firing pointercancel, which had no
+  // handler) before any pointermove ever reaches this code, so only the
+  // initial point from pointerdown ever got drawn — exactly the
+  // reported "whole page moves / only a dot" symptom. Fixed here with:
+  //   - touch-action: none on the canvas itself only (see the <style>
+  //     block above) — the actual mechanism that stops the hijack.
+  //   - setPointerCapture()/releasePointerCapture() so a signing finger
+  //     that wobbles a few px outside the canvas mid-stroke keeps
+  //     delivering events here instead of the stroke silently ending —
+  //     pointerleave (which caused exactly that) is deliberately no
+  //     longer used.
+  //   - pointercancel/lostpointercapture handling so an interrupted
+  //     gesture always cleanly resets drawing state.
+  //   - devicePixelRatio-aware backing-store sizing, recomputed on
+  //     resize/orientation change, so strokes stay sharp and aligned on
+  //     any device without hard-coding a resolution.
+  const sigCanvas = document.getElementById("sigCanvas");
+  const sigCtx = sigCanvas.getContext("2d");
+  let sigDrawing = false;
+  let sigHasStroke = false;
+  let sigActivePointerId = null;
+  let sigCanvasCssWidth = 0;
+  const SIG_CANVAS_CSS_HEIGHT = 180; // matches the CSS height in <style> above
+
+  // Re-derives the canvas's backing-store resolution from its actual
+  // CSS layout size and the device's pixel ratio, then scales the
+  // drawing context so every subsequent coordinate can be expressed in
+  // plain CSS pixels (matching getBoundingClientRect()/clientX/clientY
+  // directly, no per-draw-call scaling math needed). Only runs when the
+  // CSS width has genuinely changed, so an on-screen keyboard toggling
+  // viewport *height* (common while the name/company fields are
+  // focused) doesn't wipe an in-progress signature.
+  function resizeSigCanvasIfNeeded() {
+    if (!sigCtx) return;
+    const cssWidth = Math.round(sigCanvas.getBoundingClientRect().width);
+    if (!cssWidth || cssWidth === sigCanvasCssWidth) return;
+    sigCanvasCssWidth = cssWidth;
+    const dpr = window.devicePixelRatio || 1;
+    sigCanvas.width = Math.round(cssWidth * dpr);
+    sigCanvas.height = Math.round(SIG_CANVAS_CSS_HEIGHT * dpr);
+    sigCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    sigHasStroke = false;
+  }
+  window.addEventListener("resize", resizeSigCanvasIfNeeded);
+
+  function sigCanvasPoint(e) {
+    const rect = sigCanvas.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  }
+  function sigStartDraw(e) {
+    if (!sigCtx || sigDrawing) return; // ignore a second simultaneous pointer
+    sigDrawing = true;
+    sigActivePointerId = e.pointerId;
+    sigCanvas.setPointerCapture(e.pointerId);
+    const p = sigCanvasPoint(e);
+    // A tiny dot at the down-point so a genuine tap-with-no-movement is
+    // still visibly recorded (and counted as a real signature below) —
+    // it's invisibly absorbed under the stroke's own start if the user
+    // goes on to draw normally.
+    sigCtx.beginPath();
+    sigCtx.arc(p.x, p.y, 1, 0, Math.PI * 2);
+    sigCtx.fillStyle = "#0f1117";
+    sigCtx.fill();
+    sigCtx.beginPath();
+    sigCtx.moveTo(p.x, p.y);
+    sigHasStroke = true;
+    e.preventDefault();
+  }
+  function sigMoveDraw(e) {
+    if (!sigDrawing || e.pointerId !== sigActivePointerId) return;
+    const p = sigCanvasPoint(e);
+    sigCtx.lineTo(p.x, p.y);
+    sigCtx.strokeStyle = "#0f1117";
+    sigCtx.lineWidth = 2;
+    sigCtx.lineCap = "round";
+    sigCtx.lineJoin = "round";
+    sigCtx.stroke();
+    e.preventDefault();
+  }
+  function sigEndDraw(e) {
+    if (e && e.pointerId !== sigActivePointerId) return;
+    if (sigActivePointerId !== null) {
+      try { sigCanvas.releasePointerCapture(sigActivePointerId); } catch { /* already released */ }
+    }
+    sigDrawing = false;
+    sigActivePointerId = null;
+  }
+  sigCanvas.addEventListener("pointerdown", sigStartDraw);
+  sigCanvas.addEventListener("pointermove", sigMoveDraw);
+  sigCanvas.addEventListener("pointerup", sigEndDraw);
+  sigCanvas.addEventListener("pointercancel", sigEndDraw);
+  sigCanvas.addEventListener("lostpointercapture", sigEndDraw);
+  document.getElementById("clearSigBtn").addEventListener("click", () => {
+    if (!sigCtx) return;
+    // clearRect is itself subject to the current dpr transform, so
+    // clear in raw device-pixel space (the full physical buffer) and
+    // restore the transform afterward rather than trying to express
+    // "the whole canvas" in the scaled coordinate space.
+    sigCtx.save();
+    sigCtx.setTransform(1, 0, 0, 1, 0, 0);
+    sigCtx.clearRect(0, 0, sigCanvas.width, sigCanvas.height);
+    sigCtx.restore();
+    sigHasStroke = false;
+  });
+
+  function clearBox(el) { el.textContent = ""; el.style.display = "none"; }
+  function showBoxError(el, err) { el.textContent = (err && err.message) || "Something went wrong. Please try again."; el.style.display = "block"; }
+
+  document.getElementById("approveBtn").addEventListener("click", async () => {
+    const errBox = document.getElementById("decisionError");
+    clearBox(errBox);
+    const name = document.getElementById("signerName").value.trim();
+    const company = document.getElementById("signerCompany").value.trim();
+    if (!name) { showBoxError(errBox, { message: "Your name is required." }); return; }
+    const btn = document.getElementById("approveBtn");
+    btn.disabled = true;
+    try {
+      const { data, error } = await supabase.rpc("approve_commercial_approval_request", {
+        p_token: token,
+        p_signer_name: name,
+        p_signer_company: company || null,
+        p_signature_data: sigHasStroke ? sigCanvas.toDataURL("image/png") : null,
+      });
+      if (error) throw error;
+      await loadAndRender();
+    } catch (err) {
+      showBoxError(errBox, err);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  document.getElementById("rejectBtn").addEventListener("click", () => {
+    const errBox = document.getElementById("decisionError");
+    clearBox(errBox);
+    const name = document.getElementById("signerName").value.trim();
+    if (!name) { showBoxError(errBox, { message: "Your name is required." }); return; }
+    document.getElementById("rejectReason").value = "";
+    clearBox(document.getElementById("rejectError"));
+    document.getElementById("rejectReasonCard").style.display = "block";
+  });
+  document.getElementById("cancelRejectBtn").addEventListener("click", () => {
+    document.getElementById("rejectReasonCard").style.display = "none";
+  });
+  document.getElementById("confirmRejectBtn").addEventListener("click", async () => {
+    const errBox = document.getElementById("rejectError");
+    clearBox(errBox);
+    const name = document.getElementById("signerName").value.trim();
+    const reason = document.getElementById("rejectReason").value.trim();
+    if (!reason) { showBoxError(errBox, { message: "A reason is required." }); return; }
+    const btn = document.getElementById("confirmRejectBtn");
+    btn.disabled = true;
+    try {
+      const { data, error } = await supabase.rpc("reject_commercial_approval_request", {
+        p_token: token,
+        p_signer_name: name,
+        p_rejection_reason: reason,
+      });
+      if (error) throw error;
+      document.getElementById("rejectReasonCard").style.display = "none";
+      await loadAndRender();
+    } catch (err) {
+      showBoxError(errBox, err);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  async function loadAndRender() {
+    const { data, error } = await supabase.rpc("get_commercial_approval_request", { p_token: token });
+    if (error) throw error;
+    loadingNotice.style.display = "none";
+    content.style.display = "block";
+    renderRequest(data);
+  }
+
+  if (!token) {
+    showFatalError("This link is missing its approval token. Please use the exact link you were sent.");
+  } else {
+    loadAndRender().catch((err) => {
+      showFatalError((err && err.message) || "This approval link could not be opened. It may be invalid, expired, or already actioned.");
+    });
+  }
+</script>
+</body>
+</html>
