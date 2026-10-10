@@ -68,6 +68,13 @@ tests/
 
   security/               Real database, real non-superuser `authenticated`
                            role — the actual RLS/storage boundary, not a mock.
+    anon_grants.test.mjs     v59 allowlist CI guard: anon may EXECUTE
+                             exactly the 4 client-approval-link SECURITY
+                             DEFINER functions and nothing else (also
+                             with Supabase's default-ACL auto-grant
+                             mirrored, and after a schema re-run); the
+                             25 revoked functions refuse anon; signed-in
+                             invite join/regenerate/revoke still work.
     org_isolation.test.mjs   Organisation A/B SELECT/INSERT/UPDATE/DELETE
                              isolation, including every child table and a
                              fully unrelated stranger. The highest-priority
@@ -398,6 +405,9 @@ tests/
   auth/                    Pure Node + jsdom.
     login_logout.test.mjs   requireAuth()/signOut() from app.js, plus
                              login.html's real sign-in form.
+    session_expiry.test.mjs v59: an expired/lost session is sent to
+                             login.html, never shown a raw "permission
+                             denied for function" error.
     password_reset.test.mjs "Forgot password?" through to reset-password.html.
 
   frontend/                Pure Node + jsdom.

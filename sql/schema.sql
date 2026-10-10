@@ -9907,3 +9907,167 @@ end;
 $$;
 revoke all on function public.resolve_commercial_approval_evidence(text, uuid) from public;
 grant execute on function public.resolve_commercial_approval_evidence(text, uuid) to anon, authenticated;
+
+-- ─── v59 ADDITIONS: anon can no longer EXECUTE internal SECURITY DEFINER functions ───
+-- Postgres grants EXECUTE on every new function to PUBLIC, and this
+-- project additionally has an ALTER DEFAULT PRIVILEGES entry (owner
+-- role postgres) that auto-grants EXECUTE directly to anon AND
+-- authenticated at CREATE time (the "default-ACL auto-grant gotcha" —
+-- see v42, v50's request_commercial_approval(), and
+-- tests/security/commercial_approval_workflow.test.mjs test 19). Most
+-- functions here were only ever followed by `grant ... to
+-- authenticated`, which never took anything away from anon, so 29
+-- public SECURITY DEFINER functions were callable with nothing more
+-- than the public anon key. SECURITY DEFINER means they run as the
+-- owner and bypass RLS, so each one is only as safe as its own body.
+--
+-- Only 4 of those 29 are genuinely meant for logged-out callers — the
+-- external client-approval link (commercial-approval.html and the
+-- commercial-approval-evidence Edge Function, v50/v58). They are
+-- deliberately NOT touched here and keep their anon grant unchanged:
+--   get_commercial_approval_request(text)
+--   approve_commercial_approval_request(text, text, text, text)
+--   reject_commercial_approval_request(text, text, text)
+--   resolve_commercial_approval_evidence(text, uuid)
+--
+-- The other 25 (listed below) are internal: RLS helpers, invite/member
+-- management, onboarding and import RPCs that every page only calls
+-- after requireAuth(). Most already refuse a caller with no auth.uid(),
+-- but one was a real (small) leak: commercial_event_hash(uuid) reads
+-- commercial_line_items + commercial_event_totals as the owner with no
+-- caller check at all, so anyone holding the anon key and an event id
+-- could fingerprint that event's priced content (and watch it change)
+-- without being a member of the project. Calls made from inside other
+-- SECURITY DEFINER functions/triggers (the approval RPCs,
+-- commercial_events_after_write(), request_commercial_approval()) run
+-- as the owner and are unaffected.
+--
+-- For each of the 25, both REVOKE lines are required (PUBLIC alone
+-- doesn't remove the direct per-role default-ACL grant), and the
+-- explicit authenticated grant keeps signed-in users exactly as they
+-- were. This section sits at the very END of the file on purpose:
+-- schema.sql is re-run top to bottom, and any earlier `create or
+-- replace`/`drop + create` of these functions (or a future section
+-- that re-creates one) would otherwise hand anon its grant back. Any
+-- NEW section that re-creates one of these functions must repeat the
+-- same three lines after it — tests/security/anon_grants.test.mjs
+-- fails CI if anon can execute any public SECURITY DEFINER function
+-- other than the 4 above.
+--
+-- KNOWN, DELIBERATELY DEFERRED: 142 RLS policies on public tables (plus
+-- 4 storage.objects policies, via the SECURITY INVOKER wrappers
+-- site_photos_authorized()/controlled_documents_*_authorized()) are
+-- declared without `to authenticated`, so they are still evaluated for
+-- anon and call these helpers. For an anon request those policies now
+-- raise "permission denied for function is_project_member" (etc.)
+-- instead of quietly returning zero rows. Either way anon sees nothing;
+-- only the shape of the refusal changes. Rewriting those policies
+-- `to authenticated` is left for a separate, later PR — NO policy is
+-- changed here. The frontend (tracker/js/app.js requireAuth() /
+-- showError(), same PR) makes sure a user whose session has expired is
+-- sent to login.html rather than shown that raw error.
+--
+-- Rollback (restores the pre-v59 grants exactly; run per function):
+--   grant execute on function public.<name>(<args>) to public, anon;
+-- e.g. `grant execute on function public.is_project_member(uuid) to
+-- public, anon;`. Nothing else in this section has state to undo.
+
+revoke all on function public.is_project_member(uuid) from public;
+revoke execute on function public.is_project_member(uuid) from anon;
+grant execute on function public.is_project_member(uuid) to authenticated;
+
+revoke all on function public.is_project_editor(uuid) from public;
+revoke execute on function public.is_project_editor(uuid) from anon;
+grant execute on function public.is_project_editor(uuid) to authenticated;
+
+revoke all on function public.is_project_owner(uuid) from public;
+revoke execute on function public.is_project_owner(uuid) from anon;
+grant execute on function public.is_project_owner(uuid) to authenticated;
+
+revoke all on function public.is_org_member(uuid) from public;
+revoke execute on function public.is_org_member(uuid) from anon;
+grant execute on function public.is_org_member(uuid) to authenticated;
+
+revoke all on function public.is_org_admin(uuid) from public;
+revoke execute on function public.is_org_admin(uuid) from anon;
+grant execute on function public.is_org_admin(uuid) to authenticated;
+
+revoke all on function public.can_view_commercial(uuid) from public;
+revoke execute on function public.can_view_commercial(uuid) from anon;
+grant execute on function public.can_view_commercial(uuid) to authenticated;
+
+revoke all on function public.can_edit_commercial(uuid) from public;
+revoke execute on function public.can_edit_commercial(uuid) from anon;
+grant execute on function public.can_edit_commercial(uuid) to authenticated;
+
+revoke all on function public.can_submit_commercial(uuid) from public;
+revoke execute on function public.can_submit_commercial(uuid) from anon;
+grant execute on function public.can_submit_commercial(uuid) to authenticated;
+
+revoke all on function public.can_approve_commercial(uuid) from public;
+revoke execute on function public.can_approve_commercial(uuid) from anon;
+grant execute on function public.can_approve_commercial(uuid) to authenticated;
+
+revoke all on function public.can_view_toolbox_talks(uuid) from public;
+revoke execute on function public.can_view_toolbox_talks(uuid) from anon;
+grant execute on function public.can_view_toolbox_talks(uuid) to authenticated;
+
+revoke all on function public.can_edit_toolbox_talks(uuid) from public;
+revoke execute on function public.can_edit_toolbox_talks(uuid) from anon;
+grant execute on function public.can_edit_toolbox_talks(uuid) to authenticated;
+
+revoke all on function public.can_read_audit_row(text, uuid, uuid) from public;
+revoke execute on function public.can_read_audit_row(text, uuid, uuid) from anon;
+grant execute on function public.can_read_audit_row(text, uuid, uuid) to authenticated;
+
+revoke all on function public.get_my_role(uuid) from public;
+revoke execute on function public.get_my_role(uuid) from anon;
+grant execute on function public.get_my_role(uuid) to authenticated;
+
+revoke all on function public.get_my_project_roles() from public;
+revoke execute on function public.get_my_project_roles() from anon;
+grant execute on function public.get_my_project_roles() to authenticated;
+
+revoke all on function public.project_module_role(uuid, text) from public;
+revoke execute on function public.project_module_role(uuid, text) from anon;
+grant execute on function public.project_module_role(uuid, text) to authenticated;
+
+revoke all on function public.effective_toolbox_talk_role(uuid) from public;
+revoke execute on function public.effective_toolbox_talk_role(uuid) from anon;
+grant execute on function public.effective_toolbox_talk_role(uuid) to authenticated;
+
+revoke all on function public.get_project_members(uuid) from public;
+revoke execute on function public.get_project_members(uuid) from anon;
+grant execute on function public.get_project_members(uuid) to authenticated;
+
+revoke all on function public.join_project_by_invite(text) from public;
+revoke execute on function public.join_project_by_invite(text) from anon;
+grant execute on function public.join_project_by_invite(text) to authenticated;
+
+revoke all on function public.ensure_organisation() from public;
+revoke execute on function public.ensure_organisation() from anon;
+grant execute on function public.ensure_organisation() to authenticated;
+
+revoke all on function public.import_programme_activities(uuid, jsonb) from public;
+revoke execute on function public.import_programme_activities(uuid, jsonb) from anon;
+grant execute on function public.import_programme_activities(uuid, jsonb) to authenticated;
+
+revoke all on function public.regenerate_invite_code(uuid) from public;
+revoke execute on function public.regenerate_invite_code(uuid) from anon;
+grant execute on function public.regenerate_invite_code(uuid) to authenticated;
+
+revoke all on function public.regenerate_snagging_invite_code(uuid) from public;
+revoke execute on function public.regenerate_snagging_invite_code(uuid) from anon;
+grant execute on function public.regenerate_snagging_invite_code(uuid) to authenticated;
+
+revoke all on function public.revoke_invite_code(uuid) from public;
+revoke execute on function public.revoke_invite_code(uuid) from anon;
+grant execute on function public.revoke_invite_code(uuid) to authenticated;
+
+revoke all on function public.revoke_snagging_invite_code(uuid) from public;
+revoke execute on function public.revoke_snagging_invite_code(uuid) from anon;
+grant execute on function public.revoke_snagging_invite_code(uuid) to authenticated;
+
+revoke all on function public.commercial_event_hash(uuid) from public;
+revoke execute on function public.commercial_event_hash(uuid) from anon;
+grant execute on function public.commercial_event_hash(uuid) to authenticated;

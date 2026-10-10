@@ -3,12 +3,33 @@ import { supabase } from "./supabase-client.js";
 // ─── Auth guard ─────────────────────────────────────────────────
 // Call at the top of every protected page. Redirects to login if no
 // session, and returns the signed-in user.
+//
+// v59 (anon can no longer EXECUTE the RLS helper functions): when there
+// is no usable session, supabase-js silently sends every request with
+// the public anon key instead, and since v59 any table read whose RLS
+// policy calls is_project_member() & co. — and any helper RPC — fails
+// with a raw "permission denied for function ..." rather than quietly
+// returning nothing. So a signed-out visitor must never get as far as
+// the page's own queries:
+//   - No session at load (never signed in, OR getSession() found an
+//     expired access token and the refresh failed — supabase-js then
+//     returns session: null): redirect, and NEVER resolve, so the
+//     calling page's script stops at `await requireAuth()` instead of
+//     carrying on and firing its queries as anon while the browser is
+//     still navigating away.
+//   - Session ends while the page is open (refresh token revoked or
+//     expired, signed out in another tab): supabase-js emits SIGNED_OUT
+//     and from then on every request would go out as anon — bounce to
+//     login instead of letting the next click show a raw error.
 export async function requireAuth() {
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) {
     window.location.href = "login.html";
-    return null;
+    return new Promise(() => {});
   }
+  supabase.auth.onAuthStateChange((event) => {
+    if (event === "SIGNED_OUT") window.location.href = "login.html";
+  });
   startSitePhotoHydration();
   return session.user;
 }
@@ -86,8 +107,30 @@ export function mondayOf(date) {
   return toLocalISODate(d);
 }
 
+// v59: a "permission denied for function ..." (or an expired-JWT 401)
+// only ever reaches a page when the request went out WITHOUT a user
+// session — every helper function is still executable by
+// `authenticated`. That happens if the session died in a way that
+// didn't raise SIGNED_OUT (e.g. a token refresh that failed on a
+// network error). If there's genuinely no session any more, send the
+// user to sign in rather than leaving a raw database error on screen.
+const SESSION_LOST_ERROR_RE = /permission denied for function|JWT expired|PGRST301|PGRST303/i;
+
 export function showError(el, err) {
   const msg = (err && err.message) ? err.message : String(err);
+  const code = (err && err.code) ? String(err.code) : "";
+  if (SESSION_LOST_ERROR_RE.test(`${msg} ${code}`)) {
+    el.textContent = "Your session has expired. Please sign in again.";
+    el.style.display = "block";
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) {
+        el.textContent = msg; // signed in after all: show the real error
+      } else {
+        window.location.href = "login.html";
+      }
+    }).catch(() => { el.textContent = msg; });
+    return;
+  }
   el.textContent = msg;
   el.style.display = "block";
 }
@@ -4801,6 +4844,11 @@ export function commercialErrorMessage(err) {
   console.error("Commercial module error:", err);
   if (/row-level security|permission denied for (table|relation)/i.test(msg)) {
     return "You don't have permission to do that.";
+  }
+  // v59: only a request sent without a user session can hit this — see
+  // showError() above.
+  if (/permission denied for function|JWT expired/i.test(msg)) {
+    return "Your session has expired. Please sign in again.";
   }
   if (/violates foreign key constraint/i.test(msg)) {
     return "That record couldn't be found — it may have been deleted or is no longer available.";

@@ -21,25 +21,51 @@ function extractFunction(name) {
 const requireAuth = extractFunction("requireAuth");
 const signOut = extractFunction("signOut");
 
-test("requireAuth(): no session -> redirects to login.html and returns null", async () => {
+test("requireAuth(): no session -> redirects to login.html and never resolves, so the calling page stops before firing any query as anon (v59)", async () => {
   const window = { location: { href: "" } };
-  const supabase = { auth: { getSession: async () => ({ data: { session: null } }) } };
+  const supabase = { auth: { getSession: async () => ({ data: { session: null } }), onAuthStateChange: () => { throw new Error("must not subscribe without a session"); } } };
   let hydrationStarted = false;
-  const result = await requireAuth(window, supabase, () => { hydrationStarted = true; });
-  assert.equal(result, null);
+  const NOT_SETTLED = Symbol("not settled");
+  const result = await Promise.race([
+    requireAuth(window, supabase, () => { hydrationStarted = true; }),
+    new Promise((r) => setTimeout(() => r(NOT_SETTLED), 50)),
+  ]);
+  assert.equal(result, NOT_SETTLED, "requireAuth() must not hand control back to the page when there is no session");
   assert.equal(window.location.href, "login.html", "an unauthenticated visitor must be sent to the sign-in page");
   assert.equal(hydrationStarted, false, "no private-photo signing is attempted without a session (v58)");
+});
+
+test("requireAuth(): expired session whose refresh failed (supabase-js getSession() -> session null + error) is treated exactly like no session (v59)", async () => {
+  const window = { location: { href: "" } };
+  const supabase = { auth: { getSession: async () => ({ data: { session: null }, error: { name: "AuthApiError", message: "Invalid Refresh Token: Refresh Token Not Found" } }), onAuthStateChange: () => {} } };
+  const NOT_SETTLED = Symbol("not settled");
+  const result = await Promise.race([requireAuth(window, supabase), new Promise((r) => setTimeout(() => r(NOT_SETTLED), 50))]);
+  assert.equal(result, NOT_SETTLED);
+  assert.equal(window.location.href, "login.html");
 });
 
 test("requireAuth(): a real session -> returns the user, no redirect", async () => {
   const window = { location: { href: "" } };
   const user = { id: "u1", email: "user@example.com" };
-  const supabase = { auth: { getSession: async () => ({ data: { session: { user } } }) } };
+  const supabase = { auth: { getSession: async () => ({ data: { session: { user } } }), onAuthStateChange: () => {} } };
   let hydrationStarted = false;
   const result = await requireAuth(window, supabase, () => { hydrationStarted = true; });
   assert.deepEqual(result, user);
   assert.equal(window.location.href, "", "an authenticated visitor must not be redirected anywhere");
   assert.equal(hydrationStarted, true, "every protected page must start signing private site-photos references (v58)");
+});
+
+test("requireAuth(): if the session ends while the page is open (SIGNED_OUT, e.g. refresh token revoked), the page bounces to login.html instead of carrying on as anon (v59)", async () => {
+  const window = { location: { href: "" } };
+  const user = { id: "u1" };
+  let listener = null;
+  const supabase = { auth: { getSession: async () => ({ data: { session: { user } } }), onAuthStateChange: (cb) => { listener = cb; return { data: { subscription: { unsubscribe() {} } } }; } } };
+  await requireAuth(window, supabase);
+  assert.equal(typeof listener, "function", "a protected page must subscribe to auth state changes");
+  listener("TOKEN_REFRESHED", { user });
+  assert.equal(window.location.href, "", "an ordinary token refresh must not redirect");
+  listener("SIGNED_OUT", null);
+  assert.equal(window.location.href, "login.html");
 });
 
 test("signOut(): clears the Supabase session and redirects to login.html", async () => {
