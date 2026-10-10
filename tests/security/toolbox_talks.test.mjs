@@ -703,20 +703,29 @@ test("SECURITY DEFINER: can_edit_toolbox_talk_template_library() is callable by 
 });
 
 test("SECURITY DEFINER: anon cannot read, write, sign, or complete anything in this feature", async () => {
+  // v59: anon can no longer EXECUTE the RLS helpers (is_org_member() &
+  // co.) and these policies aren't yet restricted `to authenticated`
+  // (deferred to a later PR), so a read/update may now raise "permission
+  // denied for function ..." instead of matching zero rows. Either
+  // outcome means anon gets nothing; a row seen or changed never passes.
+  const zeroRowsOrDenied = async (sql, params, msg) => {
+    try {
+      const r = await anon.query(sql, params);
+      assert.equal(r.rowCount, 0, msg);
+    } catch (err) {
+      assert.ok(isRlsError(err), `unexpected error: ${err.message}`);
+    }
+  };
   const anon = await anonClient(DB);
   try {
-    const templates = await anon.query("select 1 from public.toolbox_talk_templates where id=$1", [fx.sysTemplateId]);
-    assert.equal(templates.rowCount, 0, "anon must see zero templates — even system ones");
-
-    const talks = await anon.query("select 1 from public.toolbox_talks where id=$1", [fx.talk1]);
-    assert.equal(talks.rowCount, 0);
+    await zeroRowsOrDenied("select 1 from public.toolbox_talk_templates where id=$1", [fx.sysTemplateId], "anon must see zero templates — even system ones");
+    await zeroRowsOrDenied("select 1 from public.toolbox_talks where id=$1", [fx.talk1]);
 
     await assert.rejects(
       () => anon.query("insert into public.toolbox_talks (project_id, template_id, template_version_id, title) values ($1,$2,$3,'x')", [fx.projA, fx.sysTemplateId, fx.sysV1]),
       (err) => isRlsError(err)
     );
-    const signAttempt = await anon.query("update public.toolbox_talk_attendees set signed_at=now() where id=$1", [fx.attendee1]);
-    assert.equal(signAttempt.rowCount, 0, "anon must never be able to sign an attendee");
+    await zeroRowsOrDenied("update public.toolbox_talk_attendees set signed_at=now() where id=$1", [fx.attendee1], "anon must never be able to sign an attendee");
   } finally {
     await anon.end();
   }

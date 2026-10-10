@@ -464,13 +464,20 @@ test("Token security 21: anon cannot read commercial_approval_requests, commerci
   await requestApproval(contributor, eventId);
   await contributor.end();
 
+  // v59: anon can no longer EXECUTE the RLS helpers (can_view_commercial
+  // & co.), and the policies that call them aren't yet restricted `to
+  // authenticated` (deferred to a later PR) — so a read may now raise
+  // "permission denied for function ..." instead of returning zero rows.
+  // Either outcome means anon sees nothing; a returned row never passes.
   const anon = await anonClient(DB);
-  const r1 = await anon.query(`select * from public.commercial_approval_requests`);
-  const r2 = await anon.query(`select * from public.commercial_events`);
-  const r3 = await anon.query(`select * from public.commercial_line_items`);
-  assert.equal(r1.rows.length, 0);
-  assert.equal(r2.rows.length, 0);
-  assert.equal(r3.rows.length, 0);
+  for (const table of ["commercial_approval_requests", "commercial_events", "commercial_line_items"]) {
+    try {
+      const r = await anon.query(`select * from public.${table}`);
+      assert.equal(r.rows.length, 0, `anon must not see any ${table} rows`);
+    } catch (err) {
+      assert.match(err.message, /permission denied/i, `unexpected error for anon on ${table}: ${err.message}`);
+    }
+  }
   await anon.end();
 });
 
