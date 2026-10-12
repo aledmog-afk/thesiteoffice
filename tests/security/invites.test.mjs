@@ -26,7 +26,7 @@ before(async () => {
   await admin.end();
 
   const owner = await userClient(DB, OWNER);
-  const org = (await owner.query("select public.ensure_organisation() as id")).rows[0].id;
+  const org = (await owner.query("select public.create_organisation('Test Org', 'main_contractor') as id")).rows[0].id;
   const proj = (await owner.query(
     "insert into public.projects (name, org_id, created_by) values ('Invite Test Site', $1, $2) returning id",
     [org, OWNER]
@@ -38,7 +38,7 @@ before(async () => {
   // A second, unrelated organisation, to prove joining Org A's project
   // never enrols anyone into Org B.
   const other = await userClient(DB, OTHER_ORG_USER);
-  const otherOrg = (await other.query("select public.ensure_organisation() as id")).rows[0].id;
+  const otherOrg = (await other.query("select public.create_organisation('Test Org', 'main_contractor') as id")).rows[0].id;
   await other.end();
 
   fx = { org, proj, inviteCode, snagCode, otherOrg };

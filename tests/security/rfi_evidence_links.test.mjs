@@ -30,7 +30,7 @@ before(async () => {
   await admin.end();
 
   const ownerA = await userClient(DB, OWNER_A);
-  const orgA = (await ownerA.query("select public.ensure_organisation() as id")).rows[0].id;
+  const orgA = (await ownerA.query("select public.create_organisation('Test Org', 'main_contractor') as id")).rows[0].id;
   const projA = (await ownerA.query("insert into public.projects (name, org_id, created_by) values ('A', $1, $2) returning id", [orgA, OWNER_A])).rows[0].id;
   const rfiA = (await ownerA.query("insert into public.rfis (project_id, title, question) values ($1,'RFI A','Q?') returning id", [projA])).rows[0].id;
 
@@ -60,7 +60,7 @@ before(async () => {
   // Org B: a fully separate org/project/RFI/weekly report, to prove
   // cross-org evidence rejection.
   const ownerB = await userClient(DB, OWNER_B);
-  const orgB = (await ownerB.query("select public.ensure_organisation() as id")).rows[0].id;
+  const orgB = (await ownerB.query("select public.create_organisation('Test Org', 'main_contractor') as id")).rows[0].id;
   const projB = (await ownerB.query("insert into public.projects (name, org_id, created_by) values ('B', $1, $2) returning id", [orgB, OWNER_B])).rows[0].id;
   const rfiB = (await ownerB.query("insert into public.rfis (project_id, title, question) values ($1,'RFI B','Q?') returning id", [projB])).rows[0].id;
   const weeklyReportB = (await ownerB.query(

@@ -38,7 +38,7 @@ function makeContext({ members, requests, currentUserId = "admin-1" } = {}) {
     escapeHtml: (s) => String(s ?? ""),
     formatDate: (d) => d || "",
     uploadPhoto: async () => "https://example.com/logo.png",
-    ensureOrganisation: async () => "org-1",
+    getPrimaryOrganisation: async () => "org-1",
     getOrganisationMembers: async () => { calls.push({ fn: "getOrganisationMembers" }); return members; },
     getOrganisationMembershipRequests: async () => { calls.push({ fn: "getOrganisationMembershipRequests" }); return requests; },
     approveOrganisationMembership: async (id) => { calls.push({ fn: "approveOrganisationMembership", id }); },

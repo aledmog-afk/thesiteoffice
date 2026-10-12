@@ -150,7 +150,15 @@
     clearError(errorBox);
     const { data: { user } } = await supabase.auth.getUser();
     try {
+      // v60: ensure_organisation() returns only a company the caller is an
+      // ADMIN of, or null. Null means they have no company of their own
+      // (brand-new, or only a member of someone else's via an invite), so
+      // send them to set one up instead of putting the project anywhere.
       const orgId = await ensureOrganisation();
+      if (!orgId) {
+        window.location.href = "onboarding.html?reason=create_project";
+        return;
+      }
       const payload = {
         name: document.getElementById("name").value.trim(),
         contract_ref: document.getElementById("contractRef").value.trim() || null,

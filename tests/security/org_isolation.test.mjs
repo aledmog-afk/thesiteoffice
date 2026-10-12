@@ -32,7 +32,7 @@ before(async () => {
   // these tests also prove the normal "create my first project" path
   // still works (Priority 1/2 regression, for free).
   const a = await userClient(DB, USER_A);
-  const orgA = (await a.query("select public.ensure_organisation() as id")).rows[0].id;
+  const orgA = (await a.query("select public.create_organisation('Test Org', 'main_contractor') as id")).rows[0].id;
   const projA = (await a.query(
     "insert into public.projects (name, org_id, created_by) values ('Org A Site', $1, $2) returning id",
     [orgA, USER_A]
@@ -49,7 +49,7 @@ before(async () => {
   await a.end();
 
   const b = await userClient(DB, USER_B);
-  const orgB = (await b.query("select public.ensure_organisation() as id")).rows[0].id;
+  const orgB = (await b.query("select public.create_organisation('Test Org', 'main_contractor') as id")).rows[0].id;
   const projB = (await b.query(
     "insert into public.projects (name, org_id, created_by) values ('Org B Site', $1, $2) returning id",
     [orgB, USER_B]

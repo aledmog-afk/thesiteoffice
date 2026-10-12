@@ -39,7 +39,7 @@ before(async () => {
   // (owner only, same org) — A2 proves cross-project isolation within
   // the same organisation even under an unfiltered dashboard query.
   const ownerA = await userClient(DB, OWNER_A);
-  const orgA = (await ownerA.query("select public.ensure_organisation() as id")).rows[0].id;
+  const orgA = (await ownerA.query("select public.create_organisation('Test Org', 'main_contractor') as id")).rows[0].id;
   const projA1 = (await ownerA.query("insert into public.projects (name, org_id, created_by) values ('A1', $1, $2) returning id", [orgA, OWNER_A])).rows[0].id;
   const projA2 = (await ownerA.query("insert into public.projects (name, org_id, created_by) values ('A2', $1, $2) returning id", [orgA, OWNER_A])).rows[0].id;
   const inviteCode = (await ownerA.query("select public.regenerate_invite_code($1) as code", [projA1])).rows[0].code;
@@ -64,7 +64,7 @@ before(async () => {
 
   // Org B: fully separate, with its own actions/hs data.
   const ownerB = await userClient(DB, OWNER_B);
-  const orgB = (await ownerB.query("select public.ensure_organisation() as id")).rows[0].id;
+  const orgB = (await ownerB.query("select public.create_organisation('Test Org', 'main_contractor') as id")).rows[0].id;
   const projB = (await ownerB.query("insert into public.projects (name, org_id, created_by) values ('B', $1, $2) returning id", [orgB, OWNER_B])).rows[0].id;
   await ownerB.query("insert into public.actions (project_id, title, status, priority) values ($1,'B critical','open','critical')", [projB]);
   const auditB = await ownerB.query("insert into public.hs_audits (project_id, audit_type, month) values ($1,'internal','2026-09-01') returning id", [projB]);

@@ -75,7 +75,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, showError, clearError, escapeHtml, formatDate, uploadPhoto, ensureOrganisation, getOrganisationMembers, getOrganisationMembershipRequests, approveOrganisationMembership, rejectOrganisationMembership } from "./js/app.js";
+  import { requireAuth, renderHeader, showError, clearError, escapeHtml, formatDate, uploadPhoto, getPrimaryOrganisation, getOrganisationMembers, getOrganisationMembershipRequests, approveOrganisationMembership, rejectOrganisationMembership } from "./js/app.js";
 
   const currentUser = await requireAuth();
   renderHeader([{ label: "Settings" }]);
@@ -87,7 +87,11 @@
   // organisation switcher is deliberately out of scope for this phase
   // (see the Phase 0 brief — "a sophisticated organisation switcher is
   // NOT required").
-  const orgId = await ensureOrganisation();
+  // v60: ensure_organisation() now returns only an org the caller ADMINS
+  // (it answers "where do my new projects go"), so Settings uses
+  // getPrimaryOrganisation() instead — the caller's earliest membership
+  // of any role, i.e. exactly the org this page showed before v60.
+  const orgId = await getPrimaryOrganisation();
 
   const orgErrorBox = document.getElementById("orgErrorBox");
   const orgNameInput = document.getElementById("orgName");

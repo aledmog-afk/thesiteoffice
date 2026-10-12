@@ -236,7 +236,7 @@ test("settings.html: a malicious organisation name is set via .value (never inte
     supabase,
     requireAuth: async () => ({ id: "u1" }),
     renderHeader: () => {},
-    ensureOrganisation: async () => "org1",
+    getPrimaryOrganisation: async () => "org1",
     showError: () => {}, clearError: () => {},
     uploadPhoto: async () => "",
   });

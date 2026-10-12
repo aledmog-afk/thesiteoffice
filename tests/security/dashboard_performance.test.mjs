@@ -26,7 +26,7 @@ before(async () => {
   await admin.end();
 
   const owner = await userClient(DB, OWNER);
-  const orgId = (await owner.query("select public.ensure_organisation() as id")).rows[0].id;
+  const orgId = (await owner.query("select public.create_organisation('Test Org', 'main_contractor') as id")).rows[0].id;
 
   for (let i = 0; i < PROJECT_COUNT; i++) {
     const proj = await owner.query(

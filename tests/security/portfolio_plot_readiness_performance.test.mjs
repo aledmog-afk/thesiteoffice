@@ -56,7 +56,7 @@ before(async () => {
   await admin.end();
 
   const owner = await userClient(DB, OWNER);
-  const orgId = (await owner.query("select public.ensure_organisation() as id")).rows[0].id;
+  const orgId = (await owner.query("select public.create_organisation('Test Org', 'main_contractor') as id")).rows[0].id;
 
   const small = await seedPortfolio(owner, orgId, 10, 10); // 10 projects / 100 plots
   const medium = await seedPortfolio(owner, orgId, 25, 20); // 25 projects / 500 plots

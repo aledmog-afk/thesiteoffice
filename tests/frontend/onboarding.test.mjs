@@ -158,3 +158,30 @@ test("Onboarding: a failed join request shows the error and stays on the search 
   assert.equal(document.getElementById("pendingView").style.display, "none", "must not show the pending confirmation on failure");
   assert.ok(document.getElementById("errorBox").textContent.includes("already a member"));
 });
+
+// v60: dashboard.html sends a user with no admin company here with
+// ?reason=create_project — go straight to "Set up your company" (name +
+// type), with an explanation, then create it via createOrganisation().
+test("Onboarding (reason=create_project): shows the setup notice and opens the create form with type choice", async () => {
+  const ctx = makeContext({ __url: "https://example.com/onboarding.html?reason=create_project" });
+  const { document } = await runPage(HTML, extractScript(HTML), ctx);
+  await wait(20);
+  assert.equal(document.getElementById("setupNotice").style.display, "block");
+  assert.equal(document.getElementById("createView").style.display, "block");
+  assert.equal(document.getElementById("chooserView").style.display, "none");
+  const opts = [...document.getElementById("orgType").options].map((o) => o.value);
+  assert.deepEqual(opts, ["main_contractor", "subcontractor", "other"]);
+  document.getElementById("orgName").value = "Almo Carpentry";
+  document.getElementById("orgType").value = "subcontractor";
+  fireEvent(document.getElementById("createSubmitBtn"), "click");
+  await wait(30);
+  assert.deepEqual(ctx.__calls.filter((c) => c.fn === "createOrganisation"), [{ fn: "createOrganisation", name: "Almo Carpentry", type: "subcontractor" }]);
+});
+
+test("Onboarding (no reason): the normal chooser shows and the setup notice stays hidden", async () => {
+  const ctx = makeContext();
+  const { document } = await runPage(HTML, extractScript(HTML), ctx);
+  await wait(20);
+  assert.equal(document.getElementById("setupNotice").style.display, "none");
+  assert.notEqual(document.getElementById("chooserView").style.display, "none");
+});

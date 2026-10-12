@@ -33,7 +33,7 @@ before(async () => {
   await admin.end();
 
   const owner = await userClient(DB, OWNER);
-  const orgId = (await owner.query("select public.ensure_organisation() as id")).rows[0].id;
+  const orgId = (await owner.query("select public.create_organisation('Test Org', 'main_contractor') as id")).rows[0].id;
 
   // ── Single project: seeded once with 500 activities; the 50-row
   // scenario just queries a LIMIT-ed subset of the same table, the
