@@ -22,6 +22,11 @@
 
   <div id="errorBox" class="error-box"></div>
 
+  <div id="setupNotice" class="card" style="display:none; border-left:4px solid var(--amber);">
+    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.4rem;">Set up your company</h3>
+    <p class="hint">New projects belong to your own company. You're not an administrator of a company on Site Tracker yet, so set yours up first — it only takes a moment. Projects you've been invited to aren't affected.</p>
+  </div>
+
   <div id="chooserView">
     <div class="card">
       <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.5rem;">Create my own organisation</h3>
@@ -99,6 +104,15 @@
 
   const orgTypeSelect = document.getElementById("orgType");
   orgTypeSelect.innerHTML = ORGANISATION_TYPES.map((t) => `<option value="${t.value}">${escapeHtml(t.label)}</option>`).join("");
+
+  // Sent here from dashboard.html when the user tried to create a project
+  // but isn't an admin of any company (v60) — go straight to the create
+  // form (name + type), with a short explanation.
+  const params = new URL(window.location.href).searchParams;
+  if (params.get("reason") === "create_project") {
+    document.getElementById("setupNotice").style.display = "block";
+    showOnly(createView);
+  }
 
   document.getElementById("showCreateBtn").addEventListener("click", () => showOnly(createView));
   document.getElementById("createBackBtn").addEventListener("click", () => showOnly(chooserView));

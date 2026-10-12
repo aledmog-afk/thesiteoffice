@@ -27,7 +27,7 @@ before(async () => {
   await admin.end();
 
   const owner = await userClient(DB, OWNER);
-  const orgId = (await owner.query("select public.ensure_organisation() as id")).rows[0].id;
+  const orgId = (await owner.query("select public.create_organisation('Test Org', 'main_contractor') as id")).rows[0].id;
 
   const proj50 = (await owner.query("insert into public.projects (name, org_id, created_by) values ('50-activity site', $1, $2) returning id", [orgId, OWNER])).rows[0].id;
   const prog50 = (await owner.query("insert into public.programmes (project_id, name, status) values ($1,'Programme',$2) returning id", [proj50, "active"])).rows[0].id;

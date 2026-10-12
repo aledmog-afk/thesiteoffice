@@ -46,7 +46,7 @@ before(async () => {
   await admin.end();
 
   const owner = await userClient(DB, OWNER);
-  const orgA = (await owner.query("select public.ensure_organisation() as id")).rows[0].id;
+  const orgA = (await owner.query("select public.create_organisation('Test Org', 'main_contractor') as id")).rows[0].id;
   const projA = (await owner.query("insert into public.projects (name, org_id, created_by) values ('P18b', $1, $2) returning id", [orgA, OWNER])).rows[0].id;
   const invite = (await owner.query("select public.regenerate_invite_code($1) as code", [projA])).rows[0].code;
 
@@ -67,7 +67,7 @@ before(async () => {
   await adminB.query(`insert into auth.users (id, email) values ($1,'p18bownerb@example.com')`, [OWNER_B]);
   await adminB.end();
   const ownerB = await userClient(DB, OWNER_B);
-  const orgC = (await ownerB.query("select public.ensure_organisation() as id")).rows[0].id;
+  const orgC = (await ownerB.query("select public.create_organisation('Test Org', 'main_contractor') as id")).rows[0].id;
   const projB = (await ownerB.query("insert into public.projects (name, org_id, created_by) values ('P18b-B', $1, $2) returning id", [orgC, OWNER_B])).rows[0].id;
   await ownerB.query(`insert into public.project_module_roles (project_id, user_id, module, role, granted_by) values ($1,$2,'commercial','contributor',$2)`, [projB, OWNER_B]);
   await ownerB.end();

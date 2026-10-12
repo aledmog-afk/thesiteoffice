@@ -104,3 +104,23 @@ test("dashboard.html: if resolving the organisation fails, no project insert is 
   assert.equal(inserts.length, 0, "must not attempt to insert a project if the organisation couldn't be resolved");
   assert.ok(document.getElementById("errorBox").textContent.includes("boom"));
 });
+
+// v60: ensure_organisation() returns null when the caller isn't an admin
+// of any company (brand-new, or only a member via an invite). The page
+// must then route to the "Set up your company" screen and never insert.
+test("dashboard.html: no admin organisation (null) sends the user to setup and inserts nothing", async () => {
+  const supabase = makeSupabase({ ensureOrgId: null });
+  const { document } = await run(supabase);
+  fireEvent(document.getElementById("newProjectBtn"), "click");
+  document.getElementById("name").value = "Sub's Own Site";
+  fireEvent(document.getElementById("projectForm"), "submit");
+  await wait(30);
+  const inserts = supabase.calls.filter((c) => c.table === "projects" && c.op === "insert");
+  assert.equal(inserts.length, 0, "must never create a project without an admin organisation");
+  assert.equal(document.getElementById("errorBox").textContent, "", "this is a redirect, not an error");
+});
+
+test("dashboard.html: the setup redirect target is onboarding.html?reason=create_project", () => {
+  const src = extractScript(HTML);
+  assert.match(src, /if \(!orgId\) \{\s*window\.location\.href = "onboarding\.html\?reason=create_project";\s*return;/);
+});

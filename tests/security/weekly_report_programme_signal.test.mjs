@@ -47,7 +47,7 @@ before(async () => {
   await admin.end();
 
   const ownerA = await userClient(DB, OWNER_A);
-  const orgA = (await ownerA.query("select public.ensure_organisation() as id")).rows[0].id;
+  const orgA = (await ownerA.query("select public.create_organisation('Test Org', 'main_contractor') as id")).rows[0].id;
   const projA1 = (await ownerA.query("insert into public.projects (name, org_id, created_by) values ('A1', $1, $2) returning id", [orgA, OWNER_A])).rows[0].id;
   const projA2 = (await ownerA.query("insert into public.projects (name, org_id, created_by) values ('A2', $1, $2) returning id", [orgA, OWNER_A])).rows[0].id;
   const progA1 = (await ownerA.query("insert into public.programmes (project_id, name, status) values ($1,'A1 Programme','active') returning id", [projA1])).rows[0].id;
@@ -65,7 +65,7 @@ before(async () => {
   await snagA.end();
 
   const ownerB = await userClient(DB, OWNER_B);
-  const orgB = (await ownerB.query("select public.ensure_organisation() as id")).rows[0].id;
+  const orgB = (await ownerB.query("select public.create_organisation('Test Org', 'main_contractor') as id")).rows[0].id;
   const projB = (await ownerB.query("insert into public.projects (name, org_id, created_by) values ('B', $1, $2) returning id", [orgB, OWNER_B])).rows[0].id;
   const progB = (await ownerB.query("insert into public.programmes (project_id, name, status) values ($1,'B Programme','active') returning id", [projB])).rows[0].id;
   await ownerB.query("insert into public.programme_activities (programme_id, title, planned_finish) values ($1,'B overdue activity','2020-01-01')", [progB]);

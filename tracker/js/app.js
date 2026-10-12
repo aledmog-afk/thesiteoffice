@@ -564,15 +564,29 @@ export function renderProgressBlock(baselinePct, actualPct, ragStatus) {
 }
 
 // ─── Organisation ───────────────────────────────────────────────
-// Returns the signed-in user's organisation id, creating one for them
-// the first time it's needed (e.g. right before their first project is
-// created) — see ensure_organisation() in sql/schema.sql. Safe to call
-// repeatedly; a user who already belongs to an organisation just gets
-// its id back.
+// Returns the id of an organisation the signed-in user is an ADMIN of
+// (their earliest), or null if they don't administer one — see the v60
+// ensure_organisation() in sql/schema.sql. Used to decide where a NEW
+// project goes: null means "set up your own company first"
+// (onboarding.html?reason=create_project). Never creates anything.
+// (Against a database without v60 the old function still returns the
+// earliest membership / lazily creates one, so callers just get an id.)
 export async function ensureOrganisation() {
   const { data, error } = await supabase.rpc("ensure_organisation");
   if (error) throw error;
-  return data;
+  return data || null;
+}
+
+// The caller's "primary" organisation for display (Settings): their
+// earliest membership of ANY role, or null. RLS on organisation_members
+// limits this to the caller's own rows.
+export async function getPrimaryOrganisation() {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return null;
+  const { data, error } = await supabase.from("organisation_members").select("org_id")
+    .eq("user_id", user.id).order("created_at", { ascending: true }).limit(1);
+  if (error) throw error;
+  return data?.[0]?.org_id || null;
 }
 
 // Returns the company logo URL for the given organisation (from

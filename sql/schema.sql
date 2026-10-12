@@ -10071,3 +10071,53 @@ grant execute on function public.revoke_snagging_invite_code(uuid) to authentica
 revoke all on function public.commercial_event_hash(uuid) from public;
 revoke execute on function public.commercial_event_hash(uuid) from anon;
 grant execute on function public.commercial_event_hash(uuid) to authenticated;
+
+-- ─── v60 ADDITIONS: new projects only go into an organisation the creator ADMINS ───
+-- Stage 1 of the organisation-tiers work. Before v60, ensure_organisation()
+-- returned the caller's EARLIEST organisation membership of any role, and
+-- auto-created "<email>'s Organisation" if they had none. Because
+-- join_project_by_invite() (deliberately unchanged here — that ships with
+-- stage 2) adds an invited user to the project owner's organisation as a
+-- plain 'member', an invited subcontractor who then created their own
+-- project silently created it INSIDE the inviting company. The insert
+-- policy only checked is_org_member(), so the database allowed it.
+--
+-- From v60:
+--   * ensure_organisation() returns the earliest organisation the caller
+--     is an ADMIN of, or NULL. It never creates an organisation and never
+--     returns one the caller is only a member of. NULL means "you need
+--     your own company first": dashboard.html sends the user to
+--     onboarding.html?reason=create_project ("Set up your company", with
+--     the organisation-type choice), which calls create_organisation().
+--     This applies to brand-new users too (they already land on
+--     onboarding.html after sign-up/sign-in — see login.html), so there is
+--     one setup path, and it always asks for a real name and type instead
+--     of inventing "<email>'s Organisation".
+--   * The projects INSERT policy requires is_org_admin(org_id), so a
+--     direct API call can't bypass the client either.
+--   * settings.html no longer uses ensure_organisation() to find the org
+--     to display (it now reads the caller's own earliest membership), so
+--     a member-only user's Settings page is unchanged.
+-- Existing projects, memberships and organisations are untouched.
+--
+-- Rollback: re-run the v29-era ensure_organisation() body (earlier in
+-- this file) and recreate the policy with is_org_member(org_id).
+
+create or replace function public.ensure_organisation()
+returns uuid
+language sql stable security definer set search_path = public
+as $$
+  select om.org_id
+    from public.organisation_members om
+   where om.user_id = auth.uid() and om.role = 'admin'
+   order by om.created_at asc, om.org_id asc
+   limit 1;
+$$;
+revoke all on function public.ensure_organisation() from public;
+revoke execute on function public.ensure_organisation() from anon;
+grant execute on function public.ensure_organisation() to authenticated;
+
+drop policy if exists "org members insert projects" on public.projects;
+drop policy if exists "org admins insert projects" on public.projects;
+create policy "org admins insert projects" on public.projects for insert
+  with check (org_id is not null and public.is_org_admin(org_id));

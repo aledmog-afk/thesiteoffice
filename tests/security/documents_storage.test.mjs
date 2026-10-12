@@ -37,7 +37,7 @@ before(async () => {
   await admin.end();
 
   const a = await userClient(DB, OWNER_A);
-  const orgA = (await a.query("select public.ensure_organisation() as id")).rows[0].id;
+  const orgA = (await a.query("select public.create_organisation('Test Org', 'main_contractor') as id")).rows[0].id;
   const projA = (await a.query("insert into public.projects (name, org_id, created_by) values ('A', $1, $2) returning id", [orgA, OWNER_A])).rows[0].id;
   const snagCode = (await a.query("select public.regenerate_snagging_invite_code($1) as code", [projA])).rows[0].code;
   await a.end();
@@ -47,7 +47,7 @@ before(async () => {
   await snagA.end();
 
   const b = await userClient(DB, OWNER_B);
-  const orgB = (await b.query("select public.ensure_organisation() as id")).rows[0].id;
+  const orgB = (await b.query("select public.create_organisation('Test Org', 'main_contractor') as id")).rows[0].id;
   const projB = (await b.query("insert into public.projects (name, org_id, created_by) values ('B', $1, $2) returning id", [orgB, OWNER_B])).rows[0].id;
   await b.end();
 

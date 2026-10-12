@@ -48,7 +48,7 @@ before(async () => {
   await admin.end();
 
   const owner = await userClient(DB, OWNER);
-  const orgId = (await owner.query("select public.ensure_organisation() as id")).rows[0].id;
+  const orgId = (await owner.query("select public.create_organisation('Test Org', 'main_contractor') as id")).rows[0].id;
 
   await seedPortfolio(owner, orgId, 25, 20); // 25 projects / 500 plots / 500 actions / 500 snags / 500 activities
   await seedPortfolio(owner, orgId, 25, 20); // layer a second batch: 50 projects / 1,000 plots / 1,000 of each = 3,000 work items total

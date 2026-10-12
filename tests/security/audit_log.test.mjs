@@ -28,7 +28,7 @@ before(async () => {
   await admin.end();
 
   const ownerA = await userClient(DB, OWNER_A);
-  const orgA = (await ownerA.query("select public.ensure_organisation() as id")).rows[0].id;
+  const orgA = (await ownerA.query("select public.create_organisation('Test Org', 'main_contractor') as id")).rows[0].id;
   const projA = (await ownerA.query(
     "insert into public.projects (name, org_id, created_by) values ('Org A Site', $1, $2) returning id",
     [orgA, OWNER_A]
@@ -42,7 +42,7 @@ before(async () => {
   await snaggerA.end();
 
   const ownerB = await userClient(DB, OWNER_B);
-  const orgB = (await ownerB.query("select public.ensure_organisation() as id")).rows[0].id;
+  const orgB = (await ownerB.query("select public.create_organisation('Test Org', 'main_contractor') as id")).rows[0].id;
   const projB = (await ownerB.query(
     "insert into public.projects (name, org_id, created_by) values ('Org B Site', $1, $2) returning id",
     [orgB, OWNER_B]
