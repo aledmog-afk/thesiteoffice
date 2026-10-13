@@ -6414,3 +6414,42 @@ export async function generateCommercialEventPdfBlob(eventId, type) {
   });
   return { blob: doc.output("blob"), filename: commercialEventPdfFilename(event) };
 }
+
+// ─── v62: role-based access per company role ─────────────────────────
+// Plain-English summary of what each company role can do (mirrors the
+// party_role_capabilities table in schema.sql — the database is the
+// real gate; this is only for labels).
+export const PARTY_ROLE_ACCESS_TEXT = {
+  subcontractor: "Your company's snags, RFIs and actions. No commercials or reports.",
+  clerk_of_works: "All snags, inspections and site diaries (weekly reports); verifies close-outs. No commercials.",
+  main_contractor_full: "Full site access (programme, snags, RFIs, actions, handovers, reports). No commercials or monthly reports.",
+  main_contractor_narrow: "Programme, actions, handovers, RFIs, responding to snags and site diaries. No commercials.",
+  client: "Read-only: snags, programme, weekly and monthly reports. Variations and dayworks are approved through the approval link.",
+  consultant: "Read-only: your company's snags and RFIs, drawings and documents.",
+};
+
+export function partyRoleAccessText(partyRole, mcMode) {
+  if (partyRole === "main_contractor") return PARTY_ROLE_ACCESS_TEXT[mcMode === "narrow" ? "main_contractor_narrow" : "main_contractor_full"];
+  return PARTY_ROLE_ACCESS_TEXT[partyRole] || "";
+}
+
+// The signed-in user's company role on each job they reach through a
+// company. Returns [] (not an error) where the database predates v62.
+export async function getMyJobRoles() {
+  const { data, error } = await supabase.rpc("get_my_job_roles");
+  if (error) { if (isMissingRpcError(error)) return []; throw error; }
+  return data || [];
+}
+
+export async function setMainContractorAccess(projectId, mode) {
+  return rpcOrThrow("set_main_contractor_access", { p_project_id: projectId, p_mode: mode });
+}
+
+// "My company's work": every outstanding item on jobs where the user
+// works through a company. The database already limits what a company
+// can see to its own rows (or all rows for roles that see everything),
+// so this only narrows to those jobs — it never widens access.
+export function filterCompanyWorkItems(items, jobRoles) {
+  const jobs = new Set((jobRoles || []).map((r) => r.project_id));
+  return (items || []).filter((i) => jobs.has(i.project_id));
+}

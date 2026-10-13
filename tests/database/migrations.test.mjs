@@ -264,13 +264,13 @@ test("Actions Engine: table, indexes, triggers and RLS policy are idempotent acr
     }
 
     const triggers = await client.query("select count(*)::int as n from pg_trigger where tgrelid = 'public.actions'::regclass and tgname like 'trg_%'");
-    assert.equal(triggers.rows[0].n, 2, "exactly 2 triggers on actions (before-write + audit), never duplicated");
+    assert.equal(triggers.rows[0].n, 3, "[v62: + company default trigger] exactly 2 triggers on actions (before-write + audit), never duplicated");
 
     const indexes = await client.query("select count(*)::int as n from pg_indexes where tablename = 'actions' and indexname like 'actions_%_idx'");
-    assert.equal(indexes.rows[0].n, 5, "4 original named indexes plus actions_plot_id_idx (external DB review, v56), never duplicated");
+    assert.equal(indexes.rows[0].n, 6, "[v62: + actions_party_idx] 4 original named indexes plus actions_plot_id_idx (external DB review, v56), never duplicated");
 
     const policies = await client.query("select count(*)::int as n from pg_policies where tablename = 'actions'");
-    assert.equal(policies.rows[0].n, 4, "exactly 4 RLS policies on actions (select/insert/update/delete), never duplicated");
+    assert.equal(policies.rows[0].n, 8, "[v62: + 4 company-capability policies] exactly 4 RLS policies on actions (select/insert/update/delete), never duplicated");
 
     await client.end();
   } finally {
@@ -348,13 +348,13 @@ test("Inspections: tables, indexes, triggers and RLS policies are idempotent acr
     assert.equal(findingTriggers.rows[0].n, 2, "exactly 2 triggers on inspection_findings (before-write + audit), never duplicated");
 
     const inspectionPolicies = await client.query("select count(*)::int as n from pg_policies where tablename = 'inspections'");
-    assert.equal(inspectionPolicies.rows[0].n, 4);
+    assert.equal(inspectionPolicies.rows[0].n, 7) /* v62: + 3 capability policies */;
 
     const findingPolicies = await client.query("select count(*)::int as n from pg_policies where tablename = 'inspection_findings'");
-    assert.equal(findingPolicies.rows[0].n, 4);
+    assert.equal(findingPolicies.rows[0].n, 7) /* v62: + 3 capability policies */;
 
     const photoPolicies = await client.query("select count(*)::int as n from pg_policies where tablename = 'inspection_finding_photos'");
-    assert.equal(photoPolicies.rows[0].n, 3, "inspection_finding_photos has select/insert/delete only, no update policy");
+    assert.equal(photoPolicies.rows[0].n, 7, "[v62: + 4 capability policies] inspection_finding_photos has select/insert/delete only, no update policy");
 
     const indexes = await client.query("select count(*)::int as n from pg_indexes where tablename in ('inspections', 'inspection_findings', 'inspection_finding_photos') and indexname like '%_idx'");
     assert.equal(indexes.rows[0].n, 11, "3 on inspections + 6 on inspection_findings + 2 on inspection_finding_photos (external DB review, v56, added org_id_idx/plot_id_idx/project_id_idx), never duplicated");
@@ -453,7 +453,7 @@ test("Defects / Snagging: new columns, indexes, helper function and trigger are 
     assert.equal(indexes.rows[0].n, 7, "4 original named indexes plus plot_id_idx/snag_list_id_idx (external DB review, v56) plus party_idx (v61), never duplicated");
 
     const triggers = await client.query("select count(*)::int as n from pg_trigger where tgrelid = 'public.snag_items'::regclass and tgname like 'trg_%'");
-    assert.equal(triggers.rows[0].n, 4, "exactly 4 triggers on snag_items (item-numbering + audit + before-write + v61 party guard), never duplicated");
+    assert.equal(triggers.rows[0].n, 5, "[v62: + verify-party trigger] exactly 4 triggers on snag_items (item-numbering + audit + before-write + v61 party guard), never duplicated");
 
     const fn = await client.query("select count(*)::int as n from information_schema.routines where routine_schema = 'public' and routine_name = 'is_project_member_user'");
     assert.equal(fn.rows[0].n, 1, "is_project_member_user must exist exactly once after repeated re-application");
@@ -547,7 +547,7 @@ test("Weekly Reporting: new columns, indexes, trigger, and inspection_findings.r
     // RLS on weekly_reports is deliberately UNCHANGED by this priority —
     // still editor-only, still 4 policies.
     const policies = await client.query("select count(*)::int as n from pg_policies where tablename = 'weekly_reports'");
-    assert.equal(policies.rows[0].n, 4, "weekly_reports RLS policy count must be unchanged by this priority");
+    assert.equal(policies.rows[0].n, 7, "[v62: + 3 capability policies] weekly_reports RLS policy count must be unchanged by this priority");
 
     const resolvedAtColumn = await client.query(`
       select count(*)::int as n from information_schema.columns
@@ -726,10 +726,10 @@ test("Programme Control: tables, indexes, triggers, RLS policies and the one-act
     assert.equal(actTriggers.rows[0].n, 2, "exactly 2 triggers on programme_activities (before-write + audit), never duplicated");
 
     const progPolicies = await client.query("select count(*)::int as n from pg_policies where tablename = 'programmes'");
-    assert.equal(progPolicies.rows[0].n, 3, "programmes has select/insert/update only, no delete policy");
+    assert.equal(progPolicies.rows[0].n, 6, "[v62: + 3 capability policies] programmes has select/insert/update only, no delete policy");
 
     const actPolicies = await client.query("select count(*)::int as n from pg_policies where tablename = 'programme_activities'");
-    assert.equal(actPolicies.rows[0].n, 4, "programme_activities has select/insert/update/delete — unlike documents, activities have no protected revision history");
+    assert.equal(actPolicies.rows[0].n, 8, "[v62: + 4 capability policies] programme_activities has select/insert/update/delete — unlike documents, activities have no protected revision history");
 
     // Note: SQL LIKE's "_" is a single-character WILDCARD, not a literal
     // underscore — "%_idx" therefore also matches
@@ -794,19 +794,19 @@ test("RFI-1: rfis/rfi_evidence_links tables, indexes, triggers and RLS policies 
     assert.equal(tables.rows[0].n, 2);
 
     const rfisTriggers = await client.query("select count(*)::int as n from pg_trigger where tgrelid = 'public.rfis'::regclass and tgname like 'trg_%'");
-    assert.equal(rfisTriggers.rows[0].n, 2, "exactly 2 triggers on rfis (before-write + audit), never duplicated");
+    assert.equal(rfisTriggers.rows[0].n, 3, "[v62: + company default trigger] exactly 2 triggers on rfis (before-write + audit), never duplicated");
 
     const evidenceTriggers = await client.query("select count(*)::int as n from pg_trigger where tgrelid = 'public.rfi_evidence_links'::regclass and tgname like 'trg_%'");
     assert.equal(evidenceTriggers.rows[0].n, 2, "exactly 2 triggers on rfi_evidence_links (before-write + audit), never duplicated");
 
     const rfisPolicies = await client.query("select count(*)::int as n from pg_policies where tablename = 'rfis'");
-    assert.equal(rfisPolicies.rows[0].n, 3, "select/insert/update only, no delete policy");
+    assert.equal(rfisPolicies.rows[0].n, 6, "[v62: + 3 company policies] select/insert/update only, no delete policy");
 
     const evidencePolicies = await client.query("select count(*)::int as n from pg_policies where tablename = 'rfi_evidence_links'");
-    assert.equal(evidencePolicies.rows[0].n, 3, "select/insert/delete only, no update policy");
+    assert.equal(evidencePolicies.rows[0].n, 5, "[v62: + 2 company policies] select/insert/delete only, no update policy");
 
     const rfisIndexes = await client.query("select count(*)::int as n from pg_indexes where tablename = 'rfis' and indexname like '%_idx'");
-    assert.equal(rfisIndexes.rows[0].n, 5, "never duplicated across re-application");
+    assert.equal(rfisIndexes.rows[0].n, 6, "[v62: + rfis_party_idx] never duplicated across re-application");
 
     const evidenceIndexes = await client.query("select count(*)::int as n from pg_indexes where tablename = 'rfi_evidence_links' and indexname like '%_idx'");
     assert.equal(evidenceIndexes.rows[0].n, 4, "never duplicated across re-application");

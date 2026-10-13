@@ -104,7 +104,7 @@ test("Schema: rfis table, constraints, foreign keys and indexes exist as designe
       `select conname, confrelid::regclass::text as target from pg_constraint where conrelid = 'public.rfis'::regclass and contype = 'f'`
     );
     const fkTargets = fks.rows.map((r) => r.target).sort();
-    assert.deepEqual(fkTargets, ["auth.users", "auth.users", "auth.users", "organisations", "plots", "projects"].sort());
+    assert.deepEqual(fkTargets, ["auth.users", "auth.users", "auth.users", "organisations", "plots", "project_parties", "projects"].sort());
 
     const indexes = await admin.query(
       `select indexname from pg_indexes where tablename = 'rfis'`
@@ -117,10 +117,10 @@ test("Schema: rfis table, constraints, foreign keys and indexes exist as designe
     const triggers = await admin.query(
       `select count(*)::int as n from pg_trigger where tgrelid = 'public.rfis'::regclass and tgname like 'trg_%'`
     );
-    assert.equal(triggers.rows[0].n, 2, "exactly 2 triggers on rfis (before-write + audit)");
+    assert.equal(triggers.rows[0].n, 3, "exactly 3 triggers on rfis (before-write + audit + v62 company default)");
 
     const policies = await admin.query(`select policyname, cmd from pg_policies where tablename = 'rfis' order by policyname`);
-    assert.equal(policies.rowCount, 3, "select/insert/update only — no delete policy");
+    assert.equal(policies.rowCount, 6, "select/insert/update only (3 editor + 3 v62 company policies) — no delete policy");
     assert.ok(!policies.rows.some((r) => r.cmd === "DELETE"), "no DELETE policy must exist for rfis");
   } finally {
     await admin.end();
