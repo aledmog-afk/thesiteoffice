@@ -10121,3 +10121,806 @@ drop policy if exists "org members insert projects" on public.projects;
 drop policy if exists "org admins insert projects" on public.projects;
 create policy "org admins insert projects" on public.projects for insert
   with check (org_id is not null and public.is_org_admin(org_id));
+
+-- ─── v61 ADDITIONS: companies on a project ("parties") — organisation tiers stage 2 ───
+-- Spec: /workspace/stage2-spec.md (agreed with Aled, 13 Oct 2026), with
+-- Aled's decisions: link-only invites (no email sending), 14-day expiry,
+-- old invite codes RETIRED, a subcontractor sees its own sub-subs' snags
+-- (a sub-sub never sees its parent's), invited companies may VIEW
+-- drawings but not change them, a Main Contractor party starts with
+-- editor-level site access (programme, RFIs, site diaries/weekly
+-- reports, actions …) but NO commercials, every other party starts
+-- snagging-level.
+--
+-- Model:
+--   * projects.org_id stays the OWNING company. Its members are "owner
+--     side" exactly as before v61.
+--   * project_parties: another company placed on the project with a role
+--     (main_contractor, subcontractor(+trade), clerk_of_works, client,
+--     consultant). parent_party_id makes a sub-subcontractor.
+--   * project_party_invites: a pending invite to ONE lead person, by
+--     email, accepted via a link-only token (only its sha256 is stored).
+--   * project_party_members: which of the party company's own staff are
+--     on this job. Each also gets a project_members row (role mapped
+--     from the party role) so every existing page/helper keeps working;
+--     the party row is the authority for WHY they're on the job.
+--   * Accepting an invite NEVER grants organisation membership. The
+--     acceptor either creates their own company (create_organisation(),
+--     becoming its admin) or must already be an approved member of an
+--     existing one (organisation_membership_requests, v42).
+--   * Access: a project_members row now counts if the user is in the
+--     owning company (as before) OR an active party member whose company
+--     membership still holds. Leaving the company removes access at once.
+--   * Party-only callers see only snags given to their own party or its
+--     descendants (snag_items.party_id); Main Contractor parties and the
+--     owner side see all. Party-only callers never see commercial_items
+--     (legacy ledger) or monthly_reports and can't edit project details,
+--     even as editors.
+--   * join_project_by_invite() is RETIRED: it raises a friendly error and
+--     never adds anyone to any organisation again. regenerate_*_code
+--     likewise refuse. Owners add their OWN company's staff with
+--     add_org_member_to_project().
+-- Rollback: drop the three new tables (cascade), drop snag_items.party_id,
+-- re-run the v29/v31-era helper and policy definitions earlier in this
+-- file, and the pre-v61 join_project_by_invite() body.
+
+-- ── Tables ──────────────────────────────────────────────────────────
+create table if not exists public.project_parties (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  org_id uuid not null references public.organisations(id) on delete cascade,
+  party_role text not null check (party_role in ('main_contractor', 'subcontractor', 'clerk_of_works', 'client', 'consultant')),
+  trade text,
+  parent_party_id uuid references public.project_parties(id) on delete cascade,
+  lead_user_id uuid references auth.users(id) on delete set null,
+  status text not null default 'active' check (status in ('active', 'removed')),
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (project_id, org_id),
+  check (party_role <> 'subcontractor' or nullif(trim(trade), '') is not null),
+  check (parent_party_id is null or party_role = 'subcontractor')
+);
+create index if not exists project_parties_org_idx on public.project_parties (org_id);
+create index if not exists project_parties_parent_idx on public.project_parties (parent_party_id);
+
+create table if not exists public.project_party_invites (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  parent_party_id uuid references public.project_parties(id) on delete cascade,
+  invited_email text not null check (invited_email = lower(trim(invited_email)) and invited_email like '%@%'),
+  party_role text not null check (party_role in ('main_contractor', 'subcontractor', 'clerk_of_works', 'client', 'consultant')),
+  trade text,
+  token_hash text not null unique,
+  status text not null default 'pending' check (status in ('pending', 'accepted', 'cancelled')),
+  expires_at timestamptz not null default now() + interval '14 days',
+  sent_count int not null default 1,
+  last_sent_at timestamptz not null default now(),
+  invited_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  accepted_by uuid references auth.users(id) on delete set null,
+  accepted_at timestamptz,
+  accepted_party_id uuid references public.project_parties(id) on delete set null,
+  check (party_role <> 'subcontractor' or nullif(trim(trade), '') is not null),
+  check (parent_party_id is null or party_role = 'subcontractor')
+);
+create unique index if not exists project_party_invites_one_pending
+  on public.project_party_invites (project_id, invited_email) where status = 'pending';
+
+create table if not exists public.project_party_members (
+  id uuid primary key default gen_random_uuid(),
+  party_id uuid not null references public.project_parties(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  added_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  unique (party_id, user_id)
+);
+create index if not exists project_party_members_user_idx on public.project_party_members (user_id);
+
+alter table public.snag_items add column if not exists party_id uuid references public.project_parties(id) on delete set null;
+create index if not exists snag_items_party_idx on public.snag_items (party_id);
+
+alter table public.project_parties enable row level security;
+alter table public.project_party_invites enable row level security;
+alter table public.project_party_members enable row level security;
+
+-- ── Core helpers ────────────────────────────────────────────────────
+-- Owner side = a member of the project's owning company.
+create or replace function public.is_owner_side_user(p_project_id uuid, p_user_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1 from public.projects p
+    join public.organisation_members om on om.org_id = p.org_id and om.user_id = p_user_id
+    where p.id = p_project_id
+  );
+$$;
+
+-- Active party ids the user belongs to on this project (company
+-- membership must still hold).
+create or replace function public.user_party_ids(p_project_id uuid, p_user_id uuid)
+returns setof uuid
+language sql stable security definer set search_path = public
+as $$
+  select pp.id
+  from public.project_party_members ppm
+  join public.project_parties pp on pp.id = ppm.party_id and pp.status = 'active'
+  join public.organisation_members om on om.org_id = pp.org_id and om.user_id = ppm.user_id
+  where pp.project_id = p_project_id and ppm.user_id = p_user_id;
+$$;
+
+create or replace function public.is_party_member_user(p_project_id uuid, p_user_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (select 1 from public.user_party_ids(p_project_id, p_user_id));
+$$;
+
+-- On the job ONLY through a party (not owner side).
+create or replace function public.is_party_only(p_project_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select not public.is_owner_side_user(p_project_id, auth.uid())
+     and public.is_party_member_user(p_project_id, auth.uid());
+$$;
+
+create or replace function public.is_project_member(p_project_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  -- Single query (no nested helper calls) so RLS-heavy pages stay as
+  -- fast as before v61: the owner-side branch is checked first.
+  select exists (
+    select 1
+    from public.project_members pm
+    join public.projects p on p.id = pm.project_id
+    where pm.project_id = p_project_id and pm.user_id = auth.uid()
+      and (exists (select 1 from public.organisation_members om where om.org_id = p.org_id and om.user_id = pm.user_id)
+           or exists (
+           select 1 from public.project_party_members ppm
+           join public.project_parties pp on pp.id = ppm.party_id and pp.status = 'active'
+           join public.organisation_members om2 on om2.org_id = pp.org_id and om2.user_id = ppm.user_id
+           where pp.project_id = pm.project_id and ppm.user_id = pm.user_id))
+  );
+$$;
+
+create or replace function public.is_project_member_user(p_project_id uuid, p_user_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  -- Single query (no nested helper calls) so RLS-heavy pages stay as
+  -- fast as before v61: the owner-side branch is checked first.
+  select exists (
+    select 1
+    from public.project_members pm
+    join public.projects p on p.id = pm.project_id
+    where pm.project_id = p_project_id and pm.user_id = p_user_id
+      and (exists (select 1 from public.organisation_members om where om.org_id = p.org_id and om.user_id = pm.user_id)
+           or exists (
+           select 1 from public.project_party_members ppm
+           join public.project_parties pp on pp.id = ppm.party_id and pp.status = 'active'
+           join public.organisation_members om2 on om2.org_id = pp.org_id and om2.user_id = ppm.user_id
+           where pp.project_id = pm.project_id and ppm.user_id = pm.user_id))
+  );
+$$;
+
+create or replace function public.is_project_editor(p_project_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  -- Single query (no nested helper calls) so RLS-heavy pages stay as
+  -- fast as before v61: the owner-side branch is checked first.
+  select exists (
+    select 1
+    from public.project_members pm
+    join public.projects p on p.id = pm.project_id
+    where pm.project_id = p_project_id and pm.user_id = auth.uid() and pm.role in ('owner', 'collaborator')
+      and (exists (select 1 from public.organisation_members om where om.org_id = p.org_id and om.user_id = pm.user_id)
+           or exists (
+           select 1 from public.project_party_members ppm
+           join public.project_parties pp on pp.id = ppm.party_id and pp.status = 'active'
+           join public.organisation_members om2 on om2.org_id = pp.org_id and om2.user_id = ppm.user_id
+           where pp.project_id = pm.project_id and ppm.user_id = pm.user_id))
+  );
+$$;
+
+create or replace function public.is_project_editor_user(p_project_id uuid, p_user_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  -- Single query (no nested helper calls) so RLS-heavy pages stay as
+  -- fast as before v61: the owner-side branch is checked first.
+  select exists (
+    select 1
+    from public.project_members pm
+    join public.projects p on p.id = pm.project_id
+    where pm.project_id = p_project_id and pm.user_id = p_user_id and pm.role in ('owner', 'collaborator')
+      and (exists (select 1 from public.organisation_members om where om.org_id = p.org_id and om.user_id = pm.user_id)
+           or exists (
+           select 1 from public.project_party_members ppm
+           join public.project_parties pp on pp.id = ppm.party_id and pp.status = 'active'
+           join public.organisation_members om2 on om2.org_id = pp.org_id and om2.user_id = ppm.user_id
+           where pp.project_id = pm.project_id and ppm.user_id = pm.user_id))
+  );
+$$;
+-- is_project_owner() is deliberately UNCHANGED: an owner must be in the
+-- owning company; a party member can never be owner.
+
+-- Party plus all its descendants (sub-subs, sub-sub-subs …).
+create or replace function public.party_and_descendants(p_party_id uuid)
+returns setof uuid
+language sql stable security definer set search_path = public
+as $$
+  with recursive t(id, depth) as (
+    select p_party_id, 0
+    union all
+    select c.id, t.depth + 1 from public.project_parties c join t on c.parent_party_id = t.id
+    where c.status = 'active' and t.depth < 10
+  )
+  select id from t;
+$$;
+
+-- Row-level scoping for party-owned work (snags). Owner side and Main
+-- Contractor parties see everything; another party sees rows given to
+-- its own party or any of its descendants — never its parent's, never a
+-- sibling's, never unassigned (party_id null = owner-side/internal).
+create or replace function public.can_see_party_row(p_project_id uuid, p_party_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (select 1 from public.projects p
+                 join public.organisation_members om on om.org_id = p.org_id and om.user_id = auth.uid()
+                 where p.id = p_project_id)
+      or exists (
+        select 1 from public.user_party_ids(p_project_id, auth.uid()) as my(id)
+        join public.project_parties pp on pp.id = my.id
+        where pp.party_role = 'main_contractor'
+           or (p_party_id is not null and p_party_id in (select d from public.party_and_descendants(my.id) as d))
+      );
+$$;
+
+create or replace function public.party_member_role(p_party_role text)
+returns text
+language sql immutable set search_path = public
+as $$
+  select case when p_party_role = 'main_contractor' then 'collaborator' else 'snagging' end;
+$$;
+
+create or replace function public.can_manage_party_invite(p_project_id uuid, p_parent_party_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select case
+    when p_parent_party_id is null then public.is_project_owner(p_project_id)
+    else exists (select 1 from public.project_parties par
+                 where par.id = p_parent_party_id and par.project_id = p_project_id
+                   and par.status = 'active' and par.party_role = 'subcontractor'
+                   and public.is_org_admin(par.org_id)
+                   and public.is_party_member_user(p_project_id, auth.uid()))
+  end;
+$$;
+
+-- ── Policies on the new tables ──────────────────────────────────────
+drop policy if exists "read project_parties" on public.project_parties;
+-- Via a SECURITY DEFINER helper: a policy on project_parties can't query
+-- project_parties itself (infinite RLS recursion).
+create or replace function public.can_read_project_party(p_project_id uuid, p_org_id uuid, p_parent_party_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select public.is_owner_side_user(p_project_id, auth.uid())
+      or public.is_org_member(p_org_id)
+      or exists (select 1 from public.project_parties par where par.id = p_parent_party_id and public.is_org_member(par.org_id));
+$$;
+create policy "read project_parties" on public.project_parties for select to authenticated using (
+  public.can_read_project_party(project_id, org_id, parent_party_id)
+);
+-- No insert/update/delete policies: only the RPCs below write.
+
+drop policy if exists "read project_party_members" on public.project_party_members;
+create policy "read project_party_members" on public.project_party_members for select to authenticated using (
+  exists (select 1 from public.project_parties pp where pp.id = party_id
+          and (public.is_owner_side_user(pp.project_id, auth.uid()) or public.is_org_member(pp.org_id)))
+);
+
+drop policy if exists "read project_party_invites" on public.project_party_invites;
+create policy "read project_party_invites" on public.project_party_invites for select to authenticated using (
+  public.can_manage_party_invite(project_id, parent_party_id)
+);
+-- The token hash is never readable by any client role.
+revoke all on public.project_party_invites from anon, authenticated;
+grant select (id, project_id, parent_party_id, invited_email, party_role, trade, status, expires_at,
+              sent_count, last_sent_at, invited_by, created_at, accepted_by, accepted_at, accepted_party_id)
+  on public.project_party_invites to authenticated;
+revoke all on public.project_parties from anon;
+revoke all on public.project_party_members from anon;
+revoke insert, update, delete, truncate on public.project_parties from authenticated;
+revoke insert, update, delete, truncate on public.project_party_members from authenticated;
+grant select on public.project_parties, public.project_party_members to authenticated;
+
+-- ── Policy changes on existing tables ───────────────────────────────
+drop policy if exists "members read snag_items" on public.snag_items;
+create policy "members read snag_items" on public.snag_items for select
+  using (public.is_project_member(project_id) and public.can_see_party_row(project_id, party_id));
+drop policy if exists "members insert snag_items" on public.snag_items;
+create policy "members insert snag_items" on public.snag_items for insert
+  with check (public.is_project_member(project_id) and public.can_see_party_row(project_id, party_id));
+drop policy if exists "members update snag_items" on public.snag_items;
+create policy "members update snag_items" on public.snag_items for update
+  using (public.is_project_member(project_id) and public.can_see_party_row(project_id, party_id))
+  with check (public.is_project_member(project_id) and public.can_see_party_row(project_id, party_id));
+drop policy if exists "members delete snag_items" on public.snag_items;
+create policy "members delete snag_items" on public.snag_items for delete
+  using (public.is_project_member(project_id) and public.can_see_party_row(project_id, party_id));
+
+drop policy if exists "members read snag_photos" on public.snag_photos;
+create policy "members read snag_photos" on public.snag_photos for select
+  using (public.is_project_member(project_id) and exists (select 1 from public.snag_items s where s.id = snag_id
+         and public.can_see_party_row(s.project_id, s.party_id)));
+drop policy if exists "members insert snag_photos" on public.snag_photos;
+create policy "members insert snag_photos" on public.snag_photos for insert
+  with check (public.is_project_member(project_id) and exists (select 1 from public.snag_items s where s.id = snag_id
+         and public.can_see_party_row(s.project_id, s.party_id)));
+drop policy if exists "members delete snag_photos" on public.snag_photos;
+create policy "members delete snag_photos" on public.snag_photos for delete
+  using (public.is_project_member(project_id) and exists (select 1 from public.snag_items s where s.id = snag_id
+         and public.can_see_party_row(s.project_id, s.party_id)));
+
+-- No commercial ledger or monthly reports for party-only users, even editors.
+drop policy if exists "editors read commercial_items" on public.commercial_items;
+create policy "editors read commercial_items" on public.commercial_items for select
+  using (public.is_project_editor(project_id) and not public.is_party_only(project_id));
+drop policy if exists "editors insert commercial_items" on public.commercial_items;
+create policy "editors insert commercial_items" on public.commercial_items for insert
+  with check (public.is_project_editor(project_id) and not public.is_party_only(project_id));
+drop policy if exists "editors update commercial_items" on public.commercial_items;
+create policy "editors update commercial_items" on public.commercial_items for update
+  using (public.is_project_editor(project_id) and not public.is_party_only(project_id));
+drop policy if exists "editors delete commercial_items" on public.commercial_items;
+create policy "editors delete commercial_items" on public.commercial_items for delete
+  using (public.is_project_editor(project_id) and not public.is_party_only(project_id));
+
+drop policy if exists "editors read monthly_reports" on public.monthly_reports;
+create policy "editors read monthly_reports" on public.monthly_reports for select
+  using (public.is_project_editor(project_id) and not public.is_party_only(project_id));
+drop policy if exists "editors insert monthly_reports" on public.monthly_reports;
+create policy "editors insert monthly_reports" on public.monthly_reports for insert
+  with check (public.is_project_editor(project_id) and not public.is_party_only(project_id));
+drop policy if exists "editors update monthly_reports" on public.monthly_reports;
+create policy "editors update monthly_reports" on public.monthly_reports for update
+  using (public.is_project_editor(project_id) and not public.is_party_only(project_id));
+drop policy if exists "editors delete monthly_reports" on public.monthly_reports;
+create policy "editors delete monthly_reports" on public.monthly_reports for delete
+  using (public.is_project_editor(project_id) and not public.is_party_only(project_id));
+
+drop policy if exists "editors update projects" on public.projects;
+create policy "editors update projects" on public.projects for update
+  using (public.is_project_editor(id) and not public.is_party_only(id));
+
+-- ── Snag party defaulting / assignee legitimacy ─────────────────────
+-- A party-only user's new snag defaults to their own party; an
+-- assignee on a party's snag must be on that party (or a descendant).
+create or replace function public.snag_items_party_guard()
+returns trigger
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_party uuid;
+begin
+  if new.party_id is not null and not exists (
+       select 1 from public.project_parties where id = new.party_id and project_id = new.project_id and status = 'active') then
+    raise exception 'party_id must be an active company on this project';
+  end if;
+  if tg_op = 'INSERT' and new.party_id is null and auth.uid() is not null
+     and not public.is_owner_side_user(new.project_id, auth.uid()) then
+    select up.id into v_party from public.user_party_ids(new.project_id, auth.uid()) as up(id) limit 1;
+    new.party_id := v_party;
+  end if;
+  if new.party_id is not null and new.assigned_to is not null
+     and not public.is_owner_side_user(new.project_id, new.assigned_to)
+     and not exists (
+       select 1 from public.user_party_ids(new.project_id, new.assigned_to) up(id)
+       where up.id in (select public.party_and_descendants(new.party_id))) then
+    raise exception 'assigned_to must work for the company this snag is given to';
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists trg_snag_items_party_guard on public.snag_items;
+create trigger trg_snag_items_party_guard
+  before insert or update of party_id, assigned_to on public.snag_items
+  for each row execute function public.snag_items_party_guard();
+revoke execute on function public.snag_items_party_guard() from public, anon, authenticated;
+
+-- ── Invite RPCs (link-only) ─────────────────────────────────────────
+create or replace function public.party_invite_token_hash(p_token text)
+returns text
+language sql immutable set search_path = public
+as $$
+  select encode(sha256(convert_to(coalesce(p_token, ''), 'UTF8')), 'hex');
+$$;
+
+
+create or replace function public.create_party_invite(p_project_id uuid, p_email text, p_party_role text, p_trade text default null, p_parent_party_id uuid default null)
+returns table (invite_id uuid, token text, expires_at timestamptz)
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_token text := replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', '');
+  v_id uuid;
+  v_exp timestamptz;
+begin
+  if auth.uid() is null then raise exception 'Not signed in' using errcode = '42501'; end if;
+  if not public.can_manage_party_invite(p_project_id, p_parent_party_id) then
+    raise exception 'Only the project owner (or, for a sub-subcontractor, the subcontractor''s company admin) can invite a company' using errcode = '42501';
+  end if;
+  if p_parent_party_id is not null and p_party_role <> 'subcontractor' then
+    raise exception 'A subcontractor can only invite sub-subcontractors';
+  end if;
+  -- An earlier pending invite to the same email is superseded.
+  update public.project_party_invites set status = 'cancelled'
+   where project_id = p_project_id and invited_email = lower(trim(p_email)) and status = 'pending';
+  insert into public.project_party_invites (project_id, parent_party_id, invited_email, party_role, trade, token_hash, invited_by)
+  values (p_project_id, p_parent_party_id, lower(trim(p_email)), p_party_role, nullif(trim(p_trade), ''),
+          public.party_invite_token_hash(v_token), auth.uid())
+  returning id, project_party_invites.expires_at into v_id, v_exp;
+  return query select v_id, v_token, v_exp;
+end;
+$$;
+
+create or replace function public.resend_party_invite(p_invite_id uuid)
+returns table (invite_id uuid, token text, expires_at timestamptz)
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_inv public.project_party_invites;
+  v_token text := replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', '');
+begin
+  select * into v_inv from public.project_party_invites where id = p_invite_id for update;
+  if v_inv.id is null or not public.can_manage_party_invite(v_inv.project_id, v_inv.parent_party_id) then
+    raise exception 'Invite not found' using errcode = '42501';
+  end if;
+  if v_inv.status <> 'pending' then raise exception 'This invite is no longer pending'; end if;
+  update public.project_party_invites
+     set token_hash = public.party_invite_token_hash(v_token), expires_at = now() + interval '14 days',
+         sent_count = sent_count + 1, last_sent_at = now()
+   where id = p_invite_id;
+  return query select p_invite_id, v_token, now() + interval '14 days';
+end;
+$$;
+
+create or replace function public.cancel_party_invite(p_invite_id uuid)
+returns void
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_inv public.project_party_invites;
+begin
+  select * into v_inv from public.project_party_invites where id = p_invite_id for update;
+  if v_inv.id is null or not public.can_manage_party_invite(v_inv.project_id, v_inv.parent_party_id) then
+    raise exception 'Invite not found' using errcode = '42501';
+  end if;
+  update public.project_party_invites set status = 'cancelled' where id = p_invite_id and status = 'pending';
+end;
+$$;
+
+-- What the invite link shows. Signed-in callers only; reveals nothing
+-- beyond this one invite.
+create or replace function public.get_party_invite(p_token text)
+returns table (invite_id uuid, project_id uuid, project_name text, inviting_company text, party_role text, trade text,
+               status text, expires_at timestamptz, email_matches boolean, parent_company text)
+language sql stable security definer set search_path = public
+as $$
+  select i.id, i.project_id, p.name, o.name, i.party_role, i.trade,
+         case when i.status = 'pending' and i.expires_at < now() then 'expired' else i.status end,
+         i.expires_at,
+         lower(coalesce((select email from auth.users where id = auth.uid()), '')) = i.invited_email,
+         (select po.name from public.project_parties par join public.organisations po on po.id = par.org_id where par.id = i.parent_party_id)
+  from public.project_party_invites i
+  join public.projects p on p.id = i.project_id
+  join public.organisations o on o.id = p.org_id
+  where auth.uid() is not null and i.token_hash = public.party_invite_token_hash(p_token);
+$$;
+
+-- Accept on behalf of a company the caller ALREADY belongs to (created
+-- via create_organisation(), or approved via a membership request).
+-- Never inserts into organisation_members.
+create or replace function public.accept_party_invite(p_token text, p_org_id uuid)
+returns uuid
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_inv public.project_party_invites;
+  v_email text;
+  v_project public.projects;
+  v_party uuid;
+  v_existing public.project_parties;
+begin
+  if auth.uid() is null then raise exception 'Not signed in' using errcode = '42501'; end if;
+  select * into v_inv from public.project_party_invites where token_hash = public.party_invite_token_hash(p_token) for update;
+  if v_inv.id is null then raise exception 'This invite link isn''t valid.'; end if;
+  if v_inv.status = 'cancelled' then raise exception 'This invite was cancelled. Ask the sender for a new one.'; end if;
+  if v_inv.status = 'accepted' then raise exception 'This invite has already been accepted.'; end if;
+  if v_inv.expires_at < now() then raise exception 'This invite has expired. Ask the sender to resend it.'; end if;
+  select lower(email) into v_email from auth.users where id = auth.uid();
+  if v_email is distinct from v_inv.invited_email then
+    raise exception 'This invite was sent to a different email address. Sign in as %.', v_inv.invited_email using errcode = '42501';
+  end if;
+  if not exists (select 1 from public.organisation_members where org_id = p_org_id and user_id = auth.uid()) then
+    raise exception 'needs_membership: you must be an approved member of that company first' using errcode = '42501';
+  end if;
+  select * into v_project from public.projects where id = v_inv.project_id;
+  if p_org_id = v_project.org_id then raise exception 'Your company already owns this project'; end if;
+  if v_inv.parent_party_id is not null and exists (
+       select 1 from public.project_parties where id = v_inv.parent_party_id and org_id = p_org_id) then
+    raise exception 'A company can''t be its own sub-subcontractor';
+  end if;
+
+  select * into v_existing from public.project_parties where project_id = v_inv.project_id and org_id = p_org_id;
+  if v_existing.id is not null then
+    if v_existing.status <> 'active' then raise exception 'That company was removed from this project by the owner'; end if;
+    v_party := v_existing.id;
+  else
+    insert into public.project_parties (project_id, org_id, party_role, trade, parent_party_id, lead_user_id, created_by)
+    values (v_inv.project_id, p_org_id, v_inv.party_role, v_inv.trade, v_inv.parent_party_id, auth.uid(), v_inv.invited_by)
+    returning id into v_party;
+  end if;
+
+  insert into public.project_party_members (party_id, user_id, added_by) values (v_party, auth.uid(), auth.uid())
+  on conflict (party_id, user_id) do nothing;
+  insert into public.project_members (project_id, user_id, role)
+  values (v_inv.project_id, auth.uid(), public.party_member_role((select party_role from public.project_parties where id = v_party)))
+  on conflict (project_id, user_id) do nothing;
+
+  update public.project_party_invites set status = 'accepted', accepted_by = auth.uid(), accepted_at = now(), accepted_party_id = v_party
+   where id = v_inv.id;
+  return v_inv.project_id;
+end;
+$$;
+
+-- ── Party staff and roles ──────────────────────────────────────────
+create or replace function public.add_party_member(p_party_id uuid, p_user_id uuid)
+returns void
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_pp public.project_parties;
+begin
+  select * into v_pp from public.project_parties where id = p_party_id and status = 'active';
+  if v_pp.id is null or not public.is_org_admin(v_pp.org_id) then
+    raise exception 'Only an admin of that company can add its staff to this job' using errcode = '42501';
+  end if;
+  if not exists (select 1 from public.organisation_members where org_id = v_pp.org_id and user_id = p_user_id) then
+    raise exception 'That person isn''t a member of your company';
+  end if;
+  insert into public.project_party_members (party_id, user_id, added_by) values (p_party_id, p_user_id, auth.uid())
+  on conflict (party_id, user_id) do nothing;
+  insert into public.project_members (project_id, user_id, role)
+  values (v_pp.project_id, p_user_id, public.party_member_role(v_pp.party_role))
+  on conflict (project_id, user_id) do nothing;
+end;
+$$;
+
+-- Internal: take a user off a party, and off the project if that was
+-- their only reason to be there.
+create or replace function public.detach_party_member(p_party_id uuid, p_user_id uuid)
+returns void
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_project uuid;
+begin
+  select project_id into v_project from public.project_parties where id = p_party_id;
+  delete from public.project_party_members where party_id = p_party_id and user_id = p_user_id;
+  if not public.is_owner_side_user(v_project, p_user_id) and not public.is_party_member_user(v_project, p_user_id) then
+    delete from public.project_members where project_id = v_project and user_id = p_user_id and role <> 'owner';
+  end if;
+  update public.project_parties set lead_user_id = null, updated_at = now() where id = p_party_id and lead_user_id = p_user_id;
+end;
+$$;
+revoke execute on function public.detach_party_member(uuid, uuid) from public, anon, authenticated;
+
+create or replace function public.remove_party_member(p_party_id uuid, p_user_id uuid)
+returns void
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_pp public.project_parties;
+begin
+  select * into v_pp from public.project_parties where id = p_party_id;
+  if v_pp.id is null or not (public.is_org_admin(v_pp.org_id) or public.is_project_owner(v_pp.project_id)) then
+    raise exception 'Not allowed' using errcode = '42501';
+  end if;
+  perform public.detach_party_member(p_party_id, p_user_id);
+end;
+$$;
+
+create or replace function public.set_party_role(p_party_id uuid, p_party_role text, p_trade text default null)
+returns void
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_pp public.project_parties;
+begin
+  select * into v_pp from public.project_parties where id = p_party_id and status = 'active';
+  if v_pp.id is null or not public.is_project_owner(v_pp.project_id) then
+    raise exception 'Only the project owner can change a company''s role' using errcode = '42501';
+  end if;
+  if v_pp.parent_party_id is not null and p_party_role <> 'subcontractor' then
+    raise exception 'A sub-subcontractor must stay a subcontractor';
+  end if;
+  update public.project_parties set party_role = p_party_role, trade = nullif(trim(p_trade), ''), updated_at = now() where id = p_party_id;
+  -- Re-base every party member's project role on the new party role.
+  update public.project_members pm set role = public.party_member_role(p_party_role)
+   where pm.project_id = v_pp.project_id and pm.role <> 'owner'
+     and pm.user_id in (select user_id from public.project_party_members where party_id = p_party_id)
+     and not public.is_owner_side_user(v_pp.project_id, pm.user_id);
+end;
+$$;
+
+create or replace function public.remove_party(p_party_id uuid)
+returns void
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_pp public.project_parties;
+  r record;
+begin
+  select * into v_pp from public.project_parties where id = p_party_id;
+  if v_pp.id is null or not public.is_project_owner(v_pp.project_id) then
+    raise exception 'Only the project owner can remove a company' using errcode = '42501';
+  end if;
+  for r in select d as id from public.party_and_descendants(p_party_id) d loop
+    update public.project_parties set status = 'removed', updated_at = now() where id = r.id;
+    update public.project_party_invites set status = 'cancelled' where parent_party_id = r.id and status = 'pending';
+    perform public.detach_party_member(r.id, m.user_id) from public.project_party_members m where m.party_id = r.id;
+  end loop;
+end;
+$$;
+
+-- Owner raises (or lowers) one individual: collaborator ⇄ snagging.
+create or replace function public.set_project_member_role(p_project_id uuid, p_user_id uuid, p_role text)
+returns void
+language plpgsql security definer set search_path = public
+as $$
+begin
+  if not public.is_project_owner(p_project_id) then
+    raise exception 'Only the project owner can change someone''s access' using errcode = '42501';
+  end if;
+  if p_role not in ('collaborator', 'snagging') then raise exception 'Role must be collaborator or snagging'; end if;
+  update public.project_members set role = p_role
+   where project_id = p_project_id and user_id = p_user_id and role <> 'owner';
+  if not found then raise exception 'That person isn''t on this project'; end if;
+end;
+$$;
+
+-- Replaces invite codes for the owner's OWN staff: add a member of the
+-- owning company straight onto the project.
+create or replace function public.add_org_member_to_project(p_project_id uuid, p_user_id uuid, p_role text default 'collaborator')
+returns void
+language plpgsql security definer set search_path = public
+as $$
+begin
+  if not public.is_project_owner(p_project_id) then
+    raise exception 'Only the project owner can add people' using errcode = '42501';
+  end if;
+  if p_role not in ('collaborator', 'snagging') then raise exception 'Role must be collaborator or snagging'; end if;
+  if not public.is_owner_side_user(p_project_id, p_user_id) then
+    raise exception 'That person isn''t a member of your company. Invite their company instead.';
+  end if;
+  insert into public.project_members (project_id, user_id, role) values (p_project_id, p_user_id, p_role)
+  on conflict (project_id, user_id) do nothing;
+end;
+$$;
+
+-- Overview for the "Companies on this job" panel.
+create or replace function public.get_project_parties(p_project_id uuid)
+returns table (party_id uuid, org_id uuid, company text, party_role text, trade text, parent_party_id uuid,
+               lead_user_id uuid, lead_email text, member_count int, status text, i_admin boolean)
+language sql stable security definer set search_path = public
+as $$
+  select pp.id, pp.org_id, o.name, pp.party_role, pp.trade, pp.parent_party_id, pp.lead_user_id,
+         (select email from auth.users where id = pp.lead_user_id),
+         (select count(*)::int from public.project_party_members m where m.party_id = pp.id),
+         pp.status, public.is_org_admin(pp.org_id)
+  from public.project_parties pp join public.organisations o on o.id = pp.org_id
+  where pp.project_id = p_project_id and pp.status = 'active'
+    and (public.is_owner_side_user(p_project_id, auth.uid())
+         or public.is_org_member(pp.org_id)
+         or exists (select 1 from public.project_parties par where par.id = pp.parent_party_id and public.is_org_member(par.org_id)))
+  order by pp.created_at;
+$$;
+
+-- ── Lead handover ───────────────────────────────────────────────────
+-- When someone leaves a company: drop them from that company's parties
+-- (and the projects, if that was their only link); if they were lead,
+-- the earliest remaining admin of that company takes over, else the
+-- lead is left empty and the owner sees "needs a lead contact".
+create or replace function public.organisation_members_party_handover()
+returns trigger
+language plpgsql security definer set search_path = public
+as $$
+declare
+  r record;
+begin
+  for r in select pp.id from public.project_parties pp
+            join public.project_party_members m on m.party_id = pp.id and m.user_id = old.user_id
+           where pp.org_id = old.org_id loop
+    perform public.detach_party_member(r.id, old.user_id);
+  end loop;
+  update public.project_parties pp
+     set lead_user_id = (select om.user_id from public.organisation_members om
+                          join public.project_party_members m on m.party_id = pp.id and m.user_id = om.user_id
+                         where om.org_id = pp.org_id and om.role = 'admin' and om.user_id <> old.user_id
+                         order by om.created_at limit 1),
+         updated_at = now()
+   where pp.org_id = old.org_id and pp.lead_user_id is null and pp.status = 'active';
+  return old;
+end;
+$$;
+drop trigger if exists trg_organisation_members_party_handover on public.organisation_members;
+create trigger trg_organisation_members_party_handover
+  after delete on public.organisation_members
+  for each row execute function public.organisation_members_party_handover();
+revoke execute on function public.organisation_members_party_handover() from public, anon, authenticated;
+
+-- ── Old invite codes retired ────────────────────────────────────────
+create or replace function public.join_project_by_invite(invite_code_param text)
+returns uuid
+language plpgsql security definer set search_path = public
+as $$
+begin
+  raise exception 'invite_retired: This invite link is no longer used. Ask the project owner to send you a company invite instead.'
+    using errcode = 'P0001';
+end;
+$$;
+create or replace function public.regenerate_invite_code(p_project_id uuid)
+returns text
+language plpgsql security definer set search_path = public
+as $$
+begin
+  raise exception 'invite_retired: Invite codes have been replaced by company invites.';
+end;
+$$;
+create or replace function public.regenerate_snagging_invite_code(p_project_id uuid)
+returns text
+language plpgsql security definer set search_path = public
+as $$
+begin
+  raise exception 'invite_retired: Invite codes have been replaced by company invites.';
+end;
+$$;
+
+-- ── Audit ──────────────────────────────────────────────────────────
+drop trigger if exists trg_audit_project_parties on public.project_parties;
+create trigger trg_audit_project_parties after insert or update or delete on public.project_parties
+  for each row execute function public.write_audit_log();
+-- project_party_members has no project_id column, so it isn't wired to
+-- write_audit_log() (which keys rows by project); additions/removals are
+-- visible through project_members' own audit trail instead.
+drop trigger if exists trg_audit_project_party_members on public.project_party_members;
+
+-- ── Grants (v59 rule: repeat after every definition) ────────────────
+do $$
+declare
+  f text;
+begin
+  foreach f in array array[
+    'public.is_owner_side_user(uuid, uuid)', 'public.user_party_ids(uuid, uuid)', 'public.is_party_member_user(uuid, uuid)',
+    'public.is_party_only(uuid)', 'public.is_project_member(uuid)', 'public.is_project_member_user(uuid, uuid)',
+    'public.is_project_editor(uuid)', 'public.is_project_editor_user(uuid, uuid)', 'public.party_and_descendants(uuid)',
+    'public.can_see_party_row(uuid, uuid)', 'public.party_member_role(text)', 'public.party_invite_token_hash(text)',
+    'public.can_manage_party_invite(uuid, uuid)', 'public.can_read_project_party(uuid, uuid, uuid)', 'public.create_party_invite(uuid, text, text, text, uuid)',
+    'public.resend_party_invite(uuid)', 'public.cancel_party_invite(uuid)', 'public.get_party_invite(text)',
+    'public.accept_party_invite(text, uuid)', 'public.add_party_member(uuid, uuid)', 'public.remove_party_member(uuid, uuid)',
+    'public.set_party_role(uuid, text, text)', 'public.remove_party(uuid)', 'public.set_project_member_role(uuid, uuid, text)',
+    'public.add_org_member_to_project(uuid, uuid, text)', 'public.get_project_parties(uuid)',
+    'public.join_project_by_invite(text)', 'public.regenerate_invite_code(uuid)', 'public.regenerate_snagging_invite_code(uuid)'
+  ] loop
+    execute format('revoke all on function %s from public', f);
+    execute format('revoke execute on function %s from anon', f);
+    execute format('grant execute on function %s to authenticated', f);
+  end loop;
+end $$;

@@ -41,30 +41,30 @@ before(async () => {
   const orgA = (await ownerA.query("select public.create_organisation('Test Org', 'main_contractor') as id")).rows[0].id;
   const projA = (await ownerA.query("insert into public.projects (name, org_id, created_by) values ('A', $1, $2) returning id", [orgA, OWNER_A])).rows[0].id;
   const plotA = (await ownerA.query("insert into public.plots (project_id, plot_number, created_by) values ($1,'P1',$2) returning id", [projA, OWNER_A])).rows[0].id;
-  const inviteA = (await ownerA.query("select public.regenerate_invite_code($1) as code", [projA])).rows[0].code;
-  const snagInviteA = (await ownerA.query("select public.regenerate_snagging_invite_code($1) as code", [projA])).rows[0].code;
+  const inviteA = (await ownerA.query("select public.test_regenerate_invite_code($1) as code", [projA])).rows[0].code;
+  const snagInviteA = (await ownerA.query("select public.test_regenerate_snagging_invite_code($1) as code", [projA])).rows[0].code;
   // Give plot A a real blocker (outstanding gate) so editor-only rows exist to test against.
   const gateRows = await ownerA.query(`select id from public.quality_gates where plot_id=$1 limit 1`, [plotA]);
   await ownerA.query(`update public.quality_gates set status='in_progress' where id=$1`, [gateRows.rows[0].id]);
   await ownerA.end();
 
   const collabMulti = await userClient(DB, COLLAB_MULTI);
-  await collabMulti.query("select public.join_project_by_invite($1)", [inviteA]);
+  await collabMulti.query("select public.test_join_project_by_invite($1)", [inviteA]);
   await collabMulti.end();
 
   const snagA = await userClient(DB, SNAG_A);
-  await snagA.query("select public.join_project_by_invite($1)", [snagInviteA]);
+  await snagA.query("select public.test_join_project_by_invite($1)", [snagInviteA]);
   await snagA.end();
 
   const ownerB = await userClient(DB, OWNER_B);
   const orgB = (await ownerB.query("select public.create_organisation('Test Org', 'main_contractor') as id")).rows[0].id;
   const projB = (await ownerB.query("insert into public.projects (name, org_id, created_by) values ('B', $1, $2) returning id", [orgB, OWNER_B])).rows[0].id;
   const plotB = (await ownerB.query("insert into public.plots (project_id, plot_number, created_by) values ($1,'P1',$2) returning id", [projB, OWNER_B])).rows[0].id;
-  const inviteB = (await ownerB.query("select public.regenerate_invite_code($1) as code", [projB])).rows[0].code;
+  const inviteB = (await ownerB.query("select public.test_regenerate_invite_code($1) as code", [projB])).rows[0].code;
   await ownerB.end();
 
   const collabMulti2 = await userClient(DB, COLLAB_MULTI);
-  await collabMulti2.query("select public.join_project_by_invite($1)", [inviteB]);
+  await collabMulti2.query("select public.test_join_project_by_invite($1)", [inviteB]);
   await collabMulti2.end();
 
   fx = { orgA, projA, plotA, orgB, projB, plotB };

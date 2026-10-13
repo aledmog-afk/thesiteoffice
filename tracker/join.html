@@ -28,32 +28,11 @@
   const statusText = document.getElementById("statusText");
   const errorBox = document.getElementById("errorBox");
   const actionsRow = document.getElementById("actionsRow");
-  const code = getParam("code");
-
-  if (!code) {
-    statusText.textContent = "This invite link is missing its code.";
-    actionsRow.style.display = "flex";
-  } else {
-    const { data: { session } } = await supabase.auth.getSession();
-    if (!session) {
-      window.location.href = `login.html?next=${encodeURIComponent(window.location.pathname.split("/").pop() + window.location.search)}`;
-    } else {
-      try {
-        const { data: joinedProjectId, error } = await supabase.rpc("join_project_by_invite", { invite_code_param: code });
-        if (error) throw error;
-        if (!joinedProjectId) {
-          statusText.textContent = "This invite link is invalid or has been revoked.";
-          actionsRow.style.display = "flex";
-        } else {
-          window.location.href = `project.html?id=${joinedProjectId}`;
-        }
-      } catch (err) {
-        statusText.textContent = "Something went wrong joining this site.";
-        showError(errorBox, err);
-        actionsRow.style.display = "flex";
-      }
-    }
-  }
+  // v61: per-project invite codes are retired. Opening an old link never
+  // joins anything — it explains what to do instead.
+  void supabase; void showError; void errorBox; void getParam;
+  statusText.textContent = "This invite link is no longer used. Ask the project owner to send you a company invite instead — it will put your company on the job.";
+  actionsRow.style.display = "flex";
 </script>
 </body>
 </html>

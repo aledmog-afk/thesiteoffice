@@ -39,7 +39,8 @@ function makeSupabase(store) {
       if (name === "get_project_members") {
         return { data: [{ user_id: "u1", email: "owner@example.com", role: "owner" }, { user_id: "u2", email: "collab@example.com", role: "collaborator" }], error: null };
       }
-      if (name === "get_my_role") return { data: "owner", error: null };
+      if (name === "get_my_role") return { data: store.role || "owner", error: null };
+      if (name === "get_project_parties") return store.parties ? { data: store.parties, error: null } : { data: null, error: { code: "PGRST202", message: "Could not find the function" } };
       return { data: null, error: null };
     },
     from(table) {
@@ -53,7 +54,8 @@ function makeSupabase(store) {
           if (table === "snag_items") return resolve({ data: store.snags, error: null });
           resolve({ data: [], error: null });
         },
-        update() { return { eq: async () => ({ error: null }) }; },
+        update(payload) { store.updated = payload; return { eq: async () => ({ error: null }) }; },
+        insert: async (payload) => { store.inserted = payload; return { error: null }; },
         delete() { return api; },
       };
       return api;
@@ -270,4 +272,45 @@ test("a partial failure (some snags rejected server-side) surfaces a visible err
   assert.equal(alerts.length, 1);
   assert.match(alerts[0], /1 of 2/);
   assert.match(alerts[0], /member of this project/, "the real server-side error message must reach the user");
+});
+
+
+// ─── v61: "Given to company" picker ─────────────────────────────────
+test("v61: with no v61 database (RPC missing) the company picker stays hidden and party_id is never sent", async () => {
+  const store = makeStore([]);
+  const { document } = await run(store);
+  await wait(30);
+  assert.equal(document.getElementById("partyFieldWrap").style.display, "none");
+  document.getElementById("addItemBtn")?.click?.();
+  document.getElementById("location").value = "Kitchen";
+  document.getElementById("description").value = "Chipped worktop";
+  fireEvent(document.getElementById("snagForm"), "submit");
+  await wait(30);
+  assert.ok(store.inserted, "the snag is still created");
+  assert.equal("party_id" in store.inserted, false);
+});
+
+test("v61: the owner side sees companies on the job and the chosen company is saved as party_id", async () => {
+  const store = makeStore([]);
+  store.parties = [{ party_id: "pa", company: "Almo Carpentry", trade: "Carpentry" }, { party_id: "pb", company: "Bolt", trade: null }];
+  const { document } = await run(store);
+  await wait(30);
+  assert.equal(document.getElementById("partyFieldWrap").style.display, "block");
+  const opts = [...document.getElementById("partyId").options].map((o) => o.textContent);
+  assert.deepEqual(opts, ["Not given to a company", "Almo Carpentry (Carpentry)", "Bolt"]);
+  document.getElementById("location").value = "Kitchen";
+  document.getElementById("description").value = "Door sticks";
+  document.getElementById("partyId").value = "pa";
+  fireEvent(document.getElementById("snagForm"), "submit");
+  await wait(30);
+  assert.equal(store.inserted.party_id, "pa");
+});
+
+test("v61: a snagging-level (invited company) user never gets the picker — their company is set server-side", async () => {
+  const store = makeStore([]);
+  store.role = "snagging";
+  store.parties = [{ party_id: "pa", company: "Almo Carpentry", trade: "Carpentry" }];
+  const { document } = await run(store);
+  await wait(30);
+  assert.equal(document.getElementById("partyFieldWrap").style.display, "none");
 });

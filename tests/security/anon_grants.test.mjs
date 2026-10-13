@@ -275,38 +275,28 @@ test("SMOKE: the anon reject path still works", async () => {
   assert.equal(rows[0].status, "rejected");
 });
 
-// ─── (5) invite join / regenerate / revoke for signed-in users ───────
-test("a signed-in user can still join by invite, and an owner can still regenerate and revoke both invite codes", async () => {
+// ─── (5) v61: company invites work for signed-in users; old codes are retired ───
+test("signed-in users can still create/accept company invites; old invite codes are retired, revoke still works", async () => {
   const owner = await userClient(DB, OWNER);
-  const code = (await owner.query("select public.regenerate_invite_code($1) as c", [fx.proj])).rows[0].c;
-  const snagCode = (await owner.query("select public.regenerate_snagging_invite_code($1) as c", [fx.proj])).rows[0].c;
-  assert.ok(code && snagCode);
+  await assert.rejects(owner.query("select public.regenerate_invite_code($1)", [fx.proj]), /invite_retired/);
+  await assert.rejects(owner.query("select public.regenerate_snagging_invite_code($1)", [fx.proj]), /invite_retired/);
+  const admin = adminClient(DB);
+  await admin.connect();
+  const joinerEmail = (await admin.query("select email from auth.users where id = $1", [JOINER])).rows[0].email;
+  await admin.end();
+  const inv = (await owner.query("select * from public.create_party_invite($1, $2, 'subcontractor', 'Carpentry')", [fx.proj, joinerEmail])).rows[0];
+  assert.ok(inv.token);
 
   const joiner = await userClient(DB, JOINER);
-  const joined = (await joiner.query("select public.join_project_by_invite($1) as p", [code])).rows[0].p;
-  assert.equal(joined, fx.proj);
-  assert.equal((await joiner.query("select public.get_my_role($1) as r", [fx.proj])).rows[0].r, "collaborator");
+  await assert.rejects(joiner.query("select public.join_project_by_invite('anything')"), /invite_retired/);
+  const org = (await joiner.query("select public.create_organisation('Joiner Co', 'subcontractor') as id")).rows[0].id;
+  assert.equal((await joiner.query("select public.accept_party_invite($1, $2) as p", [inv.token, org])).rows[0].p, fx.proj);
+  assert.equal((await joiner.query("select public.get_my_role($1) as r", [fx.proj])).rows[0].r, "snagging");
   await joiner.end();
-
-  const snagJoiner = await userClient(DB, SNAG_JOINER);
-  assert.equal((await snagJoiner.query("select public.join_project_by_invite($1) as p", [snagCode])).rows[0].p, fx.proj);
-  await snagJoiner.end();
-
-  const members = (await owner.query("select * from public.get_project_members($1)", [fx.proj])).rows;
-  assert.ok(members.length >= 3, "owner should see the joined members");
 
   await owner.query("select public.revoke_invite_code($1)", [fx.proj]);
   await owner.query("select public.revoke_snagging_invite_code($1)", [fx.proj]);
   await owner.end();
-
-  const admin = adminClient(DB);
-  await admin.connect();
-  await admin.query(`insert into auth.users (id, email) values ('a5900000-0000-0000-0000-000000000009','late@example.com')`);
-  await admin.end();
-  const late = await userClient(DB, "a5900000-0000-0000-0000-000000000009");
-  const after = (await late.query("select public.join_project_by_invite($1) as p", [code])).rows[0].p;
-  await late.end();
-  assert.equal(after, null, "a revoked invite code must stop working");
 });
 
 // ─── (6) anon on RLS tables never sees rows ──────────────────────────

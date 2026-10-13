@@ -47,11 +47,11 @@ before(async () => {
   const a = await userClient(DB, USER_A);
   const orgA = (await a.query("select public.create_organisation('Test Org', 'main_contractor') as id")).rows[0].id;
   const projA = (await a.query("insert into public.projects (name, org_id, created_by) values ('A', $1, $2) returning id", [orgA, USER_A])).rows[0].id;
-  const snagCode = (await a.query("select public.regenerate_snagging_invite_code($1) as code", [projA])).rows[0].code;
+  const snagCode = (await a.query("select public.test_regenerate_snagging_invite_code($1) as code", [projA])).rows[0].code;
   await a.end();
 
   const snagger = await userClient(DB, SNAGGER);
-  await snagger.query("select public.join_project_by_invite($1)", [snagCode]);
+  await snagger.query("select public.test_join_project_by_invite($1)", [snagCode]);
   await snagger.end();
 
   const b = await userClient(DB, USER_B);

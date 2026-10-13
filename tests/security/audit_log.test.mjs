@@ -34,11 +34,11 @@ before(async () => {
     [orgA, OWNER_A]
   )).rows[0].id;
   const plotA = (await ownerA.query("insert into public.plots (project_id, plot_number) values ($1,'Plot 1') returning id", [projA])).rows[0].id;
-  const snagCode = (await ownerA.query("select public.regenerate_snagging_invite_code($1) as code", [projA])).rows[0].code;
+  const snagCode = (await ownerA.query("select public.test_regenerate_snagging_invite_code($1) as code", [projA])).rows[0].code;
   await ownerA.end();
 
   const snaggerA = await userClient(DB, SNAGGER_A);
-  await snaggerA.query("select public.join_project_by_invite($1)", [snagCode]);
+  await snaggerA.query("select public.test_join_project_by_invite($1)", [snagCode]);
   await snaggerA.end();
 
   const ownerB = await userClient(DB, OWNER_B);

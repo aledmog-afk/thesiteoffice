@@ -53,11 +53,11 @@ before(async () => {
   const ownerA = await userClient(DB, OWNER_A);
   const orgA = (await ownerA.query("select public.create_organisation('Test Org', 'main_contractor') as id")).rows[0].id;
   const projA = (await ownerA.query("insert into public.projects (name, org_id, created_by) values ('WF', $1, $2) returning id", [orgA, OWNER_A])).rows[0].id;
-  const inviteA = (await ownerA.query("select public.regenerate_invite_code($1) as code", [projA])).rows[0].code;
+  const inviteA = (await ownerA.query("select public.test_regenerate_invite_code($1) as code", [projA])).rows[0].code;
 
   for (const uid of [CONTRIBUTOR_A, APPROVER_A]) {
     const c = await userClient(DB, uid);
-    await c.query("select public.join_project_by_invite($1)", [inviteA]);
+    await c.query("select public.test_join_project_by_invite($1)", [inviteA]);
     await c.end();
   }
 

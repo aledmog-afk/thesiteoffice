@@ -47,17 +47,17 @@ before(async () => {
   const proj = (await owner.query(
     "insert into public.projects (name, org_id, created_by) values ('Auto Access Site', $1, $2) returning id", [org, OWNER]
   )).rows[0].id;
-  const inviteCode = (await owner.query("select public.regenerate_invite_code($1) as code", [proj])).rows[0].code;
-  const snaggingInviteCode = (await owner.query("select public.regenerate_snagging_invite_code($1) as code", [proj])).rows[0].code;
+  const inviteCode = (await owner.query("select public.test_regenerate_invite_code($1) as code", [proj])).rows[0].code;
+  const snaggingInviteCode = (await owner.query("select public.test_regenerate_snagging_invite_code($1) as code", [proj])).rows[0].code;
   await owner.end();
 
   for (const uid of [PLAIN_COLLAB, DOWNGRADED_COLLAB, UPGRADED_COLLAB]) {
     const c = await userClient(DB, uid);
-    await c.query("select public.join_project_by_invite($1)", [inviteCode]);
+    await c.query("select public.test_join_project_by_invite($1)", [inviteCode]);
     await c.end();
   }
   const snagging = await userClient(DB, SNAGGING_MEMBER);
-  await snagging.query("select public.join_project_by_invite($1)", [snaggingInviteCode]);
+  await snagging.query("select public.test_join_project_by_invite($1)", [snaggingInviteCode]);
   await snagging.end();
 
   const owner2 = await userClient(DB, OWNER);
