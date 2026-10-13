@@ -43,7 +43,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, formatDate, RAG_LABEL, BUILD_MILESTONES, toLocalISODate, comparePlotNumbers, hsAuditScore } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, formatDate, RAG_LABEL, BUILD_MILESTONES, toLocalISODate, comparePlotNumbers, hsAuditScore, attachReportCommercialNotes } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -91,6 +91,7 @@
       .lte("week_starting", monthEnd)
       .order("week_starting", { ascending: true });
     if (reportsErr) { showError(errorBox, reportsErr); return; }
+    await attachReportCommercialNotes("weekly", reports);
     if (!reports || !reports.length) {
       showError(errorBox, { message: "No weekly reports found for that month — nothing to roll up." });
       return;

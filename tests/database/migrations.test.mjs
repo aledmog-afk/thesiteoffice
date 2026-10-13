@@ -684,7 +684,7 @@ test("Document Management: tables, indexes, triggers, RLS policies and the stora
     assert.equal(revPolicies.rows[0].n, 2, "document_revisions has select/insert only — no update, no delete");
 
     const indexes = await client.query("select count(*)::int as n from pg_indexes where tablename in ('documents', 'document_revisions') and indexname like '%_idx'");
-    assert.equal(indexes.rows[0].n, 5, "3 on documents + 2 on document_revisions, never duplicated");
+    assert.equal(indexes.rows[0].n, 6, "4 on documents (incl. v61 documents_party_idx) + 2 on document_revisions, never duplicated");
 
     const bucket = await client.query("select count(*)::int as n from storage.buckets where id = 'controlled-documents'");
     assert.equal(bucket.rows[0].n, 1, "the controlled-documents bucket must exist exactly once, never duplicated");

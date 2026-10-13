@@ -297,13 +297,30 @@ test("v61: the owner side sees companies on the job and the chosen company is sa
   await wait(30);
   assert.equal(document.getElementById("partyFieldWrap").style.display, "block");
   const opts = [...document.getElementById("partyId").options].map((o) => o.textContent);
-  assert.deepEqual(opts, ["Not given to a company", "Almo Carpentry (Carpentry)", "Bolt"]);
+  assert.deepEqual(opts, ["Choose a company…", "Not assigned yet", "Almo Carpentry (Carpentry)", "Bolt"]);
   document.getElementById("location").value = "Kitchen";
   document.getElementById("description").value = "Door sticks";
   document.getElementById("partyId").value = "pa";
   fireEvent(document.getElementById("snagForm"), "submit");
   await wait(30);
   assert.equal(store.inserted.party_id, "pa");
+});
+
+test("v61: once companies are on the job the picker is required; 'Not assigned yet' saves no company", async () => {
+  const store = makeStore([]);
+  store.parties = [{ party_id: "pa", company: "Almo Carpentry", trade: "Carpentry" }];
+  const { document } = await run(store);
+  await wait(30);
+  document.getElementById("location").value = "Kitchen";
+  document.getElementById("description").value = "Door sticks";
+  fireEvent(document.getElementById("snagForm"), "submit");
+  await wait(30);
+  assert.equal(store.inserted, undefined, "nothing saved without a choice");
+  assert.match(document.getElementById("errorBox").textContent, /Not assigned yet/);
+  document.getElementById("partyId").value = "__none__";
+  fireEvent(document.getElementById("snagForm"), "submit");
+  await wait(30);
+  assert.equal(store.inserted.party_id, null);
 });
 
 test("v61: a snagging-level (invited company) user never gets the picker — their company is set server-side", async () => {

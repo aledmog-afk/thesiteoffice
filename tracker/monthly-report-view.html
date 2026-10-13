@@ -24,7 +24,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, getOrgLogoUrl, formatGBP, RAG_LABEL, renderProgressBlock, RISK_IMPACT_BADGE } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, getOrgLogoUrl, formatGBP, RAG_LABEL, renderProgressBlock, RISK_IMPACT_BADGE, attachReportCommercialNotes } from "./js/app.js";
 
   await requireAuth();
   const reportId = getParam("id");
@@ -171,6 +171,7 @@
   async function load() {
     const { data: r, error } = await supabase.from("monthly_reports").select("*, projects(*)").eq("id", reportId).single();
     if (error) { document.getElementById("doc").textContent = "Monthly report not found."; return; }
+    const showCommercial = await attachReportCommercialNotes("monthly", [r]);
     const project = r.projects;
     const monthLabel = new Date(r.month + "T00:00:00").toLocaleDateString("en-GB", { month: "long", year: "numeric" });
 
@@ -241,7 +242,7 @@
       ${weeklyNotesSection("Site Housekeeping", r.site_housekeeping, "site_housekeeping")}
       ${weeklyNotesSection("Drawings / Information Received on Site", r.drawings_received, "drawings_received")}
       ${weeklyNotesSection("Visitors", r.visitors, "visitors")}
-      ${commercialSection(r.commercial_items)}
+      ${showCommercial ? commercialSection(r.commercial_items) : ""}
       ${plotHandoversSection(r.plot_handovers)}
 
       ${photos.length ? `

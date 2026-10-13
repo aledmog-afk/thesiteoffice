@@ -108,3 +108,51 @@ test("my-work.html: owner-side users (no company roles) or a pre-v62 database se
     assert.equal(document.getElementById("errorBox").style.display, "none");
   }
 });
+
+const ASSIGN = new URL("../../tracker/assign-companies.html", import.meta.url).pathname;
+function assignCtx({ role = "owner", rfis, actions, rfiError = null } = {}) {
+  const updates = [];
+  const supabase = {
+    rpc: async (n) => (n === "get_my_role" ? { data: role, error: null } : { data: null, error: null }),
+    from(table) {
+      const api = { select() { return api; }, eq(col, v) { api._eq = [col, v]; if (api._upd) { updates.push([table, api._upd, v]); return Promise.resolve({ error: null }); } return api; },
+        order() { return Promise.resolve(table === "rfis" ? { data: rfis, error: rfiError } : { data: actions, error: null }); },
+        update(p) { api._upd = p; return api; },
+        single: async () => ({ data: { id: "p1", name: "County Flats" }, error: null }) };
+      return api;
+    },
+  };
+  return { updates, ctx: { ...common, supabase, __url: "https://example.com/assign-companies.html?project=p1", getParam: () => "p1",
+    getProjectParties: async () => [{ party_id: "pa", company: "Almo", trade: "Carpentry" }, { party_id: "pb", company: "Bolt", trade: null }] } };
+}
+
+test("assign-companies.html: the owner sees older RFIs/actions with no company flagged, and assigning one saves party_id", async () => {
+  const { ctx, updates } = assignCtx({
+    rfis: [{ id: "r1", reference: "RFI-001", title: "Old RFI", status: "open", party_id: null }, { id: "r2", reference: "RFI-002", title: "Done", status: "open", party_id: "pa" }],
+    actions: [{ id: "a1", title: "Old action", status: "open", party_id: null }],
+  });
+  const { document } = await runPage(ASSIGN, extractScript(ASSIGN), ctx);
+  await wait(40);
+  assert.equal(document.getElementById("body").style.display, "block");
+  assert.match(document.getElementById("rfiRows").textContent, /Old RFI/);
+  assert.doesNotMatch(document.getElementById("rfiRows").textContent, /Done/, "already-assigned hidden by default");
+  assert.equal(document.getElementById("rfiFlag").textContent, "1 open with no company");
+  assert.equal(document.getElementById("actionFlag").textContent, "1 open with no company");
+  const sel = document.querySelector('select[data-kind="rfis"][data-id="r1"]');
+  sel.value = "pb";
+  fireEvent(sel, "change");
+  await wait(30);
+  assert.equal(JSON.stringify(updates[0]), JSON.stringify(["rfis", { party_id: "pb" }, "r1"]));
+  assert.equal(document.getElementById("rfiFlag").style.display, "none");
+});
+
+test("assign-companies.html: non-owners, and databases without v62, get a plain message", async () => {
+  let r = assignCtx({ role: "collaborator", rfis: [], actions: [] });
+  let { document } = await runPage(ASSIGN, extractScript(ASSIGN), r.ctx);
+  await wait(30);
+  assert.match(document.getElementById("notAvailableText").textContent, /Only the site owner/);
+  r = assignCtx({ rfis: null, actions: [], rfiError: { message: "column rfis.party_id does not exist" } });
+  ({ document } = await runPage(ASSIGN, extractScript(ASSIGN), r.ctx));
+  await wait(30);
+  assert.match(document.getElementById("notAvailableText").textContent, /latest database update/);
+});

@@ -33,6 +33,7 @@
     </div>
     <div class="card">
       <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.8rem;">Companies</h3>
+      <p class="hint" id="assignWorkLink" style="display:none;"><a href="#" id="assignWorkHref">Assign older RFIs and actions to companies</a> <span class="badge badge-amber" id="assignWorkFlag" style="display:none;"></span></p>
       <div class="table-wrap"><table>
         <thead><tr><th>Company</th><th>Role on this job</th><th>Lead contact</th><th>People</th><th></th></tr></thead>
         <tbody id="partyRows"></tbody>
@@ -200,6 +201,15 @@
     const { data, error } = await supabase.from("projects").select("main_contractor_access").eq("id", projectId).single();
     if (error || !data || !data.main_contractor_access) { card.style.display = "none"; return; }
     card.style.display = "block";
+    document.getElementById("assignWorkHref").href = `assign-companies.html?project=${projectId}`;
+    document.getElementById("assignWorkLink").style.display = "block";
+    try {
+      const { data: work } = await supabase.rpc("get_unassigned_company_work");
+      const mine = Array.isArray(work) ? work.find((w) => w.project_id === projectId) : null;
+      const n = mine ? mine.rfi_count + mine.action_count : 0;
+      const flag = document.getElementById("assignWorkFlag");
+      flag.textContent = `${n} need a company`; flag.style.display = n ? "" : "none";
+    } catch { /* flag is optional */ }
     document.getElementById("mcAccessSelect").value = data.main_contractor_access;
     document.getElementById("mcAccessText").textContent = partyRoleAccessText("main_contractor", data.main_contractor_access);
   }

@@ -9,8 +9,8 @@ import { createTestDatabase, dropTestDatabase, setupSchema, adminClient, userCli
 
 const DB = "tracker_test_role_access";
 const U = (n) => `a6400000-0000-0000-0000-0000000000${String(n).padStart(2, "0")}`;
-const OWNER = U(1), SUBA = U(2), SUBB = U(3), COW = U(4), CL = U(5), CON = U(6), MC = U(7);
-const EMAIL = { [OWNER]: "o@own.test", [SUBA]: "a@almo.test", [SUBB]: "b@bolt.test", [COW]: "c@cow.test", [CL]: "cl@client.test", [CON]: "con@cons.test", [MC]: "mc@main.test" };
+const OWNER = U(1), SUBA = U(2), SUBB = U(3), COW = U(4), CL = U(5), CON = U(6), MC = U(7), SUBSUB = U(8);
+const EMAIL = { [OWNER]: "o@own.test", [SUBA]: "a@almo.test", [SUBB]: "b@bolt.test", [COW]: "c@cow.test", [CL]: "cl@client.test", [CON]: "con@cons.test", [MC]: "mc@main.test", [SUBSUB]: "ss@cee.test" };
 const denied = (e) => isRlsError(e) || e?.code === "42501";
 const fx = { party: {} };
 
@@ -90,12 +90,13 @@ test("a sub's new RFI defaults to its own company and it can be assigned to a co
   assert.equal((await sql("select count(*)::int n from public.rfis where title='hacked'")).rows[0].n, 0);
 });
 
-test("consultant can read its own company's RFIs but not write them", async () => {
-  await sql(`insert into public.rfis (project_id, title, question, party_id) values ($1,'RFI Cons','?',$2)`, [fx.job, fx.party[CON]]);
+test("consultant raises and works its own company's RFIs (Aled: consultants CAN raise RFIs), never others'", async () => {
   await as(CON, async (c) => {
+    const r = await one(c, "insert into public.rfis (project_id, title, question) values ($1,'RFI Cons','?') returning party_id", [fx.job]);
+    assert.equal(r.party_id, fx.party[CON]);
     assert.deepEqual(await titles(c, "rfis"), ["RFI Cons"]);
-    await assert.rejects(c.query("insert into public.rfis (project_id, title, question) values ($1,'c','?')", [fx.job]), denied);
-    assert.equal((await c.query("update public.rfis set title='z' where title='RFI Cons'")).rowCount, 0);
+    assert.equal((await c.query("update public.rfis set question='more detail' where title='RFI Cons'")).rowCount, 1);
+    assert.equal((await c.query("update public.rfis set title='z' where title='RFI Almo'")).rowCount, 0);
   });
 });
 
@@ -237,4 +238,76 @@ test("the capability table is read-only to signed-in users and invisible to anon
   await as(SUBA, async (c) => { await assert.rejects(c.query("insert into public.party_role_capabilities values ('subcontractor','any','rfis_all')"), /permission denied/); });
   const g = await sql("select has_table_privilege('anon','public.party_role_capabilities','select') a");
   assert.equal(g.rows[0].a, false);
+});
+
+test("a subcontractor can never verify its own sub-subcontractor's work (even if raised to editor)", async () => {
+  const inv = await as(SUBA, (c) => one(c, "select * from public.create_party_invite($1,$2,'subcontractor','Plastering',$3)", [fx.job, EMAIL[SUBSUB], fx.party[SUBA]]));
+  await as(SUBSUB, async (c) => {
+    const org = (await one(c, "select public.create_organisation('Cee','subcontractor') as id")).id;
+    await c.query("select public.accept_party_invite($1,$2)", [inv.token, org]);
+  });
+  const ssParty = (await sql("select id from public.project_parties where parent_party_id=$1", [fx.party[SUBA]])).rows[0].id;
+  const id = await snag("Sub-sub snag", ssParty);
+  await sql("insert into public.snag_photos (project_id, snag_id, photo_url, kind) values ($1,$2,'p/s.jpg','completion')", [fx.job, id]);
+  await sql("update public.snag_items set status='closed' where id=$1", [id]);
+  await as(OWNER, (c) => c.query("select public.set_project_member_role($1,$2,'collaborator')", [fx.job, SUBA]));
+  await as(SUBA, async (c) => { await assert.rejects(c.query("update public.snag_items set verified_at = now() where id=$1", [id]), /never the company/); });
+  await as(COW, async (c) => { assert.equal((await one(c, "update public.snag_items set verified_at = now() where id=$1 returning verified_by", [id])).verified_by, COW); });
+  await as(OWNER, (c) => c.query("select public.set_project_member_role($1,$2,'snagging')", [fx.job, SUBA]));
+});
+
+test("weekly and monthly report commercial notes: owner side only — no invited company can read them, and they can't write them", async () => {
+  await as(OWNER, (c) => c.query("update public.weekly_reports set commercial_items = $2 where project_id = $1", [fx.job, JSON.stringify([{ title: "VO 12 £4,000" }])]));
+  await as(OWNER, (c) => c.query("update public.monthly_reports set commercial_items = $2 where project_id = $1", [fx.job, JSON.stringify([{ title: "Dayworks £900" }])]));
+  assert.deepEqual((await sql("select commercial_items c from public.weekly_reports")).rows[0].c, [], "the column itself never holds them");
+  const own = await as(OWNER, (c) => c.query("select report_kind, items from public.report_commercial_notes order by 1"));
+  assert.deepEqual(own.rows.map((r) => [r.report_kind, r.items[0].title]), [["monthly", "Dayworks £900"], ["weekly", "VO 12 £4,000"]]);
+  for (const u of [SUBA, COW, CL, CON, MC]) {
+    assert.equal((await as(u, (c) => c.query("select 1 from public.report_commercial_notes"))).rowCount, 0, u);
+    const wr = await as(u, (c) => c.query("select commercial_items from public.weekly_reports"));
+    for (const row of wr.rows) assert.deepEqual(row.commercial_items, []);
+  }
+  await as(COW, async (c) => {
+    await assert.rejects(c.query("update public.weekly_reports set commercial_items = '[{\"title\":\"x\"}]' where project_id=$1", [fx.job]), denied);
+    await c.query("update public.weekly_reports set commercial_items = '[]', progress_summary = 'CoW edit' where project_id=$1", [fx.job]);
+  });
+  assert.equal((await sql("select items from public.report_commercial_notes where report_kind='weekly'")).rows[0].items.length, 1, "a company editing the report never wipes the notes");
+  await assert.rejects(as(OWNER, (c) => c.query("insert into public.report_commercial_notes (report_kind, report_id, project_id) values ('weekly', gen_random_uuid(), $1)", [fx.job])), /permission denied/);
+});
+
+test("RFI evidence: only the RFI's company, the owner side and the Clerk of Works — not a full-access main contractor", async () => {
+  const rfi = (await sql("select id from public.rfis where title='RFI Almo'")).rows[0].id;
+  const wr = (await sql("select id from public.weekly_reports limit 1")).rows[0].id;
+  // Fixture only: bypass the photo-existence trigger (tested in rfi_evidence_links.test.mjs).
+  const a = adminClient(DB); await a.connect();
+  try {
+    await a.query("set session_replication_role = replica");
+    await a.query("insert into public.rfi_evidence_links (rfi_id, project_id, source_type, weekly_report_id, photo_id) values ($1,$2,'weekly_report_photo',$3,gen_random_uuid())", [rfi, fx.job, wr]);
+  } finally { await a.end(); }
+  const seen = async (u) => (await as(u, (c) => c.query("select 1 from public.rfi_evidence_links"))).rowCount;
+  assert.equal(await seen(OWNER), 1);
+  assert.equal(await seen(SUBA), 1);
+  assert.equal(await seen(COW), 1);
+  assert.equal(await seen(MC), 0, "MC (full) sees the RFI but not another company's evidence");
+  assert.equal(await seen(SUBB), 0);
+  assert.equal(await seen(CL), 0);
+});
+
+test("switching the MC's access keeps an individually raised/lowered MC person as the owner set them", async () => {
+  await as(OWNER, (c) => c.query("select public.set_project_member_role($1,$2,'snagging')", [fx.job, MC]));
+  await as(OWNER, (c) => c.query("select public.set_main_contractor_access($1,'narrow')", [fx.job]));
+  await as(OWNER, (c) => c.query("select public.set_main_contractor_access($1,'full')", [fx.job]));
+  assert.equal((await sql("select role from public.project_members where project_id=$1 and user_id=$2", [fx.job, MC])).rows[0].role, "snagging");
+  await sql("update public.project_members set role='collaborator', role_override=false where project_id=$1 and user_id=$2", [fx.job, MC]);
+});
+
+test("owner's unassigned-work flag counts open snags, RFIs and actions with no company; owner only", async () => {
+  const r = (await as(OWNER, (c) => c.query("select * from public.get_unassigned_company_work()"))).rows[0];
+  assert.equal(r.project_name, "Job");
+  assert.equal(r.rfi_count, 1);
+  assert.equal(r.action_count, 1);
+  assert.equal((await as(MC, (c) => c.query("select * from public.get_unassigned_company_work()"))).rowCount, 0);
+  await as(OWNER, (c) => c.query("update public.rfis set party_id=$2 where title='RFI none' and project_id=$1", [fx.job, fx.party[SUBB]]));
+  assert.equal((await as(OWNER, (c) => c.query("select rfi_count from public.get_unassigned_company_work()"))).rows[0].rfi_count, 0);
+  assert.ok((await as(SUBB, (c) => titles(c, "rfis"))).includes("RFI none"), "once assigned, the company sees it");
 });

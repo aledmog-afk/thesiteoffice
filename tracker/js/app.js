@@ -6453,3 +6453,28 @@ export function filterCompanyWorkItems(items, jobRoles) {
   const jobs = new Set((jobRoles || []).map((r) => r.project_id));
   return (items || []).filter((i) => jobs.has(i.project_id));
 }
+
+// v62: commercial notes on weekly/monthly reports live in
+// report_commercial_notes (owner side only — the database refuses every
+// invited-company user). Fills each report's commercial_items from it and
+// returns whether this user should see commercial notes at all (false
+// for anyone working on the job through a company, so the section is
+// left out of the page, print/PDF and email text entirely). On a
+// database without v62 the reports are left exactly as loaded.
+export async function attachReportCommercialNotes(kind, reports) {
+  const list = (reports || []).filter((r) => r && r.id);
+  if (!list.length) return true;
+  const { data, error } = await supabase.from("report_commercial_notes").select("report_id, items").eq("report_kind", kind).in("report_id", list.map((r) => r.id));
+  if (error) {
+    if (error.code === "42P01" || error.code === "PGRST205" || /does not exist|Could not find the table/i.test(error.message || "")) return true;
+    for (const r of list) r.commercial_items = [];
+    return false;
+  }
+  const byId = new Map((data || []).map((n) => [n.report_id, n.items]));
+  for (const r of list) if (byId.has(r.id)) r.commercial_items = byId.get(r.id);
+  const jobRoles = await getMyJobRoles().catch(() => []);
+  const companyJobs = new Set(jobRoles.map((j) => j.project_id));
+  const hidden = list.some((r) => companyJobs.has(r.project_id));
+  if (hidden) for (const r of list) r.commercial_items = [];
+  return !hidden;
+}
