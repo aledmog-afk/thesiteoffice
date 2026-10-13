@@ -11035,6 +11035,8 @@ begin
 end $$;
 
 
+
+
 -- ─── v62 ADDITIONS: role-based access per company role (organisation tiers stage 4) ───
 -- Builds on v61 (companies on a project). What each invited company can
 -- do now depends on its ROLE on the job, from one capability table
@@ -11814,106 +11816,6 @@ begin
 end;
 $$;
 
--- ── Policies ──
--- snag_items: v61 visibility + v62 "may write snags at all".
-drop policy if exists "members read snag_items" on public.snag_items;
-create policy "members read snag_items" on public.snag_items for select to authenticated using (public.is_project_member(project_id) and (project_id in (select public.owner_side_projects()) or project_id in (select public.party_cap_projects('snags_all')) or party_id in (select public.party_scope_ids(null))));
-drop policy if exists "members insert snag_items" on public.snag_items;
-create policy "members insert snag_items" on public.snag_items for insert to authenticated with check (public.is_project_member(project_id) and (project_id in (select public.owner_side_projects()) or project_id in (select public.party_cap_projects('snags_all')) or party_id in (select public.party_scope_ids(null))) and project_id in (select public.snag_write_projects()));
-drop policy if exists "members update snag_items" on public.snag_items;
-create policy "members update snag_items" on public.snag_items for update to authenticated using (public.is_project_member(project_id) and (project_id in (select public.owner_side_projects()) or project_id in (select public.party_cap_projects('snags_all')) or party_id in (select public.party_scope_ids(null))) and project_id in (select public.snag_write_projects())) with check (public.is_project_member(project_id) and (project_id in (select public.owner_side_projects()) or project_id in (select public.party_cap_projects('snags_all')) or party_id in (select public.party_scope_ids(null))) and project_id in (select public.snag_write_projects()));
-drop policy if exists "members delete snag_items" on public.snag_items;
-create policy "members delete snag_items" on public.snag_items for delete to authenticated using (public.is_project_member(project_id) and (project_id in (select public.owner_side_projects()) or project_id in (select public.party_cap_projects('snags_all')) or party_id in (select public.party_scope_ids(null))) and project_id in (select public.snag_write_projects()));
--- RFIs per company (stage 2 risk 5). Editors keep their existing policies.
-drop policy if exists "v62 parties read rfis" on public.rfis;
-create policy "v62 parties read rfis" on public.rfis for select to authenticated using (project_id in (select public.party_cap_projects('rfis_all')) or party_id in (select public.party_scope_ids('rfis_own')));
-drop policy if exists "v62 parties insert rfis" on public.rfis;
-create policy "v62 parties insert rfis" on public.rfis for insert to authenticated with check (project_id in (select public.party_cap_projects('rfis_all')) or party_id in (select public.party_scope_ids('rfis_own')));
-drop policy if exists "v62 parties update rfis" on public.rfis;
-create policy "v62 parties update rfis" on public.rfis for update to authenticated using (project_id in (select public.party_cap_projects('rfis_all')) or party_id in (select public.party_scope_ids('rfis_own'))) with check (project_id in (select public.party_cap_projects('rfis_all')) or party_id in (select public.party_scope_ids('rfis_own')));
--- Evidence links follow their RFI.
-drop policy if exists "v62 parties read rfi_evidence_links" on public.rfi_evidence_links;
-create policy "v62 parties read rfi_evidence_links" on public.rfi_evidence_links for select to authenticated using (project_id in (select public.party_cap_projects('rfi_evidence_all')) or exists (select 1 from public.rfis r where r.id = rfi_id and (r.project_id in (select public.party_cap_projects('rfis_all')) or r.party_id in (select public.party_scope_ids('rfis_own')))));
-drop policy if exists "v62 parties insert rfi_evidence_links" on public.rfi_evidence_links;
-create policy "v62 parties insert rfi_evidence_links" on public.rfi_evidence_links for insert to authenticated with check (exists (select 1 from public.rfis r where r.id = rfi_id and (r.project_id in (select public.party_cap_projects('rfis_all')) or r.party_id in (select public.party_scope_ids('rfis_own')))));
-drop policy if exists "v62 evidence only for its company, owner side and clerk of works" on public.rfi_evidence_links;
-create policy "v62 evidence only for its company, owner side and clerk of works" on public.rfi_evidence_links as restrictive for select to authenticated using (project_id in (select public.owner_side_projects()) or project_id in (select public.party_cap_projects('rfi_evidence_all')) or exists (select 1 from public.rfis r where r.id = rfi_id and r.party_id in (select public.party_scope_ids(null))));
--- Actions per company.
-drop policy if exists "v62 parties read actions" on public.actions;
-create policy "v62 parties read actions" on public.actions for select to authenticated using (project_id in (select public.party_cap_projects('actions_all')) or party_id in (select public.party_scope_ids('actions_own')));
-drop policy if exists "v62 parties insert actions" on public.actions;
-create policy "v62 parties insert actions" on public.actions for insert to authenticated with check (project_id in (select public.party_cap_projects('actions_all')) or party_id in (select public.party_scope_ids('actions_own')));
-drop policy if exists "v62 parties update actions" on public.actions;
-create policy "v62 parties update actions" on public.actions for update to authenticated using (project_id in (select public.party_cap_projects('actions_all')) or party_id in (select public.party_scope_ids('actions_own'))) with check (project_id in (select public.party_cap_projects('actions_all')) or party_id in (select public.party_scope_ids('actions_own')));
-drop policy if exists "v62 parties delete actions" on public.actions;
-create policy "v62 parties delete actions" on public.actions for delete to authenticated using (project_id in (select public.party_cap_projects('actions_all')));
--- Module access by capability (permissive, OR-ed with the existing editor policies).
-drop policy if exists "v62 parties read inspections" on public.inspections;
-create policy "v62 parties read inspections" on public.inspections for select to authenticated using (project_id in (select public.party_cap_projects('inspections_read')) or project_id in (select public.party_cap_projects('inspections')));
-drop policy if exists "v62 parties insert inspections" on public.inspections;
-create policy "v62 parties insert inspections" on public.inspections for insert to authenticated with check (project_id in (select public.party_cap_projects('inspections')));
-drop policy if exists "v62 parties update inspections" on public.inspections;
-create policy "v62 parties update inspections" on public.inspections for update to authenticated using (project_id in (select public.party_cap_projects('inspections'))) with check (project_id in (select public.party_cap_projects('inspections')));
-drop policy if exists "v62 parties read inspection_findings" on public.inspection_findings;
-create policy "v62 parties read inspection_findings" on public.inspection_findings for select to authenticated using (project_id in (select public.party_cap_projects('inspections_read')) or project_id in (select public.party_cap_projects('inspections')));
-drop policy if exists "v62 parties insert inspection_findings" on public.inspection_findings;
-create policy "v62 parties insert inspection_findings" on public.inspection_findings for insert to authenticated with check (project_id in (select public.party_cap_projects('inspections')));
-drop policy if exists "v62 parties update inspection_findings" on public.inspection_findings;
-create policy "v62 parties update inspection_findings" on public.inspection_findings for update to authenticated using (project_id in (select public.party_cap_projects('inspections'))) with check (project_id in (select public.party_cap_projects('inspections')));
-drop policy if exists "v62 parties read inspection_finding_photos" on public.inspection_finding_photos;
-create policy "v62 parties read inspection_finding_photos" on public.inspection_finding_photos for select to authenticated using (project_id in (select public.party_cap_projects('inspections_read')) or project_id in (select public.party_cap_projects('inspections')));
-drop policy if exists "v62 parties insert inspection_finding_photos" on public.inspection_finding_photos;
-create policy "v62 parties insert inspection_finding_photos" on public.inspection_finding_photos for insert to authenticated with check (project_id in (select public.party_cap_projects('inspections')));
-drop policy if exists "v62 parties update inspection_finding_photos" on public.inspection_finding_photos;
-create policy "v62 parties update inspection_finding_photos" on public.inspection_finding_photos for update to authenticated using (project_id in (select public.party_cap_projects('inspections'))) with check (project_id in (select public.party_cap_projects('inspections')));
-drop policy if exists "v62 parties delete inspection_finding_photos" on public.inspection_finding_photos;
-create policy "v62 parties delete inspection_finding_photos" on public.inspection_finding_photos for delete to authenticated using (project_id in (select public.party_cap_projects('inspections')));
-drop policy if exists "v62 parties read weekly_reports" on public.weekly_reports;
-create policy "v62 parties read weekly_reports" on public.weekly_reports for select to authenticated using (project_id in (select public.party_cap_projects('weekly_reports_read')) or project_id in (select public.party_cap_projects('weekly_reports_write')));
-drop policy if exists "v62 parties insert weekly_reports" on public.weekly_reports;
-create policy "v62 parties insert weekly_reports" on public.weekly_reports for insert to authenticated with check (project_id in (select public.party_cap_projects('weekly_reports_write')));
-drop policy if exists "v62 parties update weekly_reports" on public.weekly_reports;
-create policy "v62 parties update weekly_reports" on public.weekly_reports for update to authenticated using (project_id in (select public.party_cap_projects('weekly_reports_write'))) with check (project_id in (select public.party_cap_projects('weekly_reports_write')));
-drop policy if exists "v62 parties read monthly_reports" on public.monthly_reports;
-create policy "v62 parties read monthly_reports" on public.monthly_reports for select to authenticated using (project_id in (select public.party_cap_projects('monthly_reports_read')));
-drop policy if exists "v62 parties read programmes" on public.programmes;
-create policy "v62 parties read programmes" on public.programmes for select to authenticated using (project_id in (select public.party_cap_projects('programme_read')) or project_id in (select public.party_cap_projects('programme_write')));
-drop policy if exists "v62 parties insert programmes" on public.programmes;
-create policy "v62 parties insert programmes" on public.programmes for insert to authenticated with check (project_id in (select public.party_cap_projects('programme_write')));
-drop policy if exists "v62 parties update programmes" on public.programmes;
-create policy "v62 parties update programmes" on public.programmes for update to authenticated using (project_id in (select public.party_cap_projects('programme_write'))) with check (project_id in (select public.party_cap_projects('programme_write')));
-drop policy if exists "v62 parties read programme_activities" on public.programme_activities;
-create policy "v62 parties read programme_activities" on public.programme_activities for select to authenticated using (project_id in (select public.party_cap_projects('programme_read')) or project_id in (select public.party_cap_projects('programme_write')));
-drop policy if exists "v62 parties insert programme_activities" on public.programme_activities;
-create policy "v62 parties insert programme_activities" on public.programme_activities for insert to authenticated with check (project_id in (select public.party_cap_projects('programme_write')));
-drop policy if exists "v62 parties update programme_activities" on public.programme_activities;
-create policy "v62 parties update programme_activities" on public.programme_activities for update to authenticated using (project_id in (select public.party_cap_projects('programme_write'))) with check (project_id in (select public.party_cap_projects('programme_write')));
-drop policy if exists "v62 parties delete programme_activities" on public.programme_activities;
-create policy "v62 parties delete programme_activities" on public.programme_activities for delete to authenticated using (project_id in (select public.party_cap_projects('programme_write')));
-drop policy if exists "v62 parties read handover_documents" on public.handover_documents;
-create policy "v62 parties read handover_documents" on public.handover_documents for select to authenticated using (project_id in (select public.party_cap_projects('handovers')));
-drop policy if exists "v62 parties insert handover_documents" on public.handover_documents;
-create policy "v62 parties insert handover_documents" on public.handover_documents for insert to authenticated with check (project_id in (select public.party_cap_projects('handovers')));
-drop policy if exists "v62 parties update handover_documents" on public.handover_documents;
-create policy "v62 parties update handover_documents" on public.handover_documents for update to authenticated using (project_id in (select public.party_cap_projects('handovers'))) with check (project_id in (select public.party_cap_projects('handovers')));
-drop policy if exists "v62 parties delete handover_documents" on public.handover_documents;
-create policy "v62 parties delete handover_documents" on public.handover_documents for delete to authenticated using (project_id in (select public.party_cap_projects('handovers')));
-drop policy if exists "v62 parties read quality_gates" on public.quality_gates;
-create policy "v62 parties read quality_gates" on public.quality_gates for select to authenticated using (project_id in (select public.party_cap_projects('handovers')));
-drop policy if exists "v62 parties insert quality_gates" on public.quality_gates;
-create policy "v62 parties insert quality_gates" on public.quality_gates for insert to authenticated with check (project_id in (select public.party_cap_projects('handovers')));
-drop policy if exists "v62 parties update quality_gates" on public.quality_gates;
-create policy "v62 parties update quality_gates" on public.quality_gates for update to authenticated using (project_id in (select public.party_cap_projects('handovers'))) with check (project_id in (select public.party_cap_projects('handovers')));
-drop policy if exists "v62 parties delete quality_gates" on public.quality_gates;
-create policy "v62 parties delete quality_gates" on public.quality_gates for delete to authenticated using (project_id in (select public.party_cap_projects('handovers')));
-drop policy if exists "v62 parties read internal_milestones" on public.internal_milestones;
-create policy "v62 parties read internal_milestones" on public.internal_milestones for select to authenticated using (project_id in (select public.party_cap_projects('programme_read')) or project_id in (select public.party_cap_projects('programme_write')));
-drop policy if exists "v62 parties insert internal_milestones" on public.internal_milestones;
-create policy "v62 parties insert internal_milestones" on public.internal_milestones for insert to authenticated with check (project_id in (select public.party_cap_projects('programme_write')));
-drop policy if exists "v62 parties update internal_milestones" on public.internal_milestones;
-create policy "v62 parties update internal_milestones" on public.internal_milestones for update to authenticated using (project_id in (select public.party_cap_projects('programme_write'))) with check (project_id in (select public.party_cap_projects('programme_write')));
-drop policy if exists "v62 parties delete internal_milestones" on public.internal_milestones;
-create policy "v62 parties delete internal_milestones" on public.internal_milestones for delete to authenticated using (project_id in (select public.party_cap_projects('programme_write')));
 
 -- ── Commercial notes on reports: a separate table invited companies can't
 -- read. Writes to weekly_reports/monthly_reports.commercial_items are
@@ -12005,6 +11907,166 @@ as $$
   order by p.name;
 $$;
 
+-- ── Single-call read checks for the two busiest tables. Each is ONE
+-- query per row (like is_project_editor), so the read policy keeps the
+-- same shape and planner estimate as before v62 and project_id lookups
+-- stay on their index.
+create or replace function public.can_read_snag_row(p_project_id uuid, p_party_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.project_members pm
+    join public.projects p on p.id = pm.project_id
+    where pm.project_id = p_project_id and pm.user_id = auth.uid()
+      and (exists (select 1 from public.organisation_members om where om.org_id = p.org_id and om.user_id = pm.user_id)
+           or exists (
+             select 1 from public.project_party_members ppm
+             join public.project_parties pp on pp.id = ppm.party_id and pp.status = 'active'
+             join public.organisation_members om2 on om2.org_id = pp.org_id and om2.user_id = ppm.user_id
+             where pp.project_id = pm.project_id and ppm.user_id = pm.user_id
+               and (exists (select 1 from public.party_role_capabilities c
+                             where c.party_role = pp.party_role and c.capability = 'snags_all'
+                               and (c.mc_mode = 'any' or c.mc_mode = p.main_contractor_access))
+                    or (p_party_id is not null and p_party_id in (select d from public.party_and_descendants(pp.id) as d)))))
+  );
+$$;
+
+create or replace function public.can_read_action_row(p_project_id uuid, p_party_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.project_members pm
+    join public.projects p on p.id = pm.project_id
+    where pm.project_id = p_project_id and pm.user_id = auth.uid()
+      and ((pm.role in ('owner', 'collaborator')
+            and (exists (select 1 from public.organisation_members om where om.org_id = p.org_id and om.user_id = pm.user_id)
+                 or exists (select 1 from public.project_party_members ppm
+                            join public.project_parties pp on pp.id = ppm.party_id and pp.status = 'active'
+                            join public.organisation_members om2 on om2.org_id = pp.org_id and om2.user_id = ppm.user_id
+                            where pp.project_id = pm.project_id and ppm.user_id = pm.user_id)))
+           or exists (
+             select 1 from public.project_party_members ppm
+             join public.project_parties pp on pp.id = ppm.party_id and pp.status = 'active'
+             join public.organisation_members om2 on om2.org_id = pp.org_id and om2.user_id = ppm.user_id
+             where pp.project_id = pm.project_id and ppm.user_id = pm.user_id
+               and (exists (select 1 from public.party_role_capabilities c
+                             where c.party_role = pp.party_role and c.capability = 'actions_all'
+                               and (c.mc_mode = 'any' or c.mc_mode = p.main_contractor_access))
+                    or (p_party_id is not null
+                        and exists (select 1 from public.party_role_capabilities c2
+                                    where c2.party_role = pp.party_role and c2.capability = 'actions_own'
+                                      and (c2.mc_mode = 'any' or c2.mc_mode = p.main_contractor_access))
+                        and p_party_id in (select d from public.party_and_descendants(pp.id) as d)))))
+  );
+$$;
+
+-- ── Policies ──
+-- snag_items: v61 visibility + v62 "may write snags at all".
+drop policy if exists "members read snag_items" on public.snag_items;
+create policy "members read snag_items" on public.snag_items for select to authenticated using (public.can_read_snag_row(project_id, party_id));
+drop policy if exists "members insert snag_items" on public.snag_items;
+create policy "members insert snag_items" on public.snag_items for insert to authenticated with check (public.is_project_member(project_id) and (project_id in (select public.owner_side_projects()) or project_id in (select public.party_cap_projects('snags_all')) or party_id in (select public.party_scope_ids(null))) and project_id in (select public.snag_write_projects()));
+drop policy if exists "members update snag_items" on public.snag_items;
+create policy "members update snag_items" on public.snag_items for update to authenticated using (public.is_project_member(project_id) and (project_id in (select public.owner_side_projects()) or project_id in (select public.party_cap_projects('snags_all')) or party_id in (select public.party_scope_ids(null))) and project_id in (select public.snag_write_projects())) with check (public.is_project_member(project_id) and (project_id in (select public.owner_side_projects()) or project_id in (select public.party_cap_projects('snags_all')) or party_id in (select public.party_scope_ids(null))) and project_id in (select public.snag_write_projects()));
+drop policy if exists "members delete snag_items" on public.snag_items;
+create policy "members delete snag_items" on public.snag_items for delete to authenticated using (public.is_project_member(project_id) and (project_id in (select public.owner_side_projects()) or project_id in (select public.party_cap_projects('snags_all')) or party_id in (select public.party_scope_ids(null))) and project_id in (select public.snag_write_projects()));
+-- RFIs per company (stage 2 risk 5). Editors keep their existing policies.
+drop policy if exists "v62 parties read rfis" on public.rfis;
+create policy "v62 parties read rfis" on public.rfis for select to authenticated using (project_id in (select public.party_cap_projects('rfis_all')) or party_id in (select public.party_scope_ids('rfis_own')));
+drop policy if exists "v62 parties insert rfis" on public.rfis;
+create policy "v62 parties insert rfis" on public.rfis for insert to authenticated with check (project_id in (select public.party_cap_projects('rfis_all')) or party_id in (select public.party_scope_ids('rfis_own')));
+drop policy if exists "v62 parties update rfis" on public.rfis;
+create policy "v62 parties update rfis" on public.rfis for update to authenticated using (project_id in (select public.party_cap_projects('rfis_all')) or party_id in (select public.party_scope_ids('rfis_own'))) with check (project_id in (select public.party_cap_projects('rfis_all')) or party_id in (select public.party_scope_ids('rfis_own')));
+-- Evidence links follow their RFI.
+drop policy if exists "v62 parties read rfi_evidence_links" on public.rfi_evidence_links;
+create policy "v62 parties read rfi_evidence_links" on public.rfi_evidence_links for select to authenticated using (project_id in (select public.party_cap_projects('rfi_evidence_all')) or exists (select 1 from public.rfis r where r.id = rfi_id and (r.project_id in (select public.party_cap_projects('rfis_all')) or r.party_id in (select public.party_scope_ids('rfis_own')))));
+drop policy if exists "v62 parties insert rfi_evidence_links" on public.rfi_evidence_links;
+create policy "v62 parties insert rfi_evidence_links" on public.rfi_evidence_links for insert to authenticated with check (exists (select 1 from public.rfis r where r.id = rfi_id and (r.project_id in (select public.party_cap_projects('rfis_all')) or r.party_id in (select public.party_scope_ids('rfis_own')))));
+drop policy if exists "v62 evidence only for its company, owner side and clerk of works" on public.rfi_evidence_links;
+create policy "v62 evidence only for its company, owner side and clerk of works" on public.rfi_evidence_links as restrictive for select to authenticated using (project_id in (select public.owner_side_projects()) or project_id in (select public.party_cap_projects('rfi_evidence_all')) or exists (select 1 from public.rfis r where r.id = rfi_id and r.party_id in (select public.party_scope_ids(null))));
+-- Actions per company.
+drop policy if exists "v62 parties read actions" on public.actions;
+-- One function per row (same shape and planner estimate as before v62).
+drop policy if exists "editors read actions" on public.actions;
+create policy "editors read actions" on public.actions for select to authenticated using (public.can_read_action_row(project_id, party_id));
+drop policy if exists "v62 parties insert actions" on public.actions;
+create policy "v62 parties insert actions" on public.actions for insert to authenticated with check (project_id in (select public.party_cap_projects('actions_all')) or party_id in (select public.party_scope_ids('actions_own')));
+drop policy if exists "v62 parties update actions" on public.actions;
+create policy "v62 parties update actions" on public.actions for update to authenticated using (project_id in (select public.party_cap_projects('actions_all')) or party_id in (select public.party_scope_ids('actions_own'))) with check (project_id in (select public.party_cap_projects('actions_all')) or party_id in (select public.party_scope_ids('actions_own')));
+drop policy if exists "v62 parties delete actions" on public.actions;
+create policy "v62 parties delete actions" on public.actions for delete to authenticated using (project_id in (select public.party_cap_projects('actions_all')));
+-- Module access by capability (permissive, OR-ed with the existing editor policies).
+drop policy if exists "v62 parties read inspections" on public.inspections;
+create policy "v62 parties read inspections" on public.inspections for select to authenticated using (project_id in (select public.party_cap_projects('inspections_read')) or project_id in (select public.party_cap_projects('inspections')));
+drop policy if exists "v62 parties insert inspections" on public.inspections;
+create policy "v62 parties insert inspections" on public.inspections for insert to authenticated with check (project_id in (select public.party_cap_projects('inspections')));
+drop policy if exists "v62 parties update inspections" on public.inspections;
+create policy "v62 parties update inspections" on public.inspections for update to authenticated using (project_id in (select public.party_cap_projects('inspections'))) with check (project_id in (select public.party_cap_projects('inspections')));
+drop policy if exists "v62 parties read inspection_findings" on public.inspection_findings;
+create policy "v62 parties read inspection_findings" on public.inspection_findings for select to authenticated using (project_id in (select public.party_cap_projects('inspections_read')) or project_id in (select public.party_cap_projects('inspections')));
+drop policy if exists "v62 parties insert inspection_findings" on public.inspection_findings;
+create policy "v62 parties insert inspection_findings" on public.inspection_findings for insert to authenticated with check (project_id in (select public.party_cap_projects('inspections')));
+drop policy if exists "v62 parties update inspection_findings" on public.inspection_findings;
+create policy "v62 parties update inspection_findings" on public.inspection_findings for update to authenticated using (project_id in (select public.party_cap_projects('inspections'))) with check (project_id in (select public.party_cap_projects('inspections')));
+drop policy if exists "v62 parties read inspection_finding_photos" on public.inspection_finding_photos;
+create policy "v62 parties read inspection_finding_photos" on public.inspection_finding_photos for select to authenticated using (project_id in (select public.party_cap_projects('inspections_read')) or project_id in (select public.party_cap_projects('inspections')));
+drop policy if exists "v62 parties insert inspection_finding_photos" on public.inspection_finding_photos;
+create policy "v62 parties insert inspection_finding_photos" on public.inspection_finding_photos for insert to authenticated with check (project_id in (select public.party_cap_projects('inspections')));
+drop policy if exists "v62 parties update inspection_finding_photos" on public.inspection_finding_photos;
+create policy "v62 parties update inspection_finding_photos" on public.inspection_finding_photos for update to authenticated using (project_id in (select public.party_cap_projects('inspections'))) with check (project_id in (select public.party_cap_projects('inspections')));
+drop policy if exists "v62 parties delete inspection_finding_photos" on public.inspection_finding_photos;
+create policy "v62 parties delete inspection_finding_photos" on public.inspection_finding_photos for delete to authenticated using (project_id in (select public.party_cap_projects('inspections')));
+drop policy if exists "v62 parties read weekly_reports" on public.weekly_reports;
+create policy "v62 parties read weekly_reports" on public.weekly_reports for select to authenticated using (project_id in (select public.party_cap_projects('weekly_reports_read')) or project_id in (select public.party_cap_projects('weekly_reports_write')));
+drop policy if exists "v62 parties insert weekly_reports" on public.weekly_reports;
+create policy "v62 parties insert weekly_reports" on public.weekly_reports for insert to authenticated with check (project_id in (select public.party_cap_projects('weekly_reports_write')));
+drop policy if exists "v62 parties update weekly_reports" on public.weekly_reports;
+create policy "v62 parties update weekly_reports" on public.weekly_reports for update to authenticated using (project_id in (select public.party_cap_projects('weekly_reports_write'))) with check (project_id in (select public.party_cap_projects('weekly_reports_write')));
+drop policy if exists "v62 parties read monthly_reports" on public.monthly_reports;
+create policy "v62 parties read monthly_reports" on public.monthly_reports for select to authenticated using (project_id in (select public.party_cap_projects('monthly_reports_read')));
+drop policy if exists "v62 parties read programmes" on public.programmes;
+create policy "v62 parties read programmes" on public.programmes for select to authenticated using (project_id in (select public.party_cap_projects('programme_read')) or project_id in (select public.party_cap_projects('programme_write')));
+drop policy if exists "v62 parties insert programmes" on public.programmes;
+create policy "v62 parties insert programmes" on public.programmes for insert to authenticated with check (project_id in (select public.party_cap_projects('programme_write')));
+drop policy if exists "v62 parties update programmes" on public.programmes;
+create policy "v62 parties update programmes" on public.programmes for update to authenticated using (project_id in (select public.party_cap_projects('programme_write'))) with check (project_id in (select public.party_cap_projects('programme_write')));
+drop policy if exists "v62 parties read programme_activities" on public.programme_activities;
+create policy "v62 parties read programme_activities" on public.programme_activities for select to authenticated using (project_id in (select public.party_cap_projects('programme_read')) or project_id in (select public.party_cap_projects('programme_write')));
+drop policy if exists "v62 parties insert programme_activities" on public.programme_activities;
+create policy "v62 parties insert programme_activities" on public.programme_activities for insert to authenticated with check (project_id in (select public.party_cap_projects('programme_write')));
+drop policy if exists "v62 parties update programme_activities" on public.programme_activities;
+create policy "v62 parties update programme_activities" on public.programme_activities for update to authenticated using (project_id in (select public.party_cap_projects('programme_write'))) with check (project_id in (select public.party_cap_projects('programme_write')));
+drop policy if exists "v62 parties delete programme_activities" on public.programme_activities;
+create policy "v62 parties delete programme_activities" on public.programme_activities for delete to authenticated using (project_id in (select public.party_cap_projects('programme_write')));
+drop policy if exists "v62 parties read handover_documents" on public.handover_documents;
+create policy "v62 parties read handover_documents" on public.handover_documents for select to authenticated using (project_id in (select public.party_cap_projects('handovers')));
+drop policy if exists "v62 parties insert handover_documents" on public.handover_documents;
+create policy "v62 parties insert handover_documents" on public.handover_documents for insert to authenticated with check (project_id in (select public.party_cap_projects('handovers')));
+drop policy if exists "v62 parties update handover_documents" on public.handover_documents;
+create policy "v62 parties update handover_documents" on public.handover_documents for update to authenticated using (project_id in (select public.party_cap_projects('handovers'))) with check (project_id in (select public.party_cap_projects('handovers')));
+drop policy if exists "v62 parties delete handover_documents" on public.handover_documents;
+create policy "v62 parties delete handover_documents" on public.handover_documents for delete to authenticated using (project_id in (select public.party_cap_projects('handovers')));
+drop policy if exists "v62 parties read quality_gates" on public.quality_gates;
+create policy "v62 parties read quality_gates" on public.quality_gates for select to authenticated using (project_id in (select public.party_cap_projects('handovers')));
+drop policy if exists "v62 parties insert quality_gates" on public.quality_gates;
+create policy "v62 parties insert quality_gates" on public.quality_gates for insert to authenticated with check (project_id in (select public.party_cap_projects('handovers')));
+drop policy if exists "v62 parties update quality_gates" on public.quality_gates;
+create policy "v62 parties update quality_gates" on public.quality_gates for update to authenticated using (project_id in (select public.party_cap_projects('handovers'))) with check (project_id in (select public.party_cap_projects('handovers')));
+drop policy if exists "v62 parties delete quality_gates" on public.quality_gates;
+create policy "v62 parties delete quality_gates" on public.quality_gates for delete to authenticated using (project_id in (select public.party_cap_projects('handovers')));
+drop policy if exists "v62 parties read internal_milestones" on public.internal_milestones;
+create policy "v62 parties read internal_milestones" on public.internal_milestones for select to authenticated using (project_id in (select public.party_cap_projects('programme_read')) or project_id in (select public.party_cap_projects('programme_write')));
+drop policy if exists "v62 parties insert internal_milestones" on public.internal_milestones;
+create policy "v62 parties insert internal_milestones" on public.internal_milestones for insert to authenticated with check (project_id in (select public.party_cap_projects('programme_write')));
+drop policy if exists "v62 parties update internal_milestones" on public.internal_milestones;
+create policy "v62 parties update internal_milestones" on public.internal_milestones for update to authenticated using (project_id in (select public.party_cap_projects('programme_write'))) with check (project_id in (select public.party_cap_projects('programme_write')));
+drop policy if exists "v62 parties delete internal_milestones" on public.internal_milestones;
+create policy "v62 parties delete internal_milestones" on public.internal_milestones for delete to authenticated using (project_id in (select public.party_cap_projects('programme_write')));
+
 -- ── Grants (v59 rule) ──────────────────────────────────────────────
 do $$
 declare
@@ -12015,7 +12077,7 @@ begin
     'public.can_see_party_row(uuid, uuid)', 'public.can_write_snags(uuid)', 'public.can_verify_snag(uuid, uuid)',
     'public.can_be_assigned_work(uuid, uuid, uuid, text)', 'public.party_member_role_for(uuid, text)',
     'public.set_main_contractor_access(uuid, text)', 'public.party_cap_projects(text)', 'public.party_scope_ids(text)',
-    'public.snag_write_projects()', 'public.owner_side_projects()', 'public.get_unassigned_company_work()', 'public.get_my_job_roles()',
+    'public.snag_write_projects()', 'public.owner_side_projects()', 'public.get_unassigned_company_work()', 'public.can_read_snag_row(uuid, uuid)', 'public.can_read_action_row(uuid, uuid)', 'public.get_my_job_roles()',
     'public.accept_party_invite(text, uuid)', 'public.add_party_member(uuid, uuid)', 'public.set_party_role(uuid, text, text)'
   ] loop
     execute format('revoke all on function %s from public', f);
