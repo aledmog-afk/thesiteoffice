@@ -188,7 +188,7 @@ function viewSupabaseMock(report) {
   };
 }
 
-async function runView(report, { reviewWeeklyReport, approveWeeklyReport, issueWeeklyReport, reviseWeeklyReport } = {}) {
+async function runView(report, { reviewWeeklyReport, approveWeeklyReport, issueWeeklyReport, reviseWeeklyReport, ...extra } = {}) {
   const supabase = viewSupabaseMock(report);
   return runPage(VIEW_HTML, extractScript(VIEW_HTML), {
     __url: "https://example.com/weekly-report-view.html?id=r1",
@@ -210,6 +210,7 @@ async function runView(report, { reviewWeeklyReport, approveWeeklyReport, issueW
     issueWeeklyReport: issueWeeklyReport || (async () => ({ ...report, status: "issued" })),
     reviseWeeklyReport: reviseWeeklyReport || (async () => ({ ...report, status: "draft" })),
     CONTROL_LEVEL_BADGE,
+    ...extra,
   });
 }
 
@@ -273,4 +274,18 @@ test("weekly-report-view.html: a progress item with BOTH a milestone and typed t
   assert.match(auditHtml, /Crane base/, "the item's own typed description must ALSO show, not be replaced by the milestone");
   assert.match(auditHtml, /Foundations \(Foots\)/, "a milestone-only item (no text) still renders correctly");
   assert.match(auditHtml, /Tarmac/, "a text-only item (no milestone) still renders correctly");
+});
+
+test("weekly-report-view.html (v62): commercial notes are left out of the page (and so the print/PDF) for a company user", async () => {
+  const report = {
+    id: "r1", project_id: "p1", week_starting: "2026-09-07", week_ending: "2026-09-11", status: "draft", prepared_by: "Jane", programme_status: "on-track",
+    weather_days: [], commercial_items: [{ type: "instruction", title: "VO SECRET 4000" }], labour_records: [], risk_items: [], statutory_milestones: [], photos: [],
+    projects: { id: "p1", name: "County Flats", org_id: "o1" },
+  };
+  let r = await runView(structuredClone(report));
+  await wait(30);
+  assert.match(r.document.body.textContent, /VO SECRET 4000/, "owner side sees them");
+  r = await runView(structuredClone(report), { attachReportCommercialNotes: async (kind, list) => { list.forEach((x) => { x.commercial_items = []; }); return false; } });
+  await wait(30);
+  assert.doesNotMatch(r.document.body.textContent, /VO SECRET/);
 });

@@ -37,6 +37,7 @@ test("v62: upgrading a populated v61 database keeps access, MC defaults to full,
     const invM = (await o.query("select * from public.create_party_invite($1,'m@mc.test','main_contractor',null,null)", [proj])).rows[0];
     await o.query("insert into public.rfis (project_id, title, question) values ($1,'Old RFI','?')", [proj]);
     await o.query("insert into public.actions (project_id, title) values ($1,'Old action')", [proj]);
+    await o.query(`insert into public.weekly_reports (project_id, week_starting, week_ending, commercial_items) values ($1,'2026-10-05','2026-10-11','[{"title":"VO 7"}]')`, [proj]);
     await o.end();
     for (const [u, inv, name] of [[SUB, invS, "Almo"], [MC, invM, "MainCo"]]) {
       const c = await userClient(db, u);
@@ -48,6 +49,8 @@ test("v62: upgrading a populated v61 database keeps access, MC defaults to full,
     await admin.query("insert into public.snag_items (project_id, snag_list_id, description, party_id) values ($1,$2,'Almo snag',$3),($1,$2,'Unassigned snag',null)", [proj, list, subParty]);
     const countsQ = "select (select count(*) from public.project_members)::int pm, (select count(*) from public.project_parties)::int pp, (select count(*) from public.snag_items)::int s, (select count(*) from public.rfis)::int r, (select count(*) from public.actions)::int a, (select string_agg(user_id::text || role, ',' order by user_id) from public.project_members) roles";
     const before = (await admin.query(countsQ)).rows[0];
+    const wrBefore = (await admin.query("select updated_at from public.weekly_reports")).rows[0].updated_at;
+    const auditBefore = (await admin.query("select count(*)::int n from public.audit_log")).rows[0].n;
 
     await runSqlFile(admin, SCHEMA);
     const once = (await admin.query(countsQ)).rows[0];
@@ -56,7 +59,13 @@ test("v62: upgrading a populated v61 database keeps access, MC defaults to full,
     assert.deepEqual(once, before, "upgrade creates/removes/changes no rows");
     assert.deepEqual(twice, before, "second apply is a no-op");
     assert.equal((await admin.query("select main_contractor_access m from public.projects")).rows[0].m, "full");
-    assert.equal((await admin.query("select count(*)::int n from public.party_role_capabilities")).rows[0].n, 23);
+    const wr = (await admin.query("select commercial_items, updated_at from public.weekly_reports")).rows[0];
+    assert.deepEqual(wr.commercial_items, [], "commercial notes moved out of the readable column");
+    assert.equal(wr.updated_at.getTime(), wrBefore.getTime(), "the move doesn't touch updated_at");
+    assert.equal((await admin.query("select count(*)::int n from public.audit_log")).rows[0].n, auditBefore, "the move writes no audit rows");
+    const notes = (await admin.query("select items from public.report_commercial_notes")).rows;
+    assert.deepEqual(notes.map((n) => n.items[0].title), ["VO 7"], "moved exactly once, never lost or duplicated");
+    assert.equal((await admin.query("select count(*)::int n from public.party_role_capabilities")).rows[0].n, 24);
 
     const m = await userClient(db, MC);
     assert.equal((await m.query("select public.get_my_role($1) r", [proj])).rows[0].r, "collaborator");

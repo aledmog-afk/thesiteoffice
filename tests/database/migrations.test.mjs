@@ -539,7 +539,7 @@ test("Weekly Reporting: new columns, indexes, trigger, and inspection_findings.r
     assert.equal(indexes.rows[0].n, 2, "exactly 2 new named indexes on weekly_reports, never duplicated");
 
     const triggers = await client.query("select count(*)::int as n from pg_trigger where tgrelid = 'public.weekly_reports'::regclass and tgname like 'trg_%'");
-    assert.equal(triggers.rows[0].n, 2, "exactly 2 triggers on weekly_reports (pre-existing audit + the new before-write trigger), never duplicated");
+    assert.equal(triggers.rows[0].n, 3, "exactly 3 triggers on weekly_reports (pre-existing audit + the new before-write trigger + v62 commercial-notes divert), never duplicated");
 
     const fn = await client.query("select count(*)::int as n from information_schema.routines where routine_schema = 'public' and routine_name = 'valid_weekly_report_status_transition'");
     assert.equal(fn.rows[0].n, 1);
@@ -803,7 +803,7 @@ test("RFI-1: rfis/rfi_evidence_links tables, indexes, triggers and RLS policies 
     assert.equal(rfisPolicies.rows[0].n, 6, "[v62: + 3 company policies] select/insert/update only, no delete policy");
 
     const evidencePolicies = await client.query("select count(*)::int as n from pg_policies where tablename = 'rfi_evidence_links'");
-    assert.equal(evidencePolicies.rows[0].n, 5, "[v62: + 2 company policies] select/insert/delete only, no update policy");
+    assert.equal(evidencePolicies.rows[0].n, 6, "[v62: + 2 company policies + 1 restrictive evidence policy] select/insert/delete only, no update policy");
 
     const rfisIndexes = await client.query("select count(*)::int as n from pg_indexes where tablename = 'rfis' and indexname like '%_idx'");
     assert.equal(rfisIndexes.rows[0].n, 6, "[v62: + rfis_party_idx] never duplicated across re-application");
