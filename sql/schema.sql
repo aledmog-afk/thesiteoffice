@@ -10442,61 +10442,61 @@ grant select on public.project_parties, public.project_party_members to authenti
 
 -- ── Policy changes on existing tables ───────────────────────────────
 drop policy if exists "members read snag_items" on public.snag_items;
-create policy "members read snag_items" on public.snag_items for select
+create policy "members read snag_items" on public.snag_items for select to authenticated
   using (public.is_project_member(project_id) and public.can_see_party_row(project_id, party_id));
 drop policy if exists "members insert snag_items" on public.snag_items;
-create policy "members insert snag_items" on public.snag_items for insert
+create policy "members insert snag_items" on public.snag_items for insert to authenticated
   with check (public.is_project_member(project_id) and public.can_see_party_row(project_id, party_id));
 drop policy if exists "members update snag_items" on public.snag_items;
-create policy "members update snag_items" on public.snag_items for update
+create policy "members update snag_items" on public.snag_items for update to authenticated
   using (public.is_project_member(project_id) and public.can_see_party_row(project_id, party_id))
   with check (public.is_project_member(project_id) and public.can_see_party_row(project_id, party_id));
 drop policy if exists "members delete snag_items" on public.snag_items;
-create policy "members delete snag_items" on public.snag_items for delete
+create policy "members delete snag_items" on public.snag_items for delete to authenticated
   using (public.is_project_member(project_id) and public.can_see_party_row(project_id, party_id));
 
 drop policy if exists "members read snag_photos" on public.snag_photos;
-create policy "members read snag_photos" on public.snag_photos for select
+create policy "members read snag_photos" on public.snag_photos for select to authenticated
   using (public.is_project_member(project_id) and exists (select 1 from public.snag_items s where s.id = snag_id
          and public.can_see_party_row(s.project_id, s.party_id)));
 drop policy if exists "members insert snag_photos" on public.snag_photos;
-create policy "members insert snag_photos" on public.snag_photos for insert
+create policy "members insert snag_photos" on public.snag_photos for insert to authenticated
   with check (public.is_project_member(project_id) and exists (select 1 from public.snag_items s where s.id = snag_id
          and public.can_see_party_row(s.project_id, s.party_id)));
 drop policy if exists "members delete snag_photos" on public.snag_photos;
-create policy "members delete snag_photos" on public.snag_photos for delete
+create policy "members delete snag_photos" on public.snag_photos for delete to authenticated
   using (public.is_project_member(project_id) and exists (select 1 from public.snag_items s where s.id = snag_id
          and public.can_see_party_row(s.project_id, s.party_id)));
 
 -- No commercial ledger or monthly reports for party-only users, even editors.
 drop policy if exists "editors read commercial_items" on public.commercial_items;
-create policy "editors read commercial_items" on public.commercial_items for select
+create policy "editors read commercial_items" on public.commercial_items for select to authenticated
   using (public.is_project_editor(project_id) and not public.is_party_only(project_id));
 drop policy if exists "editors insert commercial_items" on public.commercial_items;
-create policy "editors insert commercial_items" on public.commercial_items for insert
+create policy "editors insert commercial_items" on public.commercial_items for insert to authenticated
   with check (public.is_project_editor(project_id) and not public.is_party_only(project_id));
 drop policy if exists "editors update commercial_items" on public.commercial_items;
-create policy "editors update commercial_items" on public.commercial_items for update
+create policy "editors update commercial_items" on public.commercial_items for update to authenticated
   using (public.is_project_editor(project_id) and not public.is_party_only(project_id));
 drop policy if exists "editors delete commercial_items" on public.commercial_items;
-create policy "editors delete commercial_items" on public.commercial_items for delete
+create policy "editors delete commercial_items" on public.commercial_items for delete to authenticated
   using (public.is_project_editor(project_id) and not public.is_party_only(project_id));
 
 drop policy if exists "editors read monthly_reports" on public.monthly_reports;
-create policy "editors read monthly_reports" on public.monthly_reports for select
+create policy "editors read monthly_reports" on public.monthly_reports for select to authenticated
   using (public.is_project_editor(project_id) and not public.is_party_only(project_id));
 drop policy if exists "editors insert monthly_reports" on public.monthly_reports;
-create policy "editors insert monthly_reports" on public.monthly_reports for insert
+create policy "editors insert monthly_reports" on public.monthly_reports for insert to authenticated
   with check (public.is_project_editor(project_id) and not public.is_party_only(project_id));
 drop policy if exists "editors update monthly_reports" on public.monthly_reports;
-create policy "editors update monthly_reports" on public.monthly_reports for update
+create policy "editors update monthly_reports" on public.monthly_reports for update to authenticated
   using (public.is_project_editor(project_id) and not public.is_party_only(project_id));
 drop policy if exists "editors delete monthly_reports" on public.monthly_reports;
-create policy "editors delete monthly_reports" on public.monthly_reports for delete
+create policy "editors delete monthly_reports" on public.monthly_reports for delete to authenticated
   using (public.is_project_editor(project_id) and not public.is_party_only(project_id));
 
 drop policy if exists "editors update projects" on public.projects;
-create policy "editors update projects" on public.projects for update
+create policy "editors update projects" on public.projects for update to authenticated
   using (public.is_project_editor(id) and not public.is_party_only(id));
 
 -- ── Snag party defaulting / assignee legitimacy ─────────────────────
@@ -10944,16 +10944,16 @@ create index if not exists snag_lists_party_idx on public.snag_lists (party_id);
 alter table public.project_members add column if not exists role_override boolean not null default false;
 
 drop policy if exists "members read documents" on public.documents;
-create policy "members read documents" on public.documents for select
+create policy "members read documents" on public.documents for select to authenticated
   using (public.is_project_member(project_id) and public.can_see_party_row(project_id, party_id));
 drop policy if exists "members read document_revisions" on public.document_revisions;
-create policy "members read document_revisions" on public.document_revisions for select
+create policy "members read document_revisions" on public.document_revisions for select to authenticated
   using (public.is_project_member(project_id) and exists (select 1 from public.documents d where d.id = document_id));
 drop policy if exists "members read specifications" on public.specifications;
-create policy "members read specifications" on public.specifications for select
+create policy "members read specifications" on public.specifications for select to authenticated
   using (public.is_project_member(project_id) and public.can_see_party_row(project_id, party_id));
 drop policy if exists "members read snag_lists" on public.snag_lists;
-create policy "members read snag_lists" on public.snag_lists for select
+create policy "members read snag_lists" on public.snag_lists for select to authenticated
   using (public.is_project_member(project_id) and (public.can_see_party_row(project_id, party_id)
          or exists (select 1 from public.snag_items s where s.snag_list_id = snag_lists.id)));
 
@@ -10968,7 +10968,7 @@ as $$
 $$;
 drop policy if exists "project members read controlled-documents" on storage.objects;
 create policy "project members read controlled-documents" on storage.objects
-  for select using (bucket_id = 'controlled-documents' and public.controlled_documents_read_authorized(name) and public.controlled_documents_party_ok(name));
+  for select to authenticated using (bucket_id = 'controlled-documents' and public.controlled_documents_read_authorized(name) and public.controlled_documents_party_ok(name));
 
 -- Owner's individual change is remembered and survives role changes.
 create or replace function public.set_project_member_role(p_project_id uuid, p_user_id uuid, p_role text)
