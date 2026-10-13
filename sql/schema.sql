@@ -10924,3 +10924,112 @@ begin
     execute format('grant execute on function %s to authenticated', f);
   end loop;
 end $$;
+
+-- ─── v61 ADDITIONS (part 2, Aled's stage-2 decisions) ───────────────
+-- 1. Documents, specifications and snag lists can be tied to a company
+--    (party_id). An invited company sees only those tied to its own
+--    work (or its sub-subs'); a snag list is also visible when it holds
+--    one of the company's snags. Drawings stay visible to every member,
+--    view-only (unchanged). Owner side and Main Contractor see all.
+-- 2. Changing a company's role keeps any individual raise/lower the
+--    owner made (project_members.role_override).
+-- 3. get_unassigned_company_snags(): owner dashboard flag for snags not
+--    yet given to a company on jobs that have companies.
+alter table public.documents add column if not exists party_id uuid references public.project_parties(id) on delete set null;
+alter table public.specifications add column if not exists party_id uuid references public.project_parties(id) on delete set null;
+alter table public.snag_lists add column if not exists party_id uuid references public.project_parties(id) on delete set null;
+create index if not exists documents_party_idx on public.documents (party_id);
+create index if not exists specifications_party_idx on public.specifications (party_id);
+create index if not exists snag_lists_party_idx on public.snag_lists (party_id);
+alter table public.project_members add column if not exists role_override boolean not null default false;
+
+drop policy if exists "members read documents" on public.documents;
+create policy "members read documents" on public.documents for select
+  using (public.is_project_member(project_id) and public.can_see_party_row(project_id, party_id));
+drop policy if exists "members read document_revisions" on public.document_revisions;
+create policy "members read document_revisions" on public.document_revisions for select
+  using (public.is_project_member(project_id) and exists (select 1 from public.documents d where d.id = document_id));
+drop policy if exists "members read specifications" on public.specifications;
+create policy "members read specifications" on public.specifications for select
+  using (public.is_project_member(project_id) and public.can_see_party_row(project_id, party_id));
+drop policy if exists "members read snag_lists" on public.snag_lists;
+create policy "members read snag_lists" on public.snag_lists for select
+  using (public.is_project_member(project_id) and (public.can_see_party_row(project_id, party_id)
+         or exists (select 1 from public.snag_items s where s.snag_list_id = snag_lists.id)));
+
+-- Stored files follow their document row (controlled-documents bucket).
+create or replace function public.controlled_documents_party_ok(p_name text)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select not exists (
+    select 1 from public.document_revisions r join public.documents d on d.id = r.document_id
+    where r.file_url = p_name and not public.can_see_party_row(d.project_id, d.party_id));
+$$;
+drop policy if exists "project members read controlled-documents" on storage.objects;
+create policy "project members read controlled-documents" on storage.objects
+  for select using (bucket_id = 'controlled-documents' and public.controlled_documents_read_authorized(name) and public.controlled_documents_party_ok(name));
+
+-- Owner's individual change is remembered and survives role changes.
+create or replace function public.set_project_member_role(p_project_id uuid, p_user_id uuid, p_role text)
+returns void
+language plpgsql security definer set search_path = public
+as $$
+begin
+  if not public.is_project_owner(p_project_id) then
+    raise exception 'Only the project owner can change someone''s access' using errcode = '42501';
+  end if;
+  if p_role not in ('collaborator', 'snagging') then raise exception 'Role must be collaborator or snagging'; end if;
+  update public.project_members set role = p_role, role_override = true
+   where project_id = p_project_id and user_id = p_user_id and role <> 'owner';
+  if not found then raise exception 'That person isn''t on this project'; end if;
+end;
+$$;
+
+create or replace function public.set_party_role(p_party_id uuid, p_party_role text, p_trade text default null)
+returns void
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_pp public.project_parties;
+begin
+  select * into v_pp from public.project_parties where id = p_party_id and status = 'active';
+  if v_pp.id is null or not public.is_project_owner(v_pp.project_id) then
+    raise exception 'Only the project owner can change a company''s role' using errcode = '42501';
+  end if;
+  if v_pp.parent_party_id is not null and p_party_role <> 'subcontractor' then
+    raise exception 'A sub-subcontractor must stay a subcontractor';
+  end if;
+  update public.project_parties set party_role = p_party_role, trade = nullif(trim(p_trade), ''), updated_at = now() where id = p_party_id;
+  -- Re-base party members on the new role, except anyone the owner
+  -- individually raised or lowered (role_override) — they keep theirs.
+  update public.project_members pm set role = public.party_member_role(p_party_role)
+   where pm.project_id = v_pp.project_id and pm.role <> 'owner' and not pm.role_override
+     and pm.user_id in (select user_id from public.project_party_members where party_id = p_party_id)
+     and not public.is_owner_side_user(v_pp.project_id, pm.user_id);
+end;
+$$;
+
+create or replace function public.get_unassigned_company_snags()
+returns table (project_id uuid, project_name text, snag_count int)
+language sql stable security definer set search_path = public
+as $$
+  select p.id, p.name, count(s.id)::int
+  from public.projects p
+  join public.project_members pm on pm.project_id = p.id and pm.user_id = auth.uid() and pm.role = 'owner'
+  join public.snag_items s on s.project_id = p.id and s.party_id is null and s.status not in ('closed', 'rejected')
+  where exists (select 1 from public.project_parties pp where pp.project_id = p.id and pp.status = 'active')
+  group by p.id, p.name
+  order by p.name;
+$$;
+
+do $$
+declare f text;
+begin
+  foreach f in array array['public.controlled_documents_party_ok(text)', 'public.set_project_member_role(uuid, uuid, text)',
+                           'public.set_party_role(uuid, text, text)', 'public.get_unassigned_company_snags()'] loop
+    execute format('revoke all on function %s from public', f);
+    execute format('revoke execute on function %s from anon', f);
+    execute format('grant execute on function %s to authenticated', f);
+  end loop;
+end $$;

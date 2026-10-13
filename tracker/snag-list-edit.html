@@ -51,8 +51,8 @@
         </div>
       </div>
       <div class="field" id="partyFieldWrap" style="display:none;">
-        <label for="partyId">Given to company</label>
-        <select id="partyId"><option value="">Not given to a company</option></select>
+        <label for="partyId">Given to company <span class="hint">(required)</span></label>
+        <select id="partyId"><option value="">Choose a company…</option></select>
         <p class="hint">Only that company (and any sub-subcontractor it brought in) will see this snag.</p>
       </div>
       <div class="field">
@@ -235,7 +235,7 @@
     prioritySelect.value = s.priority || "medium";
     document.getElementById("dueDate").value = s.due_date || "";
     assignedToSelect.value = s.assigned_to || "";
-    document.getElementById("partyId").value = s.party_id || "";
+    document.getElementById("partyId").value = s.party_id || (parties.length ? "__none__" : "");
     photoUrl = s.photo_url || null;
     // A photo already saved on a snag has no surviving File object from
     // this (or any prior) session — Save to Device is only ever offered
@@ -328,7 +328,14 @@
     };
     // v61: only sent when the "Given to company" picker is in use, so a
     // database without v61 (no party_id column) is never sent it.
-    if (parties.length) payload.party_id = document.getElementById("partyId").value || null;
+    // Once companies are on the job the picker is required: pick a
+    // company or explicitly "Not assigned yet" (flagged on the owner's
+    // dashboard as needing a company).
+    if (parties.length) {
+      const pv = document.getElementById("partyId").value;
+      if (!pv) { showError(errorBox, { message: "Choose which company this snag is for, or 'Not assigned yet'." }); return; }
+      payload.party_id = pv === "__none__" ? null : pv;
+    }
     if (isGeneralList) payload.plot_id = document.getElementById("itemPlot").value || null;
     try {
       if (editingId) {
@@ -726,7 +733,7 @@
       parties = (!partyErr && Array.isArray(partyRows) && myRole !== "snagging") ? partyRows : [];
     } catch { parties = []; }
     if (parties.length) {
-      document.getElementById("partyId").innerHTML = `<option value="">Not given to a company</option>` +
+      document.getElementById("partyId").innerHTML = `<option value="">Choose a company…</option><option value="__none__">Not assigned yet</option>` +
         parties.map((p) => `<option value="${p.party_id}">${escapeHtml(p.company)}${p.trade ? " (" + escapeHtml(p.trade) + ")" : ""}</option>`).join("");
       document.getElementById("partyFieldWrap").style.display = "block";
     }
