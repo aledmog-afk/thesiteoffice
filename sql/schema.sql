@@ -11851,11 +11851,15 @@ begin
       raise exception 'Commercial notes can only be added by the owning company' using errcode = '42501';
     end if;
     -- An invited company editing a report never touches the notes.
-  else
+  elsif v_items <> '[]'::jsonb then
     insert into public.report_commercial_notes (report_kind, report_id, project_id, items)
     values (v_kind, new.id, new.project_id, v_items)
     on conflict (report_kind, report_id) do update set items = excluded.items, updated_at = now();
   end if;
+  -- An EMPTY list never deletes or overwrites saved notes. Front ends
+  -- from before v62 load the (always-empty) column and save '[]' back;
+  -- without this guard that save would wipe the moved notes. Non-empty
+  -- writes keep replacing the notes exactly as before.
   new.commercial_items := '[]'::jsonb;
   return new;
 end;
