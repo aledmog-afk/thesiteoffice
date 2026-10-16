@@ -50,6 +50,11 @@
           <input type="date" id="dueDate">
         </div>
       </div>
+      <div class="field" id="partyFieldWrap" style="display:none;">
+        <label for="partyId">Given to company <span class="hint">(required)</span></label>
+        <select id="partyId"><option value="">Choose a company…</option></select>
+        <p class="hint">Only that company (and any sub-subcontractor it brought in) will see this snag.</p>
+      </div>
       <div class="field">
         <label for="assignedTo">Assigned to</label>
         <select id="assignedTo"><option value="">Unassigned</option></select>
@@ -147,6 +152,7 @@
   const photoInput = document.getElementById("photoInput");
   const prioritySelect = document.getElementById("priority");
   const assignedToSelect = document.getElementById("assignedTo");
+  let parties = [];
 
   prioritySelect.innerHTML = SNAG_PRIORITIES.map((p) => `<option value="${p}">${SNAG_PRIORITY_LABEL[p]}</option>`).join("");
 
@@ -208,6 +214,7 @@
     if (isGeneralList) document.getElementById("itemPlot").value = "";
     prioritySelect.value = "medium";
     assignedToSelect.value = "";
+    document.getElementById("partyId").value = "";
     photoUrl = null;
     originalPhotoFile = null;
     deviceSaveStatus = null;
@@ -228,6 +235,7 @@
     prioritySelect.value = s.priority || "medium";
     document.getElementById("dueDate").value = s.due_date || "";
     assignedToSelect.value = s.assigned_to || "";
+    document.getElementById("partyId").value = s.party_id || (parties.length ? "__none__" : "");
     photoUrl = s.photo_url || null;
     // A photo already saved on a snag has no surviving File object from
     // this (or any prior) session — Save to Device is only ever offered
@@ -318,6 +326,16 @@
       due_date: document.getElementById("dueDate").value || null,
       assigned_to: assignedToSelect.value || null,
     };
+    // v61: only sent when the "Given to company" picker is in use, so a
+    // database without v61 (no party_id column) is never sent it.
+    // Once companies are on the job the picker is required: pick a
+    // company or explicitly "Not assigned yet" (flagged on the owner's
+    // dashboard as needing a company).
+    if (parties.length) {
+      const pv = document.getElementById("partyId").value;
+      if (!pv) { showError(errorBox, { message: "Choose which company this snag is for, or 'Not assigned yet'." }); return; }
+      payload.party_id = pv === "__none__" ? null : pv;
+    }
     if (isGeneralList) payload.plot_id = document.getElementById("itemPlot").value || null;
     try {
       if (editingId) {
@@ -706,6 +724,19 @@
       members.map((m) => `<option value="${m.user_id}">${escapeHtml(m.email)}</option>`).join("");
     document.getElementById("bulkAssignSelect").innerHTML = `<option value="">Unassigned</option>` +
       members.map((m) => `<option value="${m.user_id}">${escapeHtml(m.email)}</option>`).join("");
+
+    // v61: companies on this job, for "Given to company". Only the owner
+    // side picks; a company's own staff get their company automatically
+    // (server-side). Missing RPC (database without v61) → picker hidden.
+    try {
+      const { data: partyRows, error: partyErr } = await supabase.rpc("get_project_parties", { p_project_id: snagList.project_id });
+      parties = (!partyErr && Array.isArray(partyRows) && myRole !== "snagging") ? partyRows : [];
+    } catch { parties = []; }
+    if (parties.length) {
+      document.getElementById("partyId").innerHTML = `<option value="">Choose a company…</option><option value="__none__">Not assigned yet</option>` +
+        parties.map((p) => `<option value="${p.party_id}">${escapeHtml(p.company)}${p.trade ? " (" + escapeHtml(p.trade) + ")" : ""}</option>`).join("");
+      document.getElementById("partyFieldWrap").style.display = "block";
+    }
 
     loadSnags();
   }

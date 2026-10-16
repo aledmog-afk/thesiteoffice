@@ -77,6 +77,9 @@
   // can only ever return the caller's own rows, never another user's.
   async function landingPageFor(userId) {
     const { data } = await supabase.from("organisation_members").select("id").eq("user_id", userId).limit(1);
+    // v61: someone opening a company invite always goes back to it — the
+    // invite page itself handles "set up your company" for newcomers.
+    if (next === "invite.html") return next;
     return (data && data.length > 0) ? next : "onboarding.html";
   }
 
@@ -148,7 +151,7 @@
           // existing) rather than straight to the dashboard. Deliberately
           // NOT applied to the signin branch above: an existing user
           // signing in always goes straight to `next`, unchanged.
-          window.location.href = "onboarding.html";
+          window.location.href = next === "invite.html" ? "invite.html" : "onboarding.html";
         } else {
           infoBox.style.background = "var(--green-light)";
           infoBox.style.color = "var(--green)";

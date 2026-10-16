@@ -60,8 +60,8 @@ before(async () => {
     "insert into public.projects (name, org_id, created_by) values ('Org A Site', $1, $2) returning id",
     [orgA, ORGA_ADMIN]
   )).rows[0].id;
-  const inviteCode = (await orgAAdmin.query("select public.regenerate_invite_code($1) as code", [projA])).rows[0].code;
-  const snagCode = (await orgAAdmin.query("select public.regenerate_snagging_invite_code($1) as code", [projA])).rows[0].code;
+  const inviteCode = (await orgAAdmin.query("select public.test_regenerate_invite_code($1) as code", [projA])).rows[0].code;
+  const snagCode = (await orgAAdmin.query("select public.test_regenerate_snagging_invite_code($1) as code", [projA])).rows[0].code;
   // Commercial access is its own, separate grant (project_module_roles) —
   // being the project owner does not imply it, matching this schema's
   // deliberate "account/org role never implies module access" principle.
@@ -519,7 +519,7 @@ test("25. IDs alone cannot be used to bypass security: fake org id, fake request
 test("26. The existing project collaborator invite link still works exactly as before, unrouted through any approval", async () => {
   const joiner = await userClient(DB, INVITE_JOINER);
   try {
-    const { rows } = await joiner.query("select public.join_project_by_invite($1) as project_id", [fx.inviteCode]);
+    const { rows } = await joiner.query("select public.test_join_project_by_invite($1) as project_id", [fx.inviteCode]);
     assert.equal(rows[0].project_id, fx.projA);
     const proj = await joiner.query("select 1 from public.projects where id=$1", [fx.projA]);
     assert.equal(proj.rowCount, 1, "accepting the invite must grant immediate project access, no approval step");
@@ -541,7 +541,7 @@ test("26. The existing project collaborator invite link still works exactly as b
 test("27. The existing snagging-only invite link still works exactly as before", async () => {
   const joiner = await userClient(DB, SNAG_JOINER);
   try {
-    const { rows } = await joiner.query("select public.join_project_by_invite($1) as project_id", [fx.snagCode]);
+    const { rows } = await joiner.query("select public.test_join_project_by_invite($1) as project_id", [fx.snagCode]);
     assert.equal(rows[0].project_id, fx.projA);
     const role = await joiner.query("select public.get_my_role($1) as role", [fx.projA]);
     assert.equal(role.rows[0].role, "snagging");

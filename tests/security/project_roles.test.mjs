@@ -31,8 +31,8 @@ before(async () => {
     "insert into public.projects (name, org_id, created_by) values ('Test Site', $1, $2) returning id",
     [org, OWNER]
   )).rows[0].id;
-  const inviteCode = (await owner.query("select public.regenerate_invite_code($1) as code", [proj])).rows[0].code;
-  const snagCode = (await owner.query("select public.regenerate_snagging_invite_code($1) as code", [proj])).rows[0].code;
+  const inviteCode = (await owner.query("select public.test_regenerate_invite_code($1) as code", [proj])).rows[0].code;
+  const snagCode = (await owner.query("select public.test_regenerate_snagging_invite_code($1) as code", [proj])).rows[0].code;
   const plotRow = await owner.query("insert into public.plots (project_id, plot_number) values ($1, 'Plot 1') returning id", [proj]);
   const plot = plotRow.rows[0].id;
   await owner.end();
@@ -49,11 +49,11 @@ before(async () => {
   await admin3.end();
 
   const collab = await userClient(DB, COLLAB);
-  await collab.query("select public.join_project_by_invite($1)", [inviteCode]);
+  await collab.query("select public.test_join_project_by_invite($1)", [inviteCode]);
   await collab.end();
 
   const snagger = await userClient(DB, SNAGGER);
-  await snagger.query("select public.join_project_by_invite($1)", [snagCode]);
+  await snagger.query("select public.test_join_project_by_invite($1)", [snagCode]);
   await snagger.end();
 
   const admin2 = adminClient(DB);
@@ -154,13 +154,13 @@ test("Snagging-only member: cannot see the collaborators list (get_project_membe
   }
 });
 
-test("Only the owner can manage invite links", async () => {
+test("Invite links are retired (v61): nobody, not even a collaborator, can regenerate one", async () => {
   const collab = await userClient(DB, COLLAB);
   try {
     await assert.rejects(
       () => collab.query("select public.regenerate_invite_code($1)", [fx.proj]),
-      /Only the site owner/,
-      "collaborator should not be able to regenerate the invite link"
+      /invite_retired/,
+      "regenerating an invite code must refuse with the retired message"
     );
   } finally {
     await collab.end();

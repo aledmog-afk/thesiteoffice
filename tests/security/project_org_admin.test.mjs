@@ -38,9 +38,9 @@ before(async () => {
   await as(OWNER, async (c) => {
     fx.ownerOrg = (await c.query("select public.create_organisation('Tai Tarian', 'developer_client') as id")).rows[0].id;
     fx.proj = (await c.query("insert into public.projects (name, org_id, created_by) values ('County Flats', $1, $2) returning id", [fx.ownerOrg, OWNER])).rows[0].id;
-    fx.code = (await c.query("select public.regenerate_invite_code($1) as code", [fx.proj])).rows[0].code;
+    fx.code = (await c.query("select public.test_regenerate_invite_code($1) as code", [fx.proj])).rows[0].code;
   });
-  await as(INVITEE, (c) => c.query("select public.join_project_by_invite($1)", [fx.code]));
+  await as(INVITEE, (c) => c.query("select public.test_join_project_by_invite($1)", [fx.code]));
   await as(TWO_ORGS, async (c) => {
     fx.first = (await c.query("select public.create_organisation('First Co', 'main_contractor') as id")).rows[0].id;
     await c.query("select pg_sleep(0.01)");

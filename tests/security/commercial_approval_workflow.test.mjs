@@ -48,10 +48,10 @@ before(async () => {
   const owner = await userClient(DB, OWNER);
   const orgA = (await owner.query("select public.create_organisation('Test Org', 'main_contractor') as id")).rows[0].id;
   const projA = (await owner.query("insert into public.projects (name, org_id, created_by) values ('P18b', $1, $2) returning id", [orgA, OWNER])).rows[0].id;
-  const invite = (await owner.query("select public.regenerate_invite_code($1) as code", [projA])).rows[0].code;
+  const invite = (await owner.query("select public.test_regenerate_invite_code($1) as code", [projA])).rows[0].code;
 
   const contributor = await userClient(DB, CONTRIBUTOR);
-  await contributor.query("select public.join_project_by_invite($1)", [invite]);
+  await contributor.query("select public.test_join_project_by_invite($1)", [invite]);
   await contributor.end();
 
   await owner.query(`insert into public.project_module_roles (project_id, user_id, module, role, granted_by) values ($1,$2,'commercial','contributor',$2)`, [projA, OWNER]);

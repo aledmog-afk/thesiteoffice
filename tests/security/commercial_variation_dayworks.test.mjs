@@ -49,10 +49,10 @@ before(async () => {
   const ownerA = await userClient(DB, OWNER_A);
   const orgA = (await ownerA.query("select public.create_organisation('Test Org', 'main_contractor') as id")).rows[0].id;
   const projA = (await ownerA.query("insert into public.projects (name, org_id, created_by) values ('VDW A', $1, $2) returning id", [orgA, OWNER_A])).rows[0].id;
-  const inviteA = (await ownerA.query("select public.regenerate_invite_code($1) as code", [projA])).rows[0].code;
+  const inviteA = (await ownerA.query("select public.test_regenerate_invite_code($1) as code", [projA])).rows[0].code;
   for (const uid of [CONTRIBUTOR_A, VIEWER_A]) {
     const c = await userClient(DB, uid);
-    await c.query("select public.join_project_by_invite($1)", [inviteA]);
+    await c.query("select public.test_join_project_by_invite($1)", [inviteA]);
     await c.end();
   }
   await ownerA.query(`insert into public.project_module_roles (project_id, user_id, module, role, granted_by) values ($1,$2,'commercial','contributor',$3)`, [projA, CONTRIBUTOR_A, OWNER_A]);
@@ -64,9 +64,9 @@ before(async () => {
   const ownerB = await userClient(DB, OWNER_B);
   const orgB = (await ownerB.query("select public.create_organisation('Test Org', 'main_contractor') as id")).rows[0].id;
   const projB = (await ownerB.query("insert into public.projects (name, org_id, created_by) values ('VDW B', $1, $2) returning id", [orgB, OWNER_B])).rows[0].id;
-  const inviteB = (await ownerB.query("select public.regenerate_invite_code($1) as code", [projB])).rows[0].code;
+  const inviteB = (await ownerB.query("select public.test_regenerate_invite_code($1) as code", [projB])).rows[0].code;
   const contributorBClient = await userClient(DB, CONTRIBUTOR_B);
-  await contributorBClient.query("select public.join_project_by_invite($1)", [inviteB]);
+  await contributorBClient.query("select public.test_join_project_by_invite($1)", [inviteB]);
   await contributorBClient.end();
   await ownerB.query(`insert into public.project_module_roles (project_id, user_id, module, role, granted_by) values ($1,$2,'commercial','contributor',$3)`, [projB, CONTRIBUTOR_B, OWNER_B]);
   await ownerB.end();

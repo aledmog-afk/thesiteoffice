@@ -18,6 +18,7 @@ export const PG_CONFIG = {
 
 const SCHEMA_PATH = path.join(__dirname, "../../sql/schema.sql");
 const MOCK_SETUP_PATH = path.join(__dirname, "mock_setup.sql");
+const LEGACY_INVITE_SHIM_PATH = path.join(__dirname, "legacy_invite_shim.sql");
 
 // Runs a .sql file's full text in one simple-query call — node-postgres
 // only uses the extended (parameterised) protocol when you pass query
@@ -63,6 +64,8 @@ export async function setupSchema(name) {
   await client.connect();
   await runSqlFile(client, MOCK_SETUP_PATH);
   await runSqlFile(client, SCHEMA_PATH);
+  // Test-only fixture helpers for same-company colleagues (see the file).
+  await runSqlFile(client, LEGACY_INVITE_SHIM_PATH);
   await client.end();
 }
 

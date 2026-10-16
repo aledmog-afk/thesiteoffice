@@ -679,6 +679,79 @@ export async function rejectOrganisationMembership(requestId, reason = null) {
   if (error) throw error;
 }
 
+// ─── Companies on a project (v61, organisation tiers stage 2) ─────
+// See the v61 section of sql/schema.sql. Every check is server-side;
+// these only wrap the RPCs so pages share one call shape.
+export const PARTY_ROLES = [
+  { value: "main_contractor", label: "Main Contractor" },
+  { value: "subcontractor", label: "Subcontractor" },
+  { value: "clerk_of_works", label: "Clerk of Works" },
+  { value: "client", label: "Client" },
+  { value: "consultant", label: "Consultant" },
+];
+export const PARTY_ROLE_LABEL = Object.fromEntries(PARTY_ROLES.map((r) => [r.value, r.label]));
+
+export function partyRoleText(role, trade) {
+  const label = PARTY_ROLE_LABEL[role] || role;
+  return trade ? `${label} (${trade})` : label;
+}
+
+// Link-only invites: the raw token goes in the URL fragment (never sent
+// to a server in a request line or Referer).
+export function partyInviteLink(token) {
+  return new URL(`invite.html#t=${token}`, window.location.href).href;
+}
+
+// True when the database has no v61 yet (RPC missing) — pages hide the
+// company features instead of showing an error.
+export function isMissingRpcError(err) {
+  return !!err && (err.code === "PGRST202" || err.code === "42883" || /Could not find the function|does not exist/i.test(err.message || ""));
+}
+
+async function rpcOrThrow(name, args) {
+  const { data, error } = await supabase.rpc(name, args);
+  if (error) throw error;
+  return data;
+}
+
+export const getProjectParties = (projectId) => rpcOrThrow("get_project_parties", { p_project_id: projectId }).then((d) => d || []);
+export async function createPartyInvite(projectId, email, role, trade = null, parentPartyId = null) {
+  const rows = await rpcOrThrow("create_party_invite", { p_project_id: projectId, p_email: email, p_party_role: role, p_trade: trade, p_parent_party_id: parentPartyId });
+  return Array.isArray(rows) ? rows[0] : rows;
+}
+export async function resendPartyInvite(inviteId) {
+  const rows = await rpcOrThrow("resend_party_invite", { p_invite_id: inviteId });
+  return Array.isArray(rows) ? rows[0] : rows;
+}
+export const cancelPartyInvite = (inviteId) => rpcOrThrow("cancel_party_invite", { p_invite_id: inviteId });
+export async function getPartyInvite(token) {
+  const rows = await rpcOrThrow("get_party_invite", { p_token: token });
+  return (Array.isArray(rows) ? rows[0] : rows) || null;
+}
+export const acceptPartyInvite = (token, orgId) => rpcOrThrow("accept_party_invite", { p_token: token, p_org_id: orgId });
+export const addPartyMember = (partyId, userId) => rpcOrThrow("add_party_member", { p_party_id: partyId, p_user_id: userId });
+export const removePartyMember = (partyId, userId) => rpcOrThrow("remove_party_member", { p_party_id: partyId, p_user_id: userId });
+export const setPartyRole = (partyId, role, trade = null) => rpcOrThrow("set_party_role", { p_party_id: partyId, p_party_role: role, p_trade: trade });
+export const removeParty = (partyId) => rpcOrThrow("remove_party", { p_party_id: partyId });
+export const addOrgMemberToProject = (projectId, userId, role = "collaborator") => rpcOrThrow("add_org_member_to_project", { p_project_id: projectId, p_user_id: userId, p_role: role });
+export const setProjectMemberRole = (projectId, userId, role) => rpcOrThrow("set_project_member_role", { p_project_id: projectId, p_user_id: userId, p_role: role });
+// Companies the caller belongs to (any role) — the ones they can accept
+// a company invite for. RLS limits rows to the caller's own.
+export async function getMyOrganisations() {
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return [];
+  const { data, error } = await supabase.from("organisation_members").select("org_id, organisations(id, name)").eq("user_id", user.id);
+  if (error) throw error;
+  return (data || []).map((r) => r.organisations).filter(Boolean);
+}
+export async function getPendingPartyInvites(projectId) {
+  const { data, error } = await supabase.from("project_party_invites")
+    .select("id, invited_email, party_role, trade, status, expires_at, parent_party_id, sent_count")
+    .eq("project_id", projectId).eq("status", "pending").order("created_at", { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+
 // ─── Actions Engine ─────────────────────────────────────────────
 // Server-side triggers (sql/schema.sql, v29 — actions_before_write())
 // are the real authority for org_id derivation, status-transition

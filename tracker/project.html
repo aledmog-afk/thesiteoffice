@@ -29,6 +29,10 @@
   </div>
 
   <div id="pageErrorBox" class="error-box"></div>
+  <div id="myCompanyBanner" class="card" style="display:none;">
+    <span id="myCompanyText"></span>
+    <a class="btn btn-outline btn-sm" id="myCompanyLink" href="#" style="margin-left:0.6rem;">Your team on this job →</a>
+  </div>
 
   <div class="card" id="progressCard" style="margin-bottom:2rem;">
     <div style="display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap; margin-bottom:0.5rem;">
@@ -217,25 +221,10 @@
       </table>
     </div>
     <div id="inviteSection" style="margin-top:1rem; display:none;">
-      <p class="hint" style="margin-bottom:0.5rem;">Full collaborator access — share with anyone who needs to create/edit reports, plots, snags etc. on this site. They'll join the moment they open it while signed in.</p>
-      <div class="btn-row" id="inviteLinkRow" style="display:none;">
-        <input type="text" id="inviteLinkInput" readonly style="flex:1; min-width:220px;">
-        <button type="button" class="btn btn-outline btn-sm" id="copyInviteBtn">Copy Link</button>
-        <button type="button" class="btn btn-outline btn-sm" id="regenerateInviteBtn">Regenerate</button>
-        <button type="button" class="btn btn-outline btn-sm" id="revokeInviteBtn">Revoke</button>
-      </div>
-      <button type="button" class="btn btn-outline btn-sm" id="getInviteLinkBtn">Get Invite Link</button>
+      <p class="hint" style="margin-bottom:0.5rem;">Invite links have been replaced by company invites: invite another company's lead person by email, or add people from your own company, on the Companies page.</p>
+      <a class="btn btn-outline btn-sm" id="companiesLink" href="#">Companies on this job →</a>
     </div>
-    <div id="snaggingInviteSection" style="margin-top:1.2rem; display:none;">
-      <p class="hint" style="margin-bottom:0.5rem;">Snagging-only access — for whoever closes out snags on site (e.g. the main contractor's site manager). They can see and edit this site's snag lists only — nothing else.</p>
-      <div class="btn-row" id="snaggingInviteLinkRow" style="display:none;">
-        <input type="text" id="snaggingInviteLinkInput" readonly style="flex:1; min-width:220px;">
-        <button type="button" class="btn btn-outline btn-sm" id="copySnaggingInviteBtn">Copy Link</button>
-        <button type="button" class="btn btn-outline btn-sm" id="regenerateSnaggingInviteBtn">Regenerate</button>
-        <button type="button" class="btn btn-outline btn-sm" id="revokeSnaggingInviteBtn">Revoke</button>
-      </div>
-      <button type="button" class="btn btn-outline btn-sm" id="getSnaggingInviteLinkBtn">Get Snagging Invite Link</button>
-    </div>
+    <div id="snaggingInviteSection" style="display:none;"></div>
   </div>
 
   <div class="card" id="modulePermissionsCard" style="margin-top:2rem; display:none;">
@@ -290,40 +279,13 @@
   const pageErrorBox = document.getElementById("pageErrorBox");
 
   // ─── Collaborators ──────────────────────────────────────────────
-  function inviteLinkFor(code) {
-    return new URL(`join.html?code=${code}`, window.location.href).href;
-  }
-
-  async function copyToClipboard(text) {
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      prompt("Copy this link:", text);
-    }
-  }
-
-  const INVITE_KINDS = {
-    collaborator: { codeField: "invite_code", sectionId: "inviteSection", linkRowId: "inviteLinkRow", inputId: "inviteLinkInput", getBtnId: "getInviteLinkBtn", regenerateRpc: "regenerate_invite_code", revokeRpc: "revoke_invite_code" },
-    snagging: { codeField: "snagging_invite_code", sectionId: "snaggingInviteSection", linkRowId: "snaggingInviteLinkRow", inputId: "snaggingInviteLinkInput", getBtnId: "getSnaggingInviteLinkBtn", regenerateRpc: "regenerate_snagging_invite_code", revokeRpc: "revoke_snagging_invite_code" },
-  };
-
+  // v61: invite codes are retired — the owner gets a link to the
+  // Companies page instead (companies.html).
   function renderInviteSection(kind, isOwner) {
-    const k = INVITE_KINDS[kind];
-    const section = document.getElementById(k.sectionId);
+    if (kind !== "collaborator") return;
+    const section = document.getElementById("inviteSection");
     section.style.display = isOwner ? "block" : "none";
-    if (!isOwner) return;
-
-    const linkRow = document.getElementById(k.linkRowId);
-    const getBtn = document.getElementById(k.getBtnId);
-    const code = project[k.codeField];
-    if (code) {
-      linkRow.style.display = "flex";
-      getBtn.style.display = "none";
-      document.getElementById(k.inputId).value = inviteLinkFor(code);
-    } else {
-      linkRow.style.display = "none";
-      getBtn.style.display = "inline-flex";
-    }
+    document.getElementById("companiesLink").href = `companies.html?project=${projectId}`;
   }
 
   const ROLE_LABEL = { owner: "Owner", collaborator: "Collaborator", snagging: "Snagging" };
@@ -370,46 +332,6 @@
     loadMembers();
   }
   window.removeMember = removeMember;
-
-  async function getOrRegenerateInvite(kind, e) {
-    const k = INVITE_KINDS[kind];
-    const btn = e.currentTarget;
-    btn.disabled = true;
-    clearError(pageErrorBox);
-    try {
-      const { data, error } = await supabase.rpc(k.regenerateRpc, { p_project_id: projectId });
-      if (error) throw error;
-      project[k.codeField] = data;
-      renderInviteSection(kind, true);
-    } catch (err) {
-      showError(pageErrorBox, err);
-    } finally {
-      btn.disabled = false;
-    }
-  }
-  document.getElementById("getInviteLinkBtn").addEventListener("click", (e) => getOrRegenerateInvite("collaborator", e));
-  document.getElementById("regenerateInviteBtn").addEventListener("click", (e) => getOrRegenerateInvite("collaborator", e));
-  document.getElementById("getSnaggingInviteLinkBtn").addEventListener("click", (e) => getOrRegenerateInvite("snagging", e));
-  document.getElementById("regenerateSnaggingInviteBtn").addEventListener("click", (e) => getOrRegenerateInvite("snagging", e));
-
-  async function revokeInvite(kind, confirmMsg) {
-    const k = INVITE_KINDS[kind];
-    if (!confirm(confirmMsg)) return;
-    clearError(pageErrorBox);
-    const { error } = await supabase.rpc(k.revokeRpc, { p_project_id: projectId });
-    if (error) { showError(pageErrorBox, error); return; }
-    project[k.codeField] = null;
-    renderInviteSection(kind, true);
-  }
-  document.getElementById("revokeInviteBtn").addEventListener("click", () => revokeInvite("collaborator", "Revoke this invite link? Anyone who hasn't already joined won't be able to use it any more."));
-  document.getElementById("revokeSnaggingInviteBtn").addEventListener("click", () => revokeInvite("snagging", "Revoke this snagging invite link? Anyone who hasn't already joined won't be able to use it any more."));
-
-  document.getElementById("copyInviteBtn").addEventListener("click", () => {
-    copyToClipboard(document.getElementById("inviteLinkInput").value);
-  });
-  document.getElementById("copySnaggingInviteBtn").addEventListener("click", () => {
-    copyToClipboard(document.getElementById("snaggingInviteLinkInput").value);
-  });
 
   // ─── Module Permissions ─────────────────────────────────────────
   const MODULE_LABEL = { commercial: "Dayworks & Variations", toolbox_talks: "Toolbox Talks" };
@@ -772,6 +694,21 @@
   // to that, hiding the site-wide cards/tiles they'd get nothing back
   // from anyway, and leaving only the Snagging tile they actually have
   // access to.
+  // v61: if the caller is on this job through their own company (a
+  // party), say which and link to "your team on this job". Silent on a
+  // database without v61 (RPC missing) or for the owner side.
+  async function showMyCompanyBanner() {
+    try {
+      const { data, error } = await supabase.rpc("get_project_parties", { p_project_id: projectId });
+      if (error || !Array.isArray(data)) return;
+      const mine = data.find((p) => p.i_admin);
+      if (!mine || myRole === "owner") return;
+      document.getElementById("myCompanyText").textContent = `You're on this job for ${mine.company}.`;
+      document.getElementById("myCompanyLink").href = `companies.html?project=${projectId}`;
+      document.getElementById("myCompanyBanner").style.display = "block";
+    } catch { /* optional feature */ }
+  }
+
   function applySnaggingOnlyView() {
     document.getElementById("statusSelect").style.display = "none";
     document.getElementById("editBtn").style.display = "none";
@@ -829,6 +766,7 @@
     ]);
     myRole = role;
     if (error) { document.getElementById("projectName").textContent = "Site not found"; return; }
+    showMyCompanyBanner();
     project = data;
     renderHeaderAndFacts();
 

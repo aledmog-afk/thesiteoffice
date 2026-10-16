@@ -44,14 +44,14 @@ before(async () => {
   const projA2 = (await orgAAdmin.query(
     "insert into public.projects (name, org_id, created_by) values ('Org A Site 2', $1, $2) returning id", [orgA, ORGA_ADMIN]
   )).rows[0].id;
-  const inviteA = (await orgAAdmin.query("select public.regenerate_invite_code($1) as code", [projA])).rows[0].code;
-  const inviteA2 = (await orgAAdmin.query("select public.regenerate_invite_code($1) as code", [projA2])).rows[0].code;
+  const inviteA = (await orgAAdmin.query("select public.test_regenerate_invite_code($1) as code", [projA])).rows[0].code;
+  const inviteA2 = (await orgAAdmin.query("select public.test_regenerate_invite_code($1) as code", [projA2])).rows[0].code;
   await orgAAdmin.end();
 
   // Join everyone into Org A's project(s), then grant module roles.
   for (const [uid, code] of [[ORGA_EDITOR, inviteA], [ORGA_CONTRIBUTOR, inviteA], [ORGA_VIEWER, inviteA]]) {
     const c = await userClient(DB, uid);
-    await c.query("select public.join_project_by_invite($1)", [code]);
+    await c.query("select public.test_join_project_by_invite($1)", [code]);
     await c.end();
   }
 
@@ -75,14 +75,14 @@ before(async () => {
   const projB = (await orgBAdmin.query(
     "insert into public.projects (name, org_id, created_by) values ('Org B Site', $1, $2) returning id", [orgB, ORGB_ADMIN]
   )).rows[0].id;
-  const inviteB = (await orgBAdmin.query("select public.regenerate_invite_code($1) as code", [projB])).rows[0].code;
+  const inviteB = (await orgBAdmin.query("select public.test_regenerate_invite_code($1) as code", [projB])).rows[0].code;
   await orgBAdmin.query(
     "insert into public.project_module_roles (project_id, user_id, module, role, granted_by) values ($1,$2,'toolbox_talks','editor',$2)",
     [projB, ORGB_ADMIN]
   );
   await orgBAdmin.end();
   const orgBContributor = await userClient(DB, ORGB_CONTRIBUTOR);
-  await orgBContributor.query("select public.join_project_by_invite($1)", [inviteB]);
+  await orgBContributor.query("select public.test_join_project_by_invite($1)", [inviteB]);
   await orgBContributor.end();
   const orgBAdmin2 = await userClient(DB, ORGB_ADMIN);
   await orgBAdmin2.query(

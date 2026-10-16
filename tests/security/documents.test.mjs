@@ -40,16 +40,16 @@ before(async () => {
   const orgA = (await ownerA.query("select public.create_organisation('Test Org', 'main_contractor') as id")).rows[0].id;
   const projA1 = (await ownerA.query("insert into public.projects (name, org_id, created_by) values ('A1', $1, $2) returning id", [orgA, OWNER_A])).rows[0].id;
   const projA2 = (await ownerA.query("insert into public.projects (name, org_id, created_by) values ('A2', $1, $2) returning id", [orgA, OWNER_A])).rows[0].id;
-  const inviteCode = (await ownerA.query("select public.regenerate_invite_code($1) as code", [projA1])).rows[0].code;
-  const snagCode = (await ownerA.query("select public.regenerate_snagging_invite_code($1) as code", [projA1])).rows[0].code;
+  const inviteCode = (await ownerA.query("select public.test_regenerate_invite_code($1) as code", [projA1])).rows[0].code;
+  const snagCode = (await ownerA.query("select public.test_regenerate_snagging_invite_code($1) as code", [projA1])).rows[0].code;
   await ownerA.end();
 
   const collabA = await userClient(DB, COLLAB_A);
-  await collabA.query("select public.join_project_by_invite($1)", [inviteCode]);
+  await collabA.query("select public.test_join_project_by_invite($1)", [inviteCode]);
   await collabA.end();
 
   const snagA = await userClient(DB, SNAG_A);
-  await snagA.query("select public.join_project_by_invite($1)", [snagCode]);
+  await snagA.query("select public.test_join_project_by_invite($1)", [snagCode]);
   await snagA.end();
 
   const ownerB = await userClient(DB, OWNER_B);
