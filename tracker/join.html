@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
-<title>Join Site – Site Tracker</title>
+<title>Old invite link – Site Tracker</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/app.css">
@@ -14,7 +14,6 @@
   <div class="auth-card">
     <div class="auth-brand">SITE <span>TRACKER</span></div>
     <p class="auth-sub" id="statusText">Joining site…</p>
-    <div id="errorBox" class="error-box"></div>
     <div class="btn-row" id="actionsRow" style="display:none; justify-content:center;">
       <a class="btn btn-amber" href="dashboard.html">Go to Dashboard</a>
     </div>
@@ -22,15 +21,10 @@
 </div>
 
 <script type="module">
-  import { supabase } from "./js/supabase-client.js";
-  import { getParam, showError } from "./js/app.js";
-
   const statusText = document.getElementById("statusText");
-  const errorBox = document.getElementById("errorBox");
   const actionsRow = document.getElementById("actionsRow");
   // v61: per-project invite codes are retired. Opening an old link never
   // joins anything — it explains what to do instead.
-  void supabase; void showError; void errorBox; void getParam;
   statusText.textContent = "This invite link is no longer used. Ask the project owner to send you a company invite instead — it will put your company on the job.";
   actionsRow.style.display = "flex";
 </script>

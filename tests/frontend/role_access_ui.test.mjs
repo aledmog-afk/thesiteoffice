@@ -150,9 +150,9 @@ test("assign-companies.html: non-owners, and databases without v62, get a plain 
   let r = assignCtx({ role: "collaborator", rfis: [], actions: [] });
   let { document } = await runPage(ASSIGN, extractScript(ASSIGN), r.ctx);
   await wait(30);
-  assert.match(document.getElementById("notAvailableText").textContent, /Only the site owner/);
+  assert.match(document.getElementById("notAvailableText").textContent, /Only the project owner/);
   r = assignCtx({ rfis: null, actions: [], rfiError: { message: "column rfis.party_id does not exist" } });
   ({ document } = await runPage(ASSIGN, extractScript(ASSIGN), r.ctx));
   await wait(30);
-  assert.match(document.getElementById("notAvailableText").textContent, /latest database update/);
+  assert.match(document.getElementById("notAvailableText").textContent, /RFIs and actions couldn't be loaded/);
 });
