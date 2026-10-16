@@ -321,7 +321,7 @@
 
   async function removeMember(memberId, email, isYou) {
     const msg = isYou
-      ? `Leave this project? You'll need a new invite link to get back in.`
+      ? `Leave this project? To get back in, the project owner or your company's admin will need to add you again.`
       : `Remove "${email}" from this project? They'll lose access immediately.`;
     if (!confirm(msg)) return;
     clearError(pageErrorBox);
