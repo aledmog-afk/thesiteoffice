@@ -27,7 +27,7 @@
       <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.4rem;">Main contractor access</h3>
       <p class="hint" id="mcAccessText"></p>
       <div class="btn-row">
-        <select id="mcAccessSelect" style="width:auto;"><option value="full">Full site access</option><option value="narrow">Narrower (programme, actions, handovers, snags, RFIs)</option></select>
+        <select id="mcAccessSelect" style="width:auto;"><option value="full">Full project access</option><option value="narrow">Narrower (programme, actions, handovers, snags, RFIs)</option></select>
         <button type="button" class="btn btn-outline btn-sm" id="mcAccessSaveBtn">Save</button>
       </div>
     </div>
@@ -85,7 +85,7 @@
   const me = await requireAuth();
   const projectId = getParam("project");
   if (!projectId) window.location.href = "dashboard.html";
-  renderHeader([{ label: "Site", href: `project.html?id=${projectId}` }, { label: "Companies" }]);
+  renderHeader([{ label: "Project", href: `project.html?id=${projectId}` }, { label: "Companies" }]);
 
   const errorBox = document.getElementById("errorBox");
   const roleOptions = (sel) => PARTY_ROLES.map((r) => `<option value="${r.value}"${r.value === sel ? " selected" : ""}>${escapeHtml(r.label)}</option>`).join("");
@@ -181,7 +181,7 @@
       supabase.from("projects").select("id, name, org_id").eq("id", projectId).single(),
       supabase.rpc("get_my_role", { p_project_id: projectId }),
     ]);
-    if (projErr || !proj) { showError(errorBox, projErr || { message: "Site not found" }); return; }
+    if (projErr || !proj) { showError(errorBox, projErr || { message: "Project not found" }); return; }
     project = proj;
     document.getElementById("projectName").textContent = proj.name;
     try {

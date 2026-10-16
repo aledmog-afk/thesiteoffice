@@ -92,7 +92,7 @@
       <div class="field" id="commercialField">
         <label>Commercial items this week</label>
         <div id="commercialItems"></div>
-        <p class="hint">Early warnings, proposed variations, or instructions raised this week — each one is added to the site's Commercials ledger when you save.</p>
+        <p class="hint">Early warnings, proposed variations, or instructions raised this week — each one is added to the project's Commercials ledger when you save.</p>
       </div>
       <div class="field">
         <label>Plan for next week</label>
@@ -813,7 +813,7 @@
     siteProject = project;
     renderHeader([
       { label: "Dashboard", href: "dashboard.html" },
-      { label: project?.name || "Site", href: `project.html?id=${projectId}` },
+      { label: project?.name || "Project", href: `project.html?id=${projectId}` },
       { label: "Weekly Reports", href: `weekly-reports.html?project=${projectId}` },
       { label: reportId ? "Edit Report" : "New Report" },
     ]);

@@ -23,7 +23,7 @@
   <div id="pageErrorBox" class="error-box"></div>
 
   <div class="card" id="noProgrammeCard" style="display:none; margin-bottom:1.5rem;">
-    <p style="margin-bottom:0.8rem;">This site doesn't have a programme yet.</p>
+    <p style="margin-bottom:0.8rem;">This project doesn't have a programme yet.</p>
     <button class="btn btn-amber" id="createProgrammeBtn">Create Programme</button>
   </div>
 
@@ -481,7 +481,7 @@
 
   async function init() {
     const { data: proj, error } = await supabase.from("projects").select("name").eq("id", projectId).single();
-    if (error) { document.getElementById("projectSub").textContent = "Site not found."; return; }
+    if (error) { document.getElementById("projectSub").textContent = "Project not found."; return; }
     project = proj;
     renderHeader([
       { label: "Dashboard", href: "dashboard.html" },

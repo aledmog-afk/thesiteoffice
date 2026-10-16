@@ -368,7 +368,7 @@
       const { data: project } = await supabase.from("projects").select("name").eq("id", projectId).single();
       renderHeader([
         { label: "Dashboard", href: "dashboard.html" },
-        { label: project?.name || "Site", href: `project.html?id=${projectId}` },
+        { label: project?.name || "Project", href: `project.html?id=${projectId}` },
         { label: "RFIs", href: `rfis.html?project=${projectId}` },
         { label: "New RFI" },
       ]);
@@ -398,7 +398,7 @@
     const project = rfi.projects;
     renderHeader([
       { label: "Dashboard", href: "dashboard.html" },
-      { label: project?.name || "Site", href: `project.html?id=${rfi.project_id}` },
+      { label: project?.name || "Project", href: `project.html?id=${rfi.project_id}` },
       { label: "RFIs", href: `rfis.html?project=${rfi.project_id}` },
       { label: rfi.reference },
     ]);

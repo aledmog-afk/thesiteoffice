@@ -6422,7 +6422,7 @@ export async function generateCommercialEventPdfBlob(eventId, type) {
 export const PARTY_ROLE_ACCESS_TEXT = {
   subcontractor: "Your company's snags, RFIs and actions. No commercials or reports.",
   clerk_of_works: "All snags, inspections and site diaries (weekly reports); verifies close-outs. No commercials.",
-  main_contractor_full: "Full site access (programme, snags, RFIs, actions, handovers, reports). No commercials or monthly reports.",
+  main_contractor_full: "Full project access (programme, snags, RFIs, actions, handovers, reports). No commercials or monthly reports.",
   main_contractor_narrow: "Programme, actions, handovers, RFIs, responding to snags and site diaries. No commercials.",
   client: "Read-only: snags, programme, weekly and monthly reports. Variations and dayworks are approved through the approval link.",
   consultant: "Read-only: your company's snags and RFIs, drawings and documents.",

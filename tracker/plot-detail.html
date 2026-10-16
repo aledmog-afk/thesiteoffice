@@ -484,7 +484,7 @@
       if (error) throw error;
       plot.progress_pct = pct;
       await recalculateActualProgress(plot.project_id);
-      document.getElementById("progressSavedHint").textContent = "Saved — site's Actual Progress has been updated.";
+      document.getElementById("progressSavedHint").textContent = "Saved — project's Actual Progress has been updated.";
     } catch (err) {
       showError(errorBox, err);
     } finally {

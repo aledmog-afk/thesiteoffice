@@ -29,7 +29,7 @@
   <div id="pageErrorBox" class="error-box"></div>
 
   <div class="card" id="noAccessCard" style="display:none;">
-    <p>You don't have Dayworks &amp; Variations access on this site. Ask the site owner to grant you a Dayworks &amp; Variations role (Viewer, Contributor or Approver) if you need it.</p>
+    <p>You don't have Dayworks &amp; Variations access on this project. Ask the project owner to grant you a Dayworks &amp; Variations role (Viewer, Contributor or Approver) if you need it.</p>
   </div>
 
   <div id="dashboardBody" style="display:none;">
@@ -186,7 +186,7 @@
     const { data: project } = await supabase.from("projects").select("name").eq("id", projectId).single();
     renderHeader([
       { label: "Dashboard", href: "dashboard.html" },
-      { label: project?.name || "Site", href: `project.html?id=${projectId}` },
+      { label: project?.name || "Project", href: `project.html?id=${projectId}` },
       { label: "Dayworks & Variations" },
     ]);
     document.getElementById("projectSub").textContent = project ? `${project.name} — dayworks & variations.` : "";
