@@ -43,6 +43,9 @@ export async function runPage(htmlPath, scriptSrc, context = {}) {
     setTimeout,
     clearTimeout,
     crypto: globalThis.crypto,
+    // v62 default: report pages behave as for the owner side (commercial
+    // notes shown, report objects untouched) unless a test overrides it.
+    attachReportCommercialNotes: async () => true,
     ...context,
   };
   const ctx = vm.createContext(fullContext);

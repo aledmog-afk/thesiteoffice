@@ -89,7 +89,7 @@
       <div class="field"><label for="drawingsReceived">Drawings / information received on site</label><textarea id="drawingsReceived" rows="2"></textarea></div>
       <div class="field"><label for="visitors">Visitors</label><textarea id="visitors" rows="2" placeholder="Who visited site this week and why"></textarea></div>
       <div class="field"><label for="otherComments">Other comments</label><textarea id="otherComments" rows="3"></textarea></div>
-      <div class="field">
+      <div class="field" id="commercialField">
         <label>Commercial items this week</label>
         <div id="commercialItems"></div>
         <p class="hint">Early warnings, proposed variations, or instructions raised this week — each one is added to the site's Commercials ledger when you save.</p>
@@ -121,7 +121,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, mountTableEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions, comparePlotNumbers, normalisePlotToken, syncGateStatusFromMilestones, EXTERNAL_WORKS_TAG, PHOTO_COMPLIANCE_STATUS, RESOURCE_ADEQUACY, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_LEVELS, RISK_IMPACT_BADGE, RISK_OWNER_SUGGESTIONS, STATUTORY_MILESTONE_TYPES, STATUTORY_OUTCOMES, STATUTORY_OUTCOME_BADGE, getWeeklyReportPosition, isWeeklyReportLocked, reviseWeeklyReport, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, CONTROL_LEVEL_BADGE, FINDING_SEVERITY_LABEL, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel, getRfiLinksForWeeklyReport } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, mountTableEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions, comparePlotNumbers, normalisePlotToken, syncGateStatusFromMilestones, EXTERNAL_WORKS_TAG, PHOTO_COMPLIANCE_STATUS, RESOURCE_ADEQUACY, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_LEVELS, RISK_IMPACT_BADGE, RISK_OWNER_SUGGESTIONS, STATUTORY_MILESTONE_TYPES, STATUTORY_OUTCOMES, STATUTORY_OUTCOME_BADGE, getWeeklyReportPosition, isWeeklyReportLocked, reviseWeeklyReport, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, CONTROL_LEVEL_BADGE, FINDING_SEVERITY_LABEL, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel, getRfiLinksForWeeklyReport, attachReportCommercialNotes } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -846,6 +846,9 @@
     document.getElementById("formTitle").textContent = "Edit Weekly Report";
     const { data: r, error } = await supabase.from("weekly_reports").select("*").eq("id", reportId).single();
     if (error) { showError(errorBox, error); return; }
+    // v62: commercial notes come from their own owner-side-only table;
+    // a company user never sees (or can add) them.
+    if (!(await attachReportCommercialNotes("weekly", [r]))) document.getElementById("commercialField").style.display = "none";
     existingReport = r;
     applyLockState();
     document.getElementById("weekStarting").value = r.week_starting;

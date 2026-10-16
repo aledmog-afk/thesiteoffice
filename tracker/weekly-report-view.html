@@ -30,7 +30,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, getOrgLogoUrl, formatGBP, showError, clearError, PHOTO_COMPLIANCE_BADGE, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_BADGE, STATUTORY_OUTCOME_BADGE, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, validWeeklyReportStatusTransitions, reviewWeeklyReport, approveWeeklyReport, issueWeeklyReport, reviseWeeklyReport, CONTROL_LEVEL_BADGE, getRfiLinksForWeeklyReport, normalisePlotToken } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, getOrgLogoUrl, formatGBP, showError, clearError, PHOTO_COMPLIANCE_BADGE, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_BADGE, STATUTORY_OUTCOME_BADGE, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, validWeeklyReportStatusTransitions, reviewWeeklyReport, approveWeeklyReport, issueWeeklyReport, reviseWeeklyReport, CONTROL_LEVEL_BADGE, getRfiLinksForWeeklyReport, normalisePlotToken, attachReportCommercialNotes } from "./js/app.js";
 
   await requireAuth();
   const reportId = getParam("id");
@@ -316,6 +316,7 @@
   async function load() {
     const { data: r, error } = await supabase.from("weekly_reports").select("*, projects(*)").eq("id", reportId).single();
     if (error) { document.getElementById("doc").textContent = "Report not found."; return; }
+    const showCommercial = await attachReportCommercialNotes("weekly", [r]);
     const project = r.projects;
     document.title = `Weekly Report - ${project.name} - ${fileDate(r.week_ending)}`;
 
@@ -432,7 +433,7 @@
       ${section("Site Housekeeping", r.site_housekeeping)}
       ${section("Drawings / Information Received on Site", r.drawings_received)}
       ${section("Visitors", r.visitors)}
-      ${commercialSection(r.commercial_items)}
+      ${showCommercial ? commercialSection(r.commercial_items) : ""}
       ${itemSection("Plan for Next Week", r.next_week_items, r.next_week_plan)}
       ${section("Other Comments", r.other_comments || r.deliveries_materials)}
 

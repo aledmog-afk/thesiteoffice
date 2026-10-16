@@ -37,6 +37,7 @@
 
     <!-- ─── My Work ─────────────────────────────────────────────── -->
     <div id="section-mine">
+      <div class="card" id="jobRolesBanner" style="display:none; margin-bottom:1.5rem;"></div>
       <div class="card" style="margin-bottom:1.5rem;">
         <div class="btn-row" id="mineFilterGroup" style="margin-bottom:0.8rem;">
           <button type="button" class="btn btn-outline btn-sm" data-filter="all">All</button>
@@ -47,6 +48,7 @@
           <button type="button" class="btn btn-outline btn-sm" data-filter="highCritical">High / Critical</button>
         </div>
         <div class="btn-row" style="margin-bottom:1rem;">
+          <select id="mineScope" style="width:auto; display:none;"><option value="me">Assigned to me</option><option value="company">My company's work</option></select>
           <select id="mineProjectFilter" style="width:auto;"><option value="all">All projects</option></select>
           <select id="mineTypeFilter" style="width:auto;">
             <option value="all">All types</option>
@@ -125,7 +127,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, escapeHtml, formatDate, showError, clearError, getPortfolioWorkItems, filterMyWorkItems, filterUnassignedWorkItems, summariseOwnerAccountability, ageingLabel, getMemberEmailMap, WORK_ITEM_TYPE_LABEL, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE } from "./js/app.js";
+  import { requireAuth, renderHeader, escapeHtml, formatDate, showError, clearError, getPortfolioWorkItems, filterMyWorkItems, filterUnassignedWorkItems, summariseOwnerAccountability, ageingLabel, getMemberEmailMap, WORK_ITEM_TYPE_LABEL, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, getMyJobRoles, filterCompanyWorkItems, partyRoleText, partyRoleAccessText } from "./js/app.js";
 
   await requireAuth();
   renderHeader([{ label: "Dashboard", href: "dashboard.html" }, { label: "My Work" }]);
@@ -140,6 +142,9 @@
   let memberEmails = {};
   let activeSection = "mine";
   let mineFilter = "all";
+  let mineScope = "me";
+  let jobRoles = [];
+  let allProjectNames = {};
   let mineProject = "all";
   let mineType = "all";
   let chasingFilter = "all";
@@ -208,8 +213,19 @@
   }
 
   // ─── My Work ────────────────────────────────────────────────────
+  function renderJobRoles() {
+    const box = document.getElementById("jobRolesBanner");
+    if (!jobRoles.length) { box.style.display = "none"; document.getElementById("mineScope").style.display = "none"; return; }
+    box.style.display = "block";
+    box.innerHTML = jobRoles.map((r) => {
+      const name = r.project_name || allProjectNames[r.project_id] || "a job";
+      return `<p style="margin:0.2rem 0;"><strong>${escapeHtml(name)}</strong> — you work for ${escapeHtml(r.company)} as ${escapeHtml(partyRoleText(r.party_role, r.trade))}. <span class="hint">${escapeHtml(partyRoleAccessText(r.party_role, r.main_contractor_access))}</span></p>`;
+    }).join("");
+    document.getElementById("mineScope").style.display = "";
+  }
+
   function renderMine() {
-    let items = filterMyWorkItems(allItems, myUserId);
+    let items = mineScope === "company" ? filterCompanyWorkItems(allItems, jobRoles) : filterMyWorkItems(allItems, myUserId);
     if (mineProject !== "all") items = items.filter((i) => i.project_id === mineProject);
     if (mineType !== "all") items = items.filter((i) => i.type === mineType);
     items = applyItemFilter(items, mineFilter);
@@ -297,6 +313,12 @@
   });
   document.querySelector('#chasingFilterGroup button[data-filter="all"]').classList.add("btn-amber");
   document.getElementById("chasingOwnerFilter").addEventListener("change", (e) => { chasingOwner = e.target.value; renderChasing(); });
+  document.getElementById("mineScope").addEventListener("change", (e) => {
+    mineScope = e.target.value;
+    document.getElementById("mineProjectFilter").innerHTML = projectOptionsHtml(mineScope === "company" ? filterCompanyWorkItems(allItems, jobRoles) : filterMyWorkItems(allItems, myUserId));
+    mineProject = "all";
+    renderMine();
+  });
   document.getElementById("chasingProjectFilter").addEventListener("change", (e) => { chasingProject = e.target.value; renderChasing(); });
   document.getElementById("chasingTypeFilter").addEventListener("change", (e) => { chasingType = e.target.value; renderChasing(); });
 
@@ -307,7 +329,9 @@
     clearError(errorBox);
     document.getElementById("retryWrap").style.display = "none";
     try {
-      allItems = await getPortfolioWorkItems();
+      [allItems, jobRoles] = await Promise.all([getPortfolioWorkItems(), getMyJobRoles().catch(() => [])]);
+      allProjectNames = Object.fromEntries(allItems.map((i) => [i.project_id, i.project_name]));
+      renderJobRoles();
 
       const ownerIds = [...new Set(allItems.map((i) => i.assigned_to).filter(Boolean))];
       const projectIdsForOwners = [...new Set(allItems.filter((i) => ownerIds.includes(i.assigned_to)).map((i) => i.project_id))];

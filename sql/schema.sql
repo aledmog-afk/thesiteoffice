@@ -11033,3 +11033,1062 @@ begin
     execute format('grant execute on function %s to authenticated', f);
   end loop;
 end $$;
+
+
+
+
+-- ─── v62 ADDITIONS: role-based access per company role (organisation tiers stage 4) ───
+-- Builds on v61 (companies on a project). What each invited company can
+-- do now depends on its ROLE on the job, from one capability table
+-- (party_role_capabilities, below) instead of being "snagging-only" for
+-- everyone. Defaults (Aled to confirm — see the PR):
+--   subcontractor   : its own company's snags (raise/work/close with
+--                     photo), its own company's RFIs and actions.
+--   clerk_of_works  : sees ALL snags, raises snags for any company,
+--                     verifies close-outs (never for work its own company
+--                     did), inspections, weekly reports (site diaries),
+--                     its own RFIs, programme read-only.
+--   main_contractor : switchable per project (projects.main_contractor_access):
+--                     'full'   (default, = v61): full site editor, still no
+--                              commercials / monthly reports.
+--                     'narrow': programme, actions, handovers + quality
+--                              gates, all RFIs, respond to all snags,
+--                              weekly reports, inspections read-only — no
+--                              blocks/plots/drawings edits, no commercials.
+--   client          : read-only: all snags, weekly + monthly reports,
+--                     programme. Approves variations/dayworks through the
+--                     EXISTING external approval link (unchanged).
+--   consultant      : read-only own-company snags; raises and works its
+--                     own company's RFIs (plus drawings/documents read).
+-- Commercial notes on weekly and monthly reports live in a separate
+-- table (report_commercial_notes) that no invited-company user can read.
+-- RFI evidence: only the RFI's company, the owner side and the Clerk of
+-- Works (restrictive policy — applies to a full-access MC too).
+-- Owner side (members of the owning company) is completely unchanged.
+-- An owner-raised individual (project_members.role = 'collaborator') keeps
+-- editor access exactly as in v61; commercials stay closed to every
+-- party-only user.
+--
+-- Per-company scoping (stage 2 risk 5): rfis.party_id and
+-- actions.party_id. A party-only user's new RFI/action defaults to their
+-- own company; with the *_own capability they see/work only their own
+-- company's (and their sub-subs') rows.
+--
+-- Snag verification records WHO and WHICH COMPANY verified
+-- (snag_items.verified_party_id; null = owner side), and the company the
+-- snag is given to can never verify its own work.
+--
+-- Rollback: drop the v62 policies/triggers/functions below, drop
+-- columns rfis.party_id, actions.party_id, snag_items.verified_party_id,
+-- projects.main_contractor_access, the party_role_capabilities table,
+-- and re-run the v61 definitions of snag_items_before_write,
+-- rfis_before_write, actions_before_write, can_see_party_row,
+-- accept_party_invite, add_party_member, set_party_role.
+
+alter table public.projects add column if not exists main_contractor_access text not null default 'full';
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'projects_main_contractor_access_check') then
+    alter table public.projects add constraint projects_main_contractor_access_check check (main_contractor_access in ('full', 'narrow'));
+  end if;
+end $$;
+alter table public.rfis add column if not exists party_id uuid references public.project_parties(id) on delete set null;
+alter table public.actions add column if not exists party_id uuid references public.project_parties(id) on delete set null;
+alter table public.snag_items add column if not exists verified_party_id uuid references public.project_parties(id) on delete set null;
+create index if not exists rfis_party_idx on public.rfis (party_id);
+create index if not exists actions_party_idx on public.actions (party_id);
+
+-- Capability table: edited only by re-running schema.sql (same rule as
+-- module_roles). mc_mode only matters for main_contractor.
+create table if not exists public.party_role_capabilities (
+  party_role text not null,
+  mc_mode text not null default 'any' check (mc_mode in ('any', 'full', 'narrow')),
+  capability text not null,
+  primary key (party_role, mc_mode, capability)
+);
+alter table public.party_role_capabilities enable row level security;
+drop policy if exists "authenticated read party_role_capabilities" on public.party_role_capabilities;
+create policy "authenticated read party_role_capabilities" on public.party_role_capabilities for select to authenticated using (true);
+revoke all on public.party_role_capabilities from anon;
+revoke insert, update, delete, truncate on public.party_role_capabilities from authenticated;
+grant select on public.party_role_capabilities to authenticated;
+insert into public.party_role_capabilities (party_role, mc_mode, capability) values
+  ('subcontractor', 'any', 'snags_write'),
+  ('subcontractor', 'any', 'rfis_own'),
+  ('subcontractor', 'any', 'actions_own'),
+  ('clerk_of_works', 'any', 'snags_write'),
+  ('clerk_of_works', 'any', 'snags_all'),
+  ('clerk_of_works', 'any', 'snags_verify'),
+  ('clerk_of_works', 'any', 'inspections'),
+  ('clerk_of_works', 'any', 'weekly_reports_write'),
+  ('clerk_of_works', 'any', 'rfis_own'),
+  ('clerk_of_works', 'any', 'programme_read'),
+  ('main_contractor', 'any', 'snags_all'),
+  ('main_contractor', 'narrow', 'snags_write'),
+  ('main_contractor', 'narrow', 'programme_write'),
+  ('main_contractor', 'narrow', 'actions_all'),
+  ('main_contractor', 'narrow', 'handovers'),
+  ('main_contractor', 'narrow', 'weekly_reports_write'),
+  ('main_contractor', 'narrow', 'rfis_all'),
+  ('main_contractor', 'narrow', 'inspections_read'),
+  ('client', 'any', 'snags_all'),
+  ('client', 'any', 'weekly_reports_read'),
+  ('client', 'any', 'monthly_reports_read'),
+  ('client', 'any', 'programme_read'),
+  ('consultant', 'any', 'rfis_own'),
+  ('clerk_of_works', 'any', 'rfi_evidence_all')
+on conflict do nothing;
+
+-- Does user hold capability p_cap on this project through one of their
+-- active companies on it? Owner-side users never get capabilities this
+-- way (they already have their normal access).
+create or replace function public.party_cap_user(p_project_id uuid, p_user_id uuid, p_cap text)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.user_party_ids(p_project_id, p_user_id) as my(id)
+    join public.project_parties pp on pp.id = my.id
+    join public.projects p on p.id = pp.project_id
+    join public.party_role_capabilities c on c.party_role = pp.party_role and c.capability = p_cap
+     and (c.mc_mode = 'any' or c.mc_mode = p.main_contractor_access)
+  );
+$$;
+
+create or replace function public.party_cap(p_project_id uuid, p_cap text)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select public.party_cap_user(p_project_id, auth.uid(), p_cap);
+$$;
+
+-- Row belongs to the caller's own company (or one of its sub-subs).
+create or replace function public.own_party_row(p_project_id uuid, p_party_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select p_party_id is not null and exists (
+    select 1 from public.user_party_ids(p_project_id, auth.uid()) as my(id)
+    where p_party_id in (select d from public.party_and_descendants(my.id) as d)
+  );
+$$;
+
+-- v62 replacement for v61's: "see all snags" now comes from the
+-- snags_all capability (MC, Clerk of Works, Client) instead of being
+-- hard-coded to main_contractor.
+create or replace function public.can_see_party_row(p_project_id uuid, p_party_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (select 1 from public.projects p
+                 join public.organisation_members om on om.org_id = p.org_id and om.user_id = auth.uid()
+                 where p.id = p_project_id)
+      or public.party_cap(p_project_id, 'snags_all')
+      or public.own_party_row(p_project_id, p_party_id);
+$$;
+
+-- May the caller write snags at all? Owner side and owner-raised
+-- editors yes; party-only users only with snags_write (so Client and
+-- Consultant are read-only).
+create or replace function public.can_write_snags(p_project_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select not public.is_party_only(p_project_id)
+      or public.is_project_editor(p_project_id)
+      or public.party_cap(p_project_id, 'snags_write');
+$$;
+
+-- Set-returning forms for RLS policies: evaluated ONCE per query (as a
+-- hashed sub-plan) instead of once per row, so policies stay fast at
+-- thousands of rows (the scalar forms above are for triggers/RPCs).
+create or replace function public.party_cap_projects(p_cap text)
+returns setof uuid
+language sql stable security definer set search_path = public
+as $$
+  select distinct pp.project_id
+  from public.project_party_members m
+  join public.project_parties pp on pp.id = m.party_id and pp.status = 'active'
+  join public.organisation_members om on om.org_id = pp.org_id and om.user_id = m.user_id
+  join public.projects p on p.id = pp.project_id
+  join public.party_role_capabilities c on c.party_role = pp.party_role and c.capability = p_cap
+   and (c.mc_mode = 'any' or c.mc_mode = p.main_contractor_access)
+  where m.user_id = auth.uid();
+$$;
+
+-- The caller's companies (and their sub-subs) on jobs where the caller's
+-- company holds p_cap (any capability when p_cap is null).
+create or replace function public.party_scope_ids(p_cap text)
+returns setof uuid
+language sql stable security definer set search_path = public
+as $$
+  select distinct d
+  from public.project_party_members m
+  join public.project_parties pp on pp.id = m.party_id and pp.status = 'active'
+  join public.organisation_members om on om.org_id = pp.org_id and om.user_id = m.user_id
+  join public.projects p on p.id = pp.project_id
+  cross join lateral public.party_and_descendants(pp.id) as d
+  where m.user_id = auth.uid()
+    and (p_cap is null or exists (select 1 from public.party_role_capabilities c
+          where c.party_role = pp.party_role and c.capability = p_cap and (c.mc_mode = 'any' or c.mc_mode = p.main_contractor_access)));
+$$;
+
+-- Jobs where the caller may write snags at all.
+create or replace function public.snag_write_projects()
+returns setof uuid
+language sql stable security definer set search_path = public
+as $$
+  select pm.project_id from public.project_members pm
+   where pm.user_id = auth.uid()
+     and (not public.is_party_only(pm.project_id) or public.is_project_editor(pm.project_id) or public.party_cap(pm.project_id, 'snags_write'));
+$$;
+
+-- Jobs the caller sees from the owning company's side.
+create or replace function public.owner_side_projects()
+returns setof uuid
+language sql stable security definer set search_path = public
+as $$
+  select p.id from public.projects p
+  join public.organisation_members om on om.org_id = p.org_id and om.user_id = auth.uid();
+$$;
+
+-- Verify / approve a close-out: editors or the Clerk of Works — but never
+-- the company the snag is given to (it did the work).
+create or replace function public.can_verify_snag(p_project_id uuid, p_snag_party_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  -- Never the company that did the work, nor a company above it (a sub
+  -- can't sign off its own sub-subcontractor's work).
+  select (public.is_project_editor(p_project_id) or public.party_cap(p_project_id, 'snags_verify'))
+     and not (p_snag_party_id is not null and exists (
+           select 1 from public.user_party_ids(p_project_id, auth.uid()) as up(id)
+           where p_snag_party_id in (select d from public.party_and_descendants(up.id) as d)));
+$$;
+
+-- RFI / action assignee legitimacy: an editor (as before), or someone
+-- working for the row's company (or a sub-sub of it), or a company with
+-- the *_all capability for that module.
+create or replace function public.can_be_assigned_work(p_project_id uuid, p_user_id uuid, p_party_id uuid, p_module text)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select public.is_project_editor_user(p_project_id, p_user_id)
+      or public.party_cap_user(p_project_id, p_user_id, p_module || '_all')
+      or (p_party_id is not null and exists (
+            select 1 from public.user_party_ids(p_project_id, p_user_id) as up(id)
+            where up.id in (select d from public.party_and_descendants(p_party_id) as d)));
+$$;
+
+-- Project role for a party member, per party role AND the project's
+-- main-contractor mode.
+create or replace function public.party_member_role_for(p_project_id uuid, p_party_role text)
+returns text
+language sql stable security definer set search_path = public
+as $$
+  select case when p_party_role = 'main_contractor'
+                and coalesce((select main_contractor_access from public.projects where id = p_project_id), 'full') = 'full'
+              then 'collaborator' else 'snagging' end;
+$$;
+
+-- Owner switches the main contractor between full and narrow access;
+-- re-bases every MC party member's project role.
+create or replace function public.set_main_contractor_access(p_project_id uuid, p_mode text)
+returns void
+language plpgsql security definer set search_path = public
+as $$
+begin
+  if not public.is_project_owner(p_project_id) then
+    raise exception 'Only the project owner can change the main contractor''s access' using errcode = '42501';
+  end if;
+  if p_mode not in ('full', 'narrow') then raise exception 'Mode must be full or narrow'; end if;
+  update public.projects set main_contractor_access = p_mode where id = p_project_id;
+  update public.project_members pm set role = case when p_mode = 'full' then 'collaborator' else 'snagging' end
+   where pm.project_id = p_project_id and pm.role <> 'owner' and not pm.role_override
+     and not public.is_owner_side_user(p_project_id, pm.user_id)
+     and pm.user_id in (select m.user_id from public.project_party_members m
+                        join public.project_parties pp on pp.id = m.party_id
+                        where pp.project_id = p_project_id and pp.status = 'active' and pp.party_role = 'main_contractor');
+end;
+$$;
+
+-- The caller's company role on each job they're on through a company —
+-- drives "My Work" and the role labels in the UI.
+create or replace function public.get_my_job_roles()
+returns table (project_id uuid, project_name text, party_id uuid, company text, party_role text, trade text, main_contractor_access text, capabilities text[])
+language sql stable security definer set search_path = public
+as $$
+  select pp.project_id, p.name, pp.id, o.name, pp.party_role, pp.trade, p.main_contractor_access,
+         array(select c.capability from public.party_role_capabilities c
+               where c.party_role = pp.party_role and (c.mc_mode = 'any' or c.mc_mode = p.main_contractor_access)
+               order by c.capability)
+  from public.project_party_members m
+  join public.project_parties pp on pp.id = m.party_id and pp.status = 'active'
+  join public.organisation_members om on om.org_id = pp.org_id and om.user_id = m.user_id
+  join public.organisations o on o.id = pp.org_id
+  join public.projects p on p.id = pp.project_id
+  where m.user_id = auth.uid() and auth.uid() is not null;
+$$;
+
+-- ── Default a party-only user's new RFI/action to their own company
+-- (fires before *_before_write, which checks the assignee against it).
+create or replace function public.party_row_default()
+returns trigger
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_party uuid;
+begin
+  if new.party_id is not null and not exists (
+       select 1 from public.project_parties where id = new.party_id and project_id = new.project_id and status = 'active') then
+    raise exception 'party_id must be an active company on this project';
+  end if;
+  if tg_op = 'INSERT' and new.party_id is null and auth.uid() is not null and public.is_party_only(new.project_id) then
+    select up.id into v_party from public.user_party_ids(new.project_id, auth.uid()) as up(id) limit 1;
+    new.party_id := v_party;
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists trg_rfis_aa_party_default on public.rfis;
+create trigger trg_rfis_aa_party_default before insert or update of party_id on public.rfis
+  for each row execute function public.party_row_default();
+drop trigger if exists trg_actions_aa_party_default on public.actions;
+create trigger trg_actions_aa_party_default before insert or update of party_id on public.actions
+  for each row execute function public.party_row_default();
+revoke execute on function public.party_row_default() from public, anon, authenticated;
+
+-- ── Record which company verified a snag (null = owner side). Fires
+-- after trg_snag_items_before_write (alphabetical), which has already
+-- decided verified_by/verified_at.
+create or replace function public.snag_items_verify_party()
+returns trigger
+language plpgsql security definer set search_path = public
+as $$
+begin
+  if new.verified_by is null then
+    new.verified_party_id := null;
+  elsif tg_op = 'INSERT' or new.verified_by is distinct from old.verified_by or new.verified_at is distinct from old.verified_at then
+    select up.id into new.verified_party_id
+      from public.user_party_ids(new.project_id, new.verified_by) as up(id)
+     where not public.is_owner_side_user(new.project_id, new.verified_by)
+     limit 1;
+  else
+    new.verified_party_id := old.verified_party_id;
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists trg_snag_items_verify_party on public.snag_items;
+create trigger trg_snag_items_verify_party before insert or update on public.snag_items
+  for each row execute function public.snag_items_verify_party();
+revoke execute on function public.snag_items_verify_party() from public, anon, authenticated;
+
+-- ── Existing functions, re-defined for v62 (bodies copied from their latest
+-- definitions above; only the marked checks change) ──
+create or replace function public.snag_items_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_action_project_id uuid;
+  v_finding_project_id uuid;
+  v_client_changed_verification boolean;
+  v_reopened boolean;
+  v_entering_pending_review boolean;
+  v_leaving_pending_review boolean;
+  v_direct_close boolean;
+begin
+  if new.assigned_to is not null and not public.is_project_member_user(new.project_id, new.assigned_to) then
+    raise exception 'assigned_to must be a member of this project';
+  end if;
+
+  if new.action_id is not null then
+    select project_id into v_action_project_id from public.actions where id = new.action_id;
+    if v_action_project_id is null then
+      raise exception 'snag_items.action_id must reference an existing action';
+    end if;
+    if v_action_project_id <> new.project_id then
+      raise exception 'a linked action must belong to the same project as the snag';
+    end if;
+  end if;
+
+  if new.inspection_finding_id is not null then
+    select project_id into v_finding_project_id from public.inspection_findings where id = new.inspection_finding_id;
+    if v_finding_project_id is null then
+      raise exception 'snag_items.inspection_finding_id must reference an existing inspection finding';
+    end if;
+    if v_finding_project_id <> new.project_id then
+      raise exception 'a linked inspection finding must belong to the same project as the snag';
+    end if;
+  end if;
+
+  if TG_OP = 'INSERT' then
+    -- A snag can never be created pre-verified, or pre-closed with a
+    -- backdated closed_date — both are always derived from a real
+    -- status transition, never trusted from the client. Likewise it can
+    -- never be created already 'pending_review' (v52 below) — that
+    -- state only means anything as the result of a real "submit for
+    -- review" action on an existing open snag, so a client attempting
+    -- it at insert time is simply reset to 'open', same idiom as the
+    -- fields above.
+    new.verified_at := null;
+    new.verified_by := null;
+    if new.status = 'pending_review' then
+      new.status := 'open';
+    end if;
+    new.closed_date := case when new.status = 'closed' then coalesce(new.closed_date, current_date) else null end;
+    return new;
+  end if;
+
+  -- UPDATE: capture whether the CLIENT itself is trying to change
+  -- verification, and whether this write is a genuine reopen (closed ->
+  -- not closed), BEFORE any auto-management below runs. A reopen auto-
+  -- clears a stale verification as a side effect and must not be
+  -- blocked by the editor-only check that guards a DELIBERATE
+  -- verification change — but it must also not silently swallow a
+  -- client's attempt to verify a snag that was never closed to begin
+  -- with, which needs its own real error below.
+  v_client_changed_verification := new.verified_at is distinct from old.verified_at;
+  v_reopened := old.status = 'closed' and new.status <> 'closed';
+
+  -- v52: completion evidence. A snag can be closed two ways — attach a
+  -- photo and close directly (self-evident, no reviewer needed), or, if
+  -- there's no photo, submit it for review and have a project editor
+  -- approve (-> closed) or reject (-> back to open) it. 'pending_review'
+  -- is a brand-new state with no prior loose behaviour to preserve, so
+  -- both its entry and exit are validated outright here — unlike
+  -- open/closed/rejected, whose existing free transitions (e.g.
+  -- closed <-> rejected) are deliberately left exactly as loose as they
+  -- have always been.
+  v_entering_pending_review := new.status = 'pending_review' and old.status <> 'pending_review';
+  v_leaving_pending_review := old.status = 'pending_review' and new.status <> 'pending_review';
+  v_direct_close := new.status = 'closed' and old.status not in ('closed', 'pending_review');
+
+  if v_entering_pending_review and old.status <> 'open' then
+    raise exception 'a snag can only be submitted for review from Open';
+  end if;
+  if v_entering_pending_review then
+    -- A fresh review cycle starts clean — a leftover reason from a
+    -- PRIOR rejection would otherwise confuse the reviewer looking at
+    -- this resubmission.
+    new.review_note := null;
+  end if;
+
+  if v_leaving_pending_review then
+    if not public.can_verify_snag(new.project_id, new.party_id) then
+      raise exception 'only a project editor or the Clerk of Works — never the company that did the work — can approve or reject a snag pending review';
+    end if;
+    if new.status not in ('closed', 'open') then
+      raise exception 'a snag pending review can only be approved (closed) or sent back to Open';
+    end if;
+  end if;
+
+  if v_direct_close and not exists (
+    select 1 from public.snag_photos where snag_id = old.id and kind = 'completion'
+  ) then
+    raise exception 'a snag can only be closed directly with at least one completion photo attached — submit it for review instead if there is no photo';
+  end if;
+  if v_direct_close then
+    -- Same reasoning as the pending_review entry above — a photo-close
+    -- is a fresh, self-evident completion, not the outcome of whatever
+    -- review cycle (if any) came before it.
+    new.review_note := null;
+  end if;
+
+  if new.status = 'closed' and old.status <> 'closed' then
+    new.closed_date := coalesce(new.closed_date, current_date);
+  elsif new.status <> 'closed' then
+    new.closed_date := null;
+  end if;
+
+  if v_reopened then
+    new.verified_at := null;
+    new.verified_by := null;
+    -- Stale "before" completion evidence would otherwise misleadingly
+    -- suggest the reopened defect is still fixed — cleared so the NEXT
+    -- close (of either kind) needs genuinely fresh evidence. Problem
+    -- photos (kind = 'problem') are untouched — they document the
+    -- persistent defect and stay relevant across reopen cycles.
+    delete from public.snag_photos where snag_id = old.id and kind = 'completion';
+  elsif v_leaving_pending_review and new.status = 'closed' then
+    -- Approval — equivalent to an editor independently verifying it,
+    -- just reached via the review queue instead of the standalone
+    -- Verify button. Client-supplied verified_at/by is never trusted
+    -- either way.
+    new.verified_at := now();
+    new.verified_by := auth.uid();
+    new.review_note := null;
+  elsif v_leaving_pending_review and new.status = 'open' then
+    -- Rejection — sent back to the assignee for rework. review_note
+    -- (the reason) is whatever the client supplies in this same write;
+    -- not enforced non-null here, matching delay_reason's own existing
+    -- optional-reason convention on this table.
+    new.verified_at := null;
+    new.verified_by := null;
+  elsif v_client_changed_verification then
+    if not public.can_verify_snag(new.project_id, new.party_id) then
+      raise exception 'only a project editor or the Clerk of Works — never the company that did the work — can change a snag''s verification';
+    end if;
+    if new.verified_at is not null then
+      if new.status <> 'closed' then
+        raise exception 'a snag must be closed before it can be verified';
+      end if;
+      new.verified_at := now();
+      new.verified_by := auth.uid();
+    else
+      new.verified_by := null;
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+create or replace function public.rfis_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_org_id uuid;
+  v_plot_project_id uuid;
+  v_next_seq integer;
+begin
+  if TG_OP = 'UPDATE' then
+    -- Identity fields are immutable regardless of payload — pinned
+    -- back to their real values BEFORE any validation below runs, so
+    -- a client can never smuggle a plot/assignee check past
+    -- validation by first changing project_id in the same payload.
+    -- (commercial_events_before_write, the pattern this trigger is
+    -- otherwise copied from, does not explicitly re-pin project_id on
+    -- UPDATE; doing so here is a deliberate hardening, not an
+    -- oversight to reconcile.)
+    new.project_id := old.project_id;
+    new.org_id := old.org_id;
+    new.reference := old.reference;
+    new.created_by := old.created_by;
+    new.created_at := old.created_at;
+  end if;
+
+  select org_id into v_org_id from public.projects where id = new.project_id;
+  if v_org_id is null then
+    raise exception 'rfis.project_id must reference an existing project with an organisation';
+  end if;
+  new.org_id := v_org_id;
+
+  if new.plot_id is not null then
+    select project_id into v_plot_project_id from public.plots where id = new.plot_id;
+    if v_plot_project_id is null then
+      raise exception 'rfis.plot_id must reference an existing plot';
+    end if;
+    if v_plot_project_id <> new.project_id then
+      raise exception 'plot_id must belong to the same project as the RFI';
+    end if;
+  end if;
+
+  if new.assigned_to is not null and not public.can_be_assigned_work(new.project_id, new.assigned_to, new.party_id, 'rfis') then
+    raise exception 'assigned_to must be a project editor, or work for the company this RFI belongs to';
+  end if;
+
+  if TG_OP = 'INSERT' then
+    new.created_by := auth.uid();
+    new.created_at := now();
+    new.updated_at := now();
+    new.status := 'open'; -- an RFI can never be created pre-answered/closed
+    new.answered_at := null; new.answered_by := null; new.response := null;
+    new.closed_at := null;
+
+    -- Reference numbering: DW-/VAR-/TT- (schema.sql, commercial_events
+    -- / toolbox_talks) all use an unguarded
+    -- max(trailing-digits)+1 with NO unique constraint behind it and
+    -- NO lock around the read — two concurrent inserts for the same
+    -- project can both read the same "next" number before either
+    -- commits, and both succeed, silently producing a duplicate
+    -- reference. That's a real, pre-existing gap in this codebase
+    -- (confirmed: no unique index on any *.reference column), not
+    -- something to reproduce here. RFI improves on it with two layers:
+    -- a transaction-scoped advisory lock keyed on project_id, which
+    -- serialises concurrent RFI inserts for the SAME project only
+    -- (inserts for different projects are never blocked by each
+    -- other, aside from the negligible chance of an unrelated
+    -- hashtext() collision) — released automatically at commit/
+    -- rollback, no cleanup needed — plus rfis_project_reference_unique
+    -- above as a hard backstop: if a reference were ever computed
+    -- twice regardless, the second insert is rejected outright instead
+    -- of silently duplicating. Never overwrites an explicitly-supplied
+    -- reference, matching the existing convention exactly.
+    if new.reference is null then
+      perform pg_advisory_xact_lock(hashtext(new.project_id::text));
+      select coalesce(max(substring(reference from '(\d+)$')::int), 0) + 1
+        into v_next_seq
+        from public.rfis
+        where project_id = new.project_id;
+      new.reference := 'RFI-' || lpad(v_next_seq::text, 3, '0');
+    end if;
+
+    return new;
+  end if;
+
+  -- UPDATE
+  new.updated_at := now();
+
+  if new.status <> old.status then
+    if not public.valid_rfi_status_transition(old.status, new.status) then
+      raise exception 'Invalid RFI status transition: % -> %', old.status, new.status;
+    end if;
+    if old.status = 'open' and new.status = 'answered' then
+      new.answered_at := now();
+      new.answered_by := auth.uid();
+    elsif new.status = 'closed' then
+      new.closed_at := now();
+    elsif new.status = 'open' then
+      -- Reopened from closed: clear the closed stamp only. The prior
+      -- answered_at/answered_by/response is kept intact — a reopen is
+      -- a correction to the OUTCOME, not an erasure of what was
+      -- genuinely answered before.
+      new.closed_at := null;
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+create or replace function public.actions_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_org_id uuid;
+  v_plot_project_id uuid;
+begin
+  select org_id into v_org_id from public.projects where id = new.project_id;
+  if v_org_id is null then
+    raise exception 'actions.project_id must reference an existing project with an organisation';
+  end if;
+  new.org_id := v_org_id;
+
+  if new.plot_id is not null then
+    select project_id into v_plot_project_id from public.plots where id = new.plot_id;
+    if v_plot_project_id is null then
+      raise exception 'actions.plot_id must reference an existing plot';
+    end if;
+    if v_plot_project_id <> new.project_id then
+      raise exception 'plot_id must belong to the same project as the action';
+    end if;
+  end if;
+
+  if new.assigned_to is not null and not public.can_be_assigned_work(new.project_id, new.assigned_to, new.party_id, 'actions') then
+    raise exception 'assigned_to must be a project editor, or work for the company this action belongs to';
+  end if;
+
+  if TG_OP = 'INSERT' then
+    new.created_by := auth.uid();
+    new.created_at := now();
+    new.updated_at := now();
+  else
+    if new.status <> old.status and not public.valid_action_status_transition(old.status, new.status) then
+      raise exception 'Invalid action status transition: % -> %', old.status, new.status;
+    end if;
+    -- creator/creation time are immutable once set, regardless of what
+    -- an UPDATE payload includes.
+    new.created_by := old.created_by;
+    new.created_at := old.created_at;
+    new.updated_at := now();
+  end if;
+
+  -- completed_at reflects the moment status most recently BECAME
+  -- 'completed' — set on the transition in, left untouched while it
+  -- stays 'completed' (so re-saving other fields doesn't reset it), and
+  -- cleared the moment status moves away from 'completed' (reopening).
+  if new.status = 'completed' and (TG_OP = 'INSERT' or old.status <> 'completed') then
+    new.completed_at := now();
+  elsif new.status <> 'completed' then
+    new.completed_at := null;
+  end if;
+
+  return new;
+end;
+$$;
+
+create or replace function public.accept_party_invite(p_token text, p_org_id uuid)
+returns uuid
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_inv public.project_party_invites;
+  v_email text;
+  v_project public.projects;
+  v_party uuid;
+  v_existing public.project_parties;
+begin
+  if auth.uid() is null then raise exception 'Not signed in' using errcode = '42501'; end if;
+  select * into v_inv from public.project_party_invites where token_hash = public.party_invite_token_hash(p_token) for update;
+  if v_inv.id is null then raise exception 'This invite link isn''t valid.'; end if;
+  if v_inv.status = 'cancelled' then raise exception 'This invite was cancelled. Ask the sender for a new one.'; end if;
+  if v_inv.status = 'accepted' then raise exception 'This invite has already been accepted.'; end if;
+  if v_inv.expires_at < now() then raise exception 'This invite has expired. Ask the sender to resend it.'; end if;
+  select lower(email) into v_email from auth.users where id = auth.uid();
+  if v_email is distinct from v_inv.invited_email then
+    raise exception 'This invite was sent to a different email address. Sign in as %.', v_inv.invited_email using errcode = '42501';
+  end if;
+  if not exists (select 1 from public.organisation_members where org_id = p_org_id and user_id = auth.uid()) then
+    raise exception 'needs_membership: you must be an approved member of that company first' using errcode = '42501';
+  end if;
+  select * into v_project from public.projects where id = v_inv.project_id;
+  if p_org_id = v_project.org_id then raise exception 'Your company already owns this project'; end if;
+  if v_inv.parent_party_id is not null and exists (
+       select 1 from public.project_parties where id = v_inv.parent_party_id and org_id = p_org_id) then
+    raise exception 'A company can''t be its own sub-subcontractor';
+  end if;
+
+  select * into v_existing from public.project_parties where project_id = v_inv.project_id and org_id = p_org_id;
+  if v_existing.id is not null then
+    if v_existing.status <> 'active' then raise exception 'That company was removed from this project by the owner'; end if;
+    v_party := v_existing.id;
+  else
+    insert into public.project_parties (project_id, org_id, party_role, trade, parent_party_id, lead_user_id, created_by)
+    values (v_inv.project_id, p_org_id, v_inv.party_role, v_inv.trade, v_inv.parent_party_id, auth.uid(), v_inv.invited_by)
+    returning id into v_party;
+  end if;
+
+  insert into public.project_party_members (party_id, user_id, added_by) values (v_party, auth.uid(), auth.uid())
+  on conflict (party_id, user_id) do nothing;
+  insert into public.project_members (project_id, user_id, role)
+  values (v_inv.project_id, auth.uid(), public.party_member_role_for(v_inv.project_id, (select party_role from public.project_parties where id = v_party)))
+  on conflict (project_id, user_id) do nothing;
+
+  update public.project_party_invites set status = 'accepted', accepted_by = auth.uid(), accepted_at = now(), accepted_party_id = v_party
+   where id = v_inv.id;
+  return v_inv.project_id;
+end;
+$$;
+
+create or replace function public.add_party_member(p_party_id uuid, p_user_id uuid)
+returns void
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_pp public.project_parties;
+begin
+  select * into v_pp from public.project_parties where id = p_party_id and status = 'active';
+  if v_pp.id is null or not public.is_org_admin(v_pp.org_id) then
+    raise exception 'Only an admin of that company can add its staff to this job' using errcode = '42501';
+  end if;
+  if not exists (select 1 from public.organisation_members where org_id = v_pp.org_id and user_id = p_user_id) then
+    raise exception 'That person isn''t a member of your company';
+  end if;
+  insert into public.project_party_members (party_id, user_id, added_by) values (p_party_id, p_user_id, auth.uid())
+  on conflict (party_id, user_id) do nothing;
+  insert into public.project_members (project_id, user_id, role)
+  values (v_pp.project_id, p_user_id, public.party_member_role_for(v_pp.project_id, v_pp.party_role))
+  on conflict (project_id, user_id) do nothing;
+end;
+$$;
+
+create or replace function public.set_party_role(p_party_id uuid, p_party_role text, p_trade text default null)
+returns void
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_pp public.project_parties;
+begin
+  select * into v_pp from public.project_parties where id = p_party_id and status = 'active';
+  if v_pp.id is null or not public.is_project_owner(v_pp.project_id) then
+    raise exception 'Only the project owner can change a company''s role' using errcode = '42501';
+  end if;
+  if v_pp.parent_party_id is not null and p_party_role <> 'subcontractor' then
+    raise exception 'A sub-subcontractor must stay a subcontractor';
+  end if;
+  update public.project_parties set party_role = p_party_role, trade = nullif(trim(p_trade), ''), updated_at = now() where id = p_party_id;
+  -- Re-base party members on the new role, except anyone the owner
+  -- individually raised or lowered (role_override) — they keep theirs.
+  update public.project_members pm set role = public.party_member_role_for(v_pp.project_id, p_party_role)
+   where pm.project_id = v_pp.project_id and pm.role <> 'owner' and not pm.role_override
+     and pm.user_id in (select user_id from public.project_party_members where party_id = p_party_id)
+     and not public.is_owner_side_user(v_pp.project_id, pm.user_id);
+end;
+$$;
+
+
+-- ── Commercial notes on reports: a separate table invited companies can't
+-- read. Writes to weekly_reports/monthly_reports.commercial_items are
+-- diverted here by trigger (the column itself always stays '[]'), so
+-- older front ends keep working for the owner side.
+create table if not exists public.report_commercial_notes (
+  report_kind text not null check (report_kind in ('weekly', 'monthly')),
+  report_id uuid not null,
+  project_id uuid not null references public.projects(id) on delete cascade,
+  items jsonb not null default '[]'::jsonb,
+  updated_at timestamptz not null default now(),
+  primary key (report_kind, report_id)
+);
+create index if not exists report_commercial_notes_project_idx on public.report_commercial_notes (project_id);
+alter table public.report_commercial_notes enable row level security;
+drop policy if exists "owner side reads report commercial notes" on public.report_commercial_notes;
+create policy "owner side reads report commercial notes" on public.report_commercial_notes for select to authenticated
+  using (public.is_project_member(project_id) and not public.is_party_only(project_id));
+revoke all on public.report_commercial_notes from anon, public;
+revoke insert, update, delete, truncate on public.report_commercial_notes from authenticated;
+grant select on public.report_commercial_notes to authenticated;
+
+create or replace function public.report_commercial_divert()
+returns trigger
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_kind text := case when tg_table_name = 'weekly_reports' then 'weekly' else 'monthly' end;
+  v_items jsonb := coalesce(new.commercial_items, '[]'::jsonb);
+begin
+  if auth.uid() is not null and public.is_party_only(new.project_id) then
+    if v_items <> '[]'::jsonb then
+      raise exception 'Commercial notes can only be added by the owning company' using errcode = '42501';
+    end if;
+    -- An invited company editing a report never touches the notes.
+  elsif v_items <> '[]'::jsonb then
+    insert into public.report_commercial_notes (report_kind, report_id, project_id, items)
+    values (v_kind, new.id, new.project_id, v_items)
+    on conflict (report_kind, report_id) do update set items = excluded.items, updated_at = now();
+  end if;
+  -- An EMPTY list never deletes or overwrites saved notes. Front ends
+  -- from before v62 load the (always-empty) column and save '[]' back;
+  -- without this guard that save would wipe the moved notes. Non-empty
+  -- writes keep replacing the notes exactly as before.
+  new.commercial_items := '[]'::jsonb;
+  return new;
+end;
+$$;
+revoke execute on function public.report_commercial_divert() from public, anon, authenticated;
+drop trigger if exists trg_weekly_reports_commercial_divert on public.weekly_reports;
+create trigger trg_weekly_reports_commercial_divert before insert or update of commercial_items on public.weekly_reports
+  for each row execute function public.report_commercial_divert();
+drop trigger if exists trg_monthly_reports_commercial_divert on public.monthly_reports;
+create trigger trg_monthly_reports_commercial_divert before insert or update of commercial_items on public.monthly_reports
+  for each row execute function public.report_commercial_divert();
+
+-- One-off move of existing notes (idempotent: only non-empty columns).
+-- Triggers are paused for the clearing update so the migration itself
+-- creates no audit rows and changes no updated_at.
+insert into public.report_commercial_notes (report_kind, report_id, project_id, items)
+  select 'weekly', id, project_id, commercial_items from public.weekly_reports where commercial_items <> '[]'::jsonb
+  on conflict (report_kind, report_id) do update set items = excluded.items;
+insert into public.report_commercial_notes (report_kind, report_id, project_id, items)
+  select 'monthly', id, project_id, commercial_items from public.monthly_reports where commercial_items <> '[]'::jsonb
+  on conflict (report_kind, report_id) do update set items = excluded.items;
+do $$
+begin
+  if exists (select 1 from public.weekly_reports where commercial_items <> '[]'::jsonb) then
+    alter table public.weekly_reports disable trigger user;
+    update public.weekly_reports set commercial_items = '[]'::jsonb where commercial_items <> '[]'::jsonb;
+    alter table public.weekly_reports enable trigger user;
+  end if;
+  if exists (select 1 from public.monthly_reports where commercial_items <> '[]'::jsonb) then
+    alter table public.monthly_reports disable trigger user;
+    update public.monthly_reports set commercial_items = '[]'::jsonb where commercial_items <> '[]'::jsonb;
+    alter table public.monthly_reports enable trigger user;
+  end if;
+end $$;
+
+-- Owner's "assign a company" screen and dashboard flag: open snags,
+-- RFIs and actions with no company yet, on jobs that have companies.
+create or replace function public.get_unassigned_company_work()
+returns table (project_id uuid, project_name text, snag_count int, rfi_count int, action_count int)
+language sql stable security definer set search_path = public
+as $$
+  select p.id, p.name,
+    (select count(*)::int from public.snag_items s where s.project_id = p.id and s.party_id is null and s.status not in ('closed', 'rejected')),
+    (select count(*)::int from public.rfis r where r.project_id = p.id and r.party_id is null and r.status not in ('closed', 'cancelled')),
+    (select count(*)::int from public.actions a where a.project_id = p.id and a.party_id is null and a.status not in ('completed', 'cancelled'))
+  from public.projects p
+  join public.project_members pm on pm.project_id = p.id and pm.user_id = auth.uid() and pm.role = 'owner'
+  where exists (select 1 from public.project_parties pp where pp.project_id = p.id and pp.status = 'active')
+  order by p.name;
+$$;
+
+-- ── Single-call read checks for the two busiest tables. Each is ONE
+-- query per row (like is_project_editor), so the read policy keeps the
+-- same shape and planner estimate as before v62 and project_id lookups
+-- stay on their index.
+create or replace function public.can_read_snag_row(p_project_id uuid, p_party_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.project_members pm
+    join public.projects p on p.id = pm.project_id
+    where pm.project_id = p_project_id and pm.user_id = auth.uid()
+      and (exists (select 1 from public.organisation_members om where om.org_id = p.org_id and om.user_id = pm.user_id)
+           or exists (
+             select 1 from public.project_party_members ppm
+             join public.project_parties pp on pp.id = ppm.party_id and pp.status = 'active'
+             join public.organisation_members om2 on om2.org_id = pp.org_id and om2.user_id = ppm.user_id
+             where pp.project_id = pm.project_id and ppm.user_id = pm.user_id
+               and (exists (select 1 from public.party_role_capabilities c
+                             where c.party_role = pp.party_role and c.capability = 'snags_all'
+                               and (c.mc_mode = 'any' or c.mc_mode = p.main_contractor_access))
+                    or (p_party_id is not null and p_party_id in (select d from public.party_and_descendants(pp.id) as d)))))
+  );
+$$;
+
+create or replace function public.can_read_action_row(p_project_id uuid, p_party_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1
+    from public.project_members pm
+    join public.projects p on p.id = pm.project_id
+    where pm.project_id = p_project_id and pm.user_id = auth.uid()
+      and ((pm.role in ('owner', 'collaborator')
+            and (exists (select 1 from public.organisation_members om where om.org_id = p.org_id and om.user_id = pm.user_id)
+                 or exists (select 1 from public.project_party_members ppm
+                            join public.project_parties pp on pp.id = ppm.party_id and pp.status = 'active'
+                            join public.organisation_members om2 on om2.org_id = pp.org_id and om2.user_id = ppm.user_id
+                            where pp.project_id = pm.project_id and ppm.user_id = pm.user_id)))
+           or exists (
+             select 1 from public.project_party_members ppm
+             join public.project_parties pp on pp.id = ppm.party_id and pp.status = 'active'
+             join public.organisation_members om2 on om2.org_id = pp.org_id and om2.user_id = ppm.user_id
+             where pp.project_id = pm.project_id and ppm.user_id = pm.user_id
+               and (exists (select 1 from public.party_role_capabilities c
+                             where c.party_role = pp.party_role and c.capability = 'actions_all'
+                               and (c.mc_mode = 'any' or c.mc_mode = p.main_contractor_access))
+                    or (p_party_id is not null
+                        and exists (select 1 from public.party_role_capabilities c2
+                                    where c2.party_role = pp.party_role and c2.capability = 'actions_own'
+                                      and (c2.mc_mode = 'any' or c2.mc_mode = p.main_contractor_access))
+                        and p_party_id in (select d from public.party_and_descendants(pp.id) as d)))))
+  );
+$$;
+
+-- ── Policies ──
+-- snag_items: v61 visibility + v62 "may write snags at all".
+drop policy if exists "members read snag_items" on public.snag_items;
+create policy "members read snag_items" on public.snag_items for select to authenticated using (public.can_read_snag_row(project_id, party_id));
+drop policy if exists "members insert snag_items" on public.snag_items;
+create policy "members insert snag_items" on public.snag_items for insert to authenticated with check (public.is_project_member(project_id) and (project_id in (select public.owner_side_projects()) or project_id in (select public.party_cap_projects('snags_all')) or party_id in (select public.party_scope_ids(null))) and project_id in (select public.snag_write_projects()));
+drop policy if exists "members update snag_items" on public.snag_items;
+create policy "members update snag_items" on public.snag_items for update to authenticated using (public.is_project_member(project_id) and (project_id in (select public.owner_side_projects()) or project_id in (select public.party_cap_projects('snags_all')) or party_id in (select public.party_scope_ids(null))) and project_id in (select public.snag_write_projects())) with check (public.is_project_member(project_id) and (project_id in (select public.owner_side_projects()) or project_id in (select public.party_cap_projects('snags_all')) or party_id in (select public.party_scope_ids(null))) and project_id in (select public.snag_write_projects()));
+drop policy if exists "members delete snag_items" on public.snag_items;
+create policy "members delete snag_items" on public.snag_items for delete to authenticated using (public.is_project_member(project_id) and (project_id in (select public.owner_side_projects()) or project_id in (select public.party_cap_projects('snags_all')) or party_id in (select public.party_scope_ids(null))) and project_id in (select public.snag_write_projects()));
+-- RFIs per company (stage 2 risk 5). Editors keep their existing policies.
+drop policy if exists "v62 parties read rfis" on public.rfis;
+create policy "v62 parties read rfis" on public.rfis for select to authenticated using (project_id in (select public.party_cap_projects('rfis_all')) or party_id in (select public.party_scope_ids('rfis_own')));
+drop policy if exists "v62 parties insert rfis" on public.rfis;
+create policy "v62 parties insert rfis" on public.rfis for insert to authenticated with check (project_id in (select public.party_cap_projects('rfis_all')) or party_id in (select public.party_scope_ids('rfis_own')));
+drop policy if exists "v62 parties update rfis" on public.rfis;
+create policy "v62 parties update rfis" on public.rfis for update to authenticated using (project_id in (select public.party_cap_projects('rfis_all')) or party_id in (select public.party_scope_ids('rfis_own'))) with check (project_id in (select public.party_cap_projects('rfis_all')) or party_id in (select public.party_scope_ids('rfis_own')));
+-- Evidence links follow their RFI.
+drop policy if exists "v62 parties read rfi_evidence_links" on public.rfi_evidence_links;
+create policy "v62 parties read rfi_evidence_links" on public.rfi_evidence_links for select to authenticated using (project_id in (select public.party_cap_projects('rfi_evidence_all')) or exists (select 1 from public.rfis r where r.id = rfi_id and (r.project_id in (select public.party_cap_projects('rfis_all')) or r.party_id in (select public.party_scope_ids('rfis_own')))));
+drop policy if exists "v62 parties insert rfi_evidence_links" on public.rfi_evidence_links;
+create policy "v62 parties insert rfi_evidence_links" on public.rfi_evidence_links for insert to authenticated with check (exists (select 1 from public.rfis r where r.id = rfi_id and (r.project_id in (select public.party_cap_projects('rfis_all')) or r.party_id in (select public.party_scope_ids('rfis_own')))));
+drop policy if exists "v62 evidence only for its company, owner side and clerk of works" on public.rfi_evidence_links;
+create policy "v62 evidence only for its company, owner side and clerk of works" on public.rfi_evidence_links as restrictive for select to authenticated using (project_id in (select public.owner_side_projects()) or project_id in (select public.party_cap_projects('rfi_evidence_all')) or exists (select 1 from public.rfis r where r.id = rfi_id and r.party_id in (select public.party_scope_ids(null))));
+-- Actions per company.
+drop policy if exists "v62 parties read actions" on public.actions;
+-- One function per row (same shape and planner estimate as before v62).
+drop policy if exists "editors read actions" on public.actions;
+create policy "editors read actions" on public.actions for select to authenticated using (public.can_read_action_row(project_id, party_id));
+drop policy if exists "v62 parties insert actions" on public.actions;
+create policy "v62 parties insert actions" on public.actions for insert to authenticated with check (project_id in (select public.party_cap_projects('actions_all')) or party_id in (select public.party_scope_ids('actions_own')));
+drop policy if exists "v62 parties update actions" on public.actions;
+create policy "v62 parties update actions" on public.actions for update to authenticated using (project_id in (select public.party_cap_projects('actions_all')) or party_id in (select public.party_scope_ids('actions_own'))) with check (project_id in (select public.party_cap_projects('actions_all')) or party_id in (select public.party_scope_ids('actions_own')));
+drop policy if exists "v62 parties delete actions" on public.actions;
+create policy "v62 parties delete actions" on public.actions for delete to authenticated using (project_id in (select public.party_cap_projects('actions_all')));
+-- Module access by capability (permissive, OR-ed with the existing editor policies).
+drop policy if exists "v62 parties read inspections" on public.inspections;
+create policy "v62 parties read inspections" on public.inspections for select to authenticated using (project_id in (select public.party_cap_projects('inspections_read')) or project_id in (select public.party_cap_projects('inspections')));
+drop policy if exists "v62 parties insert inspections" on public.inspections;
+create policy "v62 parties insert inspections" on public.inspections for insert to authenticated with check (project_id in (select public.party_cap_projects('inspections')));
+drop policy if exists "v62 parties update inspections" on public.inspections;
+create policy "v62 parties update inspections" on public.inspections for update to authenticated using (project_id in (select public.party_cap_projects('inspections'))) with check (project_id in (select public.party_cap_projects('inspections')));
+drop policy if exists "v62 parties read inspection_findings" on public.inspection_findings;
+create policy "v62 parties read inspection_findings" on public.inspection_findings for select to authenticated using (project_id in (select public.party_cap_projects('inspections_read')) or project_id in (select public.party_cap_projects('inspections')));
+drop policy if exists "v62 parties insert inspection_findings" on public.inspection_findings;
+create policy "v62 parties insert inspection_findings" on public.inspection_findings for insert to authenticated with check (project_id in (select public.party_cap_projects('inspections')));
+drop policy if exists "v62 parties update inspection_findings" on public.inspection_findings;
+create policy "v62 parties update inspection_findings" on public.inspection_findings for update to authenticated using (project_id in (select public.party_cap_projects('inspections'))) with check (project_id in (select public.party_cap_projects('inspections')));
+drop policy if exists "v62 parties read inspection_finding_photos" on public.inspection_finding_photos;
+create policy "v62 parties read inspection_finding_photos" on public.inspection_finding_photos for select to authenticated using (project_id in (select public.party_cap_projects('inspections_read')) or project_id in (select public.party_cap_projects('inspections')));
+drop policy if exists "v62 parties insert inspection_finding_photos" on public.inspection_finding_photos;
+create policy "v62 parties insert inspection_finding_photos" on public.inspection_finding_photos for insert to authenticated with check (project_id in (select public.party_cap_projects('inspections')));
+drop policy if exists "v62 parties update inspection_finding_photos" on public.inspection_finding_photos;
+create policy "v62 parties update inspection_finding_photos" on public.inspection_finding_photos for update to authenticated using (project_id in (select public.party_cap_projects('inspections'))) with check (project_id in (select public.party_cap_projects('inspections')));
+drop policy if exists "v62 parties delete inspection_finding_photos" on public.inspection_finding_photos;
+create policy "v62 parties delete inspection_finding_photos" on public.inspection_finding_photos for delete to authenticated using (project_id in (select public.party_cap_projects('inspections')));
+drop policy if exists "v62 parties read weekly_reports" on public.weekly_reports;
+create policy "v62 parties read weekly_reports" on public.weekly_reports for select to authenticated using (project_id in (select public.party_cap_projects('weekly_reports_read')) or project_id in (select public.party_cap_projects('weekly_reports_write')));
+drop policy if exists "v62 parties insert weekly_reports" on public.weekly_reports;
+create policy "v62 parties insert weekly_reports" on public.weekly_reports for insert to authenticated with check (project_id in (select public.party_cap_projects('weekly_reports_write')));
+drop policy if exists "v62 parties update weekly_reports" on public.weekly_reports;
+create policy "v62 parties update weekly_reports" on public.weekly_reports for update to authenticated using (project_id in (select public.party_cap_projects('weekly_reports_write'))) with check (project_id in (select public.party_cap_projects('weekly_reports_write')));
+drop policy if exists "v62 parties read monthly_reports" on public.monthly_reports;
+create policy "v62 parties read monthly_reports" on public.monthly_reports for select to authenticated using (project_id in (select public.party_cap_projects('monthly_reports_read')));
+drop policy if exists "v62 parties read programmes" on public.programmes;
+create policy "v62 parties read programmes" on public.programmes for select to authenticated using (project_id in (select public.party_cap_projects('programme_read')) or project_id in (select public.party_cap_projects('programme_write')));
+drop policy if exists "v62 parties insert programmes" on public.programmes;
+create policy "v62 parties insert programmes" on public.programmes for insert to authenticated with check (project_id in (select public.party_cap_projects('programme_write')));
+drop policy if exists "v62 parties update programmes" on public.programmes;
+create policy "v62 parties update programmes" on public.programmes for update to authenticated using (project_id in (select public.party_cap_projects('programme_write'))) with check (project_id in (select public.party_cap_projects('programme_write')));
+drop policy if exists "v62 parties read programme_activities" on public.programme_activities;
+create policy "v62 parties read programme_activities" on public.programme_activities for select to authenticated using (project_id in (select public.party_cap_projects('programme_read')) or project_id in (select public.party_cap_projects('programme_write')));
+drop policy if exists "v62 parties insert programme_activities" on public.programme_activities;
+create policy "v62 parties insert programme_activities" on public.programme_activities for insert to authenticated with check (project_id in (select public.party_cap_projects('programme_write')));
+drop policy if exists "v62 parties update programme_activities" on public.programme_activities;
+create policy "v62 parties update programme_activities" on public.programme_activities for update to authenticated using (project_id in (select public.party_cap_projects('programme_write'))) with check (project_id in (select public.party_cap_projects('programme_write')));
+drop policy if exists "v62 parties delete programme_activities" on public.programme_activities;
+create policy "v62 parties delete programme_activities" on public.programme_activities for delete to authenticated using (project_id in (select public.party_cap_projects('programme_write')));
+drop policy if exists "v62 parties read handover_documents" on public.handover_documents;
+create policy "v62 parties read handover_documents" on public.handover_documents for select to authenticated using (project_id in (select public.party_cap_projects('handovers')));
+drop policy if exists "v62 parties insert handover_documents" on public.handover_documents;
+create policy "v62 parties insert handover_documents" on public.handover_documents for insert to authenticated with check (project_id in (select public.party_cap_projects('handovers')));
+drop policy if exists "v62 parties update handover_documents" on public.handover_documents;
+create policy "v62 parties update handover_documents" on public.handover_documents for update to authenticated using (project_id in (select public.party_cap_projects('handovers'))) with check (project_id in (select public.party_cap_projects('handovers')));
+drop policy if exists "v62 parties delete handover_documents" on public.handover_documents;
+create policy "v62 parties delete handover_documents" on public.handover_documents for delete to authenticated using (project_id in (select public.party_cap_projects('handovers')));
+drop policy if exists "v62 parties read quality_gates" on public.quality_gates;
+create policy "v62 parties read quality_gates" on public.quality_gates for select to authenticated using (project_id in (select public.party_cap_projects('handovers')));
+drop policy if exists "v62 parties insert quality_gates" on public.quality_gates;
+create policy "v62 parties insert quality_gates" on public.quality_gates for insert to authenticated with check (project_id in (select public.party_cap_projects('handovers')));
+drop policy if exists "v62 parties update quality_gates" on public.quality_gates;
+create policy "v62 parties update quality_gates" on public.quality_gates for update to authenticated using (project_id in (select public.party_cap_projects('handovers'))) with check (project_id in (select public.party_cap_projects('handovers')));
+drop policy if exists "v62 parties delete quality_gates" on public.quality_gates;
+create policy "v62 parties delete quality_gates" on public.quality_gates for delete to authenticated using (project_id in (select public.party_cap_projects('handovers')));
+drop policy if exists "v62 parties read internal_milestones" on public.internal_milestones;
+create policy "v62 parties read internal_milestones" on public.internal_milestones for select to authenticated using (project_id in (select public.party_cap_projects('programme_read')) or project_id in (select public.party_cap_projects('programme_write')));
+drop policy if exists "v62 parties insert internal_milestones" on public.internal_milestones;
+create policy "v62 parties insert internal_milestones" on public.internal_milestones for insert to authenticated with check (project_id in (select public.party_cap_projects('programme_write')));
+drop policy if exists "v62 parties update internal_milestones" on public.internal_milestones;
+create policy "v62 parties update internal_milestones" on public.internal_milestones for update to authenticated using (project_id in (select public.party_cap_projects('programme_write'))) with check (project_id in (select public.party_cap_projects('programme_write')));
+drop policy if exists "v62 parties delete internal_milestones" on public.internal_milestones;
+create policy "v62 parties delete internal_milestones" on public.internal_milestones for delete to authenticated using (project_id in (select public.party_cap_projects('programme_write')));
+
+-- ── Grants (v59 rule) ──────────────────────────────────────────────
+do $$
+declare
+  f text;
+begin
+  foreach f in array array[
+    'public.party_cap_user(uuid, uuid, text)', 'public.party_cap(uuid, text)', 'public.own_party_row(uuid, uuid)',
+    'public.can_see_party_row(uuid, uuid)', 'public.can_write_snags(uuid)', 'public.can_verify_snag(uuid, uuid)',
+    'public.can_be_assigned_work(uuid, uuid, uuid, text)', 'public.party_member_role_for(uuid, text)',
+    'public.set_main_contractor_access(uuid, text)', 'public.party_cap_projects(text)', 'public.party_scope_ids(text)',
+    'public.snag_write_projects()', 'public.owner_side_projects()', 'public.get_unassigned_company_work()', 'public.can_read_snag_row(uuid, uuid)', 'public.can_read_action_row(uuid, uuid)', 'public.get_my_job_roles()',
+    'public.accept_party_invite(text, uuid)', 'public.add_party_member(uuid, uuid)', 'public.set_party_role(uuid, text, text)'
+  ] loop
+    execute format('revoke all on function %s from public', f);
+    execute format('revoke execute on function %s from anon', f);
+    execute format('grant execute on function %s to authenticated', f);
+  end loop;
+end $$;
+revoke execute on function public.snag_items_before_write() from public, anon, authenticated;
+revoke execute on function public.rfis_before_write() from public, anon, authenticated;
+revoke execute on function public.actions_before_write() from public, anon, authenticated;

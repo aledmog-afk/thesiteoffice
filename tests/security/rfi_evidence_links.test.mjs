@@ -103,7 +103,7 @@ test("Schema: rfi_evidence_links table, constraints, foreign keys and indexes ex
     assert.deepEqual(fkTargets, ["auth.users", "projects", "rfis", "weekly_reports"].sort());
 
     const policies = await admin.query(`select cmd from pg_policies where tablename = 'rfi_evidence_links'`);
-    assert.equal(policies.rowCount, 3, "select/insert/delete only, no update policy");
+    assert.equal(policies.rowCount, 6, "select/insert/delete only, no update policy (3 original + 2 v62 company policies + 1 v62 restrictive evidence policy)");
     assert.ok(!policies.rows.some((r) => r.cmd === "UPDATE"));
   } finally {
     await admin.end();

@@ -23,8 +23,17 @@
   <div id="notAvailable" class="card" style="display:none;"><p>Company invites aren't switched on for this site yet.</p></div>
 
   <div id="ownerView" style="display:none;">
+    <div class="card" id="mcAccessCard" style="display:none; margin-bottom:1.2rem;">
+      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.4rem;">Main contractor access</h3>
+      <p class="hint" id="mcAccessText"></p>
+      <div class="btn-row">
+        <select id="mcAccessSelect" style="width:auto;"><option value="full">Full site access</option><option value="narrow">Narrower (programme, actions, handovers, snags, RFIs)</option></select>
+        <button type="button" class="btn btn-outline btn-sm" id="mcAccessSaveBtn">Save</button>
+      </div>
+    </div>
     <div class="card">
       <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.8rem;">Companies</h3>
+      <p class="hint" id="assignWorkLink" style="display:none;"><a href="#" id="assignWorkHref">Assign older RFIs and actions to companies</a> <span class="badge badge-amber" id="assignWorkFlag" style="display:none;"></span></p>
       <div class="table-wrap"><table>
         <thead><tr><th>Company</th><th>Role on this job</th><th>Lead contact</th><th>People</th><th></th></tr></thead>
         <tbody id="partyRows"></tbody>
@@ -71,7 +80,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, PARTY_ROLES, partyRoleText, partyInviteLink, isMissingRpcError, getProjectParties, createPartyInvite, resendPartyInvite, cancelPartyInvite, getPendingPartyInvites, setPartyRole, removeParty, addPartyMember, removePartyMember, addOrgMemberToProject, getOrganisationMembers } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, PARTY_ROLES, partyRoleText, partyInviteLink, isMissingRpcError, getProjectParties, createPartyInvite, resendPartyInvite, cancelPartyInvite, getPendingPartyInvites, setPartyRole, removeParty, addPartyMember, removePartyMember, addOrgMemberToProject, getOrganisationMembers, partyRoleAccessText, setMainContractorAccess } from "./js/app.js";
 
   const me = await requireAuth();
   const projectId = getParam("project");
@@ -181,9 +190,33 @@
       if (isMissingRpcError(err)) { document.getElementById("notAvailable").style.display = "block"; return; }
       showError(errorBox, err); return;
     }
-    if (role === "owner") await loadOwner();
+    if (role === "owner") { await loadOwner(); await loadMcAccess(); }
     await loadPartyAdmin();
   }
+
+  // v62: the owner chooses how much the main contractor company can do.
+  // Hidden where the database predates v62 (no main_contractor_access).
+  async function loadMcAccess() {
+    const card = document.getElementById("mcAccessCard");
+    const { data, error } = await supabase.from("projects").select("main_contractor_access").eq("id", projectId).single();
+    if (error || !data || !data.main_contractor_access) { card.style.display = "none"; return; }
+    card.style.display = "block";
+    document.getElementById("assignWorkHref").href = `assign-companies.html?project=${projectId}`;
+    document.getElementById("assignWorkLink").style.display = "block";
+    try {
+      const { data: work } = await supabase.rpc("get_unassigned_company_work");
+      const mine = Array.isArray(work) ? work.find((w) => w.project_id === projectId) : null;
+      const n = mine ? mine.rfi_count + mine.action_count : 0;
+      const flag = document.getElementById("assignWorkFlag");
+      flag.textContent = `${n} need a company`; flag.style.display = n ? "" : "none";
+    } catch { /* flag is optional */ }
+    document.getElementById("mcAccessSelect").value = data.main_contractor_access;
+    document.getElementById("mcAccessText").textContent = partyRoleAccessText("main_contractor", data.main_contractor_access);
+  }
+  document.getElementById("mcAccessSaveBtn").addEventListener("click", () => {
+    const mode = document.getElementById("mcAccessSelect").value;
+    run(() => setMainContractorAccess(projectId, mode));
+  });
 
   async function run(fn) {
     clearError(errorBox);

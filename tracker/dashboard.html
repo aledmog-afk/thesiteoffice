@@ -69,7 +69,7 @@
   </div>
 
   <div class="card" id="needsCompanyCard" style="display:none; margin-bottom:1.2rem; border-left:4px solid var(--amber, #f0a500);">
-    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.4rem;">Snags needing a company</h3>
+    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.4rem;">Work needing a company</h3>
     <div id="needsCompanyRows"></div>
   </div>
   <div id="controlSection" style="display:none;">
@@ -328,10 +328,17 @@
   async function loadNeedsCompany() {
     const card = document.getElementById("needsCompanyCard");
     try {
-      const { data, error } = await supabase.rpc("get_unassigned_company_snags");
-      if (error || !Array.isArray(data) || !data.length) { card.style.display = "none"; return; }
-      document.getElementById("needsCompanyRows").innerHTML = data.map((r) =>
-        `<p style="margin:0.2rem 0;"><a href="project.html?id=${encodeURIComponent(r.project_id)}">${escapeHtml(r.project_name)}</a> — ${r.snag_count} snag${r.snag_count === 1 ? "" : "s"} not assigned to a company yet</p>`).join("");
+      // v62 adds RFIs and actions; fall back to the v61 snag-only list.
+      let { data, error } = await supabase.rpc("get_unassigned_company_work");
+      if (error) ({ data, error } = await supabase.rpc("get_unassigned_company_snags"));
+      const rows = (!error && Array.isArray(data) ? data : []).filter((r) => r.snag_count || r.rfi_count || r.action_count);
+      if (!rows.length) { card.style.display = "none"; return; }
+      const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+      document.getElementById("needsCompanyRows").innerHTML = rows.map((r) => {
+        const parts = [r.snag_count ? plural(r.snag_count, "snag") : null, r.rfi_count ? plural(r.rfi_count, "RFI") : null, r.action_count ? plural(r.action_count, "action") : null].filter(Boolean).join(", ");
+        const link = r.rfi_count || r.action_count ? ` · <a href="assign-companies.html?project=${encodeURIComponent(r.project_id)}">Assign</a>` : "";
+        return `<p style="margin:0.2rem 0;"><a href="project.html?id=${encodeURIComponent(r.project_id)}">${escapeHtml(r.project_name)}</a> — ${parts} not assigned to a company yet${link}</p>`;
+      }).join("");
       card.style.display = "block";
     } catch { card.style.display = "none"; }
   }
