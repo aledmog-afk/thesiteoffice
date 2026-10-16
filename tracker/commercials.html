@@ -201,7 +201,7 @@
     const { data: project } = await supabase.from("projects").select("name").eq("id", projectId).single();
     renderHeader([
       { label: "Dashboard", href: "dashboard.html" },
-      { label: project?.name || "Site", href: `project.html?id=${projectId}` },
+      { label: project?.name || "Project", href: `project.html?id=${projectId}` },
       { label: "Commercials" },
     ]);
     document.getElementById("projectSub").textContent = project ? `${project.name} — early warnings & proposed variations.` : "";

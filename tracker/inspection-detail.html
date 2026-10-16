@@ -470,7 +470,7 @@
     const project = inspection.projects;
     renderHeader([
       { label: "Dashboard", href: "dashboard.html" },
-      { label: project?.name || "Site", href: `project.html?id=${inspection.project_id}` },
+      { label: project?.name || "Project", href: `project.html?id=${inspection.project_id}` },
       { label: "Inspections", href: `inspections.html?project=${inspection.project_id}` },
       { label: inspection.title },
     ]);

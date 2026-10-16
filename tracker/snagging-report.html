@@ -169,7 +169,7 @@
 
   async function load() {
     const { data: proj } = await supabase.from("projects").select("*").eq("id", projectId).single();
-    if (!proj) { document.getElementById("doc").textContent = "Site not found."; return; }
+    if (!proj) { document.getElementById("doc").textContent = "Project not found."; return; }
     project = proj;
 
     renderHeader([

@@ -450,7 +450,7 @@
       const { data: project } = await supabase.from("projects").select("name").eq("id", talk.project_id).single();
       renderHeader([
         { label: "Dashboard", href: "dashboard.html" },
-        { label: project?.name || "Site", href: `project.html?id=${talk.project_id}` },
+        { label: project?.name || "Project", href: `project.html?id=${talk.project_id}` },
         { label: "Toolbox Talks", href: `toolbox-talks.html?project=${talk.project_id}` },
         { label: talk.title },
       ]);

@@ -86,7 +86,7 @@
       </table>
     </div>
     <div id="emptyState" class="empty" style="display:none;">
-      <p>No documents yet for this site.</p>
+      <p>No documents yet for this project.</p>
     </div>
   </div>
 </div>
@@ -178,7 +178,7 @@
             return { ...d, revisions: revisions || [] };
           }))
         : selected;
-      await exportDocumentsZip(project?.name || "Site", docsForExport, { includeHistory });
+      await exportDocumentsZip(project?.name || "Project", docsForExport, { includeHistory });
     } catch (err) {
       showError(errorBox, err);
     } finally {
@@ -244,7 +244,7 @@
       supabase.rpc("get_my_role", { p_project_id: projectId }),
       supabase.from("projects").select("name").eq("id", projectId).single(),
     ]);
-    if (error) { document.getElementById("projectSub").textContent = "Site not found."; return; }
+    if (error) { document.getElementById("projectSub").textContent = "Project not found."; return; }
     project = proj;
     isEditor = role === "owner" || role === "collaborator";
     document.getElementById("newDocBtn").style.display = isEditor ? "inline-flex" : "none";

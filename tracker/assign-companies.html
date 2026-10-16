@@ -52,7 +52,7 @@
 
   await requireAuth();
   const projectId = getParam("project");
-  renderHeader([{ label: "Dashboard", href: "dashboard.html" }, { label: "Site", href: `project.html?id=${projectId}` }, { label: "Assign work to companies" }]);
+  renderHeader([{ label: "Dashboard", href: "dashboard.html" }, { label: "Project", href: `project.html?id=${projectId}` }, { label: "Assign work to companies" }]);
   const errorBox = document.getElementById("errorBox");
   let parties = [], rfis = [], actions = [];
   const OPEN_RFI = (r) => r.status !== "closed";

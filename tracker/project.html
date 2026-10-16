@@ -65,7 +65,7 @@
           <tbody id="controlAttentionRows"></tbody>
         </table>
       </div>
-      <div id="controlAttentionEmpty" class="empty" style="display:none;"><p>No actions currently require attention on this site.</p></div>
+      <div id="controlAttentionEmpty" class="empty" style="display:none;"><p>No actions currently require attention on this project.</p></div>
     </div>
   </div>
 
@@ -151,16 +151,16 @@
   </div>
 
   <div class="card" id="detailsCard">
-    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Site Details</h3>
+    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Project Details</h3>
     <dl class="doc-facts" id="factsView"></dl>
 
     <form id="editForm" style="display:none;">
       <div id="errorBox" class="error-box"></div>
       <div class="form-grid">
-        <div class="field"><label for="name">Site name *</label><input type="text" id="name" required></div>
+        <div class="field"><label for="name">Project name *</label><input type="text" id="name" required></div>
         <div class="field"><label for="contractRef">Contract reference</label><input type="text" id="contractRef"></div>
       </div>
-      <div class="field"><label for="address">Site address</label><input type="text" id="address"></div>
+      <div class="field"><label for="address">Project address</label><input type="text" id="address"></div>
       <div class="field">
         <label for="postcode">Postcode</label>
         <input type="text" id="postcode" placeholder="e.g. B91 3XX" style="max-width:180px;">
@@ -207,7 +207,7 @@
       <div class="btn-row">
         <button type="submit" class="btn btn-amber">Save Changes</button>
         <button type="button" class="btn btn-outline" id="cancelEditBtn">Cancel</button>
-        <button type="button" class="btn btn-danger" id="deleteBtn" style="margin-left:auto;">Delete Site</button>
+        <button type="button" class="btn btn-danger" id="deleteBtn" style="margin-left:auto;">Delete Project</button>
       </div>
     </form>
   </div>
@@ -228,7 +228,7 @@
 
   <div class="card" id="modulePermissionsCard" style="margin-top:2rem; display:none;">
     <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.4rem;">Module Permissions</h3>
-    <p class="hint" style="margin-bottom:1rem;">Being a collaborator on this site does not by itself grant access to modules like Toolbox Talks or Dayworks &amp; Variations — switch each one on per person below.</p>
+    <p class="hint" style="margin-bottom:1rem;">Being a collaborator on this project does not by itself grant access to modules like Toolbox Talks or Dayworks &amp; Variations — switch each one on per person below.</p>
     <div id="modulePermissionsErrorBox" class="error-box"></div>
     <div class="table-wrap">
       <table>
@@ -321,8 +321,8 @@
 
   async function removeMember(memberId, email, isYou) {
     const msg = isYou
-      ? `Leave this site? You'll need a new invite link to get back in.`
-      : `Remove "${email}" from this site? They'll lose access immediately.`;
+      ? `Leave this project? You'll need a new invite link to get back in.`
+      : `Remove "${email}" from this project? They'll lose access immediately.`;
     if (!confirm(msg)) return;
     clearError(pageErrorBox);
     const { error } = await supabase.from("project_members").delete().eq("id", memberId);
@@ -764,7 +764,7 @@
       supabase.from("projects").select("*").eq("id", projectId).single(),
     ]);
     myRole = role;
-    if (error) { document.getElementById("projectName").textContent = "Site not found"; return; }
+    if (error) { document.getElementById("projectName").textContent = "Project not found"; return; }
     showMyCompanyBanner();
     project = data;
     renderHeaderAndFacts();

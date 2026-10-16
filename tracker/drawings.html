@@ -392,7 +392,7 @@
 
   async function init() {
     const { data, error } = await supabase.from("projects").select("*").eq("id", projectId).single();
-    if (error) { document.getElementById("projectSub").textContent = "Site not found."; return; }
+    if (error) { document.getElementById("projectSub").textContent = "Project not found."; return; }
     project = data;
     renderHeader([
       { label: "Dashboard", href: "dashboard.html" },

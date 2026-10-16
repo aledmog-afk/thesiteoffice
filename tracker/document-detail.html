@@ -176,7 +176,7 @@
     document.getElementById("docSub").textContent = doc.doc_number ? `${DOCUMENT_TYPE_LABEL[doc.document_type]} · ${doc.doc_number}` : DOCUMENT_TYPE_LABEL[doc.document_type];
     renderHeader([
       { label: "Dashboard", href: "dashboard.html" },
-      { label: doc.projects?.name || "Site", href: `project.html?id=${doc.project_id}` },
+      { label: doc.projects?.name || "Project", href: `project.html?id=${doc.project_id}` },
       { label: "Documents", href: `documents.html?project=${doc.project_id}` },
       { label: doc.title },
     ]);

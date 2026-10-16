@@ -28,7 +28,7 @@
   <div id="pageErrorBox" class="error-box"></div>
 
   <div class="card" id="noAccessCard" style="display:none;">
-    <p>You don't have Dayworks &amp; Variations access on this site.</p>
+    <p>You don't have Dayworks &amp; Variations access on this project.</p>
   </div>
 
   <!-- ─── CREATE MODE ─────────────────────────────────────────── -->
@@ -904,7 +904,7 @@
       const { data: project } = await supabase.from("projects").select("name").eq("id", crumbProjectId).single();
       renderHeader([
         { label: "Dashboard", href: "dashboard.html" },
-        { label: project?.name || "Site", href: `project.html?id=${crumbProjectId}` },
+        { label: project?.name || "Project", href: `project.html?id=${crumbProjectId}` },
         { label: "Dayworks & Variations", href: `commercial-dashboard.html?project=${crumbProjectId}` },
         { label: "Variations", href: `variations.html?project=${crumbProjectId}` },
         { label: eventId ? (event?.reference || "Variation") : "New Variation" },

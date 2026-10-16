@@ -47,7 +47,7 @@
   <div id="pageErrorBox" class="error-box"></div>
 
   <div class="card" id="noProgrammeGate" style="display:none;">
-    <p style="margin-bottom:0.8rem;">This site doesn't have an active or draft programme to import into yet. Create or activate one first.</p>
+    <p style="margin-bottom:0.8rem;">This project doesn't have an active or draft programme to import into yet. Create or activate one first.</p>
     <a class="btn btn-amber" id="goToProgrammeLink" href="#">Go to Programme</a>
   </div>
 
@@ -505,7 +505,7 @@
   // ─── Init ────────────────────────────────────────────────────────
   async function init() {
     const { data: proj, error } = await supabase.from("projects").select("name").eq("id", projectId).single();
-    if (error) { document.getElementById("projectSub").textContent = "Site not found."; return; }
+    if (error) { document.getElementById("projectSub").textContent = "Project not found."; return; }
     project = proj;
     renderHeader([
       { label: "Dashboard", href: "dashboard.html" },

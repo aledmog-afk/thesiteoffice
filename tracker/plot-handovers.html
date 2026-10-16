@@ -144,7 +144,7 @@
     plots.forEach((p) => rows.push([p.plot_number, p.block_id ? `Flat (${blockNameById.get(p.block_id) || "block"})` : "Plot", p.progress_pct || 0]));
     [...(blocks || [])].sort((a, b) => comparePlotNumbers(a.block_name, b.block_name)).forEach((b) => rows.push([b.block_name, "Block", b.progress_pct || 0]));
     rows.push([]);
-    rows.push(["Site Actual Progress %", "", project?.actual_progress_pct ?? ""]);
+    rows.push(["Project Actual Progress %", "", project?.actual_progress_pct ?? ""]);
     rows.push(["Baseline Progress %", "", project?.baseline_progress_pct ?? ""]);
     rows.push(["External / Engineering Works %", "", project?.external_works_pct ?? ""]);
     return rows;
@@ -223,7 +223,7 @@
       ]);
 
       if (!allPlots?.length && !blocks?.length) {
-        alert("No plots or blocks on this site yet — nothing to export.");
+        alert("No plots or blocks on this project yet — nothing to export.");
         return;
       }
 
@@ -234,7 +234,7 @@
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(overallRows), "Overall Progress");
       XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(internalRows), "Internal Works");
-      XLSX.writeFile(wb, `${project?.name || "Site"} - Trackers - ${fileDateStamp()}.xlsx`);
+      XLSX.writeFile(wb, `${project?.name || "Project"} - Trackers - ${fileDateStamp()}.xlsx`);
     } catch (err) {
       alert(`Could not generate trackers: ${err.message}`);
     } finally {
@@ -278,7 +278,7 @@
     const { data: project } = await supabase.from("projects").select("name").eq("id", projectId).single();
     renderHeader([
       { label: "Dashboard", href: "dashboard.html" },
-      { label: project?.name || "Site", href: `project.html?id=${projectId}` },
+      { label: project?.name || "Project", href: `project.html?id=${projectId}` },
       { label: "Plot Handovers" },
     ]);
     document.getElementById("projectSub").textContent = project ? `${project.name} — quality gates and statutory documents, tracked per plot or per apartment block.` : "";
