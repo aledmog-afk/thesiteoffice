@@ -84,7 +84,7 @@ test("invite.html: an unknown token, or a database without v61, fails safely", a
   r = inviteCtx(Object.assign(new Error("Could not find the function"), { code: "PGRST202" }));
   page = await runPage(INVITE, extractScript(INVITE), r.ctx);
   await wait(20);
-  assert.match(page.document.getElementById("statusText").textContent, /aren't switched on yet/);
+  assert.match(page.document.getElementById("statusText").textContent, /invite couldn't be loaded/);
 });
 
 test("invite.html: 'Set up my company' creates the company with name and type, then accepts for it", async () => {

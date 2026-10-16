@@ -78,7 +78,7 @@
     let inv;
     try { inv = await getPartyInvite(token); }
     catch (err) {
-      if (isMissingRpcError(err)) { stop("Company invites aren't switched on yet."); return; }
+      if (isMissingRpcError(err)) { stop("This invite couldn't be loaded. Refresh the page, and if it keeps happening, ask the person who sent it for a new link."); return; }
       showError(errorBox, err); stop("Something went wrong opening this invite."); return;
     }
     if (!inv) { stop("This invite link isn't valid."); return; }

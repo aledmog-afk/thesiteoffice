@@ -20,7 +20,7 @@
     </div>
   </div>
   <div id="errorBox" class="error-box"></div>
-  <div id="notAvailable" class="card" style="display:none;"><p>Company invites aren't switched on for this site yet.</p></div>
+  <div id="notAvailable" class="card" style="display:none;"><p>Companies couldn't be loaded for this project. Refresh the page, and if it keeps happening, contact support.</p></div>
 
   <div id="ownerView" style="display:none;">
     <div class="card" id="mcAccessCard" style="display:none; margin-bottom:1.2rem;">
@@ -162,7 +162,7 @@
           ${p.party_role === "subcontractor" ? `
             <form data-subsub-form="${p.party_id}" style="margin-top:1rem;">
               <h4 style="font-size:0.95rem; margin-bottom:0.4rem;">Invite a sub-subcontractor</h4>
-              <p class="hint" style="margin-bottom:0.5rem;">They'll only see the snags given to them, never yours.</p>
+              <p class="hint" style="margin-bottom:0.5rem;">They'll only see the snags assigned to them, never yours.</p>
               <div class="btn-row">
                 <input type="email" name="email" placeholder="Lead person's email" required style="flex:1; min-width:180px;">
                 <input type="text" name="trade" placeholder="Trade" required style="width:9rem;">

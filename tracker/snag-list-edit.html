@@ -51,7 +51,7 @@
         </div>
       </div>
       <div class="field" id="partyFieldWrap" style="display:none;">
-        <label for="partyId">Given to company <span class="hint">(required)</span></label>
+        <label for="partyId">Assigned company <span class="hint">(required)</span></label>
         <select id="partyId"><option value="">Choose a company…</option></select>
         <p class="hint">Only that company (and any sub-subcontractor it brought in) will see this snag.</p>
       </div>
@@ -326,7 +326,7 @@
       due_date: document.getElementById("dueDate").value || null,
       assigned_to: assignedToSelect.value || null,
     };
-    // v61: only sent when the "Given to company" picker is in use, so a
+    // v61: only sent when the "Assigned company" picker is in use, so a
     // database without v61 (no party_id column) is never sent it.
     // Once companies are on the job the picker is required: pick a
     // company or explicitly "Not assigned yet" (flagged on the owner's
@@ -725,7 +725,7 @@
     document.getElementById("bulkAssignSelect").innerHTML = `<option value="">Unassigned</option>` +
       members.map((m) => `<option value="${m.user_id}">${escapeHtml(m.email)}</option>`).join("");
 
-    // v61: companies on this job, for "Given to company". Only the owner
+    // v61: companies on this job, for "Assigned company". Only the owner
     // side picks; a company's own staff get their company automatically
     // (server-side). Missing RPC (database without v61) → picker hidden.
     try {

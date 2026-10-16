@@ -20,10 +20,10 @@
     </div>
   </div>
   <div id="errorBox" class="error-box"></div>
-  <div id="notAvailable" class="card" style="display:none;"><p id="notAvailableText">This isn't available for this site yet.</p></div>
+  <div id="notAvailable" class="card" style="display:none;"><p id="notAvailableText">This isn't available for this project.</p></div>
 
   <div id="body" style="display:none;">
-    <p class="hint">Older RFIs and actions were created before companies were on the job. A company only sees the RFIs and actions given to it — pick one for each.</p>
+    <p class="hint">Older RFIs and actions were created before companies were on the job. A company only sees the RFIs and actions assigned to it — pick one for each.</p>
     <div class="btn-row" style="margin-bottom:0.8rem;">
       <label style="display:flex; gap:0.4rem; align-items:center;"><input type="checkbox" id="onlyUnassigned" checked> Only show ones with no company</label>
     </div>
@@ -91,16 +91,16 @@
       supabase.rpc("get_my_role", { p_project_id: projectId }),
     ]);
     if (proj) document.getElementById("projectName").textContent = proj.name;
-    if (role !== "owner") { notAvailable("Only the site owner can assign work to companies."); return; }
+    if (role !== "owner") { notAvailable("Only the project owner can assign work to companies."); return; }
     try { parties = await getProjectParties(projectId); }
-    catch (err) { if (isMissingRpcError(err)) { notAvailable("Companies aren't switched on for this site yet."); return; } showError(errorBox, err); return; }
+    catch (err) { if (isMissingRpcError(err)) { notAvailable("Companies couldn't be loaded for this project. Refresh the page, and if it keeps happening, contact support."); return; } showError(errorBox, err); return; }
     const [rr, ar] = await Promise.all([
       supabase.from("rfis").select("id, reference, title, status, party_id").eq("project_id", projectId).order("created_at", { ascending: true }),
       supabase.from("actions").select("id, title, status, party_id").eq("project_id", projectId).order("created_at", { ascending: true }),
     ]);
     if (rr.error || ar.error) {
       const e = rr.error || ar.error;
-      if (/party_id/.test(e.message || "")) { notAvailable("This needs the latest database update."); return; }
+      if (/party_id/.test(e.message || "")) { notAvailable("Older RFIs and actions couldn't be loaded. Refresh the page, and if it keeps happening, contact support."); return; }
       showError(errorBox, e); return;
     }
     rfis = rr.data || []; actions = ar.data || [];
