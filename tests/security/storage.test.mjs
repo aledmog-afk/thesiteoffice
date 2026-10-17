@@ -329,3 +329,15 @@ test("v58: site_photos_ref_to_path() converts every stored reference shape to a 
     await admin.end();
   }
 });
+
+test("v65: site-photos write policies apply to signed-in users only — anon's upload is refused by RLS and its delete affects nothing", async () => {
+  const anon = await anonClient(DB);
+  try {
+    await assert.rejects(() => tryInsertObject(anon, `${fx.projA}/reports/anon-upload.jpg`), (e) => /row-level security/i.test(e.message));
+    await adminInsertObjects([`${fx.projA}/reports/anon-delete.jpg`]);
+    const del = await anon.query("delete from storage.objects where bucket_id='site-photos' and name=$1", [`${fx.projA}/reports/anon-delete.jpg`]);
+    assert.equal(del.rowCount, 0);
+  } finally {
+    await anon.end();
+  }
+});
