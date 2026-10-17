@@ -27,14 +27,14 @@
       <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.4rem;">Main contractor access</h3>
       <p class="hint" id="mcAccessText"></p>
       <div class="btn-row">
-        <select id="mcAccessSelect" style="width:auto;"><option value="full">Full project access</option><option value="narrow">Narrower (programme, actions, handovers, snags, RFIs)</option></select>
+        <select id="mcAccessSelect" style="width:auto; max-width:100%;"><option value="full">Full project access</option><option value="narrow">Narrower (programme, actions, handovers, snags, RFIs)</option></select>
         <button type="button" class="btn btn-outline btn-sm" id="mcAccessSaveBtn">Save</button>
       </div>
     </div>
     <div class="card">
       <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.8rem;">Companies</h3>
       <p class="hint" id="assignWorkLink" style="display:none;"><a href="#" id="assignWorkHref">Assign older RFIs and actions to companies</a> <span class="badge badge-amber" id="assignWorkFlag" style="display:none;"></span></p>
-      <div class="table-wrap"><table>
+      <div class="table-wrap"><table class="stack-mobile">
         <thead><tr><th>Company</th><th>Role on this job</th><th>Lead contact</th><th>People</th><th></th></tr></thead>
         <tbody id="partyRows"></tbody>
       </table></div>
@@ -58,7 +58,7 @@
 
     <div class="card" style="margin-top:1.2rem;">
       <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.8rem;">Waiting to accept</h3>
-      <div class="table-wrap"><table>
+      <div class="table-wrap"><table class="stack-mobile">
         <thead><tr><th>Email</th><th>Role</th><th>Expires</th><th></th></tr></thead>
         <tbody id="inviteRows"></tbody>
       </table></div>
@@ -112,9 +112,9 @@
     document.getElementById("partyRows").innerHTML = others.map((p) => `
       <tr data-party="${p.party_id}">
         <td>${escapeHtml(p.company)}${p.parent_party_id ? ` <span class="hint">(brought in by ${escapeHtml((parties.find((x) => x.party_id === p.parent_party_id) || {}).company || "another company")})</span>` : ""}</td>
-        <td>${p.parent_party_id ? escapeHtml(partyRoleText(p.party_role, p.trade)) : `<select data-role-for="${p.party_id}">${roleOptions(p.party_role)}</select> <input data-trade-for="${p.party_id}" value="${escapeHtml(p.trade || "")}" placeholder="Trade" style="width:8rem;"> <button class="btn btn-outline btn-sm" data-save-role="${p.party_id}">Save</button>`}</td>
-        <td>${p.lead_email ? escapeHtml(p.lead_email) : `<span class="badge badge-red">Needs a lead contact</span>`}</td>
-        <td>${p.member_count}</td>
+        <td data-label="Role on this job">${p.parent_party_id ? escapeHtml(partyRoleText(p.party_role, p.trade)) : `<select data-role-for="${p.party_id}">${roleOptions(p.party_role)}</select> <input data-trade-for="${p.party_id}" value="${escapeHtml(p.trade || "")}" placeholder="Trade" style="width:8rem;"> <button class="btn btn-outline btn-sm" data-save-role="${p.party_id}">Save</button>`}</td>
+        <td data-label="Lead contact">${p.lead_email ? escapeHtml(p.lead_email) : `<span class="badge badge-red">Needs a lead contact</span>`}</td>
+        <td data-label="People">${p.member_count}</td>
         <td><button class="btn btn-outline btn-sm" data-remove-party="${p.party_id}" data-name="${escapeHtml(p.company)}">Remove</button></td>
       </tr>`).join("");
 
@@ -124,8 +124,8 @@
       const expired = new Date(i.expires_at) < new Date();
       return `<tr>
         <td>${escapeHtml(i.invited_email)}</td>
-        <td>${escapeHtml(partyRoleText(i.party_role, i.trade))}</td>
-        <td>${expired ? `<span class="badge badge-red">Expired</span>` : escapeHtml(formatDate(i.expires_at.slice(0, 10)))}</td>
+        <td data-label="Role">${escapeHtml(partyRoleText(i.party_role, i.trade))}</td>
+        <td data-label="Expires">${expired ? `<span class="badge badge-red">Expired</span>` : escapeHtml(formatDate(i.expires_at.slice(0, 10)))}</td>
         <td><button class="btn btn-outline btn-sm" data-resend="${i.id}">Resend (new link)</button> <button class="btn btn-outline btn-sm" data-cancel="${i.id}">Cancel</button></td>
       </tr>`;
     }).join("");
