@@ -35,3 +35,12 @@ test("anon cannot execute the v61 storage helper", async () => {
     assert.equal(r.rows[0].ok, false);
   } finally { await a.end(); }
 });
+
+test("v65: no storage.objects policy applies to public or anon", async () => {
+  const a = adminClient(DB); await a.connect();
+  try {
+    const r = await a.query("select policyname, roles::text[] roles from pg_policies where schemaname='storage' and tablename='objects' order by 1");
+    assert.ok(r.rowCount >= 5);
+    for (const row of r.rows) assert.deepEqual(row.roles, ["authenticated"], `storage.objects "${row.policyname}"`);
+  } finally { await a.end(); }
+});
