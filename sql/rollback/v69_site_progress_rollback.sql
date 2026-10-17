@@ -8,9 +8,16 @@
 --
 -- What it does, in one transaction (any error = nothing changes):
 --   1. Refuses to run unless the v69 go-live marker and snapshots exist.
---   2. Stops v69 behaviour: drops the seven v69 TRIGGERS. No table, column
---      or function is dropped; all v69 history (stage events, overrides,
---      external works notes, packages, mapping log, flags) is kept.
+--      RUN IT ONCE ONLY. If the 'v69_rolled_back' marker already exists it
+--      stops straight away with an error and changes nothing, so a second
+--      run can never undo work done after the first rollback.
+--   2. Stops v69 behaviour: drops the seven v69 TRIGGERS and revokes
+--      execute on the six v69 RPCs (set_plot_override, clear_plot_override,
+--      set_external_works, save_external_works_package,
+--      retire_external_works_package, create_site) from PUBLIC, anon and
+--      authenticated. No table, column or function is dropped; all v69
+--      history (stage events, overrides, external works notes, packages,
+--      mapping log, flags) is kept.
 --   3. Restores the pre-v69 seed_plot_defaults() (16/18-row grid).
 --   4. Archives every 33-stage row of the plots that existed at go-live
 --      into legacy_v69_rollback_stage_rows (kept), then removes them from
@@ -22,10 +29,17 @@
 --   6. Restores plots.progress_pct, blocks.progress_pct and
 --      projects.actual_progress_pct / external_works_pct from the
 --      snapshots, writing only rows that actually differ (so no audit
---      noise for unchanged sites).
+--      noise for unchanged sites). Then clears the v69 manual-figure
+--      columns on plots (progress_override and its note/by/at). With the
+--      triggers gone this changes no figure; the override history is kept.
 --   7. Records a 'v69_rolled_back' marker. v69's go-live step refuses to
---      run again while that marker exists.
--- Re-running this script is a no-op.
+--      run again while that marker exists, and so does this script.
+--
+-- After it, the old (pre-v69) UI works as before: it creates sites with a
+-- direct insert into projects (no create_site) and writes plot %, site %
+-- and external works % directly, which the dropped guards no longer block.
+-- If psql isn't run with ON_ERROR_STOP and the session stays open after an
+-- error, run ROLLBACK.
 
 begin;
 
@@ -34,6 +48,9 @@ begin
   if to_regclass('public.progress_migration_runs') is null
      or not exists (select 1 from public.progress_migration_runs where step = 'v69_go_live') then
     raise exception 'v69 rollback: the v69 go-live step has not run here; nothing to roll back';
+  end if;
+  if exists (select 1 from public.progress_migration_runs where step = 'v69_rolled_back') then
+    raise exception 'v69 rollback has already run here (v69_rolled_back marker exists); stopping without changing anything';
   end if;
   if to_regclass('public.legacy_v69_internal_milestones') is null
      or not exists (select 1 from public.legacy_v69_project_progress) then
@@ -50,6 +67,14 @@ drop trigger if exists trg_plots_v69_after on public.plots;
 drop trigger if exists trg_blocks_v69_after on public.blocks;
 drop trigger if exists trg_projects_v69_progress_guard on public.projects;
 drop trigger if exists trg_weekly_reports_v69_progress on public.weekly_reports;
+
+-- 2b. The v69 RPCs can no longer be called by anyone outside the database.
+revoke execute on function public.set_plot_override(uuid, numeric, text) from public, anon, authenticated;
+revoke execute on function public.clear_plot_override(uuid, text) from public, anon, authenticated;
+revoke execute on function public.set_external_works(uuid, numeric, numeric, text) from public, anon, authenticated;
+revoke execute on function public.save_external_works_package(uuid, uuid, text, numeric, numeric, text[], text) from public, anon, authenticated;
+revoke execute on function public.retire_external_works_package(uuid, text) from public, anon, authenticated;
+revoke execute on function public.create_site(jsonb, numeric, text) from public, anon, authenticated;
 
 -- 3. Pre-v69 seed_plot_defaults() (verbatim from schema.sql v24).
 create or replace function public.seed_plot_defaults()
@@ -224,6 +249,13 @@ update public.projects j
   from public.legacy_v69_project_progress s
  where j.id = s.project_id
    and (j.actual_progress_pct is distinct from s.actual_progress_pct or j.external_works_pct is distinct from s.external_works_pct);
+
+-- 6b. Clear the v69 manual-figure columns. The triggers are gone, so
+-- progress_pct (restored above) is not touched.
+update public.plots
+   set progress_override = null, progress_override_note = null, progress_override_by = null, progress_override_at = null
+ where progress_override is not null or progress_override_note is not null
+    or progress_override_by is not null or progress_override_at is not null;
 
 -- 7. Marker.
 insert into public.progress_migration_runs (step, detail)

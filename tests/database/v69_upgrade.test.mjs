@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createTestDatabase, dropTestDatabase, runSqlFile, runSql, adminClient } from "../lib/db.mjs";
+import { createTestDatabase, dropTestDatabase, runSqlFile, runSql, adminClient, userClient, anonClient } from "../lib/db.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const MOCK_SETUP = path.join(__dirname, "../lib/mock_setup.sql");
@@ -224,7 +224,22 @@ const ROLLBACK = path.join(__dirname, "../../sql/rollback/v69_site_progress_roll
 const GRID = `select json_agg(json_build_object('id', id, 'k', milestone_key, 't', title, 'p', percent::text, 'o', sort_order) order by id) g
   from public.internal_milestones`;
 
-test("v69 rollback script: after go-live and later use, every figure and the old grid go back exactly; new tables kept; re-run is a no-op", async () => {
+const OWNER = "a6900000-0000-0000-0000-0000000000a1";
+// The six v69 RPCs, each called with arguments that WOULD work for an org
+// admin while v69 is live.
+const RPC_CALLS = (fx, pkg) => [
+  ["set_plot_override", "select public.set_plot_override($1, 95, 'Walkround check')", [fx.p3]],
+  ["clear_plot_override", "select public.clear_plot_override($1, 'Back to automatic')", [fx.p1]],
+  ["set_external_works", "select public.set_external_works($1, 80, 50, 'Moved after rollback')", [fx.proj]],
+  ["save_external_works_package", "select public.save_external_works_package($1, null, 'Roads', 50, 40, '{}'::text[], 'New package')", [fx.proj]],
+  ["retire_external_works_package", "select public.retire_external_works_package($1, 'Retire it')", [pkg]],
+  ["create_site", `select public.create_site('{"name":"Fake New Site","org_id":"${ORG}"}'::jsonb, 20, 'Set at site setup')`, []],
+];
+const RPC_SIGS = ["set_plot_override(uuid, numeric, text)", "clear_plot_override(uuid, text)", "set_external_works(uuid, numeric, numeric, text)",
+  "save_external_works_package(uuid, uuid, text, numeric, numeric, text[], text)", "retire_external_works_package(uuid, text)", "create_site(jsonb, numeric, text)"];
+async function asUser(db, u, fn) { const c = u ? await userClient(db, u) : await anonClient(db); try { return await fn(c); } finally { await c.end(); } }
+
+test("v69 rollback script: after go-live and later use, every figure and the old grid go back exactly; RPCs refused, overrides cleared; the old UI path works; a second run stops and changes nothing", async () => {
   const db = "tracker_test_v69_rollback";
   await createTestDatabase(db);
   const admin = adminClient(db);
@@ -236,6 +251,9 @@ test("v69 rollback script: after go-live and later use, every figure and the old
     const before = (await admin.query(FIGURES)).rows[0].f;
     const gridBefore = (await admin.query(GRID)).rows[0].g;
     assert.equal(gridBefore.length, 3 * 18 + 2 * 16);
+    // A real org admin (fake), for the RPC and old-UI checks.
+    await admin.query("insert into auth.users (id, email) values ($1, 'owner@fake-homes.test')", [OWNER]);
+    await admin.query("insert into public.organisation_members (org_id, user_id, role) values ($1, $2, 'admin')", [ORG, OWNER]);
 
     await runSqlFile(admin, SCHEMA);
     // Use it after go-live: a submitted report raises Plot 3, the site
@@ -248,6 +266,12 @@ test("v69 rollback script: after go-live and later use, every figure and the old
     await admin.query("select set_config('app.progress_internal','',false)");
     await admin.query("select public.recalc_project_progress($1)", [fx.proj]);
     assert.notDeepEqual((await admin.query(FIGURES)).rows[0].f, before, "figures moved after go-live");
+    // While v69 is live, the owner can use every RPC (so the refusals below come from the rollback).
+    const pkg = await asUser(db, OWNER, async (c) => {
+      await c.query("select public.set_plot_override($1, 40, 'Walkround check')", [fx.p3]);
+      return (await c.query("select public.save_external_works_package($1, null, 'Services', 50, 10, '{}'::text[], 'Added') id", [fx.proj])).rows[0].id;
+    });
+    assert.ok(pkg);
     const kept = (await admin.query("select (select count(*) from public.progress_stage_events)::int ev, (select count(*) from public.plot_progress_overrides)::int ov")).rows[0];
 
     await runSqlFile(admin, ROLLBACK);
@@ -261,25 +285,65 @@ test("v69 rollback script: after go-live and later use, every figure and the old
     for (const t of ["progress_stages", "external_works_updates", "external_works_packages", "legacy_v69_plot_progress"]) {
       assert.ok((await admin.query("select to_regclass($1) t", [`public.${t}`])).rows[0].t, `${t} kept`);
     }
-    // v69 behaviour is off: a submitted report no longer moves anything, and
-    // a typed plot % sticks again (today's pages).
-    const v69Triggers = (await admin.query("select count(*)::int n from pg_trigger where tgname like '%v69%'")).rows[0].n;
-    assert.equal(v69Triggers, 0);
-    await admin.query("update public.plots set progress_pct = 70 where id=$1", [fx.p1]);
-    assert.equal(Number((await admin.query("select progress_pct from public.plots where id=$1", [fx.p1])).rows[0].progress_pct), 70);
-    await admin.query("update public.plots set progress_pct = 60 where id=$1", [fx.p1]);
+    // The carried-over / manual figure columns are cleared; no figure moved (checked above).
+    assert.equal((await admin.query(`select count(*)::int n from public.plots where progress_override is not null
+      or progress_override_note is not null or progress_override_by is not null or progress_override_at is not null`)).rows[0].n, 0);
+    // v69 behaviour is off.
+    assert.equal((await admin.query("select count(*)::int n from pg_trigger where tgname like '%v69%'")).rows[0].n, 0);
+
+    // Every v69 RPC is refused, for a signed-in org admin and for anon, and
+    // nothing changes. No EXECUTE is left for PUBLIC, anon or authenticated.
+    const grants = (await admin.query(`select p.oid::regprocedure::text f, a.grantee, a.privilege_type
+      from pg_proc p cross join lateral aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+      where p.oid = any($1::regprocedure[]) and a.privilege_type = 'EXECUTE'
+        and (a.grantee = 0 or a.grantee in (select oid from pg_roles where rolname in ('anon','authenticated')))`,
+      [RPC_SIGS.map((x) => `public.${x}`)])).rows;
+    assert.deepEqual(grants, [], "no EXECUTE for PUBLIC / anon / authenticated on any v69 RPC");
+    const auditAtRb = (await admin.query("select count(*)::int n from public.audit_log")).rows[0].n;
+    const sitesAtRb = (await admin.query("select count(*)::int n from public.projects")).rows[0].n;
+    for (const who of [OWNER, null]) {
+      for (const [name, q, args] of RPC_CALLS(fx, pkg)) {
+        await asUser(db, who, (c) => assert.rejects(c.query(q, args), /permission denied for function/, `${name} refused for ${who ? "an org admin" : "anon"}`));
+      }
+    }
+    assert.deepEqual((await admin.query(FIGURES)).rows[0].f, before, "no figure changed by the refused calls");
+    assert.deepEqual((await admin.query(GRID)).rows[0].g, gridBefore);
+    assert.equal((await admin.query("select count(*)::int n from public.audit_log")).rows[0].n, auditAtRb);
+    assert.equal((await admin.query("select count(*)::int n from public.projects")).rows[0].n, sitesAtRb, "create_site made nothing");
+
+    // The old (pre-v69) UI path works as a signed-in org admin: the old
+    // dashboard creates a site with a direct insert, and the old pages type
+    // plot %, an old-grid stage %, site % and external works % directly.
+    // These are also the "later work" a second rollback must not undo.
+    const oldStage = gridBefore.find((r) => r.k === "kitchen" && Number(r.p) === 0).id;
+    const newSite = await asUser(db, OWNER, async (c) => {
+      const id = (await c.query("insert into public.projects (name, org_id, created_by) values ('Fake Old-UI Site', $1, $2) returning id", [ORG, OWNER])).rows[0].id;
+      await c.query("update public.plots set progress_pct = 60 where id = $1", [fx.p3]);
+      await c.query("update public.internal_milestones set percent = 70 where id = $1", [oldStage]);
+      await c.query("update public.projects set actual_progress_pct = 33.3, external_works_pct = 45 where id = $1", [fx.proj]);
+      return id;
+    });
+    const LATER = `select (select progress_pct::float from public.plots where id = $1) p3,
+      (select percent::float from public.internal_milestones where id = $2) st,
+      (select json_build_object('a', actual_progress_pct::float, 'e', external_works_pct::float) from public.projects where id = $3) site,
+      (select count(*)::int from public.projects where id = $4) newsite`;
+    const later = (await admin.query(LATER, [fx.p3, oldStage, fx.proj, newSite])).rows[0];
+    assert.deepEqual(later, { p3: 60, st: 70, site: { a: 33.3, e: 45 }, newsite: 1 }, "the old UI's writes stick");
     // New plots get the old 18-row grid again.
     const np = (await admin.query("insert into public.plots (project_id, plot_number) values ($1,'Plot 9') returning id", [fx.proj])).rows[0].id;
     assert.equal((await admin.query("select count(*)::int n from public.internal_milestones where plot_id=$1", [np])).rows[0].n, 18);
     await admin.query("delete from public.plots where id=$1", [np]);
 
-    // Running it again changes nothing; re-applying v69 on top refuses.
+    // A second run stops straight away and changes nothing: the later work survives.
     const audit = (await admin.query("select count(*)::int n from public.audit_log")).rows[0].n;
-    await runSqlFile(admin, ROLLBACK);
-    assert.deepEqual((await admin.query(FIGURES)).rows[0].f, before);
-    assert.deepEqual((await admin.query(GRID)).rows[0].g, gridBefore);
-    assert.equal((await admin.query("select count(*)::int n from public.audit_log")).rows[0].n, audit, "no audit rows when nothing differs");
+    await assert.rejects(runSqlFile(admin, ROLLBACK), /v69 rollback has already run here/);
+    await admin.query("rollback");
+    assert.deepEqual((await admin.query(LATER, [fx.p3, oldStage, fx.proj, newSite])).rows[0], later, "work done after the first rollback survives");
+    assert.equal((await admin.query("select count(*)::int n from public.audit_log")).rows[0].n, audit, "nothing written");
+    assert.equal((await admin.query("select count(*)::int n from public.progress_migration_runs where step='v69_rolled_back'")).rows[0].n, 1);
+    // Re-applying v69 on top refuses.
     await assert.rejects(runSqlFile(admin, SCHEMA), /v69 was rolled back here/);
+    await admin.query("rollback").catch(() => {});
   } finally {
     await admin.end();
     await dropTestDatabase(db);
