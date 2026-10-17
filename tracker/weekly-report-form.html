@@ -61,6 +61,7 @@
       <div class="field"><label for="weather">Weather Notes (optional)</label><input type="text" id="weather" placeholder="Any general commentary not captured in the day-by-day tracker above"></div>
       <div class="field">
         <label>Progress this week</label>
+        <p class="hint" id="stageFeedHint" style="margin-bottom:0.4rem;">Saving a draft doesn't change any plot. When the report is issued, each task's build stage is raised on every plot it tags: it only ever raises a stage, never lowers it. Use whole plot names or ranges: "Plot 22", "22-27" (every plot in it). A tag that matches no plot, or more than one, is skipped. Tasks tagged "External / Engineering Works" or a block name don't move any plot; external works tasks are listed on Site Details beside the external works figure.</p>
         <div id="progressItems"></div>
         <p class="hint" id="carriedOverHint" style="display:none;">Pre-filled from last week's plan, starting at last week's % complete on each — just update it if it's moved on. Anything under 100% carries into this week's own "Plan for next week" automatically; reaching 100% drops it for good.</p>
       </div>

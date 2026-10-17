@@ -111,7 +111,14 @@ const AUTH_ALLOWLIST = [
   "set_party_role(uuid,text,text)",
   "set_project_member_role(uuid,uuid,text)",
   "site_photos_read_authorized(text)",
-  "snag_write_projects()"
+  "snag_write_projects()",
+  // v69: the note-required progress RPCs the plot page, Site Details and
+  // new-site form call (each checks is_project_editor itself).
+  "clear_plot_override(uuid,text)",
+  "retire_external_works_package(uuid,text)",
+  "save_external_works_package(uuid,uuid,text,numeric,numeric,text[],text)",
+  "set_external_works(uuid,numeric,numeric,text)",
+  "set_plot_override(uuid,numeric,text)"
 ].sort();
 
 const PRIV_SQL = `
@@ -190,9 +197,9 @@ for (const [sig, q] of V68_CLOSED) {
   });
 }
 
-test("ALLOWLIST CI GUARD: the SECURITY DEFINER functions authenticated can execute are EXACTLY the 67 kept after v68", async () => {
+test("ALLOWLIST CI GUARD: the SECURITY DEFINER functions authenticated can execute are EXACTLY the 67 kept after v68, plus the 5 v69 progress RPCs", async () => {
   const got = (await sql(AUTH_EXECUTABLE_DEFINER_SQL)).rows.map((r) => r.sig).sort();
-  assert.equal(AUTH_ALLOWLIST.length, 67);
+  assert.equal(AUTH_ALLOWLIST.length, 72);
   assert.deepEqual(got, AUTH_ALLOWLIST,
     "authenticated must reach only the reviewed set. Internal-only SECURITY DEFINER helpers: revoke execute from public, anon, authenticated. " +
     "Needed by a page or an RLS policy: add to AUTH_ALLOWLIST on purpose.");

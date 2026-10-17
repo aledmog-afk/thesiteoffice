@@ -6,6 +6,7 @@
 // actually fails, instead of leaving a misleading UI state behind.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { progressHelpers } from "../lib/progress_helpers.mjs";
 import { extractScript, runPage, fireEvent, wait } from "../lib/jsdom-harness.mjs";
 
 const HTML = new URL("../../tracker/plot-detail.html", import.meta.url).pathname;
@@ -26,6 +27,8 @@ function makeSupabase({ gateUpdateShouldFail = false } = {}) {
       const api = {
         select() { return api; },
         eq() { return api; },
+        not() { return api; },
+        is() { return api; },
         order() { return api; },
         single: async () => (table === "plots" ? { data: PLOT, error: null } : { data: null, error: null }),
         update(payload) {
@@ -52,6 +55,7 @@ function makeSupabase({ gateUpdateShouldFail = false } = {}) {
 
 async function run(supabase) {
   return runPage(HTML, extractScript(HTML), {
+    ...progressHelpers,
     __url: "https://example.com/plot-detail.html?id=plot1",
     supabase,
     requireAuth: async () => ({ id: "u1" }),
@@ -87,6 +91,7 @@ test("plot-detail.html: a FAILED gate status write reverts the dropdown instead 
   const supabase = makeSupabase({ gateUpdateShouldFail: true });
   let alertMessage = null;
   const { document, window } = await runPage(HTML, extractScript(HTML), {
+    ...progressHelpers,
     __url: "https://example.com/plot-detail.html?id=plot1",
     supabase,
     requireAuth: async () => ({ id: "u1" }),

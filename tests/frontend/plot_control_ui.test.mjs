@@ -9,6 +9,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { progressHelpers } from "../lib/progress_helpers.mjs";
 import { extractScript, runPage, fireEvent, wait } from "../lib/jsdom-harness.mjs";
 
 const PLOT_DETAIL_HTML = new URL("../../tracker/plot-detail.html", import.meta.url).pathname;
@@ -52,6 +53,8 @@ function plotDetailSupabaseMock({ snagListId = "list1" } = {}) {
       const api = {
         select() { return api; },
         eq() { return api; },
+        not() { return api; },
+        is() { return api; },
         order() { return api; },
         single: async () => (table === "plots" ? { data: SAMPLE_PLOT, error: null } : { data: null, error: null }),
         maybeSingle: async () => (table === "snag_lists" ? { data: { id: snagListId }, error: null } : { data: null, error: null }),
@@ -65,6 +68,7 @@ function plotDetailSupabaseMock({ snagListId = "list1" } = {}) {
 async function runPlotDetail({ readinessResult = readiness(), getPlotHandoverReadinessImpl } = {}) {
   const supabase = plotDetailSupabaseMock();
   return runPage(PLOT_DETAIL_HTML, extractScript(PLOT_DETAIL_HTML), {
+    ...progressHelpers,
     __url: "https://example.com/plot-detail.html?id=plot1",
     supabase,
     getParam: () => "plot1",
@@ -182,6 +186,7 @@ function plotRow(overrides = {}) { return { id: `p${Math.random()}`, project_id:
 async function runPlotHandovers({ plots, readinessRows }) {
   const supabase = plotHandoversSupabaseMock({ plots });
   return runPage(PLOT_HANDOVERS_HTML, extractScript(PLOT_HANDOVERS_HTML), {
+    ...progressHelpers,
     __url: "https://example.com/plot-handovers.html?project=p1",
     supabase,
     getParam: () => "p1",
@@ -242,6 +247,7 @@ test("plot-handovers.html: a failed readiness fetch degrades gracefully — the 
   const plots = [plotRow()];
   const supabase = plotHandoversSupabaseMock({ plots });
   const { document } = await runPage(PLOT_HANDOVERS_HTML, extractScript(PLOT_HANDOVERS_HTML), {
+    ...progressHelpers,
     __url: "https://example.com/plot-handovers.html?project=p1",
     supabase,
     getParam: () => "p1",

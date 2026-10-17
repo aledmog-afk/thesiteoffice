@@ -32,7 +32,6 @@
         <input type="number" id="blockProgressInput" min="0" max="100" step="1">
       </div>
       <div class="btn-row">
-        <button type="button" class="btn btn-outline" id="suggestProgressBtn">Suggest from Milestones</button>
         <button type="button" class="btn btn-amber" id="saveProgressBtn">Save</button>
       </div>
     </div>
@@ -76,7 +75,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, uploadImage, suggestPlotProgress, recalculateActualProgress, comparePlotNumbers, generateFlatsFromSpec } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, uploadImage, comparePlotNumbers, generateFlatsFromSpec } from "./js/app.js";
 
   await requireAuth();
   const blockId = getParam("id");
@@ -243,17 +242,11 @@
   }
 
   // ─── Block progress ───────────────────────────────────────────────
-  document.getElementById("suggestProgressBtn").addEventListener("click", async () => {
-    const btn = document.getElementById("suggestProgressBtn");
-    btn.disabled = true;
-    btn.textContent = "Checking weekly reports…";
-    const suggested = await suggestPlotProgress(block.project_id, block.block_name);
-    document.getElementById("blockProgressInput").value = suggested;
-    document.getElementById("progressSavedHint").textContent = `Suggested from logged milestones — review and hit Save to apply.`;
-    btn.disabled = false;
-    btn.textContent = "Suggest from Milestones";
-  });
-
+  // The block's own % (shared structure/envelope for every flat in it)
+  // stays typed here. The database recalculates the site figure after
+  // the save (each block counts once per flat). The old "Suggest from
+  // Milestones" button is gone (it matched the block name's first
+  // number against plot tags, so "Block 1" picked up plot 1).
   document.getElementById("saveProgressBtn").addEventListener("click", async () => {
     clearError(errorBox);
     const val = document.getElementById("blockProgressInput").value;
@@ -264,8 +257,7 @@
       const { error } = await supabase.from("blocks").update({ progress_pct: pct }).eq("id", blockId);
       if (error) throw error;
       block.progress_pct = pct;
-      await recalculateActualProgress(block.project_id);
-      document.getElementById("progressSavedHint").textContent = "Saved — project's Actual Progress has been updated.";
+      document.getElementById("progressSavedHint").textContent = "Saved — the site's Actual Progress has been updated.";
     } catch (err) {
       showError(errorBox, err);
     } finally {

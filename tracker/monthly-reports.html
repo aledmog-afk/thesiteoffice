@@ -43,7 +43,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, formatDate, RAG_LABEL, BUILD_MILESTONES, toLocalISODate, comparePlotNumbers, hsAuditScore, attachReportCommercialNotes } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, formatDate, RAG_LABEL, BUILD_MILESTONES, MONTHLY_PROGRESS_BASIS_NOTE, toLocalISODate, comparePlotNumbers, hsAuditScore, attachReportCommercialNotes } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -229,6 +229,18 @@
       .sort((a, b) => comparePlotNumbers(a.plot_number, b.plot_number))
       .map((p) => ({ plot_number: p.plot_number, handed_over_at: p.handed_over_at }));
 
+    // v69: the first monthly report made after a site moved to stage-based
+    // progress carries a one-line note explaining the change.
+    let progressBasisNote = null;
+    if (project?.stage_progress_since) {
+      const { count: sinceCount } = await supabase
+        .from("monthly_reports")
+        .select("id", { count: "exact", head: true })
+        .eq("project_id", projectId)
+        .gte("created_at", project.stage_progress_since);
+      if (!sinceCount) progressBasisNote = MONTHLY_PROGRESS_BASIS_NOTE;
+    }
+
     const { data: { user } } = await supabase.auth.getUser();
     const payload = {
       project_id: projectId,
@@ -237,6 +249,7 @@
       rag_status: project?.rag_status || null,
       baseline_progress_pct: project?.baseline_progress_pct ?? null,
       actual_progress_pct: project?.actual_progress_pct ?? null,
+      ...(progressBasisNote ? { progress_basis_note: progressBasisNote } : {}),
       progress_items: progressItems,
       health_safety_notes: healthSafetyNotes,
       programme_comments: programmeComments,

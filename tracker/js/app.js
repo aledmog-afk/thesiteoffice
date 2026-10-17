@@ -1762,58 +1762,14 @@ export async function getMemberEmailMap(projectIds) {
   return map;
 }
 
-// ─── Automatic progress ───────────────────────────────────────────
-// Actual Progress % is a weighted average of every plot's own
-// progress_pct, every block's own progress_pct, plus the site's
-// external_works_pct (civils/drainage/landscaping that isn't any one
-// plot or block). Every input is set directly (by hand, or via
-// suggestPlotProgress() below) rather than being locked to an
-// automatic calculation — the point is that they're always correctable
-// when a milestone gets missed in a weekly report.
-//
-// A block's own progress_pct is the shared structure/civils tracked
-// once for the whole apartment block, not duplicated per flat — but it
-// underpins every flat inside it, so it's weighted as though it were
-// that many house-equivalent units, not just one. A fully-built frame
-// sitting under 30 still-empty flats is genuine, substantial progress
-// on the site as a whole, not "barely started" — counting the block's
-// shared progress only once would badly understate that. Each flat's
-// own fit-out progress still also counts individually and separately,
-// same as a house. A brand new block with no flats yet counts as a
-// single unit, same as before, so it isn't invisible in the average
-// until flats are added.
-export async function recalculateActualProgress(projectId) {
-  const [{ data: project }, { data: plots }, { data: blocks }] = await Promise.all([
-    supabase.from("projects").select("external_works_pct").eq("id", projectId).single(),
-    supabase.from("plots").select("progress_pct, block_id").eq("project_id", projectId),
-    supabase.from("blocks").select("id, progress_pct").eq("project_id", projectId),
-  ]);
-
-  const flatCountByBlock = new Map();
-  (plots || []).forEach((p) => {
-    if (!p.block_id) return;
-    flatCountByBlock.set(p.block_id, (flatCountByBlock.get(p.block_id) || 0) + 1);
-  });
-
-  let sum = 0;
-  let weight = 0;
-  (plots || []).forEach((p) => {
-    sum += Number(p.progress_pct) || 0;
-    weight += 1;
-  });
-  (blocks || []).forEach((b) => {
-    const blockWeight = flatCountByBlock.get(b.id) || 1;
-    sum += (Number(b.progress_pct) || 0) * blockWeight;
-    weight += blockWeight;
-  });
-  sum += Number(project?.external_works_pct) || 0;
-  weight += 1;
-
-  const pct = Math.round((sum / weight) * 10) / 10;
-
-  await supabase.from("projects").update({ actual_progress_pct: pct }).eq("id", projectId);
-  return pct;
-}
+// Site Actual Progress (projects.actual_progress_pct) and each plot's
+// progress_pct are worked out by the database since v69
+// (recalc_project_progress / recalc_plot_progress in sql/schema.sql),
+// so they can't go stale and no page recalculates them in the browser.
+// With no external works share set, the site figure is exactly the old
+// browser formula: every plot once, each block once per flat (min 1),
+// plus external works counted as one plot's worth. With a share set:
+// share x external works + (1 - share) x the plots/blocks part.
 
 // Stamps a plot as fully handed over the moment System Handover
 // Readiness has ZERO blockers — reusing computePlotHandoverReadiness()
@@ -2597,47 +2553,181 @@ export function normalisePlotToken(s) {
 // A site-wide, non-numbered "plot" for civils/drainage/landscaping work
 // that isn't any one house or flat. Offered alongside the real plots in
 // the weekly report plot picker (see weekly-report-form.html) purely as
-// a tag — normalisePlotToken() falls back to a plain lowercase string
-// match for it since it has no digits, so it flows through the exact
-// same matching suggestPlotProgress() below already does for numbered
-// plots, with no extra logic needed. Matches the exact wording of the
-// "External / Engineering Works (%)" field on Site Details.
+// a tag. It never moves a plot stage (resolvePlotTags() below and the
+// database's resolve_plot_tags() both skip it); its tasks are shown as
+// read-only suggestions beside the external works figure on Site
+// Details instead. Matches the wording of that field.
 export const EXTERNAL_WORKS_TAG = "External / Engineering Works";
 
-// Suggests a starting point for one plot's progress_pct (or, passing
-// EXTERNAL_WORKS_TAG, the site's external_works_pct), computed from
-// the build milestones logged against it in weekly reports — purely a
-// value for the caller to pre-fill an input with; it never writes
-// anything itself, so it can never silently overwrite a manually-typed
-// correction.
-//
-// Dedupes by milestone across the project's ENTIRE weekly report
-// history, not just the most recent report, taking the highest percent
-// ever recorded for each — so a milestone finished months ago still
-// counts even once it's dropped off every current week's list. A
-// progress item's plot field can list several plots at once ("5,6,7"),
-// so an item counts toward this plot if its plot list includes this
-// plot's number. Items with no milestone, or a custom "Other" milestone
-// outside BUILD_MILESTONES, aren't weighted — there's no fixed slot for
-// them in the scale.
-export async function suggestPlotProgress(projectId, plotNumber) {
-  const { data: reports } = await supabase.from("weekly_reports").select("progress_items").eq("project_id", projectId);
-  const target = normalisePlotToken(plotNumber);
+// ─── Shared plot-tag parser (v69) ───────────────────────────────
+// A weekly report item's plot tag is free text: "5", "Plot 5", "5,6,7",
+// "22-27", "Plots 1-3", a block name ("Flats 14-19"), the site-wide
+// EXTERNAL_WORKS_TAG, or something else entirely ("S278"). These rules
+// are IDENTICAL to resolve_plot_tags_detail() in sql/schema.sql (which
+// raises plot stages from an issued report) and are checked against the
+// same case table, tests/lib/plot_tag_cases.json. Whole names and whole
+// ranges only; anything unclear is skipped (and, in the database,
+// logged), never guessed:
+//   * split on commas; trim, lower-case, collapse spaces
+//   * the tag or a part equal to a block name or EXTERNAL_WORKS_TAG -> not
+//     a plot (skipped, not reported)
+//   * a whole-part range "22-27" / "Plots 22-24" / "Plot 22 - Plot 24"
+//     (hyphen or en dash, at most 200 apart) -> those numbers
+//   * otherwise the part is one plot name
+//   * names compare by plotTagKey(): a leading Plot/Flat/Unit/House/
+//     Apartment/Apt/No word before a number is dropped, leading zeros are
+//     dropped, "22 A" = "22a", any other text is kept whole. So "22" is
+//     plot 22 only (never 22A/22B) and "block1" is not flat 1.
+//   * a key with no plot -> skipped "unmatched"; the rest still applies
+//   * a key with more than one plot -> "ambiguous": the WHOLE tag is skipped
+const TAG_SPACE = (x) => String(x ?? "").replace(/^\s+|\s+$/g, "").replace(/\s+/g, " ").toLowerCase();
+const PLOT_RANGE_RE = /^(?:(?:plots?|flats?|units?|houses?) ?)?([0-9]{1,6}) ?[-–] ?(?:(?:plots?|flats?|units?|houses?) ?)?([0-9]{1,6})$/;
+export function plotTagKey(s) {
+  let t = TAG_SPACE(s);
+  if (/^(plots?|flats?|units?|houses?|apartments?|apt|no)\.? ?#? ?[0-9]/.test(t)) {
+    t = t.replace(/^(plots?|flats?|units?|houses?|apartments?|apt|no)\.? ?#? ?/, "");
+  }
+  t = t.replace(/^0+([0-9])/, "$1").replace(/^([0-9]+) ([a-z])$/, "$1$2");
+  return t === "" ? null : t;
+}
 
-  const best = new Map(); // milestone -> highest percent seen
-  (reports || []).forEach((r) => {
-    (Array.isArray(r.progress_items) ? r.progress_items : []).forEach((item) => {
-      if (typeof item === "string" || !item.milestone || !BUILD_MILESTONES.includes(item.milestone) || !item.plot) return;
-      const plotTokens = item.plot.split(",").map((p) => p.trim());
-      if (!plotTokens.some((t) => normalisePlotToken(t) === target)) return;
-      const percent = typeof item.percent === "number" ? item.percent : 0;
-      if (!best.has(item.milestone) || percent > best.get(item.milestone)) best.set(item.milestone, percent);
+// plots: [{ id, plot_number }]; blockNames: the site's block names.
+// Returns { ids (matching plot ids, in plot order), skipped: [{ token, reason }] }.
+export function resolvePlotTagsDetailed(tag, plots, blockNames = []) {
+  const none = { ids: [], skipped: [] };
+  if (tag === null || tag === undefined) return none;
+  const external = TAG_SPACE(EXTERNAL_WORKS_TAG);
+  const whole = TAG_SPACE(tag);
+  const blocks = new Set((blockNames || []).map((b) => TAG_SPACE(b)));
+  if (!whole || whole === external || blocks.has(whole)) return none;
+  const byKey = new Map();
+  (plots || []).forEach((p) => {
+    const k = plotTagKey(p.plot_number);
+    if (k === null) return;
+    if (!byKey.has(k)) byKey.set(k, []);
+    byKey.get(k).push(p.id);
+  });
+  const found = new Set();
+  const skipped = [];
+  let ambiguous = false;
+  String(tag).split(",").forEach((raw) => {
+    const low = TAG_SPACE(raw);
+    if (!low || low === external || blocks.has(low)) return;
+    const m = low.match(PLOT_RANGE_RE);
+    let keys;
+    if (m) {
+      const a = Number(m[1]);
+      const b = Number(m[2]);
+      if (Math.abs(b - a) > 200) { skipped.push({ token: low, reason: "range_too_wide" }); return; }
+      keys = [];
+      for (let n = Math.min(a, b); n <= Math.max(a, b); n++) keys.push(String(n));
+    } else {
+      keys = [plotTagKey(low)];
+    }
+    keys.forEach((k) => {
+      if (k === null) return;
+      const hits = byKey.get(k) || [];
+      if (!hits.length) skipped.push({ token: k, reason: "unmatched" });
+      else if (hits.length > 1) { ambiguous = true; skipped.push({ token: k, reason: "ambiguous" }); }
+      else found.add(hits[0]);
     });
   });
+  const dedupe = (list) => list.filter((x, i) => list.findIndex((y) => y.token === x.token && y.reason === x.reason) === i);
+  if (ambiguous) return { ids: [], skipped: dedupe(skipped) };
+  return { ids: (plots || []).filter((p) => found.has(p.id)).map((p) => p.id), skipped: dedupe(skipped) };
+}
 
-  if (best.size === 0) return 0;
-  const sum = [...best.values()].reduce((s, v) => s + v, 0);
-  return Math.round((sum / BUILD_MILESTONES.length) * 10) / 10;
+export function resolvePlotTags(tag, plots, blockNames = []) {
+  return resolvePlotTagsDetailed(tag, plots, blockNames).ids;
+}
+
+// ─── Plot progress: automatic vs manual (v69) ───────────────────
+// plots.progress_pct = GREATEST(progress_override, progress_calculated),
+// kept by the database. "Manual" while an override is above the
+// calculated figure; the database drops the override by itself once
+// the stages catch up.
+export function plotProgressMode(plot) {
+  const override = plot?.progress_override;
+  if (override === null || override === undefined) return "auto";
+  return Number(override) > Number(plot?.progress_calculated || 0) ? "manual" : "auto";
+}
+
+export const PLOT_STAGE_SOURCE_LABEL = {
+  plot_page: "Plot page",
+  report: "Weekly report",
+  migration: "Old grid",
+  backfill: "Past report",
+};
+
+// ─── External works (v69) ───────────────────────────────────────
+// The figure is never set automatically. Stale when the site isn't
+// complete and nothing has been noted for more than 21 days.
+export const EXTERNAL_WORKS_STALE_DAYS = 21;
+
+// One line on the first monthly report after a site's go-live (v69).
+export const MONTHLY_PROGRESS_BASIS_NOTE = "From this report, site progress is worked out from each plot's build stages (raised by weekly reports). Plots taken over mid-build keep their previous figure as a manual starting point until the stages catch up.";
+
+// Stale only applies once the site's share has been set at least once
+// (external_works_share_set_at); before that "Share not set" is the only flag.
+export function externalWorksStale(project, now = new Date()) {
+  if (!project || project.status === "complete") return false;
+  if (!project.external_works_share_set_at) return false;
+  const last = project.external_works_updated_at || project.external_works_share_set_at;
+  return now.getTime() - new Date(last).getTime() > EXTERNAL_WORKS_STALE_DAYS * 86400000;
+}
+
+// Who made a history change. The database stores a display name
+// (changed_by_name), never an email. System actions read "Automatic".
+export const HISTORY_ACTOR_FALLBACK = "A team member";
+export function historyActorName(row) {
+  if (!row) return HISTORY_ACTOR_FALLBACK;
+  if (row.action === "superseded" || row.action === "carried_over") return "Automatic";
+  const name = typeof row.changed_by_name === "string" ? row.changed_by_name.trim() : "";
+  return name && !name.includes("@") ? name : HISTORY_ACTOR_FALLBACK;
+}
+
+// Package shares are relative weights; this is each one's share of the
+// external works as a percentage of the live packages' total.
+export function normalisedPackageShare(pkg, packages) {
+  const total = (packages || []).reduce((sum, p) => sum + (Number(p.share) || 0), 0);
+  if (!total) return 0;
+  return Math.round(((Number(pkg?.share) || 0) / total) * 1000) / 10;
+}
+
+export function externalWorksShareSet(project) {
+  return project?.external_works_share !== null && project?.external_works_share !== undefined;
+}
+
+// Read-only suggestions for Site Details: every weekly report task
+// tagged EXTERNAL_WORKS_TAG, grouped under the package whose report
+// stages include the task's stage, else under "unassigned". Nothing
+// here is ever written anywhere.
+// reports: [{ week_ending, progress_items }]; packages: [{ id, name, report_stages }]
+export function externalWorksSuggestions(reports, packages = []) {
+  const byPackage = new Map((packages || []).map((p) => [p.id, []]));
+  const unassigned = [];
+  const stageToPackage = new Map();
+  (packages || []).forEach((p) => (p.report_stages || []).forEach((st) => { if (!stageToPackage.has(st)) stageToPackage.set(st, p.id); }));
+  const external = EXTERNAL_WORKS_TAG.toLowerCase();
+  (reports || []).forEach((r) => {
+    (Array.isArray(r.progress_items) ? r.progress_items : []).forEach((item) => {
+      if (!item || typeof item !== "object" || !item.plot) return;
+      if (String(item.plot).replace(/^ +| +$/g, "").toLowerCase() !== external) return;
+      const entry = {
+        week_ending: r.week_ending || null,
+        stage: item.milestone || "",
+        text: item.text || "",
+        percent: typeof item.percent === "number" ? item.percent : Number(item.percent) || 0,
+      };
+      const pkg = stageToPackage.get(entry.stage);
+      if (pkg) byPackage.get(pkg).push(entry);
+      else unassigned.push(entry);
+    });
+  });
+  const sortDesc = (a, b) => String(b.week_ending || "").localeCompare(String(a.week_ending || ""));
+  byPackage.forEach((list) => list.sort(sortDesc));
+  unassigned.sort(sortDesc);
+  return { byPackage, unassigned };
 }
 
 // Which BUILD_MILESTONES entries make up each standalone-house quality
@@ -2656,51 +2746,41 @@ const GATE_MILESTONES = {
 // Call after saving a weekly report, passing the report's own
 // progress_items. Advances a house plot's quality gate to "Under
 // Review" once every milestone that makes it up has been logged at
-// 100% against that plot (deduped across the project's whole weekly
-// report history, same rule as suggestPlotProgress() above) — a gate
-// already Under Review, Approved, or marked N/A is left untouched.
+// 100% against that plot (highest % ever, across the project's whole
+// weekly report history) — a gate already Under Review, Approved, or
+// marked N/A is left untouched, and nothing is ever auto-approved or
+// downgraded. Plot tags go through resolvePlotTags() (the same parser
+// the database uses to raise plot stages), so "22-27" counts for every
+// plot from 22 to 27 and block names / External tags count for none.
 // Only checks plots actually tagged in `progressItems`, since that's
 // the only data this particular save could have changed. Returns the
 // number of gates advanced.
 export async function syncGateStatusFromMilestones(projectId, progressItems) {
-  const taggedTokens = new Set();
-  (progressItems || []).forEach((item) => {
-    if (!item.plot || !item.milestone) return;
-    item.plot.split(",").forEach((p) => {
-      const token = normalisePlotToken(p.trim());
-      if (token) taggedTokens.add(token);
-    });
-  });
-  if (!taggedTokens.size) return 0;
+  const items = (progressItems || []).filter((item) => item && item.plot && item.milestone);
+  if (!items.length) return 0;
 
-  const [{ data: plots }, { data: reports }] = await Promise.all([
+  const [{ data: plots }, { data: blocks }, { data: reports }] = await Promise.all([
     supabase.from("plots").select("id, plot_number").eq("project_id", projectId).is("block_id", null),
+    supabase.from("blocks").select("block_name").eq("project_id", projectId),
     supabase.from("weekly_reports").select("progress_items").eq("project_id", projectId),
   ]);
+  const housePlots = plots || [];
+  const blockNames = (blocks || []).map((b) => b.block_name);
 
-  const relevantPlots = (plots || []).filter((p) => taggedTokens.has(normalisePlotToken(p.plot_number)));
-  if (!relevantPlots.length) return 0;
+  const taggedIds = new Set();
+  items.forEach((item) => resolvePlotTags(item.plot, housePlots, blockNames).forEach((id) => taggedIds.add(id)));
+  if (!taggedIds.size) return 0;
+  const relevantPlots = housePlots.filter((p) => taggedIds.has(p.id));
 
-  const tokenToPlotIds = new Map();
-  const completionByPlotId = new Map();
-  relevantPlots.forEach((p) => {
-    completionByPlotId.set(p.id, new Map());
-    const token = normalisePlotToken(p.plot_number);
-    if (!tokenToPlotIds.has(token)) tokenToPlotIds.set(token, []);
-    tokenToPlotIds.get(token).push(p.id);
-  });
-
+  const completionByPlotId = new Map(relevantPlots.map((p) => [p.id, new Map()]));
   (reports || []).forEach((r) => {
     (Array.isArray(r.progress_items) ? r.progress_items : []).forEach((item) => {
-      if (typeof item === "string" || !item.milestone || !BUILD_MILESTONES.includes(item.milestone) || !item.plot) return;
+      if (typeof item === "string" || !item || !item.milestone || !BUILD_MILESTONES.includes(item.milestone) || !item.plot) return;
       const percent = typeof item.percent === "number" ? item.percent : 0;
-      item.plot.split(",").forEach((p) => {
-        const plotIds = tokenToPlotIds.get(normalisePlotToken(p.trim()));
-        if (!plotIds) return;
-        plotIds.forEach((plotId) => {
-          const m = completionByPlotId.get(plotId);
-          if (!m.has(item.milestone) || percent > m.get(item.milestone)) m.set(item.milestone, percent);
-        });
+      resolvePlotTags(item.plot, relevantPlots, blockNames).forEach((plotId) => {
+        const m = completionByPlotId.get(plotId);
+        if (!m) return;
+        if (!m.has(item.milestone) || percent > m.get(item.milestone)) m.set(item.milestone, percent);
       });
     });
   });
@@ -2877,42 +2957,48 @@ export async function fetchWeatherConditions(latitude, longitude, startDate, end
   }
 }
 
-// Standard UK residential new-build stages, groundworks through handover,
-// offered as the milestone dropdown on weekly report progress/next-week
-// items. Not exhaustive for every build type (e.g. covers both timber
-// frame and brick & block) — "Other" lets you type anything not listed.
-export const BUILD_MILESTONES = [
-  "Site Set-Up / Enabling Works",
-  "Groundworks",
-  "Foundations (Foots)",
-  "Drainage (Below Ground)",
-  "Slab Pour / Oversite",
-  "Timber Frame Erect",
-  "Brick & Block Superstructure",
-  "Scaffold Erect",
-  "Roofing",
-  "Windows & External Doors",
-  "Scaffold Drop",
-  "Render",
-  "Cladding / External Finishes",
-  "1st Fix – Carpentry",
-  "1st Fix – Electrical",
-  "1st Fix – Plumbing & Heating",
-  "1st Fix – Gas",
-  "Plastering / Drylining",
-  "2nd Fix – Carpentry",
-  "2nd Fix – Electrical",
-  "2nd Fix – Plumbing & Heating",
-  "Kitchen Fit",
-  "Bathroom Fit",
-  "Painting & Decorating",
-  "Flooring",
-  "Solar Panels (PV)",
-  "External Works / Landscaping",
-  "Testing & Commissioning",
-  "Snagging",
-  "Handover / Practical Completion",
+// The one 33-stage list (v69), shared by the weekly report dropdown and
+// the plot page grid. MUST stay identical (keys, names, order, house/flat
+// N/A defaults) to public.progress_stages in sql/schema.sql — the
+// database resolves report stages by these exact names (en dashes
+// included); tests/frontend/progress_stages_parity.test.mjs checks it.
+// "Other" still lets you type anything not listed (it feeds no stage).
+export const PROGRESS_STAGES = [
+  { key: "st_site_setup", name: "Site Set-Up / Enabling Works", house: false, flat: false },
+  { key: "st_groundworks", name: "Groundworks", house: true, flat: false },
+  { key: "st_foundations", name: "Foundations (Foots)", house: true, flat: false },
+  { key: "st_drainage", name: "Drainage (Below Ground)", house: true, flat: false },
+  { key: "st_slab", name: "Slab Pour / Oversite", house: true, flat: false },
+  { key: "st_timber_frame", name: "Timber Frame Erect", house: true, flat: false },
+  { key: "st_brick_block", name: "Brick & Block Superstructure", house: true, flat: false },
+  { key: "st_scaffold_erect", name: "Scaffold Erect", house: true, flat: false },
+  { key: "st_roofing", name: "Roofing", house: true, flat: false },
+  { key: "st_windows_doors", name: "Windows & External Doors", house: true, flat: false },
+  { key: "st_scaffold_drop", name: "Scaffold Drop", house: true, flat: false },
+  { key: "st_render", name: "Render", house: true, flat: false },
+  { key: "st_cladding", name: "Cladding / External Finishes", house: true, flat: false },
+  { key: "st_1fix_carpentry", name: "1st Fix – Carpentry", house: true, flat: true },
+  { key: "st_1fix_electrical", name: "1st Fix – Electrical", house: true, flat: true },
+  { key: "st_1fix_plumbing", name: "1st Fix – Plumbing & Heating", house: true, flat: true },
+  { key: "st_1fix_gas", name: "1st Fix – Gas", house: true, flat: false },
+  { key: "st_plaster_dryline", name: "Plastering / Drylining", house: true, flat: true },
+  { key: "st_2fix_carpentry", name: "2nd Fix – Carpentry", house: true, flat: true },
+  { key: "st_2fix_electrical", name: "2nd Fix – Electrical", house: true, flat: true },
+  { key: "st_2fix_plumbing", name: "2nd Fix – Plumbing & Heating", house: true, flat: true },
+  { key: "st_carpentry_finals", name: "Carpentry Finals", house: true, flat: true },
+  { key: "st_kitchen", name: "Kitchen Fit", house: true, flat: true },
+  { key: "st_bathroom", name: "Bathroom Fit", house: true, flat: true },
+  { key: "st_decorating", name: "Painting & Decorating", house: true, flat: true },
+  { key: "st_flooring", name: "Flooring", house: true, flat: true },
+  { key: "st_mastic", name: "Mastic", house: true, flat: true },
+  { key: "st_pv", name: "Solar Panels (PV)", house: true, flat: false },
+  { key: "st_external_works", name: "External Works / Landscaping", house: false, flat: false },
+  { key: "st_testing", name: "Testing & Commissioning", house: true, flat: true },
+  { key: "st_clean", name: "Clean", house: true, flat: true },
+  { key: "st_snagging", name: "Snagging", house: true, flat: true },
+  { key: "st_handover", name: "Handover / Practical Completion", house: true, flat: true },
 ];
+export const BUILD_MILESTONES = PROGRESS_STAGES.map((s) => s.name);
 const MILESTONE_CUSTOM_VALUE = "__custom__";
 
 // ─── H&S Audits ─────────────────────────────────────────────────
@@ -3002,7 +3088,7 @@ export function hsAuditScore(items) {
 // Pass { plotOptions: [...] } (a project's plot numbers) to turn the plot
 // field from freetext into a multi-select — still stored as the same
 // comma-joined string ("Plot 5, Plot 6") the rest of the app already
-// expects (suggestPlotProgress() etc. already split on commas), so this
+// expects (resolvePlotTags() splits on commas), so this
 // is a pure UI change with no data-shape migration. Falls back to the
 // plain text input when omitted/empty.
 // Pass { withVerification: true } to add a Clerk of Works "Quality

@@ -4,6 +4,7 @@
 // not just that the RPC exists).
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { progressHelpers } from "../lib/progress_helpers.mjs";
 import { extractScript, runPage, fireEvent, wait } from "../lib/jsdom-harness.mjs";
 
 const HTML = new URL("../../tracker/dashboard.html", import.meta.url).pathname;
@@ -13,9 +14,10 @@ function makeSupabase({ ensureOrgId = "org-1", projects = [] } = {}) {
   return {
     calls,
     auth: { getUser: async () => ({ data: { user: { id: "u1" } } }) },
-    rpc(name) {
-      calls.push({ op: "rpc", name });
+    rpc(name, args) {
+      calls.push({ op: "rpc", name, args });
       if (name === "ensure_organisation") return Promise.resolve({ data: ensureOrgId, error: null });
+      if (name === "create_site") return Promise.resolve({ data: "new-project-id", error: null });
       return Promise.resolve({ data: null, error: null });
     },
     from(table) {
@@ -40,6 +42,7 @@ function makeSupabase({ ensureOrgId = "org-1", projects = [] } = {}) {
 
 async function run(supabase) {
   return runPage(HTML, extractScript(HTML), {
+    ...progressHelpers,
     __url: "https://example.com/dashboard.html",
     supabase,
     requireAuth: async () => ({ id: "u1" }),
@@ -84,10 +87,12 @@ test("dashboard.html: creating a project resolves the caller's organisation and 
   const rpcCalls = supabase.calls.filter((c) => c.op === "rpc" && c.name === "ensure_organisation");
   assert.equal(rpcCalls.length, 1, "expected ensure_organisation to be called exactly once");
 
-  const inserts = supabase.calls.filter((c) => c.table === "projects" && c.op === "insert");
+  // v69: the site is created through one create_site() call (site + share).
+  const inserts = supabase.calls.filter((c) => c.op === "rpc" && c.name === "create_site");
   assert.equal(inserts.length, 1);
-  assert.equal(inserts[0].payload.org_id, "org-abc-123", "the resolved organisation id must be included in the insert");
-  assert.equal(inserts[0].payload.name, "New Site");
+  assert.equal(inserts[0].args.p_site.org_id, "org-abc-123", "the resolved organisation id must be included in the insert");
+  assert.equal(inserts[0].args.p_site.name, "New Site");
+  assert.equal(supabase.calls.filter((c) => c.table === "projects" && c.op === "insert").length, 0, "no direct insert");
 });
 
 test("dashboard.html: if resolving the organisation fails, no project insert is attempted", async () => {
@@ -100,7 +105,7 @@ test("dashboard.html: if resolving the organisation fails, no project insert is 
   fireEvent(document.getElementById("projectForm"), "submit");
   await wait(30);
 
-  const inserts = supabase.calls.filter((c) => c.table === "projects" && c.op === "insert");
+  const inserts = supabase.calls.filter((c) => (c.table === "projects" && c.op === "insert") || c.name === "create_site");
   assert.equal(inserts.length, 0, "must not attempt to insert a project if the organisation couldn't be resolved");
   assert.ok(document.getElementById("errorBox").textContent.includes("boom"));
 });
@@ -115,7 +120,7 @@ test("dashboard.html: no admin organisation (null) sends the user to setup and i
   document.getElementById("name").value = "Sub's Own Site";
   fireEvent(document.getElementById("projectForm"), "submit");
   await wait(30);
-  const inserts = supabase.calls.filter((c) => c.table === "projects" && c.op === "insert");
+  const inserts = supabase.calls.filter((c) => (c.table === "projects" && c.op === "insert") || c.name === "create_site");
   assert.equal(inserts.length, 0, "must never create a project without an admin organisation");
   assert.equal(document.getElementById("errorBox").textContent, "", "this is a redirect, not an error");
 });
