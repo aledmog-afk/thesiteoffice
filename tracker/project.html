@@ -245,7 +245,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, geocodePostcode, recalculateActualProgress, generateMissingPlots, suggestPlotProgress, EXTERNAL_WORKS_TAG, monthStartISO, getProjectControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, isFindingOutstanding, categoriseSnag, isSnagOutstanding, getProjectPlotReadiness, getMyCommercialRole, commercialCapabilities, getMyToolboxTalkRole, toolboxTalkCapabilities, getModuleRolesCatalog, getProjectModuleRoles, setProjectModuleRole } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, geocodePostcode, recalculateActualProgress, generateMissingPlots, suggestPlotProgress, EXTERNAL_WORKS_TAG, monthStartISO, getProjectControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, isFindingOutstanding, categoriseSnag, isSnagOutstanding, getProjectPlotReadiness, getMyCommercialRole, commercialCapabilities, getMyToolboxTalkRole, toolboxTalkCapabilities, getModuleRolesCatalog, getProjectModuleRoles, setProjectModuleRole, commercialOwnerAccessEnabled } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("id");
@@ -352,6 +352,9 @@
   const modulePermissionsErrorBox = document.getElementById("modulePermissionsErrorBox");
   let moduleCatalog = [];
   let moduleGrants = [];
+  // v67: once the database treats the project owner as Contributor, the
+  // owner's Dayworks & Variations cell says so instead of a dropdown.
+  let commercialOwnerAuto = false;
 
   function renderModulePermissions(members) {
     // v66 removed the Dayworks & Variations 'approver' role. Until v66 is
@@ -374,6 +377,9 @@
         // "no explicit grant" is not "no access", it's "use the
         // automatic default", so the empty option must say so rather
         // than implying access is absent.
+        if (m === "commercial" && member.role === "owner" && commercialOwnerAuto) {
+          return `<td><span class="hint" data-owner-full-access="${member.user_id}">Owner — full access (Contributor, automatic)</span></td>`;
+        }
         const hasAutoDefault = m === "toolbox_talks" && (member.role === "owner" || member.role === "collaborator");
         const emptyLabel = hasAutoDefault ? "Default (Contributor — automatic)" : "— No access —";
         const options = `<option value="">${emptyLabel}</option>` + rolesForModule.map((r) =>
@@ -410,9 +416,10 @@
     if (!isOwner) return;
     clearError(modulePermissionsErrorBox);
     try {
-      [moduleCatalog, moduleGrants] = await Promise.all([
+      [moduleCatalog, moduleGrants, commercialOwnerAuto] = await Promise.all([
         getModuleRolesCatalog(),
         getProjectModuleRoles(projectId),
+        commercialOwnerAccessEnabled(projectId).catch(() => false),
       ]);
       renderModulePermissions(members);
     } catch (err) {

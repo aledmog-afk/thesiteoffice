@@ -194,18 +194,22 @@ test("No grant: a full project collaborator with ZERO commercial grant cannot se
   }
 });
 
-test("Project owner WITHOUT an explicit commercial grant has NO commercial access either — module access is explicit, never implied by ownership", async () => {
-  // A fresh project owned by someone with no self-granted commercial
-  // role — being the owner must not implicitly unlock Commercial.
+test("v67: the project OWNER without an explicit commercial grant is treated as Contributor — can see, create and price on their own project", async () => {
+  // v67 (Aled, 17 Oct 2026): the project owner (is_project_owner — owner
+  // role AND a member of the project's own organisation) gets
+  // Contributor-level access automatically, without a role row.
   const ownerB = await userClient(DB, OWNER_B);
   try {
-    const { rows: sel } = await ownerB.query("select * from public.commercial_events where project_id=$1", [fx.projB]);
-    assert.equal(sel.length, 0);
-    await assert.rejects(
-      ownerB.query(`insert into public.commercial_events (project_id, type, title) values ($1,'daywork','Should fail')`, [fx.projB]),
-      isRlsError,
-      "the project owner must not implicitly have Commercial access without an explicit grant"
-    );
+    assert.equal((await ownerB.query("select public.commercial_access_role($1) as r", [fx.projB])).rows[0].r, "contributor");
+    const { rows: created } = await ownerB.query(
+      `insert into public.commercial_events (project_id, type, title) values ($1,'daywork','Owner auto-access') returning id`, [fx.projB]);
+    await ownerB.query(
+      `insert into public.commercial_line_items (commercial_event_id, line_type, description, quantity, rate) values ($1,'labour','x',2,30)`, [created[0].id]);
+    const { rows: li } = await ownerB.query("select rate, line_total from public.commercial_line_items where commercial_event_id=$1", [created[0].id]);
+    assert.equal(li[0].line_total, "60.00", "the owner sees prices like any Contributor");
+    // ...but it is THEIR project only — owning project B gives nothing on project A.
+    assert.equal((await ownerB.query("select public.commercial_access_role($1) as r", [fx.projA])).rows[0].r, null);
+    assert.equal((await ownerB.query("select * from public.commercial_events where project_id=$1", [fx.projA])).rows.length, 0);
   } finally {
     await ownerB.end();
   }
@@ -401,7 +405,7 @@ test("commercial_event_totals view: is created with security_invoker=true, so it
 
 test("commercial_event_totals view: a contributor on project B cannot see project A's totals through the view, even though the view was created by a superuser", async () => {
   const contributorA = await userClient(DB, CONTRIBUTOR_A); // granted on projA only
-  const ownerB = await userClient(DB, OWNER_B); // owns projB, no commercial grant anywhere
+  const ownerB = await userClient(DB, OWNER_B); // owns projB (so v67 Contributor there), no access to projA
   try {
     // Give an unrelated draft daywork on project A a real, non-zero
     // total via a real line item, so there is something non-trivial for
@@ -433,8 +437,11 @@ test("commercial_event_totals view: a contributor on project B cannot see projec
 
     // Belt and braces: an unfiltered select must also come back empty
     // for ownerB, not merely a specific id lookup.
-    const { rows: allForOwnerB } = await ownerB.query("select * from public.commercial_event_totals");
-    assert.equal(allForOwnerB.length, 0, "an unfiltered query against the view must also return zero rows for a user with no Commercial access anywhere");
+    // (v67: ownerB is now automatically a Contributor on their OWN
+    // project B, so the check is "nothing from project A".)
+    const { rows: allForOwnerB } = await ownerB.query(
+      "select t.* from public.commercial_event_totals t join public.commercial_events ce on ce.id = t.commercial_event_id where ce.project_id = $1", [fx.projA]);
+    assert.equal(allForOwnerB.length, 0, "an unfiltered query against the view must return zero project-A rows for a user with no Commercial access on project A");
   } finally {
     await contributorA.end();
     await ownerB.end();

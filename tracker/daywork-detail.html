@@ -73,6 +73,7 @@
         <strong class="display-font" id="grandTotal" style="font-size:1.2rem;">£0.00</strong>
       </div>
       <div id="tbcWarning" class="hint" style="display:none; color:var(--amber); margin-bottom:0.8rem;"></div>
+      <p class="hint" id="pricesHiddenNote" style="display:none; margin-bottom:0.8rem;">You have view-only access: you can see the total, but quantities, rates and line prices are only shown to Contributors and the project owner.</p>
       <ul class="item-list" id="lineItemList"></ul>
       <div class="item-add-row" id="lineItemAddRow" style="display:none; flex-wrap:wrap; margin-top:0.8rem;">
         <select id="liType" style="flex:0 0 140px;"></select>
@@ -188,7 +189,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showCommercialError, clearError, getMyCommercialRole, commercialCapabilities, createDaywork, getDaywork, updateDaywork, getCommercialLineItems, addCommercialLineItem, deleteCommercialLineItem, getCommercialEvidence, addCommercialEvidencePhoto, removeCommercialEvidenceLink, getCommercialSignatures, submitCommercialEvent, approveCommercialEvent, rejectCommercialEvent, reopenCommercialEvent, validCommercialStatusTransitions, previewLineTotal, formatCommercialGBP, getMemberEmailMap, getDocumentFileUrl, todayISO, comparePlotNumbers, getVariationsLinkedToDaywork, COMMERCIAL_STATUS_LABEL, COMMERCIAL_STATUS_BADGE, COMMERCIAL_LINE_TYPES, COMMERCIAL_LINE_TYPE_LABEL, generateCommercialEventPdfBlob, saveFileToDevice, deviceSaveStatusLabel, getCommercialApprovalRequests, requestCommercialApproval, revokeCommercialApprovalRequest, buildCommercialApprovalUrl, COMMERCIAL_APPROVAL_STATUS_LABEL, COMMERCIAL_APPROVAL_STATUS_BADGE } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showCommercialError, clearError, getMyCommercialRole, commercialCapabilities, getCommercialEventView, createDaywork, getDaywork, updateDaywork, getCommercialLineItems, addCommercialLineItem, deleteCommercialLineItem, getCommercialEvidence, addCommercialEvidencePhoto, removeCommercialEvidenceLink, getCommercialSignatures, submitCommercialEvent, approveCommercialEvent, rejectCommercialEvent, reopenCommercialEvent, validCommercialStatusTransitions, previewLineTotal, formatCommercialGBP, getMemberEmailMap, getDocumentFileUrl, todayISO, comparePlotNumbers, getVariationsLinkedToDaywork, COMMERCIAL_STATUS_LABEL, COMMERCIAL_STATUS_BADGE, COMMERCIAL_LINE_TYPES, COMMERCIAL_LINE_TYPE_LABEL, generateCommercialEventPdfBlob, saveFileToDevice, deviceSaveStatusLabel, getCommercialApprovalRequests, requestCommercialApproval, revokeCommercialApprovalRequest, buildCommercialApprovalUrl, COMMERCIAL_APPROVAL_STATUS_LABEL, COMMERCIAL_APPROVAL_STATUS_BADGE } from "./js/app.js";
 
   await requireAuth();
   const eventId = getParam("id");
@@ -204,6 +205,11 @@
   let approvalRequests = [];
   let membersById = {};
   let currentUserId = null;
+  // v67: a Viewer sees record totals only — never quantities, rates or
+  // line totals, and no PDF. After v67 the database only gives them the
+  // redacted copy (get_commercial_event_view); before v67 the page still
+  // hides the same things.
+  let pricesHidden = false;
 
   function plotOptionsHtml(selectedId) {
     return `<option value="">No specific plot</option>` +
@@ -256,7 +262,7 @@
     badge.style.display = "inline-block";
     badge.className = `badge ${COMMERCIAL_STATUS_BADGE[event.status]}`;
     badge.textContent = COMMERCIAL_STATUS_LABEL[event.status];
-    document.getElementById("generatePdfBtn").style.display = (event.status === "submitted" || event.status === "approved") ? "inline-flex" : "none";
+    document.getElementById("generatePdfBtn").style.display = (!pricesHidden && (event.status === "submitted" || event.status === "approved")) ? "inline-flex" : "none";
     document.getElementById("pdfStatusText").textContent = "";
 
     document.getElementById("headerFacts").innerHTML = `
@@ -308,7 +314,7 @@
 
   // ─── Line items ─────────────────────────────────────────────────
   function renderLineItems() {
-    const tbcCount = lineItems.filter((li) => li.rate === null).length;
+    const tbcCount = typeof event.tbc_count === "number" ? event.tbc_count : lineItems.filter((li) => li.rate === null).length;
     const tbcWarning = document.getElementById("tbcWarning");
     if (tbcCount) {
       tbcWarning.style.display = "block";
@@ -318,6 +324,16 @@
     }
 
     const unlocked = caps.canEdit && (event.status === "draft" || event.status === "rejected");
+    document.getElementById("pricesHiddenNote").style.display = pricesHidden ? "block" : "none";
+    if (pricesHidden) {
+      document.getElementById("lineItemList").innerHTML = lineItems.map((li) => `
+      <li class="item-row">
+        <span class="badge badge-grey" style="flex:0 0 auto;">${COMMERCIAL_LINE_TYPE_LABEL[li.line_type]}</span>
+        <span style="flex:1 1 200px;">${escapeHtml(li.description)}${li.trade ? ` <span class="hint">(${escapeHtml(li.trade)})</span>` : ""}</span>
+      </li>
+    `).join("");
+      return;
+    }
     document.getElementById("lineItemList").innerHTML = lineItems.map((li) => `
       <li class="item-row">
         <span class="badge badge-grey" style="flex:0 0 auto;">${COMMERCIAL_LINE_TYPE_LABEL[li.line_type]}</span>
@@ -746,6 +762,29 @@
   }
 
   async function reloadEvent() {
+    if (pricesHidden) {
+      const view = await getCommercialEventView(eventId);
+      if (view) {
+        event = view;
+        lineItems = view.lines || [];
+        signatures = view.signatures || [];
+        approvalRequests = view.approval_requests || [];
+        let linkedVariations;
+        [evidence, linkedVariations] = await Promise.all([
+          getCommercialEvidence(eventId),
+          getVariationsLinkedToDaywork(eventId),
+        ]);
+        renderHeaderFacts();
+        renderLineItems();
+        renderLinkedVariations(linkedVariations);
+        await renderEvidence();
+        renderWorkflow();
+        renderApproval();
+        return;
+      }
+      // Before v67 the function doesn't exist yet: fall through to the
+      // normal reads; the render functions still hide the prices.
+    }
     event = await getDaywork(eventId);
     let linkedVariations;
     [lineItems, evidence, signatures, linkedVariations, approvalRequests] = await Promise.all([
@@ -777,6 +816,7 @@
     const role = await getMyCommercialRole(projectId).catch(() => null);
     caps = commercialCapabilities(role);
     if (!caps.canView) { document.getElementById("noAccessCard").style.display = "block"; return; }
+    pricesHidden = !caps.canSeePrices;
 
     const { data: { user } } = await supabase.auth.getUser();
     currentUserId = user.id;

@@ -12519,3 +12519,313 @@ grant execute on function public.can_submit_commercial(uuid) to authenticated;
 revoke all on function public.can_approve_commercial(uuid) from public;
 revoke execute on function public.can_approve_commercial(uuid) from anon;
 grant execute on function public.can_approve_commercial(uuid) to authenticated;
+
+-- ─── v67 ADDITIONS: Dayworks & Variations — Viewers see totals only; project owners get full access ───
+-- Aled, 17 Oct 2026 (all four recommendations):
+--   1. Viewers get NO quantities/hours, rates, line totals or markup —
+--      only record-level totals (commercial_events.total_value) and the
+--      non-price facts (status, references, descriptions, dates).
+--   2. Viewers DO see linked-daywork totals on a variation (those are
+--      record totals they can already see in the Dayworks list).
+--   3. The project owner (is_project_owner: project_members role 'owner'
+--      AND a member of the project's own organisation — never a
+--      subcontractor party) is treated as Contributor automatically,
+--      without a role row. Org admins get nothing automatically.
+--   4. Commercial change history (audit_log rows for the D&V tables, and
+--      for the older commercial_items ledger) and the PDF export's data
+--      are Contributor/owner only. commercials.html and commercial_items'
+--      own table access are deliberately unchanged (out of scope).
+--
+-- How: database rules filter whole rows, so the price-bearing tables
+-- (commercial_line_items, variations, commercial_signatures,
+-- commercial_approval_requests) and the commercial_event_totals view
+-- become Contributor/owner only, and Viewers read a redacted copy through
+-- get_commercial_event_view() / commercial_tbc_event_ids() /
+-- list_commercial_variation_facts(). commercial_events (which holds the
+-- record total), dayworks, variation_dayworks and commercial_evidence_links
+-- stay readable by Viewers. Everything below is at the END of the file
+-- and safe to re-run; earlier sections recreate the old "commercial
+-- viewers read ..." policies on a re-run and this block drops them again.
+
+-- (1) Effective role: owner => contributor, otherwise the explicit grant.
+create or replace function public.commercial_access_role(p_project_id uuid)
+returns text
+language sql stable security definer set search_path = public
+as $$
+  select case
+    when public.is_project_owner(p_project_id) then 'contributor'
+    else public.project_module_role(p_project_id, 'commercial')
+  end;
+$$;
+
+-- Same NULL-for-no-role behaviour as before (the triggers rely on it).
+create or replace function public.can_view_commercial(p_project_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select public.commercial_access_role(p_project_id) in ('viewer', 'contributor');
+$$;
+
+create or replace function public.can_edit_commercial(p_project_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select public.commercial_access_role(p_project_id) = 'contributor';
+$$;
+
+create or replace function public.can_submit_commercial(p_project_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select public.commercial_access_role(p_project_id) = 'contributor';
+$$;
+
+-- Who may see quantities, rates, line totals, markup, hashes and history.
+create or replace function public.can_see_commercial_prices(p_project_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select coalesce(public.commercial_access_role(p_project_id) = 'contributor', false);
+$$;
+
+-- (2) Price-bearing tables: Contributors/owners only.
+drop policy if exists "commercial viewers read commercial_line_items" on public.commercial_line_items;
+drop policy if exists "commercial contributors read commercial_line_items" on public.commercial_line_items;
+create policy "commercial contributors read commercial_line_items" on public.commercial_line_items
+  for select to authenticated using (
+    exists (select 1 from public.commercial_events ce
+             where ce.id = commercial_line_items.commercial_event_id and public.can_see_commercial_prices(ce.project_id))
+  );
+
+drop policy if exists "commercial viewers read variations" on public.variations;
+drop policy if exists "commercial contributors read variations" on public.variations;
+create policy "commercial contributors read variations" on public.variations
+  for select to authenticated using (
+    exists (select 1 from public.commercial_events ce
+             where ce.id = variations.commercial_event_id and public.can_see_commercial_prices(ce.project_id))
+  );
+
+drop policy if exists "commercial viewers read commercial_signatures" on public.commercial_signatures;
+drop policy if exists "commercial contributors read commercial_signatures" on public.commercial_signatures;
+create policy "commercial contributors read commercial_signatures" on public.commercial_signatures
+  for select to authenticated using (
+    exists (select 1 from public.commercial_events ce
+             where ce.id = commercial_signatures.commercial_event_id and public.can_see_commercial_prices(ce.project_id))
+  );
+
+drop policy if exists "commercial viewers read commercial_approval_requests" on public.commercial_approval_requests;
+drop policy if exists "commercial contributors read commercial_approval_requests" on public.commercial_approval_requests;
+create policy "commercial contributors read commercial_approval_requests" on public.commercial_approval_requests
+  for select to authenticated using (public.can_see_commercial_prices(project_id));
+
+-- The totals breakdown view (subtotals + markup): Contributors/owners
+-- only. Same columns as before; still security_invoker.
+create or replace view public.commercial_event_totals
+with (security_invoker = true)
+as
+select
+  ce.id as commercial_event_id,
+  ce.type,
+  coalesce(li.own_subtotal, 0) as own_subtotal,
+  coalesce(dw.dayworks_subtotal, 0) as dayworks_subtotal,
+  case when ce.type = 'variation' then coalesce(v.markup_pct, 0) else null end as markup_pct,
+  case
+    when ce.type = 'variation' then
+      round((coalesce(li.own_subtotal, 0) + coalesce(dw.dayworks_subtotal, 0)) * (1 + coalesce(v.markup_pct, 0) / 100), 2)
+    else
+      coalesce(li.own_subtotal, 0)
+  end as total
+from public.commercial_events ce
+left join public.variations v on v.commercial_event_id = ce.id
+left join (
+  select commercial_event_id, sum(line_total) as own_subtotal
+  from public.commercial_line_items
+  group by commercial_event_id
+) li on li.commercial_event_id = ce.id
+left join (
+  select vd.variation_id, sum(d_ce.total_value) as dayworks_subtotal
+  from public.variation_dayworks vd
+  join public.commercial_events d_ce on d_ce.id = vd.daywork_id
+  group by vd.variation_id
+) dw on dw.variation_id = ce.id
+-- current_user is 'authenticated' (or 'anon') only when a client reads the
+-- view directly. Inside a SECURITY DEFINER function (commercial_event_hash,
+-- the approval-link RPCs, request_commercial_approval) current_user is the
+-- owner, so those internal checks still see the real figures even when
+-- the caller is the anon approval link.
+where current_user not in ('authenticated', 'anon')
+   or public.can_see_commercial_prices(ce.project_id);
+
+-- (3) Viewer-safe reads. Each checks can_view_commercial itself and
+-- returns ONLY non-price fields plus record totals. Never line ids
+-- (with a line id and the record hash, a rate could be brute-forced),
+-- never quantity/unit price/line total/markup/hashes/signature images.
+create or replace function public.get_commercial_event_view(p_event_id uuid)
+returns jsonb
+language plpgsql stable security definer set search_path = public
+as $$
+declare
+  v_event public.commercial_events%rowtype;
+  v_result jsonb;
+begin
+  select * into v_event from public.commercial_events where id = p_event_id;
+  if v_event.id is null or public.can_view_commercial(v_event.project_id) is not true then
+    raise exception 'Commercial record not found';
+  end if;
+
+  v_result := jsonb_build_object(
+    'id', v_event.id,
+    'project_id', v_event.project_id,
+    'org_id', v_event.org_id,
+    'plot_id', v_event.plot_id,
+    'type', v_event.type,
+    'reference', v_event.reference,
+    'title', v_event.title,
+    'status', v_event.status,
+    'total_value', v_event.total_value,
+    'submitted_by', v_event.submitted_by,
+    'submitted_at', v_event.submitted_at,
+    'approved_by', v_event.approved_by,
+    'approved_at', v_event.approved_at,
+    'rejected_by', v_event.rejected_by,
+    'rejected_at', v_event.rejected_at,
+    'rejection_reason', v_event.rejection_reason,
+    'supersedes_id', v_event.supersedes_id,
+    'created_by', v_event.created_by,
+    'created_at', v_event.created_at,
+    'updated_at', v_event.updated_at,
+    'prices_hidden', true,
+    'has_tbc', exists (select 1 from public.commercial_line_items li where li.commercial_event_id = v_event.id and li.rate is null),
+    'tbc_count', (select count(*) from public.commercial_line_items li where li.commercial_event_id = v_event.id and li.rate is null),
+    'lines', coalesce((
+      select jsonb_agg(jsonb_build_object(
+               'position', x.pos, 'line_type', x.line_type, 'description', x.description, 'trade', x.trade, 'unit', x.unit
+             ) order by x.pos)
+        from (select row_number() over (order by li.created_at, li.id) as pos, li.line_type, li.description, li.trade, li.unit
+                from public.commercial_line_items li where li.commercial_event_id = v_event.id) x
+    ), '[]'::jsonb),
+    'signatures', coalesce((
+      select jsonb_agg(jsonb_build_object(
+               'action', s.action, 'signed_by_user_id', s.signed_by_user_id, 'signed_by_name', s.signed_by_name, 'signed_at', s.signed_at
+             ) order by s.signed_at)
+        from public.commercial_signatures s where s.commercial_event_id = v_event.id
+    ), '[]'::jsonb),
+    'approval_requests', coalesce((
+      select jsonb_agg(jsonb_build_object(
+               'status', r.status, 'recipient_name', r.recipient_name, 'recipient_email', r.recipient_email,
+               'recipient_company', r.recipient_company, 'created_at', r.created_at, 'expires_at', r.expires_at,
+               'viewed_at', r.viewed_at, 'approved_at', r.approved_at, 'rejected_at', r.rejected_at,
+               'rejection_reason', r.rejection_reason, 'signer_name', r.signer_name
+             ) order by r.created_at desc)
+        from public.commercial_approval_requests r where r.commercial_event_id = v_event.id
+    ), '[]'::jsonb)
+  );
+
+  if v_event.type = 'daywork' then
+    v_result := v_result || coalesce((
+      select jsonb_build_object('date_undertaken', d.date_undertaken)
+        from public.dayworks d where d.commercial_event_id = v_event.id
+    ), '{}'::jsonb);
+  else
+    v_result := v_result || coalesce((
+      select jsonb_build_object(
+               'date_identified', v.date_identified, 'date_instructed', v.date_instructed,
+               'instruction_reference', v.instruction_reference, 'instructed_by', v.instructed_by, 'reason', v.reason)
+        from public.variations v where v.commercial_event_id = v_event.id
+    ), '{}'::jsonb);
+    v_result := v_result || jsonb_build_object('linked_dayworks', coalesce((
+      select jsonb_agg(jsonb_build_object(
+               'daywork_id', d.id, 'reference', d.reference, 'title', d.title, 'status', d.status,
+               'total_value', d.total_value, 'created_at', d.created_at, 'linked_at', vd.linked_at
+             ) order by vd.linked_at)
+        from public.variation_dayworks vd join public.commercial_events d on d.id = vd.daywork_id
+       where vd.variation_id = v_event.id
+    ), '[]'::jsonb));
+  end if;
+
+  return v_result;
+end;
+$$;
+
+-- Which records still have an unpriced (TBC) line — for the dashboard's
+-- warning panel. Record ids only.
+create or replace function public.commercial_tbc_event_ids(p_project_id uuid)
+returns setof uuid
+language sql stable security definer set search_path = public
+as $$
+  select distinct li.commercial_event_id
+    from public.commercial_line_items li
+   where li.project_id = p_project_id
+     and li.rate is null
+     and public.can_view_commercial(p_project_id);
+$$;
+
+-- The Variations list's non-price columns (dates, instruction reference).
+create or replace function public.list_commercial_variation_facts(p_project_id uuid)
+returns table (commercial_event_id uuid, date_identified date, date_instructed date, instruction_reference text)
+language sql stable security definer set search_path = public
+as $$
+  select v.commercial_event_id, v.date_identified, v.date_instructed, v.instruction_reference
+    from public.variations v
+   where v.project_id = p_project_id
+     and public.can_view_commercial(p_project_id);
+$$;
+
+-- (4) Change history: commercial tables (and the older commercial_items
+-- ledger) are Contributor/owner only. Otherwise identical to the earlier
+-- definition (v44 Toolbox Talks section).
+create or replace function public.can_read_audit_row(p_table_name text, p_project_id uuid, p_org_id uuid)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+begin
+  if p_table_name = 'org_settings' then
+    return p_org_id is not null and public.is_org_member(p_org_id);
+  end if;
+
+  if p_table_name = 'toolbox_talk_templates' then
+    return p_org_id is not null and public.is_org_member(p_org_id);
+  end if;
+
+  if p_project_id is null then
+    return false;
+  end if;
+
+  -- v67: commercial history carries full rows (rates, line totals,
+  -- markup), so only those who may see prices may read it.
+  if p_table_name in ('commercial_events', 'commercial_line_items', 'variations', 'dayworks', 'variation_dayworks',
+                      'commercial_evidence_links', 'commercial_signatures', 'commercial_approval_requests', 'commercial_items') then
+    return public.can_see_commercial_prices(p_project_id);
+  end if;
+
+  if p_table_name in ('projects', 'snag_items', 'documents', 'document_revisions', 'toolbox_talks', 'toolbox_talk_attendees') then
+    return public.is_project_member(p_project_id);
+  end if;
+
+  return public.is_project_editor(p_project_id);
+end;
+$$;
+
+-- Grants (v59/v63 pattern): signed-in users only, never anon or PUBLIC.
+do $$
+declare f text;
+begin
+  foreach f in array array[
+    'public.commercial_access_role(uuid)',
+    'public.can_view_commercial(uuid)',
+    'public.can_edit_commercial(uuid)',
+    'public.can_submit_commercial(uuid)',
+    'public.can_see_commercial_prices(uuid)',
+    'public.get_commercial_event_view(uuid)',
+    'public.commercial_tbc_event_ids(uuid)',
+    'public.list_commercial_variation_facts(uuid)',
+    'public.can_read_audit_row(text, uuid, uuid)'
+  ] loop
+    execute format('revoke all on function %s from public', f);
+    execute format('revoke execute on function %s from anon', f);
+    execute format('grant execute on function %s to authenticated', f);
+  end loop;
+end $$;

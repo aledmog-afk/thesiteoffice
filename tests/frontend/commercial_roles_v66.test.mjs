@@ -24,11 +24,11 @@ function extractFunction(name) {
 const commercialCapabilities = extractFunction("commercialCapabilities");
 
 test("commercialCapabilities (v66): viewer can only view; contributor can view, edit, submit and approve", () => {
-  assert.deepEqual(commercialCapabilities("viewer"), { role: "viewer", canView: true, canEdit: false, canSubmit: false, canApprove: false });
-  assert.deepEqual(commercialCapabilities("contributor"), { role: "contributor", canView: true, canEdit: true, canSubmit: true, canApprove: true });
+  assert.deepEqual(commercialCapabilities("viewer"), { role: "viewer", canView: true, canEdit: false, canSubmit: false, canApprove: false, canSeePrices: false });
+  assert.deepEqual(commercialCapabilities("contributor"), { role: "contributor", canView: true, canEdit: true, canSubmit: true, canApprove: true, canSeePrices: true });
   for (const r of [null, undefined, "", "editor", "owner"]) {
     const c = commercialCapabilities(r);
-    assert.equal(c.canView || c.canEdit || c.canSubmit || c.canApprove, false, `${r} must get nothing`);
+    assert.equal(c.canView || c.canEdit || c.canSubmit || c.canApprove || c.canSeePrices, false, `${r} must get nothing`);
   }
 });
 

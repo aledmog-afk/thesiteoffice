@@ -191,13 +191,13 @@ test("AUTO ACCESS: an explicit grant still lets an owner extend access to a snag
   }
 });
 
-test("COMMERCIAL UNAFFECTED: the same owner/collaborator who now gets automatic Toolbox Talks access still gets nothing for Commercial without an explicit grant", async () => {
+test("COMMERCIAL: Toolbox Talks' automatic access doesn't leak into Commercial — a plain collaborator still gets nothing without an explicit grant; the project owner is Contributor only because of v67's owner rule, not v46", async () => {
   const owner = await userClient(DB, OWNER);
   try {
     const role = await owner.query("select public.project_module_role($1, 'commercial') as role", [fx.proj]);
-    assert.equal(role.rows[0].role, null);
-    const view = await owner.query("select public.can_view_commercial($1) as ok", [fx.proj]);
-    assert.ok(!view.rows[0].ok, "Commercial must remain fully opt-in for everyone, including the project owner — v46 only touches Toolbox Talks");
+    assert.equal(role.rows[0].role, null, "no commercial grant row exists for the owner");
+    const access = await owner.query("select public.commercial_access_role($1) as role", [fx.proj]);
+    assert.equal(access.rows[0].role, "contributor", "v67 (Aled, 17 Oct): the project owner is automatically a Contributor on Dayworks & Variations");
   } finally {
     await owner.end();
   }

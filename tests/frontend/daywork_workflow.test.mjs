@@ -283,6 +283,8 @@ async function run(store, { role, userId, eventId = null, projectId = "p1" }) {
     // Phase 2: defaults to empty (no linked Variations); a test can
     // override it per-call by setting store.getVariationsLinkedToDaywork.
     getVariationsLinkedToDaywork: (...a) => (store.getVariationsLinkedToDaywork ? store.getVariationsLinkedToDaywork(...a) : Promise.resolve([])),
+    // v67: the redacted Viewer copy. null = the database has no v67 yet.
+    getCommercialEventView: (...a) => (store.getCommercialEventView ? store.getCommercialEventView(...a) : Promise.resolve(null)),
     getDocumentFileUrl: (...a) => store.getDocumentFileUrl(...a),
     generateCommercialEventPdfBlob: (...a) => (store.generateCommercialEventPdfBlob ? store.generateCommercialEventPdfBlob(...a) : Promise.resolve({ blob: new Blob(["pdf"]), filename: "test.pdf" })),
     saveFileToDevice: (...a) => (store.saveFileToDevice ? store.saveFileToDevice(...a) : Promise.resolve({ status: "downloaded" })),
@@ -498,7 +500,8 @@ test("Permissions: a Viewer sees the record but no mutation controls anywhere on
   assert.equal(document.getElementById("lineItemAddRow").style.display, "none");
   assert.equal(document.getElementById("addEvidenceRow").style.display, "none");
   assert.equal(document.getElementById("workflowActions").children.length, 0, "a viewer should see zero workflow action buttons");
-  assert.ok(document.getElementById("lineItemList").textContent.includes("Labour"), "a viewer must still be able to SEE the pricing");
+  assert.ok(document.getElementById("lineItemList").textContent.includes("Labour"), "a viewer still sees what the lines are");
+  assert.ok(!document.getElementById("lineItemList").textContent.includes("£"), "v67: but never a rate or line price");
 });
 
 test("Permissions: a Viewer never sees Sign & Approve/Reject on a submitted record", async () => {
@@ -698,4 +701,63 @@ test("PDF export: a failure shows an error and clears the status text, rather th
 
   assert.equal(document.getElementById("pdfStatusText").textContent, "");
   assert.ok(document.getElementById("pageErrorBox").textContent.includes("submitted or approved"));
+});
+
+// ─── v67: Viewers see totals only ───────────────────────────────
+// A v67 database: Viewers can't read line items directly, only the
+// redacted get_commercial_event_view() copy (mirrors sql/schema.sql).
+function withV67(store) {
+  store.getCommercialEventView = async (eventId) => {
+    const e = store.events.get(eventId);
+    const lines = store.lineItems.filter((li) => li.commercial_event_id === eventId);
+    return {
+      ...e, prices_hidden: true,
+      tbc_count: lines.filter((li) => li.rate === null).length,
+      has_tbc: lines.some((li) => li.rate === null),
+      lines: lines.map((li, i) => ({ position: i + 1, line_type: li.line_type, description: li.description, trade: li.trade, unit: li.unit })),
+      signatures: [], approval_requests: [],
+    };
+  };
+  const realGetLines = store.getCommercialLineItems.bind(store);
+  store.getCommercialLineItems = async (...a) => (store.__role === "viewer" ? [] : realGetLines(...a));
+  return store;
+}
+
+async function pricedSubmittedDaywork(store) {
+  const event = await store.createDaywork.call(Object.assign(store, { __userId: CONTRIBUTOR_A, __role: "contributor" }), "p1", { title: "Totals-only test" });
+  await store.addCommercialLineItem(event.id, { lineType: "labour", description: "Groundworker", quantity: 8, unit: "hrs", rate: 45 });
+  await store.addCommercialLineItem(event.id, { lineType: "plant", description: "Mini digger", quantity: 1, unit: "day", rate: null });
+  await store.submitCommercialEvent(event.id);
+  return event;
+}
+
+for (const v67 of [true, false]) {
+  test(`v67 Viewer render (${v67 ? "after v67: redacted view" : "before v67: function missing, page still hides prices"}): no quantity, rate or line total, no PDF button — total, descriptions and TBC warning still shown`, async () => {
+    const store = makeStore();
+    if (v67) withV67(store);
+    const event = await pricedSubmittedDaywork(store);
+    const { document } = await run(store, { role: "viewer", userId: "u-viewer", eventId: event.id });
+    await wait(30);
+    const list = document.getElementById("lineItemList").textContent;
+    assert.ok(list.includes("Groundworker") && list.includes("Mini digger"), "line descriptions are shown");
+    assert.ok(!list.includes("£"), "no rate or line price");
+    assert.ok(!/\b8\b/.test(list) && !list.includes("×"), "no quantity/hours");
+    assert.ok(!list.includes("TBC"), "no per-line TBC/price column");
+    assert.equal(document.getElementById("generatePdfBtn").style.display, "none", "no PDF button for a Viewer, even on a submitted record");
+    assert.equal(document.getElementById("pricesHiddenNote").style.display, "block");
+    assert.equal(document.getElementById("grandTotal").textContent, formatCommercialGBP(360), "the record total IS shown");
+    assert.equal(document.getElementById("tbcWarning").style.display, "block", "the TBC warning still works");
+    assert.match(document.getElementById("tbcWarning").textContent, /1 line item/);
+  });
+}
+
+test("v67: a Contributor (which now includes the project owner) still sees quantities, rates, line totals and the PDF button", async () => {
+  const store = withV67(makeStore());
+  const event = await pricedSubmittedDaywork(store);
+  const { document } = await run(store, { role: "contributor", userId: CONTRIBUTOR_A, eventId: event.id });
+  await wait(30);
+  const list = document.getElementById("lineItemList").textContent;
+  assert.ok(list.includes("8 hrs") && list.includes(formatCommercialGBP(45)) && list.includes(formatCommercialGBP(360)));
+  assert.equal(document.getElementById("generatePdfBtn").style.display, "inline-flex");
+  assert.equal(document.getElementById("pricesHiddenNote").style.display, "none");
 });
