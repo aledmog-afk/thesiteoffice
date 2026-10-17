@@ -4,7 +4,8 @@
 // (today's figure is carried over as a noted manual override), carry the
 // old grid across (Dry Lining + Plastering averaged, flagged when more
 // than 25 apart), retire (never delete) the old rows, backfill past
-// reports raise-only with the shared tag parser, and running the schema
+// SUBMITTED reports (never drafts) raise-only with the shared tag parser,
+// and running the schema
 // again must change nothing. If the figures WOULD change, the migration
 // stops and applies nothing.
 import { test } from "node:test";
@@ -55,6 +56,15 @@ async function seedPreV69(admin, { plot3Kitchen = 0 } = {}) {
       { plot: "Plot 3", milestone: "External Works / Landscaping", percent: 100 },
       { plot: "Plot 2", milestone: "Groundworks", percent: 30 },
     ])]);
+  // Both of those were submitted (and issued) ...
+  await admin.query("update public.weekly_reports set status='reviewed' where project_id=$1", [proj]);
+  await admin.query("update public.weekly_reports set status='approved' where project_id=$1", [proj]);
+  await admin.query("update public.weekly_reports set status='issued' where project_id=$1", [proj]);
+  // ... and a third is still a DRAFT. It must not be backfilled: Plot 3 is
+  // stored at 0, so if this draft raised its Kitchen to 100 the hard
+  // acceptance check would stop the go-live.
+  await admin.query(`insert into public.weekly_reports (project_id, week_starting, week_ending, progress_items) values ($1, '2026-09-21', '2026-09-27', $2::jsonb)`,
+    [proj, JSON.stringify([{ plot: "Plot 3", milestone: "Kitchen Fit", percent: 100 }, { plot: "Plot 1", milestone: "Roofing", percent: 100 }])]);
   // Today's stored site figure, as the browser formula left it:
   // (60 + 50 + 0 + 0 + 0 + 30 x 2 + 20) / (5 + 2 + 1) = 23.75 -> 23.8
   await admin.query("update public.projects set actual_progress_pct = 23.8 where id = $1", [proj]);
@@ -125,6 +135,9 @@ test("v69: every plot and site figure is identical after go-live; grid carried, 
     }
     assert.deepEqual(await stage(fx.p3, "st_external_works"), { p: 0, a: false, s: "migration" });
     assert.equal((await stage(fx.p3, "st_site_setup")).a, false);
+    // The draft report raised nothing.
+    assert.equal((await stage(fx.p3, "st_kitchen")).p, 0, "drafts are not backfilled");
+    assert.equal((await stage(fx.p1, "st_roofing")).p, 0, "drafts are not backfilled");
 
     // Overrides: every plot with a figure above 0 carried over, with the note; manual while above calculated.
     const ov = (await admin.query(`select p.plot_number n, p.progress_override::float o, p.progress_calculated::float c, p.progress_override_note note
@@ -156,6 +169,23 @@ test("v69: every plot and site figure is identical after go-live; grid carried, 
   }
 });
 
+// Nothing of v69 left: no v69 tables, triggers, functions (so nothing
+// callable by anon / authenticated), columns, data, and the old seed.
+async function assertNothingOfV69(admin) {
+  const r = (await admin.query(`select
+    (select count(*) from pg_trigger where tgname like '%v69%')::int triggers,
+    (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public'
+       and p.proname in ('progress_internal','progress_bulk','plot_tag_key','resolve_plot_tags','resolve_plot_tags_detail','recalc_plot_progress',
+         'recalc_project_progress','apply_weekly_report_progress','set_plot_override','clear_plot_override','set_external_works',
+         'save_external_works_package','retire_external_works_package','create_site','progress_actor_name','external_works_check'))::int functions,
+    (select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace where n.nspname = 'public'
+       and (c.relname like 'legacy_v69%' or c.relname like 'progress_%' or c.relname like 'external_works_%' or c.relname = 'plot_progress_overrides'))::int tables,
+    (select count(*) from information_schema.columns where table_schema = 'public' and table_name = 'internal_milestones' and column_name = 'stage_key')::int cols,
+    (select prosrc from pg_proc where proname = 'seed_plot_defaults') seed`)).rows[0];
+  assert.deepEqual({ t: r.triggers, f: r.functions, tb: r.tables, c: r.cols }, { t: 0, f: 0, tb: 0, c: 0 }, "no v69 objects left");
+  assert.ok(!r.seed.includes("progress_stages"), "the old seed_plot_defaults is still the live one");
+}
+
 test("v69: if any figure WOULD change, the go-live step stops with the differences and applies nothing", async () => {
   const db = "tracker_test_v69_upgrade_stop";
   await createTestDatabase(db);
@@ -171,12 +201,17 @@ test("v69: if any figure WOULD change, the go-live step stops with the differenc
     const imBefore = (await admin.query("select count(*)::int n, count(*) filter (where percent > 0)::int nz from public.internal_milestones")).rows[0];
     const auditBefore = (await admin.query("select count(*)::int n from public.audit_log")).rows[0].n;
     await assert.rejects(runSqlFile(admin, SCHEMA), /v69 go-live stopped: figures would change \(plot [0-9a-f-]+: 0 -> 3\.2/);
+    // v69 runs in its own BEGIN ... COMMIT, so after a failure the session
+    // holds an aborted transaction: the runner (psql exits on error, the
+    // SQL editor ends its session) rolls it back.
+    await admin.query("rollback");
     assert.deepEqual((await admin.query(FIGURES)).rows[0].f, before);
     // A schema.sql run is one implicit transaction, so the whole v69 apply
     // (tables, triggers, data) is rolled back with it.
     const after = (await admin.query("select count(*)::int n, count(*) filter (where percent > 0)::int nz from public.internal_milestones")).rows[0];
     assert.deepEqual(after, imBefore, "no stage rows added, nothing changed");
     assert.equal((await admin.query("select to_regclass('public.progress_stages') t")).rows[0].t, null, "nothing of v69 applied");
+    await assertNothingOfV69(admin);
     assert.equal((await admin.query("select count(*)::int n from public.audit_log")).rows[0].n, auditBefore);
     assert.ok(fx.p3);
   } finally {
@@ -184,3 +219,147 @@ test("v69: if any figure WOULD change, the go-live step stops with the differenc
     await dropTestDatabase(db);
   }
 });
+
+const ROLLBACK = path.join(__dirname, "../../sql/rollback/v69_site_progress_rollback.sql");
+const GRID = `select json_agg(json_build_object('id', id, 'k', milestone_key, 't', title, 'p', percent::text, 'o', sort_order) order by id) g
+  from public.internal_milestones`;
+
+test("v69 rollback script: after go-live and later use, every figure and the old grid go back exactly; new tables kept; re-run is a no-op", async () => {
+  const db = "tracker_test_v69_rollback";
+  await createTestDatabase(db);
+  const admin = adminClient(db);
+  try {
+    await admin.connect();
+    await runSqlFile(admin, MOCK_SETUP);
+    await runSql(admin, PRE_V69);
+    const fx = await seedPreV69(admin);
+    const before = (await admin.query(FIGURES)).rows[0].f;
+    const gridBefore = (await admin.query(GRID)).rows[0].g;
+    assert.equal(gridBefore.length, 3 * 18 + 2 * 16);
+
+    await runSqlFile(admin, SCHEMA);
+    // Use it after go-live: a submitted report raises Plot 3, the site
+    // share is set, a plot override is set.
+    const rep = (await admin.query(`insert into public.weekly_reports (project_id, week_starting, week_ending, progress_items) values ($1,'2026-10-05','2026-10-11',$2::jsonb) returning id`,
+      [fx.proj, JSON.stringify([{ plot: "Plot 3", milestone: "Groundworks", percent: 100 }])])).rows[0].id;
+    for (const st of ["reviewed", "approved", "issued"]) await admin.query("update public.weekly_reports set status=$2 where id=$1", [rep, st]);
+    await admin.query("select set_config('app.progress_internal','on',false)");
+    await admin.query("update public.projects set external_works_share = 15, external_works_share_set_at = now() where id=$1", [fx.proj]);
+    await admin.query("select set_config('app.progress_internal','',false)");
+    await admin.query("select public.recalc_project_progress($1)", [fx.proj]);
+    assert.notDeepEqual((await admin.query(FIGURES)).rows[0].f, before, "figures moved after go-live");
+    const kept = (await admin.query("select (select count(*) from public.progress_stage_events)::int ev, (select count(*) from public.plot_progress_overrides)::int ov")).rows[0];
+
+    await runSqlFile(admin, ROLLBACK);
+    assert.deepEqual((await admin.query(FIGURES)).rows[0].f, before, "every plot, block and site figure back exactly");
+    assert.deepEqual((await admin.query(GRID)).rows[0].g, gridBefore, "old grid rows back (same values); no 33-stage rows left on go-live plots");
+    assert.equal((await admin.query("select count(*)::int n from public.internal_milestones where retired_at is not null")).rows[0].n, 0, "old grid un-retired");
+    // New tables and their history are kept (nothing dropped); the stage rows are archived.
+    const k2 = (await admin.query("select (select count(*) from public.progress_stage_events)::int ev, (select count(*) from public.plot_progress_overrides)::int ov")).rows[0];
+    assert.deepEqual(k2, kept);
+    assert.equal((await admin.query("select count(*)::int n from public.legacy_v69_rollback_stage_rows")).rows[0].n, 5 * 33);
+    for (const t of ["progress_stages", "external_works_updates", "external_works_packages", "legacy_v69_plot_progress"]) {
+      assert.ok((await admin.query("select to_regclass($1) t", [`public.${t}`])).rows[0].t, `${t} kept`);
+    }
+    // v69 behaviour is off: a submitted report no longer moves anything, and
+    // a typed plot % sticks again (today's pages).
+    const v69Triggers = (await admin.query("select count(*)::int n from pg_trigger where tgname like '%v69%'")).rows[0].n;
+    assert.equal(v69Triggers, 0);
+    await admin.query("update public.plots set progress_pct = 70 where id=$1", [fx.p1]);
+    assert.equal(Number((await admin.query("select progress_pct from public.plots where id=$1", [fx.p1])).rows[0].progress_pct), 70);
+    await admin.query("update public.plots set progress_pct = 60 where id=$1", [fx.p1]);
+    // New plots get the old 18-row grid again.
+    const np = (await admin.query("insert into public.plots (project_id, plot_number) values ($1,'Plot 9') returning id", [fx.proj])).rows[0].id;
+    assert.equal((await admin.query("select count(*)::int n from public.internal_milestones where plot_id=$1", [np])).rows[0].n, 18);
+    await admin.query("delete from public.plots where id=$1", [np]);
+
+    // Running it again changes nothing; re-applying v69 on top refuses.
+    const audit = (await admin.query("select count(*)::int n from public.audit_log")).rows[0].n;
+    await runSqlFile(admin, ROLLBACK);
+    assert.deepEqual((await admin.query(FIGURES)).rows[0].f, before);
+    assert.deepEqual((await admin.query(GRID)).rows[0].g, gridBefore);
+    assert.equal((await admin.query("select count(*)::int n from public.audit_log")).rows[0].n, audit, "no audit rows when nothing differs");
+    await assert.rejects(runSqlFile(admin, SCHEMA), /v69 was rolled back here/);
+  } finally {
+    await admin.end();
+    await dropTestDatabase(db);
+  }
+});
+
+const V69_ONLY = FULL.slice(FULL.indexOf("-- ─── v69 ADDITIONS"));
+
+test("v69 abort path: inside an outer transaction (as apply_migration runs it) and when run statement by statement in one session, a STOP at the data step leaves nothing behind", async () => {
+  const db = "tracker_test_v69_abort";
+  await createTestDatabase(db);
+  const admin = adminClient(db);
+  try {
+    await admin.connect();
+    await runSqlFile(admin, MOCK_SETUP);
+    await runSql(admin, PRE_V69);
+    await seedPreV69(admin, { plot3Kitchen: 100 });
+    const before = (await admin.query(FIGURES)).rows[0].f;
+    // 1. Wrapped in an outer transaction: v69's own BEGIN only warns.
+    await admin.query("begin");
+    await assert.rejects(runSql(admin, V69_ONLY), /v69 go-live stopped/);
+    await admin.query("rollback");
+    await assertNothingOfV69(admin);
+    assert.deepEqual((await admin.query(FIGURES)).rows[0].f, before);
+    // 2. Statement by statement (separate round trips, one session): after
+    //    the STOP every later statement fails and the final COMMIT rolls back.
+    const stmts = splitStatements(V69_ONLY);
+    assert.ok(stmts.length > 100 && /^begin;?$/i.test(stmts[0].trim()));
+    let stopped = false;
+    for (const st of stmts) {
+      try { await admin.query(st); } catch (e) { if (/v69 go-live stopped/.test(e.message)) stopped = true; }
+    }
+    assert.ok(stopped);
+    await admin.query("rollback").catch(() => {});
+    await assertNothingOfV69(admin);
+    assert.deepEqual((await admin.query(FIGURES)).rows[0].f, before);
+  } finally {
+    await admin.end();
+    await dropTestDatabase(db);
+  }
+});
+
+test("v69 inside an outer transaction (apply_migration style) applies normally when the figures match", async () => {
+  const db = "tracker_test_v69_outer";
+  await createTestDatabase(db);
+  const admin = adminClient(db);
+  try {
+    await admin.connect();
+    await runSqlFile(admin, MOCK_SETUP);
+    await runSql(admin, PRE_V69);
+    await seedPreV69(admin);
+    const before = (await admin.query(FIGURES)).rows[0].f;
+    await admin.query("begin");
+    await runSql(admin, V69_ONLY);
+    await admin.query("commit").catch(() => {});
+    assert.deepEqual((await admin.query(FIGURES)).rows[0].f, before);
+    assert.equal((await admin.query("select count(*)::int n from public.progress_migration_runs where step='v69_go_live'")).rows[0].n, 1);
+    assert.ok((await admin.query("select count(*)::int n from pg_trigger where tgname like '%v69%'")).rows[0].n >= 7);
+  } finally {
+    await admin.end();
+    await dropTestDatabase(db);
+  }
+});
+
+// Minimal SQL splitter for the test: top-level semicolons, honouring
+// dollar quotes, quotes and -- comments.
+function splitStatements(sql) {
+  const out = []; let cur = ""; let i = 0; let dollar = null; let q = false;
+  while (i < sql.length) {
+    const ch = sql[i];
+    if (dollar) {
+      if (sql.startsWith(dollar, i)) { cur += dollar; i += dollar.length; dollar = null; continue; }
+      cur += ch; i++; continue;
+    }
+    if (q) { cur += ch; if (ch === "'") q = false; i++; continue; }
+    if (ch === "-" && sql[i + 1] === "-") { const j = sql.indexOf("\n", i); const end = j < 0 ? sql.length : j; cur += sql.slice(i, end); i = end; continue; }
+    if (ch === "'") { q = true; cur += ch; i++; continue; }
+    if (ch === "$") { const m = sql.slice(i).match(/^\$[A-Za-z0-9_]*\$/); if (m) { dollar = m[0]; cur += dollar; i += dollar.length; continue; } }
+    if (ch === ";") { if (cur.replace(/--[^\n]*/g, "").trim()) out.push(cur.replace(/^(\s*--[^\n]*\n)*\s*/, "") + ";"); cur = ""; i++; continue; }
+    cur += ch; i++;
+  }
+  return out;
+}
