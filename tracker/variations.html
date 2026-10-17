@@ -68,7 +68,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showCommercialError, clearError, getMyCommercialRole, commercialCapabilities, listCommercialEvents, formatCommercialGBP, COMMERCIAL_STATUS_LABEL, COMMERCIAL_STATUS_BADGE } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showCommercialError, clearError, getMyCommercialRole, commercialCapabilities, listCommercialEvents, listCommercialVariationFacts, formatCommercialGBP, COMMERCIAL_STATUS_LABEL, COMMERCIAL_STATUS_BADGE } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -141,7 +141,7 @@
       const [events, { data: plots }, { data: variationFields }, { data: links }] = await Promise.all([
         listCommercialEvents(projectId, { type: "variation" }),
         supabase.from("plots").select("id, plot_number").eq("project_id", projectId),
-        supabase.from("variations").select("commercial_event_id, date_identified").eq("project_id", projectId),
+        listCommercialVariationFacts(projectId).then((data) => ({ data })),
         supabase.from("variation_dayworks").select("variation_id").eq("project_id", projectId),
       ]);
       allVariations = events;

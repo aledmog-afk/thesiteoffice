@@ -246,6 +246,8 @@ async function run(store, { role, userId, eventId = null, projectId = "p1" }) {
     updateVariation: (...a) => store.updateVariation(...a),
     listEligibleDayworksForLinking: (...a) => store.listEligibleDayworksForLinking(...a),
     getLinkedDayworks: (...a) => store.getLinkedDayworks(...a),
+    // v67: the redacted Viewer copy. null = the database has no v67 yet.
+    getCommercialEventView: (...a) => (store.getCommercialEventView ? store.getCommercialEventView(...a) : Promise.resolve(null)),
     linkDaywork: (...a) => store.linkDaywork(...a),
     unlinkDaywork: (...a) => store.unlinkDaywork(...a),
     getCommercialLineItems: (...a) => store.getCommercialLineItems(...a),
@@ -541,4 +543,75 @@ test("PDF export: clicking Generate PDF calls generateCommercialEventPdfBlob() w
   assert.equal(calls[0].type, "variation");
   assert.equal(calls[1].savedFilename, "VAR-001.pdf");
   assert.equal(document.getElementById("pdfStatusText").textContent, "Downloaded");
+});
+
+// ─── v67: Viewers see totals only ───────────────────────────────
+// A v67 database: a Viewer can't read the variations table (markup) or
+// line items, only the redacted get_commercial_event_view() copy.
+function withV67(store) {
+  store.getCommercialEventView = async (eventId) => {
+    const e = store.events.get(eventId);
+    const lines = store.lineItems.filter((li) => li.commercial_event_id === eventId);
+    const { markup_pct, ...rest } = e;
+    return {
+      ...rest, prices_hidden: true,
+      tbc_count: lines.filter((li) => li.rate === null).length,
+      lines: lines.map((li, i) => ({ position: i + 1, line_type: li.line_type, description: li.description, trade: li.trade, unit: li.unit })),
+      signatures: [], approval_requests: [],
+      linked_dayworks: store.links.filter((l) => l.variation_id === eventId).map((l) => {
+        const d = store.events.get(l.daywork_id);
+        return { daywork_id: d.id, reference: d.reference, title: d.title, status: d.status, total_value: d.total_value, created_at: d.created_at };
+      }),
+    };
+  };
+  const realGetVariation = store.getVariation.bind(store);
+  store.getVariation = async (...a) => { if (store.__role === "viewer") throw new Error("JSON object requested, multiple (or no) rows returned"); return realGetVariation(...a); };
+  const realGetLines = store.getCommercialLineItems.bind(store);
+  store.getCommercialLineItems = async (...a) => (store.__role === "viewer" ? [] : realGetLines(...a));
+  return store;
+}
+
+async function pricedVariation(store) {
+  store.__userId = CONTRIBUTOR_A; store.__role = "contributor";
+  const variation = await store.createVariation("p1", { title: "Totals-only variation", markupPct: 12.5 });
+  await store.addCommercialLineItem(variation.id, { lineType: "labour", description: "Bricklayer", quantity: 6, unit: "hrs", rate: 40 });
+  const dwId = await makeDaywork(store, "p1", "Linked daywork", 500);
+  await store.linkDaywork(variation.id, dwId);
+  await store.submitCommercialEvent(variation.id);
+  return store.events.get(variation.id);
+}
+
+for (const v67 of [true, false]) {
+  test(`v67 Viewer render (${v67 ? "after v67: redacted view" : "before v67: function missing, page still hides prices"}): no quantity, rate, line total, direct subtotal or markup, no PDF — totals and linked-Daywork totals still shown`, async () => {
+    const store = makeStore();
+    if (v67) withV67(store);
+    const v = await pricedVariation(store);
+    store.__role = "viewer";
+    const { document } = await run(store, { role: "viewer", userId: "u-viewer", eventId: v.id });
+    await wait(30);
+    assert.equal(document.getElementById("pageErrorBox").textContent, "", "the page loads for a Viewer");
+    const list = document.getElementById("lineItemList").textContent;
+    assert.ok(list.includes("Bricklayer"));
+    assert.ok(!list.includes("£") && !list.includes("×") && !/\b6\b/.test(list), "no quantity, rate or line price");
+    assert.equal(document.getElementById("directSubtotalRow").style.display, "none", "no direct subtotal (it would reveal the markup)");
+    assert.equal(document.getElementById("markupReadonly").style.display, "none");
+    assert.equal(document.getElementById("markupField").style.display, "none");
+    assert.ok(!document.getElementById("markupCard").textContent.includes("12.5"), "the markup % is nowhere on the card");
+    assert.equal(document.getElementById("markupHeading").textContent, "Total");
+    assert.equal(document.getElementById("generatePdfBtn").style.display, "none");
+    // (240 + 500) * 1.125 = 832.50
+    assert.equal(document.getElementById("grandTotal").textContent, formatCommercialGBP(832.5), "the record total IS shown");
+    assert.ok(document.getElementById("linkedDayworkRows").textContent.includes(formatCommercialGBP(500)), "linked Daywork totals ARE shown (Aled's decision 2)");
+  });
+}
+
+test("v67: a Contributor (which now includes the project owner) still sees the markup, direct subtotal, line prices and the PDF button", async () => {
+  const store = withV67(makeStore());
+  const v = await pricedVariation(store);
+  const { document } = await run(store, { role: "contributor", userId: CONTRIBUTOR_A, eventId: v.id });
+  await wait(30);
+  assert.equal(document.getElementById("markupReadonlyValue").textContent, "12.5%");
+  assert.equal(document.getElementById("directSubtotal").textContent, formatCommercialGBP(240));
+  assert.ok(document.getElementById("lineItemList").textContent.includes(formatCommercialGBP(40)));
+  assert.equal(document.getElementById("generatePdfBtn").style.display, "inline-flex");
 });

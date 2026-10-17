@@ -4889,10 +4889,38 @@ export function validCommercialStatusTransitions(status) {
 // most project members. This exists purely to drive the UI (show/hide
 // the nav entry, buttons, forms); RLS enforces the real boundary
 // regardless of what this returns.
+//
+// v67: asks commercial_access_role() instead, which also treats the
+// project owner as Contributor. Until v67 is applied that function
+// doesn't exist yet, so this falls back to the explicit grant.
 export async function getMyCommercialRole(projectId) {
-  const { data, error } = await supabase.rpc("project_module_role", { p_project_id: projectId, p_module: "commercial" });
-  if (error) throw error;
-  return data || null;
+  const { data, error } = await supabase.rpc("commercial_access_role", { p_project_id: projectId });
+  if (!error) return data || null;
+  if (!isMissingRpcError(error)) throw error;
+  const { data: granted, error: grantError } = await supabase.rpc("project_module_role", { p_project_id: projectId, p_module: "commercial" });
+  if (grantError) throw grantError;
+  return granted || null;
+}
+
+// v67: has the database got the "project owner = Contributor" rule yet?
+// (The Module Permissions card says "Owner — full access" only once it
+// has; before v67 the owner still needs an explicit grant.)
+export async function commercialOwnerAccessEnabled(projectId) {
+  const { error } = await supabase.rpc("commercial_access_role", { p_project_id: projectId });
+  if (!error) return true;
+  if (isMissingRpcError(error)) return false;
+  throw error;
+}
+
+// v67: the redacted, totals-only copy of one record for a Viewer
+// (get_commercial_event_view() in sql/schema.sql) — no quantities,
+// rates, line totals, markup, line ids or hashes. Returns null if the
+// database doesn't have the function yet (before v67).
+export async function getCommercialEventView(eventId) {
+  const { data, error } = await supabase.rpc("get_commercial_event_view", { p_event_id: eventId });
+  if (!error) return data || null;
+  if (isMissingRpcError(error)) return null;
+  throw error;
 }
 
 // Derives the same view/edit/submit/approve capability matrix the
@@ -4910,6 +4938,10 @@ export async function getMyCommercialRole(projectId) {
 // Until v66 is applied an old 'approver' grant could still come back from
 // the database — it has always had Contributor's powers, so it's read as
 // 'contributor' (role is reported as such too).
+//
+// v67: canSeePrices — only a Contributor (which includes the project
+// owner) sees quantities, rates, line totals, markup and the PDF. A
+// Viewer sees record totals only.
 export function commercialCapabilities(rawRole) {
   const role = rawRole === "approver" ? "contributor" : rawRole;
   return {
@@ -4918,6 +4950,7 @@ export function commercialCapabilities(rawRole) {
     canEdit: role === "contributor",
     canSubmit: role === "contributor",
     canApprove: role === "contributor",
+    canSeePrices: role === "contributor",
   };
 }
 
@@ -5239,17 +5272,43 @@ export async function getCommercialSummary(projectId) {
   return { events, counts, approvedValue, submittedValue };
 }
 
+// v67: record ids with at least one unpriced (TBC) line.
+export async function getCommercialTbcEventIds(projectId) {
+  const { data, error } = await supabase.rpc("commercial_tbc_event_ids", { p_project_id: projectId });
+  if (!error) return (data || []).map((r) => (typeof r === "string" ? r : r.commercial_tbc_event_ids || r.commercial_event_id));
+  if (!isMissingRpcError(error)) throw error;
+  const { data: lineItems, error: liErr } = await supabase.from("commercial_line_items").select("commercial_event_id, rate").eq("project_id", projectId);
+  if (liErr) throw liErr;
+  return [...new Set((lineItems || []).filter((li) => li.rate === null).map((li) => li.commercial_event_id))];
+}
+
+// v67: the Variations list's non-price columns (dates, instruction
+// reference) via list_commercial_variation_facts(), since the variations
+// table itself (it holds markup_pct) is Contributor/owner only. Before
+// v67 it falls back to reading the table.
+export async function listCommercialVariationFacts(projectId) {
+  const { data, error } = await supabase.rpc("list_commercial_variation_facts", { p_project_id: projectId });
+  if (!error) return data || [];
+  if (!isMissingRpcError(error)) throw error;
+  const { data: rows, error: tableError } = await supabase.from("variations").select("commercial_event_id, date_identified").eq("project_id", projectId);
+  if (tableError) throw tableError;
+  return rows || [];
+}
+
 // Evidence/TBC/rejected warnings for the dashboard's "needs attention"
 // panel — computed from the same kind of broad, flat queries as
 // everything else in this app, never a per-record round trip.
+//
+// v67: the TBC list comes from commercial_tbc_event_ids() (record ids
+// only), which a Viewer may call; line items themselves are Contributor/
+// owner only. Before v67 it falls back to reading the line items.
 export async function getCommercialWarnings(projectId) {
-  const [{ data: lineItems, error: liErr }, { data: evidenceLinks, error: evErr }] = await Promise.all([
-    supabase.from("commercial_line_items").select("commercial_event_id, rate").eq("project_id", projectId),
+  const [tbcIds, { data: evidenceLinks, error: evErr }] = await Promise.all([
+    getCommercialTbcEventIds(projectId),
     supabase.from("commercial_evidence_links").select("commercial_event_id").eq("project_id", projectId),
   ]);
-  if (liErr) throw liErr;
   if (evErr) throw evErr;
-  const tbcEventIds = new Set((lineItems || []).filter((li) => li.rate === null).map((li) => li.commercial_event_id));
+  const tbcEventIds = new Set(tbcIds);
   const eventsWithEvidence = new Set((evidenceLinks || []).map((l) => l.commercial_event_id));
   return { tbcEventIds, eventsWithEvidence };
 }

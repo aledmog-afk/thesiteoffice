@@ -187,6 +187,8 @@ function variationsBaseContext(role, events, extra = {}) {
     clearError: (el) => { el.textContent = ""; el.style.display = "none"; },
     getMyCommercialRole: async () => role,
     listCommercialEvents: async () => events,
+    // v67: the list's non-price variation columns come via this helper.
+    listCommercialVariationFacts: async () => extra.variationFields || [],
   };
 }
 

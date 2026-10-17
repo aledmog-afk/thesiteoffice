@@ -63,7 +63,7 @@ function emptySupabase() {
   };
 }
 
-function makeContext({ members, moduleCatalog = MODULE_CATALOG, moduleGrants = [], currentUserId = "owner-1", myRole = "owner", setProjectModuleRoleImpl, supabase } = {}) {
+function makeContext({ members, moduleCatalog = MODULE_CATALOG, moduleGrants = [], currentUserId = "owner-1", myRole = "owner", setProjectModuleRoleImpl, supabase, ownerAuto = false } = {}) {
   const calls = [];
   const sb = supabase || emptySupabase();
   const origRpc = sb.rpc.bind(sb);
@@ -108,6 +108,8 @@ function makeContext({ members, moduleCatalog = MODULE_CATALOG, moduleGrants = [
     setProjectModuleRole: setProjectModuleRoleImpl || (async (projectId, userId, moduleName, role) => {
       calls.push({ fn: "setProjectModuleRole", projectId, userId, moduleName, role });
     }),
+    // v67: false = the database doesn't have the owner rule yet (before v67).
+    commercialOwnerAccessEnabled: async () => ownerAuto,
     __calls: calls,
   };
   return ctx;
@@ -264,4 +266,24 @@ test("Module Permissions (v66): an old 'approver' grant (before v66 is applied) 
   await wait(30);
   const select = document.querySelector(`select[data-user="collab-1"][data-module="commercial"]`);
   assert.equal(select.value, "contributor");
+});
+
+test("Module Permissions (v67): once the database treats the owner as Contributor, the owner's Dayworks & Variations cell says 'Owner — full access' instead of a dropdown; other members keep theirs", async () => {
+  const ctx = makeContext({ members: [OWNER, COLLAB], ownerAuto: true });
+  const { document } = await run(ctx);
+  await wait(30);
+  assert.equal(document.querySelector(`select[data-user="owner-1"][data-module="commercial"]`), null, "no dropdown for the owner's commercial cell");
+  const label = document.querySelector(`[data-owner-full-access="owner-1"]`);
+  assert.ok(label, "the owner's cell shows the automatic full-access label");
+  assert.match(label.textContent, /Owner — full access/);
+  assert.ok(document.querySelector(`select[data-user="collab-1"][data-module="commercial"]`), "a collaborator still gets a dropdown");
+  assert.ok(document.querySelector(`select[data-user="owner-1"][data-module="toolbox_talks"]`), "other modules are unchanged for the owner");
+});
+
+test("Module Permissions (v67): before v67 is applied (no owner rule in the database yet) the owner's commercial cell is still a dropdown", async () => {
+  const ctx = makeContext({ members: [OWNER, COLLAB], ownerAuto: false });
+  const { document } = await run(ctx);
+  await wait(30);
+  assert.ok(document.querySelector(`select[data-user="owner-1"][data-module="commercial"]`));
+  assert.equal(document.querySelector(`[data-owner-full-access]`), null);
 });
