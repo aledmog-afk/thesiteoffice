@@ -2,7 +2,7 @@
 // branch and the real reset-password.html page script.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { extractScript, runPage, fireEvent, wait } from "../lib/jsdom-harness.mjs";
+import { extractScript, runPage, fireEvent, wait, loadSafeNextPage } from "../lib/jsdom-harness.mjs";
 
 const LOGIN_HTML = new URL("../../tracker/login.html", import.meta.url).pathname;
 const RESET_HTML = new URL("../../tracker/reset-password.html", import.meta.url).pathname;
@@ -13,6 +13,7 @@ function baseAuthContext(overrides = {}) {
     showError: (el, err) => { el.textContent = (err && err.message) || String(err); el.style.display = "block"; },
     clearError: (el) => { el.textContent = ""; el.style.display = "none"; },
     getParam: () => null,
+    safeNextPage: loadSafeNextPage(),
     ...overrides,
   };
 }

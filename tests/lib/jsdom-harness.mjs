@@ -68,3 +68,12 @@ export function fireEvent(el, type, opts = {}) {
 export async function wait(ms) {
   await new Promise((r) => setTimeout(r, ms));
 }
+
+// The real safeNextPage() body from tracker/js/app.js (pages that read
+// ?next= import it; the harness strips imports, so tests hand it in).
+// Returns null if app.js has no such function.
+export function loadSafeNextPage() {
+  const src = fs.readFileSync(new URL("../../tracker/js/app.js", import.meta.url), "utf8");
+  const m = src.match(/export function safeNextPage\([\s\S]*?\n\}/);
+  return m ? new Function(`return ${m[0].replace(/^export /, "")}`)() : null;
+}
