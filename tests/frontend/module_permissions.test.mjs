@@ -317,3 +317,133 @@ test("Module Permissions: if the database check fails, nobody gets the owner lab
   assert.ok(document.querySelector(`select[data-user="owner-1"][data-module="commercial"]`));
   assert.equal(document.getElementById("modulePermissionsErrorBox").textContent, "", "and the card still loads without an error");
 });
+
+// ─── Item 11: People on this job, grouped by company ────────────────
+const BENNETT = { party_id: "pb", org_id: "org-b", company: "Bennett Groundworks Ltd", party_role: "subcontractor", trade: "Groundworks", parent_party_id: null, lead_user_id: "sub-1", lead_email: "site@bennett.test", member_count: 2, status: "active", i_admin: false };
+const DAVIES = { party_id: "pd", org_id: "org-d", company: "Davies Scaffolding", party_role: "subcontractor", trade: "Scaffolding", parent_party_id: "pb", lead_user_id: null, lead_email: null, member_count: 1, status: "active", i_admin: false };
+const SUB1 = { member_id: "m4", user_id: "sub-1", email: "site@bennett.test", role: "snagging", joined_at: "2026-01-04T00:00:00Z" };
+const SUB2 = { member_id: "m5", user_id: "sub-2", email: "dean@bennett.test", role: "snagging", joined_at: "2026-01-05T00:00:00Z" };
+const SCAF = { member_id: "m6", user_id: "scaf-1", email: "ops@davies.test", role: "snagging", joined_at: "2026-01-06T00:00:00Z" };
+const PARTY_LINKS = [{ party_id: "pb", user_id: "sub-1" }, { party_id: "pb", user_id: "sub-2" }, { party_id: "pd", user_id: "scaf-1" }];
+
+function partySupabase(parties = [BENNETT, DAVIES], links = PARTY_LINKS) {
+  const sb = emptySupabase();
+  const baseRpc = sb.rpc;
+  sb.rpc = async (name, args) => (name === "get_project_parties" ? { data: parties, error: null } : baseRpc(name, args));
+  const baseFrom = sb.from.bind(sb);
+  sb.from = (table) => {
+    if (table !== "project_party_members") return baseFrom(table);
+    let ids = null;
+    const api = {
+      select() { return api; }, eq() { return api; },
+      in(_c, v) { ids = v; return api; },
+      then(resolve) { resolve({ data: links.filter((l) => !ids || ids.includes(l.party_id)), error: null }); },
+    };
+    return api;
+  };
+  return sb;
+}
+const groupHeaders = (doc, sel) => [...doc.querySelectorAll(`${sel} tr.people-group`)].map((r) => r.dataset.group);
+
+test("People on this job (item 11): the card is renamed, people are grouped by company (own team first, sub-sub after its parent), with role and trade", async () => {
+  const ctx = makeContext({ members: [OWNER, COLLAB, SUB1, SUB2, SCAF], supabase: partySupabase() });
+  const { document } = await run(ctx);
+  await wait(30);
+  const card = document.getElementById("collaboratorsCard");
+  assert.match(card.querySelector(".card-heading").textContent, /^People on this job$/);
+  assert.ok(!/Collaborators/.test(card.textContent));
+  assert.deepEqual(groupHeaders(document, "#memberRows"), ["own", "pb", "pd"]);
+  const rows = document.getElementById("memberRows").textContent;
+  assert.match(rows, /Your company \(your team\)/);
+  assert.match(rows, /Bennett Groundworks Ltd[\s\S]*Subcontractor \(Groundworks\)/);
+  assert.match(rows, /Davies Scaffolding[\s\S]*brought in by Bennett Groundworks Ltd/);
+  const bennettRow = document.querySelector('#memberRows tr[data-group="pb"]');
+  const after = [];
+  for (let r = bennettRow.nextElementSibling; r && !r.classList.contains("people-group"); r = r.nextElementSibling) after.push(r.textContent);
+  assert.equal(after.length, 2);
+  assert.ok(after.some((t) => t.includes("site@bennett.test")) && after.some((t) => t.includes("dean@bennett.test")));
+});
+
+test("People on this job (item 11): access uses the same words as the Companies page — Owner, Full access, Snagging only", async () => {
+  const ctx = makeContext({ members: [OWNER, COLLAB, SNAG], supabase: partySupabase([], []) });
+  const { document } = await run(ctx);
+  await wait(30);
+  const badges = [...document.querySelectorAll("#memberRows .badge")].map((b) => b.textContent);
+  assert.deepEqual(badges, ["Owner", "Full access", "Snagging only"]);
+  assert.ok(!/Collaborator\b|\bSnagging\b(?! only)/.test(badges.join(" ")));
+  assert.deepEqual(groupHeaders(document, "#memberRows"), ["own"], "no companies: everyone in one group");
+});
+
+test("People on this job (item 11): company people show 'Managed by their company' instead of Remove; own staff keep Remove", async () => {
+  const ctx = makeContext({ members: [OWNER, COLLAB, SUB1, SUB2, SCAF], supabase: partySupabase() });
+  const { document } = await run(ctx);
+  await wait(30);
+  for (const uid of ["sub-1", "sub-2", "scaf-1"]) assert.ok(document.querySelector(`[data-managed-by-company="${uid}"]`), `${uid} managed by company`);
+  const buttons = [...document.querySelectorAll("#memberRows button")].map((b) => b.getAttribute("onclick"));
+  assert.equal(buttons.length, 1, "only the owner's own staff member can be removed here");
+  assert.match(buttons[0], /'m2'/);
+});
+
+test("People on this job (item 11): each company header shows its lead contact (or 'Needs a lead contact') and a 'Manage this company' link to its row on companies.html", async () => {
+  const ctx = makeContext({ members: [OWNER, SUB1, SCAF], supabase: partySupabase() });
+  const { document } = await run(ctx);
+  await wait(30);
+  assert.match(document.querySelector('#memberRows [data-lead-for="pb"]').textContent, /Lead contact: site@bennett\.test/);
+  assert.match(document.querySelector('#memberRows [data-lead-for="pd"]').textContent, /Needs a lead contact/);
+  const link = document.querySelector('#memberRows a[data-manage-party="pb"]');
+  assert.equal(link.textContent, "Manage this company");
+  assert.equal(link.getAttribute("href"), "companies.html?project=p1#party-pb");
+});
+
+test("People on this job (item 11): a non-owner sees the groups but no Manage link and no Remove for company people", async () => {
+  const sb = partySupabase();
+  const ctx = makeContext({ members: [OWNER, COLLAB, SUB1], currentUserId: "collab-1", myRole: "collaborator", supabase: sb });
+  const { document } = await run(ctx);
+  await wait(30);
+  assert.deepEqual(groupHeaders(document, "#memberRows"), ["own", "pb", "pd"]);
+  assert.equal(document.querySelector("#memberRows a[data-manage-party]"), null);
+  assert.ok(document.querySelector('[data-managed-by-company="sub-1"]'));
+  assert.equal(document.getElementById("companiesTile").style.display, "none");
+});
+
+test("Module Permissions (item 11): rows use the same company grouping, and company people keep their dropdowns (the database honours their grants)", async () => {
+  const ctx = makeContext({ members: [OWNER, COLLAB, SUB1, SCAF], supabase: partySupabase() });
+  const { document } = await run(ctx);
+  await wait(30);
+  assert.deepEqual(groupHeaders(document, "#modulePermissionsRows"), ["own", "pb", "pd"]);
+  assert.ok(document.querySelector('#modulePermissionsRows select[data-user="sub-1"][data-module="commercial"]'));
+  assert.ok(document.querySelector('#modulePermissionsRows select[data-user="scaf-1"][data-module="toolbox_talks"]'));
+  assert.ok(!/Set by their company's access/.test(document.getElementById("modulePermissionsCard").textContent));
+});
+
+test("Module Permissions (item 11): the hint says the owner gets Dayworks & Variations automatically, not that it's off for everyone", async () => {
+  const ctx = makeContext({ members: [OWNER, COLLAB] });
+  const { document } = await run(ctx);
+  await wait(30);
+  const hint = document.querySelector("#modulePermissionsCard p.hint").textContent;
+  assert.match(hint, /The project owner gets Dayworks & Variations automatically/);
+  assert.match(hint, /for everyone else it's off until you switch it on/);
+  assert.ok(!/Dayworks & Variations is off until you switch it on for someone/.test(hint));
+  assert.match(hint, /Full access gets Toolbox Talks/);
+});
+
+test("Phone layout (item 11): both tables stack on phones like companies.html, with labelled cells", async () => {
+  const ctx = makeContext({ members: [OWNER, COLLAB, SUB1], supabase: partySupabase() });
+  const { document } = await run(ctx);
+  await wait(30);
+  assert.ok(document.querySelector("#memberRows").closest("table").classList.contains("stack-mobile"));
+  assert.ok(document.querySelector("#modulePermissionsRows").closest("table").classList.contains("stack-mobile"));
+  assert.ok(document.querySelector('#memberRows td[data-label="Access"]'));
+  assert.ok(document.querySelector('#memberRows td[data-label="Joined"]'));
+  assert.ok(document.querySelector('#modulePermissionsRows td[data-label="Toolbox Talks"]'));
+});
+
+test("Companies tile (item 11): the owner gets a Companies tile on the project page linking to companies.html", async () => {
+  const ctx = makeContext({ members: [OWNER, COLLAB] });
+  const { document } = await run(ctx);
+  await wait(30);
+  const tile = document.getElementById("companiesTile");
+  assert.notEqual(tile.style.display, "none");
+  assert.equal(tile.getAttribute("href"), "companies.html?project=p1");
+  assert.equal(document.getElementById("companiesLink").textContent, "Companies on this job →");
+});

@@ -297,3 +297,26 @@ test("join.html: an old invite code link explains it's retired and never calls j
   assert.equal(document.getElementById("actionsRow").style.display, "flex");
   assert.deepEqual(calls, []);
 });
+
+// ─── Item 11 ───────────────────────────────────────────────────────────
+test("companies.html (item 11): a 'People on this job' link goes back to the project page's people card", async () => {
+  const { ctx } = companiesCtx({ parties: [ALMO] });
+  const { document } = await runPage(COMPANIES, extractScript(COMPANIES), ctx);
+  await wait(30);
+  const a = document.getElementById("peopleLink");
+  assert.equal(a.textContent, "People on this job →");
+  assert.equal(a.getAttribute("href"), "project.html?id=p1#collaboratorsCard");
+});
+
+test("companies.html (item 11): each company row has an anchor, and #party-<id> highlights that row only", async () => {
+  const other = { ...ALMO, party_id: "pz", company: "Zed Roofing" };
+  const { ctx } = companiesCtx({ parties: [ALMO, other] });
+  ctx.__url = "https://example.com/companies.html?project=p1#party-pa";
+  const { document } = await runPage(COMPANIES, extractScript(COMPANIES), ctx);
+  await wait(30);
+  const row = document.getElementById("party-pa");
+  assert.ok(row && row.dataset.party === "pa");
+  assert.ok(row.classList.contains("row-highlight"));
+  assert.ok(!document.getElementById("party-pz").classList.contains("row-highlight"));
+  assert.ok(row.textContent.includes("Remove"), "the highlighted row is where the company can be removed");
+});
