@@ -351,3 +351,21 @@ tr:hover td { background: var(--off); }
   .photo-roundup-group { break-inside: avoid; page-break-inside: avoid; }
   .photo-roundup-group:not(:last-child) { break-after: page; page-break-after: always; }
 }
+
+/* ─── SHARED LAYOUT CLASSES (item 15) ────────────── */
+/* Layouts that were written inline on several pages. Anything that
+   differs from these (a gap, a margin) stays inline on the element.
+   This block sits after the print rules on purpose: the widths below
+   used to be inline, and inline styles beat the print overrides, so
+   they need to keep winning over .page / .doc in print too. */
+.flex-row { display: flex; align-items: center; }
+.row-between { display: flex; align-items: center; justify-content: space-between; }
+.row-wrap { flex-wrap: wrap; gap: 0.6rem; }
+.hint-text { font-size: 0.85rem; color: var(--ink-soft); }
+.auto-width { width: auto; }
+.btn-block { width: 100%; }
+.page-640 { max-width: 640px; }
+.page-800 { max-width: 800px; }
+.page-900 { max-width: 900px; }
+.modal-520 { max-width: 520px; }
+.field-200 { max-width: 200px; }

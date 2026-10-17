@@ -28,9 +28,9 @@
   </div>
 
   <div class="card" id="programmeCard" style="display:none; margin-bottom:1.5rem;">
-    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.8rem;">
-      <div style="display:flex; align-items:center; gap:0.8rem; flex-wrap:wrap;">
-        <select id="programmeSelect" style="width:auto; display:none;"></select>
+    <div class="row-between" style="flex-wrap:wrap; gap:0.8rem;">
+      <div class="flex-row" style="gap:0.8rem; flex-wrap:wrap;">
+        <select id="programmeSelect" class="auto-width" style="display:none;"></select>
         <span class="display-font" id="programmeName" style="font-size:1.1rem; font-weight:700;"></span>
         <span class="badge" id="programmeStatusBadge"></span>
       </div>
@@ -94,17 +94,17 @@
     <div class="btn-row" style="margin-bottom:1rem; flex-wrap:wrap;">
       <button class="btn btn-amber" id="newActivityBtn">+ New Activity</button>
       <a class="btn btn-outline" id="importProgrammeLink" href="#">Import from Excel</a>
-      <select id="statusFilter" style="width:auto;">
+      <select id="statusFilter" class="auto-width">
         <option value="">All statuses</option>
       </select>
-      <select id="varianceFilter" style="width:auto;">
+      <select id="varianceFilter" class="auto-width">
         <option value="">All variance</option>
         <option value="overdue">Overdue</option>
         <option value="late">Forecast Late</option>
         <option value="milestone">Milestones</option>
         <option value="completed_late">Completed Late</option>
       </select>
-      <select id="sortBy" style="width:auto; margin-left:auto;">
+      <select id="sortBy" class="auto-width" style="margin-left:auto;">
         <option value="forecast_finish">Sort: Forecast Finish</option>
         <option value="planned_finish">Sort: Planned Finish</option>
         <option value="variance">Sort: Variance</option>

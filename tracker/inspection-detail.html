@@ -60,7 +60,7 @@
   </div>
 
   <div class="card">
-    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.6rem; margin-bottom:1rem;">
+    <div class="row-between row-wrap" style="margin-bottom:1rem;">
       <h3 class="card-heading" style="margin:0;">Findings</h3>
       <button class="btn btn-amber btn-sm" id="newFindingBtn">+ Add Finding</button>
     </div>
@@ -70,11 +70,11 @@
         <div class="field"><label for="findingTitle">Title *</label><input type="text" id="findingTitle" required placeholder="e.g. Missing fire stopping at floor 2"></div>
         <div class="field"><label for="findingDescription">Description</label><textarea id="findingDescription" rows="2"></textarea></div>
         <div class="form-grid">
-          <div class="field" style="max-width:200px;">
+          <div class="field field-200">
             <label for="findingSeverity">Severity</label>
             <select id="findingSeverity"></select>
           </div>
-          <div class="field" style="max-width:200px;">
+          <div class="field field-200">
             <label for="findingPlot">Plot <span class="hint">(optional)</span></label>
             <select id="findingPlot"><option value="">Not plot-specific</option></select>
           </div>

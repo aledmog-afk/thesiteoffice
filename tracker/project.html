@@ -19,7 +19,7 @@
       <div class="page-sub" id="projectMeta"></div>
     </div>
     <div class="btn-row">
-      <select id="statusSelect" style="width:auto;">
+      <select id="statusSelect" class="auto-width">
         <option value="active">Active</option>
         <option value="on hold">On hold</option>
         <option value="complete">Complete</option>
@@ -35,7 +35,7 @@
   </div>
 
   <div class="card" id="progressCard" style="margin-bottom:2rem;">
-    <div style="display:flex; align-items:center; justify-content:space-between; gap:1rem; flex-wrap:wrap; margin-bottom:0.5rem;">
+    <div class="row-between" style="gap:1rem; flex-wrap:wrap; margin-bottom:0.5rem;">
       <span class="badge rag-badge" id="ragBadge"></span>
       <span class="hint" style="color:var(--ink-soft); font-size:0.8rem;">Overall status &amp; programme progress — edit below</span>
     </div>
@@ -47,7 +47,7 @@
   </div>
 
   <div class="card" id="controlCard" style="margin-bottom:2rem; display:none;">
-    <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.6rem; margin-bottom:0.8rem;">
+    <div class="row-between row-wrap" style="margin-bottom:0.8rem;">
       <h3 class="card-heading" style="margin:0;">Control Summary</h3>
       <span class="badge" id="controlStatusBadge"></span>
     </div>
