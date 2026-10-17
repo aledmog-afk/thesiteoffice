@@ -1,29 +1,5 @@
 {
   "version": 1,
-  "include": [
-    "/sql",
-    "/sql/*",
-    "/tests",
-    "/tests/*",
-    "/supabase",
-    "/supabase/*",
-    "/.github",
-    "/.github/*",
-    "/tracker/docs",
-    "/tracker/docs/*",
-    "/scripts",
-    "/scripts/*",
-    "/tools",
-    "/tools/*",
-    "/node_modules",
-    "/node_modules/*",
-    "/functions",
-    "/functions/*",
-    "/package.json",
-    "/package-lock.json",
-    "/README.md",
-    "/netlify.toml",
-    "/_routes.json"
-  ],
-  "exclude": []
+  "include": ["/*"],
+  "exclude": ["/tracker/js/*", "/tracker/css/*", "/tracker/favicon.svg"]
 }

@@ -10,11 +10,16 @@
 // "Rewrites (other status codes)"). _headers cannot change a status
 // either.
 //
-// _routes.json (repo root) limits this Function to exactly these paths,
-// so every other request is still served as a plain static file with no
-// Function invocation. Keep BLOCKED_PREFIXES / BLOCKED_FILES and
-// _routes.json in step - tests/frontend/blocked_repo_paths.test.mjs
-// checks they match.
+// _routes.json (repo root) runs this Function on every request except the
+// app's js/css/favicon (the bulk of requests), and it just hands anything
+// not blocked straight on to the static file. It can't be limited to only
+// the blocked paths: Pages matches _routes.json against the raw,
+// still-percent-encoded path but serves static files by the decoded one,
+// so /%73ql/schema.sql would skip a narrow route list and still download
+// the file (checked on a branch preview). Encoded "../" under the excluded
+// folders does not resolve to another folder on Pages (checked too).
+// tests/frontend/blocked_repo_paths.test.mjs checks the routes still send
+// every blocked path here.
 
 export const BLOCKED_PREFIXES = [
   "/sql", "/tests", "/supabase", "/.github", "/tracker/docs", "/scripts",

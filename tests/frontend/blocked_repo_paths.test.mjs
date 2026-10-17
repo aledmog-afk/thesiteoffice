@@ -1,8 +1,8 @@
 // functions/_middleware.js + _routes.json: repository files that aren't part
 // of the website answer 404 on Cloudflare Pages, and nothing the app needs
 // is caught. Loads the real middleware source as an ES module (it is not
-// reimplemented here) and checks _routes.json invokes it on exactly the
-// blocked paths.
+// reimplemented here) and checks _routes.json invokes it on every blocked
+// path, including percent-encoded forms.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -64,9 +64,15 @@ test("blocked repo paths: _routes.json invokes the Function for every one of the
   for (const r of [...routes.include, ...routes.exclude]) assert.ok(r.length <= 100);
 });
 
-test("blocked repo paths: _routes.json and the middleware lists cover the same paths", () => {
-  const expected = new Set([...mw.BLOCKED_PREFIXES.flatMap((p) => [p, `${p}/*`]), ...mw.BLOCKED_FILES]);
-  assert.deepEqual(new Set(routes.include), expected);
+test("blocked repo paths: _routes.json sends everything to the Function except app js/css/favicon, which hold nothing blocked", () => {
+  assert.deepEqual(routes.include, ["/*"], "a narrow include list is bypassed by percent-encoded paths (/%73ql/...)");
+  for (const r of routes.exclude) {
+    assert.ok(r.startsWith("/tracker/") && !r.startsWith("/tracker/docs"), `${r} must stay inside the app's static assets`);
+    for (const p of MUST_BLOCK) assert.equal(routeMatches(r, p), false, `${r} would let ${p} skip the Function`);
+  }
+  for (const p of ["/%73ql/schema.sql", "/sql%2Fschema.sql", "/tracker/%64ocs/SITE_PROGRESS_SPEC.md", "/SQL/schema.sql"]) {
+    assert.ok(routed(p), `${p} must reach the Function`);
+  }
 });
 
 test("blocked repo paths: encoded and doubled-slash variants are still blocked once they reach the Function", () => {
@@ -79,12 +85,12 @@ test("blocked repo paths: no /tracker/ app page or asset (anything outside /trac
   const paths = appPaths();
   assert.ok(paths.some((p) => p === "/tracker/login.html") && paths.some((p) => p === "/tracker/js/app.js") && paths.some((p) => p === "/tracker/css/app.css"));
   for (const p of paths) {
-    assert.equal(routed(p), false, `${p} would invoke the Function`);
     assert.equal(mw.isBlockedPath(p), false, `${p} would be blocked`);
+    const res = await mw.onRequest({ request: new Request(`https://thesiteoffice.uk${p}`), next: () => new Response("asset") });
+    assert.equal(res.status, 200, `${p} must pass through to the static file`);
   }
   for (const p of ["/", "/index.html", "/tracker/documents.html", "/tracker/drawings", "/tracker/docs-like.html", "/sqlite", "/testsuite", "/scripts.html", "/toolsbox", "/README", "/contents-inventory"]) {
     assert.equal(mw.isBlockedPath(p), false, p);
-    assert.equal(routed(p), false, p);
   }
 });
 
