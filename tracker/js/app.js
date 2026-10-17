@@ -4902,14 +4902,24 @@ export async function getMyCommercialRole(projectId) {
   return granted || null;
 }
 
-// v67: has the database got the "project owner = Contributor" rule yet?
-// (The Module Permissions card says "Owner — full access" only once it
-// has; before v67 the owner still needs an explicit grant.)
-export async function commercialOwnerAccessEnabled(projectId) {
-  const { error } = await supabase.rpc("commercial_access_role", { p_project_id: projectId });
-  if (!error) return true;
-  if (isMissingRpcError(error)) return false;
-  throw error;
+// Which members get Dayworks & Variations automatically as the project
+// owner — asked of the database, never inferred from the member list
+// alone. The database (v67, commercial_access_role → is_project_owner)
+// gives it only to a member whose project role is 'owner' AND who belongs
+// to the project's own company. A member list row saying 'owner' isn't
+// enough (e.g. an owner row for someone outside the company), so for each
+// owner-role member we ask is_owner_side_user(project, user) — the same
+// company-membership check is_project_owner makes. commercial_access_role
+// itself only answers for the signed-in user, so it can't be used for
+// other rows. Fails closed: if the check errors, that member just gets the
+// normal grant dropdown. Returns a Set of user ids.
+export async function getCommercialOwnerAccessUserIds(projectId, members) {
+  const owners = (members || []).filter((m) => m.role === "owner");
+  const results = await Promise.all(owners.map(async (m) => {
+    const { data, error } = await supabase.rpc("is_owner_side_user", { p_project_id: projectId, p_user_id: m.user_id });
+    return !error && data === true ? m.user_id : null;
+  }));
+  return new Set(results.filter(Boolean));
 }
 
 // v67: the redacted, totals-only copy of one record for a Viewer

@@ -16,7 +16,7 @@ function src(name) {
   for (; i < APP_JS.length; i++) { if (APP_JS[i] === "{") depth++; else if (APP_JS[i] === "}" && --depth === 0) break; }
   return APP_JS.slice(start, i + 1).replace(/^export /, "");
 }
-const NAMES = ["isMissingRpcError", "getMyCommercialRole", "commercialOwnerAccessEnabled", "getCommercialEventView", "getCommercialTbcEventIds", "listCommercialVariationFacts", "getCommercialWarnings"];
+const NAMES = ["isMissingRpcError", "getMyCommercialRole", "getCommercialOwnerAccessUserIds", "getCommercialEventView", "getCommercialTbcEventIds", "listCommercialVariationFacts", "getCommercialWarnings"];
 function load(supabase) {
   return new Function("supabase", `${NAMES.map(src).join("\n")}; return { ${NAMES.join(", ")} };`)(supabase);
 }
@@ -44,9 +44,19 @@ test("getMyCommercialRole: after v67 uses commercial_access_role (owner → 'con
   await assert.rejects(load(sb).getMyCommercialRole("p"), (e) => /permission denied/.test(e.message), "a real error is not swallowed");
 });
 
-test("commercialOwnerAccessEnabled: true once commercial_access_role exists, false before v67", async () => {
-  assert.equal(await load(fake({ rpcs: { commercial_access_role: { data: null, error: null } } })).commercialOwnerAccessEnabled("p"), true);
-  assert.equal(await load(fake({})).commercialOwnerAccessEnabled("p"), false);
+test("getCommercialOwnerAccessUserIds: asks the database (is_owner_side_user) for each owner-role member only, and fails closed", async () => {
+  const calls = [];
+  const sb = { rpc: async (name, args) => {
+    calls.push([name, args]);
+    if (args.p_user_id === "in-org") return { data: true, error: null };
+    if (args.p_user_id === "boom") return { data: null, error: { code: "500", message: "network" } };
+    return { data: false, error: null };
+  } };
+  const members = [{ user_id: "in-org", role: "owner" }, { user_id: "not-in-org", role: "owner" }, { user_id: "boom", role: "owner" }, { user_id: "collab", role: "collaborator" }];
+  const ids = await load(sb).getCommercialOwnerAccessUserIds("p", members);
+  assert.deepEqual([...ids], ["in-org"]);
+  assert.deepEqual(calls.map((c) => c[0]), ["is_owner_side_user", "is_owner_side_user", "is_owner_side_user"], "only owner-role members are checked");
+  assert.deepEqual(calls[0][1], { p_project_id: "p", p_user_id: "in-org" });
 });
 
 test("getCommercialEventView: returns the redacted record after v67, null before (so the page falls back)", async () => {
