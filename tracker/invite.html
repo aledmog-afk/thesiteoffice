@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Company invite – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page page-640">
+  <div class="page-head"><div><div class="page-title">Company invite</div></div></div>
+  <div id="errorBox" class="error-box"></div>
+  <div class="card" id="statusCard"><p id="statusText">Checking your invite…</p>
+    <div class="btn-row" id="dashRow" style="display:none; margin-top:1rem;"><a class="btn btn-outline" href="dashboard.html">Go to Dashboard</a></div>
+  </div>
+
+  <div id="inviteView" style="display:none;">
+    <div class="card">
+      <p id="inviteSummary" style="font-size:1.05rem;"></p>
+      <p class="hint" id="inviteExpiry"></p>
+    </div>
+    <div class="card" id="useMyCompanyCard" style="display:none;">
+      <h3 class="card-heading" style="margin-bottom:0.5rem;">Accept for my company</h3>
+      <div class="btn-row"><select id="myCompanySelect" style="flex:1; min-width:200px;"></select><button type="button" class="btn btn-amber" id="acceptMineBtn">Accept</button></div>
+    </div>
+    <div class="card">
+      <h3 class="card-heading" style="margin-bottom:0.5rem;">Set up my company</h3>
+      <p class="hint" style="margin-bottom:0.8rem;">If your company isn't on Site Tracker yet. You'll be its administrator and can add your own staff to the job.</p>
+      <div class="field"><label for="orgName">Company name</label><input type="text" id="orgName" placeholder="e.g. Almo Carpentry Ltd"></div>
+      <div class="field"><label for="orgType">Company type</label><select id="orgType"></select></div>
+      <button type="button" class="btn btn-amber" id="createAcceptBtn">Create Company &amp; Accept</button>
+    </div>
+    <div class="card">
+      <h3 class="card-heading" style="margin-bottom:0.5rem;">My company is already on Site Tracker</h3>
+      <p class="hint" style="margin-bottom:0.8rem;">Ask to join it. Its administrator has to approve you first. Then open this invite link again to accept.</p>
+      <div class="btn-row"><input type="text" id="orgSearch" placeholder="Company name" style="flex:1; min-width:180px;"><button type="button" class="btn btn-outline btn-sm" id="searchBtn">Search</button></div>
+      <div id="searchResults"></div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, escapeHtml, formatDate, showError, clearError, ORGANISATION_TYPES, createOrganisation, searchOrganisations, requestOrganisationMembership, getPartyInvite, acceptPartyInvite, partyRoleText, isMissingRpcError, getMyOrganisations } from "./js/app.js";
+
+  // The token arrives in the URL fragment (#t=...). Keep it in this
+  // tab's sessionStorage so it survives the sign-in round trip.
+  const fragToken = new URL(window.location.href).hash.match(/[#&]t=([0-9a-f]{64})/)?.[1] || null;
+  if (fragToken) window.sessionStorage.setItem("partyInviteToken", fragToken);
+  const token = fragToken || window.sessionStorage.getItem("partyInviteToken");
+
+  const statusText = document.getElementById("statusText");
+  const errorBox = document.getElementById("errorBox");
+  const dashRow = document.getElementById("dashRow");
+  function stop(msg) { statusText.textContent = msg; dashRow.style.display = "flex"; }
+
+  if (!token) {
+    stop("This invite link is incomplete. Ask the sender to copy it again.");
+  } else {
+    // Not signed in yet: sign in / sign up first, then come straight back
+    // here (login.html honours next=invite.html even with no company yet).
+    const { data: { session } } = await supabase.auth.getSession();
+    if (!session) {
+      window.location.href = "login.html?next=invite.html";
+      await new Promise(() => {});
+    }
+    await requireAuth();
+    renderHeader([{ label: "Company invite" }]);
+    await start();
+  }
+
+  async function start() {
+    let inv;
+    try { inv = await getPartyInvite(token); }
+    catch (err) {
+      if (isMissingRpcError(err)) { stop("This invite couldn't be loaded. Refresh the page, and if it keeps happening, ask the person who sent it for a new link."); return; }
+      showError(errorBox, err); stop("Something went wrong opening this invite."); return;
+    }
+    if (!inv) { stop("This invite link isn't valid."); return; }
+    if (inv.status === "accepted") { stop("This invite has already been accepted."); return; }
+    if (inv.status === "cancelled") { stop("This invite was cancelled. Ask the sender for a new one."); return; }
+    if (inv.status === "expired") { stop("This invite has expired. Ask the sender to resend it."); return; }
+    if (!inv.email_matches) { stop("This invite was sent to a different email address. Sign out and sign in with the address it was sent to."); return; }
+
+    document.getElementById("statusCard").style.display = "none";
+    document.getElementById("inviteView").style.display = "block";
+    const by = inv.parent_company ? `${inv.parent_company} (on ${inv.inviting_company}'s job)` : inv.inviting_company;
+    document.getElementById("inviteSummary").textContent = `${by} has invited your company to ${inv.project_name} as ${partyRoleText(inv.party_role, inv.trade)}.`;
+    document.getElementById("inviteExpiry").textContent = `This invite expires on ${formatDate(String(inv.expires_at).slice(0, 10))}.`;
+    document.getElementById("orgType").innerHTML = ORGANISATION_TYPES.map((t) => `<option value="${t.value}"${t.value === (inv.party_role === "main_contractor" ? "main_contractor" : inv.party_role === "subcontractor" ? "subcontractor" : "") ? " selected" : ""}>${escapeHtml(t.label)}</option>`).join("");
+
+    const mine = await getMyOrganisations().catch(() => []);
+    if (mine.length) {
+      document.getElementById("myCompanySelect").innerHTML = mine.map((o) => `<option value="${o.id}">${escapeHtml(o.name)}</option>`).join("");
+      document.getElementById("useMyCompanyCard").style.display = "block";
+    }
+
+    async function finish(orgId) {
+      const projectId = await acceptPartyInvite(token, orgId);
+      window.sessionStorage.removeItem("partyInviteToken");
+      window.location.href = `project.html?id=${projectId}`;
+    }
+    document.getElementById("acceptMineBtn").addEventListener("click", async () => {
+      clearError(errorBox);
+      try { await finish(document.getElementById("myCompanySelect").value); } catch (err) { showError(errorBox, err); }
+    });
+    document.getElementById("createAcceptBtn").addEventListener("click", async () => {
+      clearError(errorBox);
+      const name = document.getElementById("orgName").value.trim();
+      if (!name) { showError(errorBox, { message: "Company name is required." }); return; }
+      try {
+        const orgId = await createOrganisation(name, document.getElementById("orgType").value);
+        await finish(orgId);
+      } catch (err) { showError(errorBox, err); }
+    });
+    document.getElementById("searchBtn").addEventListener("click", async () => {
+      clearError(errorBox);
+      const q = document.getElementById("orgSearch").value.trim();
+      if (q.length < 2) return;
+      try {
+        const orgs = await searchOrganisations(q);
+        document.getElementById("searchResults").innerHTML = orgs.length ? orgs.map((o) => `
+          <div class="btn-row" style="margin-top:0.6rem;"><span style="flex:1;">${escapeHtml(o.name)}</span>
+          <button type="button" class="btn btn-outline btn-sm" data-join="${o.id}">Ask to join</button></div>`).join("")
+          : `<p class="hint">No companies found. Set yours up instead.</p>`;
+      } catch (err) { showError(errorBox, err); }
+    });
+    document.getElementById("searchResults").addEventListener("click", async (e) => {
+      const id = e.target?.dataset?.join;
+      if (!id) return;
+      clearError(errorBox);
+      try {
+        await requestOrganisationMembership(id);
+        document.getElementById("searchResults").innerHTML = `<p class="hint" id="joinPending">Request sent. Once that company's administrator approves you, open this invite link again and choose "Accept for my company".</p>`;
+      } catch (err) { showError(errorBox, err); }
+    });
+  }
+</script>
+</body>
+</html>
