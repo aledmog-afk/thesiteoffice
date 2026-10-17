@@ -43,9 +43,11 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { showError, clearError, getParam } from "./js/app.js";
+  import { showError, clearError, getParam, safeNextPage } from "./js/app.js";
 
-  const next = getParam("next") || "dashboard.html";
+  // ?next= is attacker-controllable (anyone can send a login link), so it
+  // only ever names a page of this app - see safeNextPage() in app.js.
+  const next = safeNextPage(getParam("next"));
 
   const form = document.getElementById("authForm");
   const errorBox = document.getElementById("errorBox");

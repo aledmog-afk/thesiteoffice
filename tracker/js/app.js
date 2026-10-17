@@ -44,6 +44,30 @@ export function getParam(name) {
   return new URLSearchParams(window.location.search).get(name);
 }
 
+// Where a ?next= (or any similar "go here afterwards") parameter may send
+// the browser. Only a page of this app is allowed: a bare page name ending
+// in .html, optionally followed by a ?query or #hash, e.g.
+// "project.html?id=1". Anything else - a scheme (javascript:, data:,
+// https:), a protocol-relative "//host", a backslash, a colon, leading or
+// trailing whitespace or a control character, in the raw value or after
+// any number of rounds of URL-decoding - falls back to `fallback`. Every
+// page that navigates to a URL taken from the query string or hash must
+// pass it through here first.
+export function safeNextPage(raw, fallback = "dashboard.html") {
+  if (typeof raw !== "string" || raw === "") return fallback;
+  const bad = (v) => v !== v.trim() || /[\u0000-\u001f\u007f-\u009f]/.test(v) || v.includes(":") || v.includes("\\") || v.includes("//");
+  let current = raw;
+  for (let i = 0; i < 10; i++) {
+    if (bad(current)) return fallback;
+    let decoded;
+    try { decoded = decodeURIComponent(current); } catch { return fallback; }
+    if (decoded === current) break;
+    if (i === 9) return fallback;
+    current = decoded;
+  }
+  return /^[A-Za-z0-9_-]+\.html(?:[?#][^\s]*)?$/.test(raw) ? raw : fallback;
+}
+
 export function escapeHtml(str) {
   if (str === null || str === undefined) return "";
   return String(str)
