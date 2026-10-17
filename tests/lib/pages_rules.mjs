@@ -51,6 +51,8 @@ export function parseHeaders(text) {
       return;
     }
     if (!current) throw new Error(`_headers line ${i + 1}: header before any path`);
+    const detach = raw.trim().match(/^!\s*([A-Za-z0-9-]+)$/);
+    if (detach) { (current.detach ||= []).push(detach[1]); return; }
     const m = raw.trim().match(/^([A-Za-z0-9-]+):\s*(.+)$/);
     if (!m) throw new Error(`_headers line ${i + 1}: expected "Name: value", got "${raw}"`);
     current.headers[m[1]] = m[2];
@@ -65,4 +67,18 @@ export function headerRulePathMatches(rulePath, path) {
 
 export function readRootFile(name) {
   return fs.readFileSync(new URL(`../../${name}`, import.meta.url), "utf8");
+}
+
+// The headers a response for `path` ends up with: every matching rule in
+// file order, each first detaching ("! Name") what earlier rules set and
+// then adding its own. A header set twice is joined with ", " - as Pages
+// does - so a test can spot a duplicate.
+export function resolveHeaders(rules, path) {
+  const out = {};
+  for (const r of rules) {
+    if (!headerRulePathMatches(r.path, path)) continue;
+    for (const name of r.detach || []) delete out[name];
+    for (const [k, v] of Object.entries(r.headers)) out[k] = k in out ? `${out[k]}, ${v}` : v;
+  }
+  return out;
 }

@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { JSDOM } from "jsdom";
-import { parseHeaders, headerRulePathMatches, parseRedirects, matchRedirect, readRootFile } from "../lib/pages_rules.mjs";
+import { parseHeaders, resolveHeaders, parseRedirects, matchRedirect, readRootFile } from "../lib/pages_rules.mjs";
 
 const ROOT = new URL("../../", import.meta.url);
 const PAGES = ["index.html", "404.html", "privacy.html", "terms.html"];
@@ -103,23 +103,35 @@ test("privacy draft: lists the topics a UK GDPR privacy notice has to cover", ()
   }
 });
 
-test("_headers: every root page gets the security headers, no request path matches two rules, and /tracker/* is unchanged", () => {
+const SECURITY = {
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "Strict-Transport-Security": "max-age=31536000",
+};
+
+test("_headers: every root page, the 404 page at any unknown path, and the app get each security header exactly once", () => {
   const rules = parseHeaders(readRootFile("_headers"));
-  for (const p of ["/", "/index.html", "/privacy", "/privacy.html", "/terms", "/terms.html"]) {
-    const matching = rules.filter((r) => headerRulePathMatches(r.path, p));
-    assert.equal(matching.length, 1, `${p} matches ${matching.length} rules`);
-    const h = matching[0].headers;
-    assert.equal(h["X-Frame-Options"], "DENY");
-    assert.equal(h["X-Content-Type-Options"], "nosniff");
-    assert.match(h["Content-Security-Policy"], /script-src 'self';/);
-    assert.match(h["Content-Security-Policy"], /frame-ancestors 'none'/);
+  const rootPaths = ["/", "/index.html", "/404", "/404.html", "/privacy", "/privacy.html", "/terms", "/terms.html", "/robots.txt", "/sitemap.xml", "/no-such-page", "/old/deep/link"];
+  const appPaths = ["/tracker/", "/tracker/login.html", "/tracker/login", "/tracker/commercial-approval.html", "/tracker/js/app.js", "/tracker/no-such-page"];
+  for (const p of [...rootPaths, ...appPaths]) {
+    const h = resolveHeaders(rules, p);
+    for (const [k, v] of Object.entries(SECURITY)) assert.equal(h[k], v, `${p}: ${k}`);
+    assert.ok(h["Content-Security-Policy"] && !h["Content-Security-Policy"].includes(", default-src"), `${p}: exactly one CSP`);
+    assert.match(h["Content-Security-Policy"], /frame-ancestors 'none'/, p);
   }
-  for (const p of ["/tracker/", "/tracker/login.html", "/tracker/commercial-approval.html"]) {
-    assert.equal(rules.filter((r) => headerRulePathMatches(r.path, p)).length, 1, `${p} must match only the /tracker/* rule`);
-  }
-  const tracker = rules.find((r) => r.path === "/tracker/*");
-  assert.match(tracker.headers["Content-Security-Policy"], /script-src 'self' 'unsafe-inline' https:\/\/esm\.sh;/);
-  assert.match(tracker.headers["Content-Security-Policy"], /connect-src 'self' https:\/\/\*\.supabase\.co/);
+  for (const p of rootPaths) assert.match(resolveHeaders(rules, p)["Content-Security-Policy"], /script-src 'self';/, `${p}: root pages allow no inline script`);
+});
+
+test("_headers: the app's own CSP is unchanged (inline module scripts, esm.sh, Supabase)", () => {
+  const rules = parseHeaders(readRootFile("_headers"));
+  const csp = resolveHeaders(rules, "/tracker/login.html")["Content-Security-Policy"];
+  assert.equal(csp, "default-src 'self'; script-src 'self' 'unsafe-inline' https://esm.sh; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://*.supabase.co; connect-src 'self' https://*.supabase.co https://api.postcodes.io https://api.open-meteo.com https://esm.sh; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
+});
+
+test("_headers: /contents-inventory is left exactly as before (Aled's decision) - no headers from this file", () => {
+  const rules = parseHeaders(readRootFile("_headers"));
+  for (const p of ["/contents-inventory", "/contents-inventory.html"]) assert.deepEqual(resolveHeaders(rules, p), {}, p);
 });
 
 test("robots and sitemap: the front page is listed, the app itself is kept out of search", () => {
