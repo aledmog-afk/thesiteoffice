@@ -24,7 +24,7 @@
 
   <div id="ownerView" style="display:none;">
     <div class="card" id="mcAccessCard" style="display:none; margin-bottom:1.2rem;">
-      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.4rem;">Main contractor access</h3>
+      <h3 class="card-heading" style="margin-bottom:0.4rem;">Main contractor access</h3>
       <p class="hint" id="mcAccessText"></p>
       <div class="btn-row">
         <select id="mcAccessSelect" style="width:auto; max-width:100%;"><option value="full">Full project access</option><option value="narrow">Narrower (programme, actions, handovers, snags, RFIs)</option></select>
@@ -32,7 +32,7 @@
       </div>
     </div>
     <div class="card">
-      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.8rem;">Companies</h3>
+      <h3 class="card-heading" style="margin-bottom:0.8rem;">Companies</h3>
       <p class="hint" id="assignWorkLink" style="display:none;"><a href="#" id="assignWorkHref">Assign older RFIs and actions to companies</a> <span class="badge badge-amber" id="assignWorkFlag" style="display:none;"></span></p>
       <div class="table-wrap"><table class="stack-mobile">
         <thead><tr><th>Company</th><th>Role on this job</th><th>Lead contact</th><th>People</th><th></th></tr></thead>
@@ -42,7 +42,7 @@
     </div>
 
     <div class="card" style="margin-top:1.2rem;">
-      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.4rem;">Invite a company</h3>
+      <h3 class="card-heading" style="margin-bottom:0.4rem;">Invite a company</h3>
       <p class="hint" style="margin-bottom:0.8rem;">Invite one lead person by email. You'll get a link to send them yourself (WhatsApp, text or email). It works only for that email address and expires after 14 days. They then add their own staff.</p>
       <form id="inviteForm">
         <div class="field"><label for="inviteEmail">Lead person's email</label><input type="email" id="inviteEmail" required></div>
@@ -57,7 +57,7 @@
     </div>
 
     <div class="card" style="margin-top:1.2rem;">
-      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.8rem;">Waiting to accept</h3>
+      <h3 class="card-heading" style="margin-bottom:0.8rem;">Waiting to accept</h3>
       <div class="table-wrap"><table class="stack-mobile">
         <thead><tr><th>Email</th><th>Role</th><th>Expires</th><th></th></tr></thead>
         <tbody id="inviteRows"></tbody>
@@ -66,7 +66,7 @@
     </div>
 
     <div class="card" style="margin-top:1.2rem;">
-      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.4rem;">Add someone from your own company</h3>
+      <h3 class="card-heading" style="margin-bottom:0.4rem;">Add someone from your own company</h3>
       <div class="btn-row">
         <select id="ownStaffSelect" style="flex:1; min-width:200px;"></select>
         <select id="ownStaffRole"><option value="collaborator">Full access</option><option value="snagging">Snagging only</option></select>
@@ -152,7 +152,7 @@
       const on = new Set((onParty || []).map((r) => r.user_id));
       html.push(`
         <div class="card" style="margin-top:1.2rem;" data-admin-party="${p.party_id}">
-          <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.3rem;">${escapeHtml(p.company)}: your team on this job</h3>
+          <h3 class="card-heading" style="margin-bottom:0.3rem;">${escapeHtml(p.company)}: your team on this job</h3>
           <p class="hint" style="margin-bottom:0.8rem;">${escapeHtml(partyRoleText(p.party_role, p.trade))}. People you add get your company's access on this job, never more.</p>
           <div class="table-wrap"><table><tbody>
             ${(staff || []).map((m) => `<tr><td>${escapeHtml(m.email)}</td><td>${on.has(m.user_id)

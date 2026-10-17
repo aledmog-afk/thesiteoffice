@@ -69,8 +69,8 @@
 
     <div class="card" id="pricingCard" style="margin-bottom:1.5rem;">
       <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem;">
-        <h3 style="font-family:var(--font-display); font-size:1rem; margin:0;">Pricing</h3>
-        <strong id="grandTotal" style="font-family:var(--font-display); font-size:1.2rem;">£0.00</strong>
+        <h3 class="card-heading" style="margin:0;">Pricing</h3>
+        <strong class="display-font" id="grandTotal" style="font-size:1.2rem;">£0.00</strong>
       </div>
       <div id="tbcWarning" class="hint" style="display:none; color:var(--amber); margin-bottom:0.8rem;"></div>
       <ul class="item-list" id="lineItemList"></ul>
@@ -87,7 +87,7 @@
     </div>
 
     <div class="card" id="linkedVariationsCard" style="margin-bottom:1.5rem; display:none;">
-      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Linked Variation(s)</h3>
+      <h3 class="card-heading">Linked Variation(s)</h3>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Reference</th><th>Title</th><th>Status</th></tr></thead>
@@ -97,7 +97,7 @@
     </div>
 
     <div class="card" id="evidenceCard" style="margin-bottom:1.5rem;">
-      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Evidence</h3>
+      <h3 class="card-heading">Evidence</h3>
       <div id="evidenceGrid"></div>
       <div id="evidenceEmpty" class="hint" style="display:none;">No evidence attached yet.</div>
       <div class="btn-row" id="addEvidenceRow" style="margin-top:0.8rem; display:none;">
@@ -108,13 +108,13 @@
     </div>
 
     <div class="card" id="workflowCard">
-      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Status &amp; Approval</h3>
+      <h3 class="card-heading">Status &amp; Approval</h3>
       <div id="workflowDetails" style="margin-bottom:1rem;"></div>
       <div class="btn-row" id="workflowActions"></div>
     </div>
 
     <div class="card" id="approvalCard" style="display:none;">
-      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Client Approval</h3>
+      <h3 class="card-heading">Client Approval</h3>
       <div id="approvalDetails" style="margin-bottom:1rem;"></div>
       <div class="btn-row" id="approvalActions"></div>
       <div id="approvalLinkBox" style="display:none; margin-top:1rem; padding-top:1rem; border-top:1px solid var(--border);">
@@ -131,7 +131,7 @@
 
 <div class="modal-backdrop" id="rejectModal" style="display:none;">
   <div class="modal-box">
-    <h3 style="font-family:var(--font-display); margin-top:0;">Reject this Daywork</h3>
+    <h3 class="display-font" style="margin-top:0;">Reject this Daywork</h3>
     <div class="field"><label for="rejectReason">Reason (optional, visible to the person who submitted it)</label><textarea id="rejectReason" rows="3"></textarea></div>
     <div class="btn-row">
       <button type="button" class="btn btn-danger" id="confirmRejectBtn">Reject</button>
@@ -143,7 +143,7 @@
 <!-- Sign & Approve -->
 <div class="modal-backdrop" id="signApproveModal" style="display:none;">
   <div class="modal-box" style="max-width:520px;">
-    <h3 style="font-family:var(--font-display); margin-top:0;">Sign &amp; Approve</h3>
+    <h3 class="display-font" style="margin-top:0;">Sign &amp; Approve</h3>
     <p class="hint" style="margin-bottom:0.8rem;">By signing, you confirm you have reviewed the pricing and evidence above and accept this record as final. Once approved, it becomes permanently locked — nobody, including you, will be able to edit it again.</p>
     <canvas id="sigCanvas" width="480" height="180"></canvas>
     <div class="btn-row" style="margin-top:0.6rem;">
@@ -164,7 +164,7 @@
 <!-- Request Client Approval -->
 <div class="modal-backdrop" id="requestApprovalModal" style="display:none;">
   <div class="modal-box" style="max-width:480px;">
-    <h3 style="font-family:var(--font-display); margin-top:0;">Request Client Approval</h3>
+    <h3 class="display-font" style="margin-top:0;">Request Client Approval</h3>
     <p class="hint" style="margin-bottom:0.8rem;">Sends a one-time link to a client who doesn't need a Site Tracker account. They'll see this record's items, total, and evidence, and can approve or reject it.</p>
     <div class="field"><label for="reqEmail">Client email *</label><input type="email" id="reqEmail" required></div>
     <div class="field"><label for="reqName">Client name (optional)</label><input type="text" id="reqName"></div>

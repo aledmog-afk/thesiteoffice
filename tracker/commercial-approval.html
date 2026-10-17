@@ -55,17 +55,17 @@
 
   <div id="content" style="display:none;">
     <div class="card">
-      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.6rem;" id="eventHeading"></h3>
+      <h3 class="card-heading" style="margin-bottom:0.6rem;" id="eventHeading"></h3>
       <dl class="doc-facts" id="eventFacts"></dl>
     </div>
 
     <div class="card" id="linkedCard" style="display:none;">
-      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.8rem;">Related Dayworks</h3>
+      <h3 class="card-heading" style="margin-bottom:0.8rem;">Related Dayworks</h3>
       <table><tbody id="linkedRows"></tbody></table>
     </div>
 
     <div class="card">
-      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.8rem;">Items</h3>
+      <h3 class="card-heading" style="margin-bottom:0.8rem;">Items</h3>
       <ul class="item-list" id="lineItemList" style="list-style:none; padding:0; margin:0;"></ul>
       <div style="display:flex; justify-content:flex-end; margin-top:0.8rem; padding-top:0.8rem; border-top:1px solid var(--border);">
         <strong style="font-size:1.1rem;">Total: <span id="grandTotal"></span></strong>
@@ -73,13 +73,13 @@
     </div>
 
     <div class="card" id="evidenceCard">
-      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.8rem;">Evidence</h3>
+      <h3 class="card-heading" style="margin-bottom:0.8rem;">Evidence</h3>
       <div id="evidenceList"></div>
       <div id="evidenceEmpty" class="hint" style="display:none;">No evidence attached.</div>
     </div>
 
     <div class="card" id="decisionCard" style="display:none;">
-      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.6rem;">Your Decision</h3>
+      <h3 class="card-heading" style="margin-bottom:0.6rem;">Your Decision</h3>
       <p class="hint" style="margin-bottom:0.8rem;">You are reviewing this on behalf of <strong id="recipientEmailLabel"></strong>. By approving, you confirm you have reviewed the items and evidence above and accept this record as final — it becomes permanently locked once approved. Rejecting sends it back to the contractor with your reason.</p>
 
       <div class="field"><label for="signerName">Your name *</label><input type="text" id="signerName"></div>
@@ -102,7 +102,7 @@
     </div>
 
     <div class="card" id="rejectReasonCard" style="display:none;">
-      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.6rem;">Reason for Rejection</h3>
+      <h3 class="card-heading" style="margin-bottom:0.6rem;">Reason for Rejection</h3>
       <div class="field"><label for="rejectReason">Reason *</label><textarea id="rejectReason" rows="3"></textarea></div>
       <div id="rejectError" class="error-box"></div>
       <div class="btn-row">

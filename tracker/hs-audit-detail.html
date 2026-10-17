@@ -27,7 +27,7 @@
   <div id="errorBox" class="error-box"></div>
 
   <div class="card" id="detailsCard" style="margin-bottom:2rem;">
-    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Audit Details</h3>
+    <h3 class="card-heading">Audit Details</h3>
     <form id="detailsForm">
       <div class="form-grid">
         <div class="field"><label for="month">Month this audit counts for</label><input type="month" id="month" required></div>
@@ -42,7 +42,7 @@
   </div>
 
   <div class="card" id="externalCard" style="display:none; margin-bottom:2rem;">
-    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Audit Document</h3>
+    <h3 class="card-heading">Audit Document</h3>
     <div id="externalFileRow" style="margin-bottom:0.8rem;"></div>
     <input type="file" id="externalReplaceInput" accept="application/pdf,image/*">
     <p class="hint">Uploading a new file replaces the one attached to this audit.</p>
@@ -123,7 +123,7 @@
       bySection.get(item.section).push(item);
     });
     document.getElementById("itemRows").innerHTML = Array.from(bySection.entries()).map(([section, sectionItems]) => `
-      <tr><td colspan="5" style="background:var(--paper-soft); font-family:var(--font-display); font-size:0.85rem; letter-spacing:0.02em;">${escapeHtml(section)}</td></tr>
+      <tr><td class="display-font" colspan="5" style="background:var(--paper-soft); font-size:0.85rem; letter-spacing:0.02em;">${escapeHtml(section)}</td></tr>
       ${sectionItems.map(itemRowHtml).join("")}
     `).join("");
     wireItemRows();
