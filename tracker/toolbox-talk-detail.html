@@ -58,7 +58,7 @@
     </div>
 
     <div class="card">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.6rem;">
+      <div class="row-between" style="margin-bottom:0.6rem;">
         <h3 class="card-heading" style="margin:0;">Attendance &amp; Signatures</h3>
         <span id="progressText" class="hint"></span>
       </div>
@@ -81,7 +81,7 @@
 
 <!-- Signature capture -->
 <div class="modal-backdrop" id="signModal" style="display:none;">
-  <div class="modal-box" style="max-width:520px;">
+  <div class="modal-box modal-520">
     <h3 class="display-font" style="margin-top:0;" id="signModalTitle">Sign</h3>
     <p class="hint" style="margin-bottom:0.8rem;">By signing, this attendee confirms they attended this toolbox talk and understood its content. This is attendance/acknowledgement evidence, not a legally binding e-signature.</p>
     <canvas id="sigCanvas" width="480" height="180"></canvas>

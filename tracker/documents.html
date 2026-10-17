@@ -49,7 +49,7 @@
   <div class="card" style="margin-bottom:1.5rem;">
     <div class="btn-row" style="flex-wrap:wrap; align-items:center; gap:0.8rem;">
       <div class="field" style="margin:0;">
-        <select id="filterType" style="width:auto;">
+        <select id="filterType" class="auto-width">
           <option value="">All types</option>
           <option value="drawing">Drawing</option>
           <option value="specification">Specification</option>
@@ -57,7 +57,7 @@
         </select>
       </div>
       <div class="field" style="margin:0;">
-        <select id="filterStatus" style="width:auto;">
+        <select id="filterStatus" class="auto-width">
           <option value="">All statuses</option>
           <option value="draft">Draft</option>
           <option value="current">Current</option>
@@ -65,7 +65,7 @@
           <option value="archived">Archived</option>
         </select>
       </div>
-      <label style="display:flex; align-items:center; gap:0.4rem; font-size:0.85rem; color:var(--ink-soft);">
+      <label class="flex-row hint-text" style="gap:0.4rem;">
         <input type="checkbox" id="includeHistoryCheck"> Include revision history in export
       </label>
       <button class="btn btn-outline btn-sm" id="exportBtn" style="margin-left:auto;" disabled>Export Selected (ZIP)</button>

@@ -72,7 +72,7 @@
     </div>
 
     <div class="card" id="pricingCard" style="margin-bottom:1.5rem;">
-      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem;">
+      <div class="row-between" style="margin-bottom:1rem;">
         <h3 class="card-heading" style="margin:0;">Direct Pricing</h3>
       </div>
       <div id="tbcWarning" class="hint" style="display:none; color:var(--amber); margin-bottom:0.8rem;"></div>
@@ -92,7 +92,7 @@
     </div>
 
     <div class="card" id="dayworksCard" style="margin-bottom:1.5rem;">
-      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem;">
+      <div class="row-between" style="margin-bottom:1rem;">
         <h3 class="card-heading" style="margin:0;">Linked Dayworks</h3>
         <button type="button" class="btn btn-outline btn-sm" id="addDayworkBtn" style="display:none;">+ Add Daywork</button>
       </div>
@@ -107,11 +107,11 @@
     </div>
 
     <div class="card" id="markupCard" style="margin-bottom:1.5rem;">
-      <div style="display:flex; align-items:center; justify-content:space-between;">
+      <div class="row-between">
         <h3 class="card-heading" style="margin:0;" id="markupHeading">Markup &amp; Total</h3>
         <strong class="display-font" id="grandTotal" style="font-size:1.2rem;">£0.00</strong>
       </div>
-      <div class="field" style="margin-top:0.8rem; max-width:200px;" id="markupField">
+      <div class="field field-200" style="margin-top:0.8rem;" id="markupField">
         <label for="markupInput">Markup (%)</label>
         <input type="number" id="markupInput" step="0.01" min="0">
       </div>
@@ -165,7 +165,7 @@
 
 <!-- Sign & Approve -->
 <div class="modal-backdrop" id="signApproveModal" style="display:none;">
-  <div class="modal-box" style="max-width:520px;">
+  <div class="modal-box modal-520">
     <h3 class="display-font" style="margin-top:0;">Sign &amp; Approve</h3>
     <p class="hint" style="margin-bottom:0.8rem;">By signing, you confirm you have reviewed the pricing and evidence above and accept this record as final. Once approved, it becomes permanently locked — nobody, including you, will be able to edit it again.</p>
     <canvas id="sigCanvas" width="480" height="180"></canvas>
@@ -203,7 +203,7 @@
 
 <!-- Request Client Approval -->
 <div class="modal-backdrop" id="requestApprovalModal" style="display:none;">
-  <div class="modal-box" style="max-width:480px;">
+  <div class="modal-box">
     <h3 class="display-font" style="margin-top:0;">Request Client Approval</h3>
     <p class="hint" style="margin-bottom:0.8rem;">Sends a one-time link to a client who doesn't need a Site Tracker account. They'll see this record's items, total, and evidence, and can approve or reject it.</p>
     <div class="field"><label for="reqEmail">Client email *</label><input type="email" id="reqEmail" required></div>
