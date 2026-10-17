@@ -12155,3 +12155,254 @@ grant execute on function public.valid_toolbox_talk_status_transition(text, text
 revoke all on function public.valid_weekly_report_status_transition(text, text) from public;
 revoke execute on function public.valid_weekly_report_status_transition(text, text) from anon;
 grant execute on function public.valid_weekly_report_status_transition(text, text) to authenticated;
+
+-- ─── v64 ADDITIONS: old approval links stop showing prices ───
+-- A link is ACTIVE only while its request is pending/viewed, not past
+-- expires_at, and the record is still 'submitted'. Anything else gets a
+-- short reply: active=false, status, org_name, the item reference, plus
+-- decided_at/signer_name once approved/rejected. This is enforced here,
+-- not in the page, because anyone with a token can call the RPC directly.
+--
+-- A pending/viewed request whose record is no longer 'submitted' (e.g.
+-- approved inside the app) is reported as status 'closed' but NOT
+-- written back: the only places that change a request's status are the
+-- token's own expiry/view flips here and the resubmit trigger, and
+-- inventing a third writer for a derived state isn't needed.
+--
+-- Evidence now needs an active link too, and reject gets approve's
+-- content-hash/total re-check (same message).
+create or replace function public.get_commercial_approval_request(p_token text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_req public.commercial_approval_requests%rowtype;
+  v_event public.commercial_events%rowtype;
+  v_project_name text;
+  v_org_name text;
+  v_reason text;
+  v_instruction_reference text;
+  v_markup_pct numeric(5,2);
+  v_date date;
+  v_line_items jsonb;
+  v_linked jsonb;
+  v_evidence jsonb;
+  v_effective_status text;
+  v_reply_status text;
+  v_inactive jsonb;
+begin
+  if p_token is null or trim(p_token) = '' then
+    raise exception 'Invalid approval link.';
+  end if;
+
+  select * into v_req from public.commercial_approval_requests
+    where token_hash = public.commercial_approval_token_hash(p_token);
+  if v_req.id is null then
+    raise exception 'Invalid approval link.';
+  end if;
+
+  v_effective_status := v_req.status;
+  if v_effective_status in ('pending', 'viewed') and v_req.expires_at <= now() then
+    update public.commercial_approval_requests set status = 'expired', updated_at = now() where id = v_req.id and status in ('pending', 'viewed');
+    v_effective_status := 'expired';
+  elsif v_effective_status = 'pending' then
+    update public.commercial_approval_requests set status = 'viewed', viewed_at = now(), updated_at = now() where id = v_req.id and status = 'pending';
+    v_effective_status := 'viewed';
+  end if;
+
+  select * into v_event from public.commercial_events where id = v_req.commercial_event_id;
+  select name into v_org_name from public.organisations where id = v_event.org_id;
+
+  if v_effective_status not in ('pending', 'viewed') or v_event.id is null or v_event.status <> 'submitted' then
+    v_reply_status := case when v_effective_status in ('pending', 'viewed') then 'closed' else v_effective_status end;
+    v_inactive := jsonb_build_object(
+      'active', false,
+      'status', v_reply_status,
+      'org_name', v_org_name,
+      'reference', nullif(trim(coalesce(v_event.reference, '')), '')
+    );
+    if v_reply_status = 'approved' then
+      v_inactive := v_inactive || jsonb_build_object('decided_at', v_req.approved_at, 'signer_name', v_req.signer_name);
+    elsif v_reply_status = 'rejected' then
+      v_inactive := v_inactive || jsonb_build_object('decided_at', v_req.rejected_at, 'signer_name', v_req.signer_name);
+    end if;
+    return v_inactive;
+  end if;
+
+  select name into v_project_name from public.projects where id = v_event.project_id;
+
+  v_reason := null; v_instruction_reference := null; v_markup_pct := null; v_date := null;
+  if v_event.type = 'variation' then
+    select reason, instruction_reference, markup_pct into v_reason, v_instruction_reference, v_markup_pct
+      from public.variations where commercial_event_id = v_req.commercial_event_id;
+  else
+    select date_undertaken into v_date from public.dayworks where commercial_event_id = v_req.commercial_event_id;
+  end if;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+    'line_type', li.line_type, 'description', li.description, 'trade', li.trade,
+    'quantity', li.quantity, 'unit', li.unit, 'rate', li.rate, 'line_total', li.line_total
+  ) order by li.created_at), '[]'::jsonb) into v_line_items
+  from public.commercial_line_items li where li.commercial_event_id = v_req.commercial_event_id;
+
+  v_linked := '[]'::jsonb;
+  if v_event.type = 'variation' then
+    select coalesce(jsonb_agg(jsonb_build_object(
+      'reference', d_ce.reference, 'title', d_ce.title, 'total_value', d_ce.total_value
+    ) order by d_ce.reference), '[]'::jsonb) into v_linked
+    from public.variation_dayworks vd
+    join public.commercial_events d_ce on d_ce.id = vd.daywork_id
+    where vd.variation_id = v_req.commercial_event_id;
+  end if;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+    'evidence_link_id', el.id, 'caption', el.caption,
+    'title', d.title, 'file_name', dr.file_name, 'mime_type', dr.mime_type
+  ) order by el.linked_at), '[]'::jsonb) into v_evidence
+  from public.commercial_evidence_links el
+  left join public.documents d on d.id = el.source_id and el.source_table = 'documents'
+  left join public.document_revisions dr on dr.id = d.current_revision_id
+  where el.commercial_event_id = v_req.commercial_event_id;
+
+  return jsonb_build_object(
+    'active', true,
+    'status', v_effective_status,
+    'expires_at', v_req.expires_at,
+    'recipient_name', v_req.recipient_name,
+    'recipient_company', v_req.recipient_company,
+    'recipient_email', v_req.recipient_email,
+    'signer_name', v_req.signer_name,
+    'approved_at', v_req.approved_at,
+    'rejected_at', v_req.rejected_at,
+    'rejection_reason', v_req.rejection_reason,
+    'event', jsonb_build_object(
+      'type', v_event.type, 'reference', v_event.reference, 'title', v_event.title,
+      'reason', v_reason, 'instruction_reference', v_instruction_reference, 'markup_pct', v_markup_pct,
+      'date_undertaken', v_date,
+      'total_value', v_event.total_value, 'status', v_event.status
+    ),
+    'project_name', v_project_name,
+    'org_name', v_org_name,
+    'line_items', v_line_items,
+    'linked_dayworks', v_linked,
+    'evidence', v_evidence
+  );
+end;
+$$;
+
+create or replace function public.resolve_commercial_approval_evidence(p_token text, p_evidence_link_id uuid)
+returns table (storage_bucket text, object_path text)
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_req public.commercial_approval_requests%rowtype;
+begin
+  if p_token is null or trim(p_token) = '' or p_evidence_link_id is null then
+    raise exception 'Invalid request.';
+  end if;
+
+  select * into v_req from public.commercial_approval_requests
+    where token_hash = public.commercial_approval_token_hash(p_token);
+  if v_req.id is null then
+    raise exception 'Invalid request.';
+  end if;
+
+  if v_req.status in ('pending', 'viewed') and v_req.expires_at <= now() then
+    raise exception 'This approval link has expired.';
+  end if;
+  if v_req.status not in ('pending', 'viewed')
+     or not exists (select 1 from public.commercial_events e
+                     where e.id = v_req.commercial_event_id and e.status = 'submitted') then
+    raise exception 'This approval link is no longer valid.';
+  end if;
+
+  return query
+    select dr.storage_bucket,
+           case when dr.storage_bucket = 'site-photos'
+                then public.site_photos_ref_to_path(dr.file_url)
+                else dr.file_url
+           end
+    from public.commercial_evidence_links el
+    join public.documents d on d.id = el.source_id and el.source_table = 'documents'
+    join public.document_revisions dr on dr.id = d.current_revision_id
+    where el.id = p_evidence_link_id
+      and el.commercial_event_id = v_req.commercial_event_id;
+end;
+$$;
+
+create or replace function public.reject_commercial_approval_request(
+  p_token text,
+  p_signer_name text,
+  p_rejection_reason text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_req public.commercial_approval_requests%rowtype;
+  v_event public.commercial_events%rowtype;
+  v_clean_name text;
+  v_clean_reason text;
+begin
+  v_clean_name := nullif(trim(coalesce(p_signer_name, '')), '');
+  v_clean_reason := nullif(trim(coalesce(p_rejection_reason, '')), '');
+  if v_clean_name is null then
+    raise exception 'A name is required to reject.';
+  end if;
+  if v_clean_reason is null then
+    raise exception 'A reason is required to reject.';
+  end if;
+  if p_token is null or trim(p_token) = '' then
+    raise exception 'Invalid approval link.';
+  end if;
+
+  select * into v_req from public.commercial_approval_requests
+    where token_hash = public.commercial_approval_token_hash(p_token)
+    for update;
+  if v_req.id is null then
+    raise exception 'Invalid approval link.';
+  end if;
+  if v_req.status in ('pending', 'viewed') and v_req.expires_at <= now() then
+    raise exception 'This approval link has expired.';
+  end if;
+  if v_req.status not in ('pending', 'viewed') then
+    raise exception 'This approval request has already been actioned or is no longer valid.';
+  end if;
+
+  select * into v_event from public.commercial_events where id = v_req.commercial_event_id;
+  if v_event.id is null or v_event.status <> 'submitted' then
+    raise exception 'This record is no longer awaiting approval.';
+  end if;
+
+  if public.commercial_event_hash(v_req.commercial_event_id) is distinct from v_req.bound_content_hash
+     or v_event.total_value is distinct from v_req.bound_total then
+    raise exception 'This record has changed since this approval request was created. A new approval request is needed.';
+  end if;
+
+  update public.commercial_approval_requests
+    set signer_name = v_clean_name, signer_email = recipient_email, updated_at = now()
+    where id = v_req.id;
+
+  perform set_config('app.commercial_external_approval_token', p_token, true);
+  update public.commercial_events set status = 'rejected', rejection_reason = v_clean_reason where id = v_req.commercial_event_id;
+
+  update public.commercial_approval_requests set status = 'rejected', rejected_at = now(), rejection_reason = v_clean_reason, updated_at = now() where id = v_req.id;
+
+  return jsonb_build_object('status', 'rejected');
+end;
+$$;
+
+-- Grants (v59/v63 pattern): these three stay callable by the logged-out
+-- approval link and by signed-in users only.
+revoke all on function public.get_commercial_approval_request(text) from public;
+grant execute on function public.get_commercial_approval_request(text) to anon, authenticated;
+revoke all on function public.resolve_commercial_approval_evidence(text, uuid) from public;
+grant execute on function public.resolve_commercial_approval_evidence(text, uuid) to anon, authenticated;
+revoke all on function public.reject_commercial_approval_request(text, text, text) from public;
+grant execute on function public.reject_commercial_approval_request(text, text, text) to anon, authenticated;
