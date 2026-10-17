@@ -12906,6 +12906,7 @@ revoke all on function public.remove_party_member(uuid, uuid) from public;
 revoke execute on function public.remove_party_member(uuid, uuid) from anon;
 grant execute on function public.remove_party_member(uuid, uuid) to authenticated;
 
+
 -- ─── v69 ADDITIONS: one 33-stage list feeding plot % and site %; plot overrides; external works share and packages ───
 -- Design: tracker/docs/SITE_PROGRESS_SPEC.md. In short:
 --   * public.progress_stages is the one 33-stage list (weekly report
@@ -12939,6 +12940,8 @@ grant execute on function public.remove_party_member(uuid, uuid) to authenticate
 -- go-live acceptance check included), nothing of v69 is left behind.
 -- Inside an outer transaction (e.g. apply_migration) BEGIN only warns and
 -- the outer transaction still decides.
+-- FUTURE SECTIONS (v70+) must go AFTER the commit below, outside this
+-- block, or have their own begin;/commit;. Don't add them inside it.
 begin;
 
 
@@ -13822,7 +13825,8 @@ begin
   perform set_config('app.progress_internal', 'on', true);
   insert into public.plot_progress_overrides (project_id, plot_id, action, old_override, new_override, calculated, note, changed_by, changed_by_name)
   values (v_plot.project_id, v_plot.id, 'cleared', v_plot.progress_override, null, v_plot.progress_calculated,
-          coalesce(nullif(left(btrim(p_note), 500), ''), 'Switched back to automatic'),
+          -- A note shorter than 3 characters (the history table's minimum) falls back to the default.
+          case when length(btrim(coalesce(p_note, ''))) >= 3 then left(btrim(p_note), 500) else 'Switched back to automatic' end,
           auth.uid(), public.progress_actor_name(auth.uid()));
   update public.plots
      set progress_override = null, progress_override_note = null, progress_override_by = null, progress_override_at = null
@@ -14348,4 +14352,6 @@ begin
 end;
 $v69t$;
 
+-- End of the v69 transaction. Future sections go below this line,
+-- outside the block (or in their own begin;/commit;).
 commit;

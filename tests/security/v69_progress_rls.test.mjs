@@ -389,6 +389,20 @@ test("overrides use the external works rule: an editor who isn't only an invited
   assert.equal((await plot("Plot 3")).progress_override, null);
 });
 
+test("clear_plot_override with a 1-2 character note (or only spaces) falls back to the default note instead of raising", async () => {
+  const p3 = await plot("Plot 3");
+  for (const note of ["x", "ok", "  ", " a "]) {
+    await as(OWNER, (c) => c.query("select public.set_plot_override($1, 96, 'Owner checked on site')", [p3.id]));
+    await as(OWNER, (c) => c.query("select public.clear_plot_override($1, $2)", [p3.id, note]));
+    assert.equal((await plot("Plot 3")).progress_override, null, `cleared with note ${JSON.stringify(note)}`);
+    const h = (await sql("select note from public.plot_progress_overrides where plot_id=$1 and action='cleared' order by changed_at desc, id desc limit 1", [p3.id])).rows[0];
+    assert.equal(h.note, "Switched back to automatic");
+  }
+  await as(OWNER, (c) => c.query("select public.set_plot_override($1, 96, 'Owner checked on site')", [p3.id]));
+  await as(OWNER, (c) => c.query("select public.clear_plot_override($1, $2)", [p3.id, "Stages caught up"]));
+  assert.equal((await sql("select note from public.plot_progress_overrides where plot_id=$1 and action='cleared' order by changed_at desc, id desc limit 1", [p3.id])).rows[0].note, "Stages caught up");
+});
+
 test("create_site: the site and its share in one call; a bad share leaves no half-made site; permission enforced in the database", async () => {
   const count = async () => (await sql("select count(*)::int n from public.projects where name like 'Fake New Site%'")).rows[0].n;
   const id = await as(OWNER, (c) => one(c, "select public.create_site($1::jsonb, 15, 'Set at site setup') id",

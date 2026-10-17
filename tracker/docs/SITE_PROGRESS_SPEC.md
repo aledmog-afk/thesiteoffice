@@ -134,7 +134,7 @@ New columns on `plots`: `progress_calculated`, `progress_override`, `progress_ov
 - The UI shows **Manual** while `override > calculated`, otherwise **Automatic**.
 - RPCs (definer, `search_path` set, `authenticated` only):
   - `set_plot_override(plot, percent, note)`: the caller must be an editor **and not party-only** (the same rule as external works), a note is required, and the figure must be higher than the calculated one;
-  - `clear_plot_override(plot, note)`: "Switch back to automatic", with the same permission rule.
+  - `clear_plot_override(plot, note)`: "Switch back to automatic", with the same permission rule. A note shorter than 3 characters (or none) falls back to "Switched back to automatic".
 - History lives in `plot_progress_overrides`, with actions `set` / `cleared` / `superseded` / `carried_over`, note, who (`changed_by` id and `changed_by_name`) and when. Members can read it; clients can't write it.
   - **No email is stored or returned.** `progress_actor_name()` resolves the name in the database from the user's profile name (`full_name`/`name` metadata). The UI shows that name, or "A team member" if there is none, or "Automatic" for superseded and carried-over rows. Live users have no name metadata today, so history will show "A team member".
 - Guard `plots_v69_progress_guard`: client writes to `progress_pct`, `progress_calculated` or the override columns are **ignored**. They're restored, not rejected, so a cached old page doesn't break.
@@ -198,7 +198,8 @@ The step is guarded by a `progress_migration_runs` marker. On a re-run of `schem
 7. **Recalculate** plots, set `projects.stage_progress_since`, then recalculate sites.
 8. **Hard acceptance:** if any plot, block or site figure differs from the snapshot, it raises `v69 go-live stopped: figures would change (…)`. Because v69 is one transaction, **nothing is applied**: no tables, columns, triggers, functions, grants or data.
    - Run it with psql `-v ON_ERROR_STOP=1`, which exits and so rolls the transaction back. A client that keeps the session open after the error must run `ROLLBACK`.
-   - Under `apply_migration`, which is already a transaction, the inner `begin`/`commit` only warn and the outer transaction decides. A failure still rolls back everything.
+   - Under `apply_migration`, which is already a transaction, the inner `begin`/`commit` only warn and the outer transaction decides. A failure still rolls back everything. The live apply sends **only the v69 section** (from `-- ─── v69 ADDITIONS` to the end of `schema.sql`) as its own migration.
+   - Future sections (v70+) must go after v69's `commit;`, outside the block, or have their own `begin;`/`commit;`. A comment in `schema.sql` says so at both ends of the block.
    - If the database was rolled back with the rollback script, the step refuses to run again; a fresh go-live decision is needed.
 9. Write the marker row, with counts.
 
@@ -208,17 +209,19 @@ The early-stage tick list (`EARLY_STAGES.md`, 770 proposed values) is **not** ap
 
 **Plot Handovers export:** only live stage rows are exported, N/A shows as "N/A", and the list shows a "manual" label.
 
-**Rollback:** `sql/rollback/v69_site_progress_rollback.sql` (one transaction, idempotent).
+**Rollback:** `sql/rollback/v69_site_progress_rollback.sql` (one transaction). **Run it once only.**
 - **Before the live apply:** don't apply.
-- **After it:** the script refuses to run unless the go-live marker and snapshots exist. Then it:
-  1. drops the 7 v69 triggers. Tables, columns, functions and history are kept; nothing new is dropped;
+- **After it:** the script refuses to run unless the go-live marker and snapshots exist. If the `v69_rolled_back` marker already exists, it stops straight away with an error and changes nothing, so a second run can't undo work done after the first. Otherwise it:
+  1. drops the 7 v69 triggers, and revokes execute on the six RPCs (`set_plot_override`, `clear_plot_override`, `set_external_works`, `save_external_works_package`, `retire_external_works_package`, `create_site`) from PUBLIC, anon and authenticated. Tables, columns, functions and history are kept; nothing new is dropped;
   2. puts back the pre-v69 `seed_plot_defaults()`;
   3. archives the `st_*` rows of go-live plots into `legacy_v69_rollback_stage_rows`, then removes them from `internal_milestones`;
   4. un-retires the legacy grid and restores each row's %, title, order and key from the snapshot;
-  5. restores every plot, block and site figure from the snapshots, only where it differs;
+  5. restores every plot, block and site figure from the snapshots, only where it differs, then clears the manual-figure columns on plots (`progress_override` and its note, by and at). With the triggers gone, that changes no figure; the override history is kept;
   6. writes a `v69_rolled_back` marker.
 - Plots created after go-live keep their 33 rows.
-- In the dry run it restored every figure and all 1474 legacy rows exactly, and a second run changed nothing.
+- After it, the old (pre-v69) UI works as before. It creates sites with a direct insert into `projects` (it never used `create_site`), and it types plot %, stage %, site % and external works % directly.
+- After a rollback, a full `schema.sql` run stops at the v69 section ("v69 was rolled back here…"), which rolls back on its own.
+- In the dry run it restored every figure and all 1474 legacy rows exactly, and the six RPCs were refused for authenticated and anon. Work done afterwards (plot 60, old stage 70, external works 45) survived a second run, which stopped with the error.
 
 ## 8. Permissions summary
 
