@@ -48,17 +48,17 @@
 
   <div class="card" id="controlCard" style="margin-bottom:2rem; display:none;">
     <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.6rem; margin-bottom:0.8rem;">
-      <h3 style="font-family:var(--font-display); font-size:1rem; margin:0;">Control Summary</h3>
+      <h3 class="card-heading" style="margin:0;">Control Summary</h3>
       <span class="badge" id="controlStatusBadge"></span>
     </div>
     <p class="hint" id="controlStatusReason" style="margin-bottom:1rem;"></p>
     <div class="totals-bar" id="controlTotalsBar"></div>
     <div id="plotSummaryWrap" style="display:none; margin-top:1rem;">
-      <h4 style="font-family:var(--font-display); font-size:0.8rem; margin:0 0 0.4rem; color:var(--ink-soft);">Plot Summary — normal lifecycle state, not an exception (see Plot Handovers for detail)</h4>
+      <h4 class="display-font" style="font-size:0.8rem; margin:0 0 0.4rem; color:var(--ink-soft);">Plot Summary — normal lifecycle state, not an exception (see Plot Handovers for detail)</h4>
       <div class="totals-bar" id="plotSummaryTotalsBar"></div>
     </div>
     <div id="controlAttentionWrap">
-      <h4 style="font-family:var(--font-display); font-size:0.85rem; margin:0.6rem 0;">Actions Requiring Attention</h4>
+      <h4 class="display-font" style="font-size:0.85rem; margin:0.6rem 0;">Actions Requiring Attention</h4>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Title</th><th>Owner</th><th>Priority</th><th>Status</th><th>Due</th></tr></thead>
@@ -151,7 +151,7 @@
   </div>
 
   <div class="card" id="detailsCard">
-    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Project Details</h3>
+    <h3 class="card-heading">Project Details</h3>
     <dl class="doc-facts" id="factsView"></dl>
 
     <form id="editForm" style="display:none;">
@@ -213,7 +213,7 @@
   </div>
 
   <div class="card" id="collaboratorsCard" style="margin-top:2rem;">
-    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Collaborators</h3>
+    <h3 class="card-heading">Collaborators</h3>
     <div class="table-wrap">
       <table>
         <thead><tr><th>Email</th><th>Role</th><th>Joined</th><th></th></tr></thead>
@@ -227,7 +227,7 @@
   </div>
 
   <div class="card" id="modulePermissionsCard" style="margin-top:2rem; display:none;">
-    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.4rem;">Module Permissions</h3>
+    <h3 class="card-heading" style="margin-bottom:0.4rem;">Module Permissions</h3>
     <p class="hint" style="margin-bottom:0.5rem;">Choose what each person can do in these modules. Dayworks &amp; Variations is off until you switch it on for someone. Everyone with full access gets Toolbox Talks as a Contributor automatically; picking a role here replaces that.</p>
     <ul class="hint" style="margin:0 0 1rem 1.1rem;">
       <li><strong>Dayworks &amp; Variations.</strong> Viewer can see dayworks and variations. Contributor can also create, edit and submit them, and capture the client's signature to approve or reject them on the spot. Approver can currently do exactly what Contributor can.</li>

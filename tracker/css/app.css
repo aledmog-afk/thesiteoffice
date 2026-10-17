@@ -244,6 +244,11 @@ tr:hover td { background: var(--off); }
   table.stack-mobile select, table.stack-mobile input { max-width: 100%; }
 }
 
+/* Headings that were styled inline on each page. Any margin that
+   differs from the default stays inline on the element. */
+.display-font { font-family: var(--font-display); }
+.card-heading { font-family: var(--font-display); font-size: 1rem; margin-bottom: 1rem; }
+
 /* ─── LOGO SETTINGS ──────────────────────────────── */
 .logo-preview { max-width: 260px; max-height: 120px; object-fit: contain; border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem; background: var(--white); }
 

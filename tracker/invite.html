@@ -25,18 +25,18 @@
       <p class="hint" id="inviteExpiry"></p>
     </div>
     <div class="card" id="useMyCompanyCard" style="display:none;">
-      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.5rem;">Accept for my company</h3>
+      <h3 class="card-heading" style="margin-bottom:0.5rem;">Accept for my company</h3>
       <div class="btn-row"><select id="myCompanySelect" style="flex:1; min-width:200px;"></select><button type="button" class="btn btn-amber" id="acceptMineBtn">Accept</button></div>
     </div>
     <div class="card">
-      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.5rem;">Set up my company</h3>
+      <h3 class="card-heading" style="margin-bottom:0.5rem;">Set up my company</h3>
       <p class="hint" style="margin-bottom:0.8rem;">If your company isn't on Site Tracker yet. You'll be its administrator and can add your own staff to the job.</p>
       <div class="field"><label for="orgName">Company name</label><input type="text" id="orgName" placeholder="e.g. Almo Carpentry Ltd"></div>
       <div class="field"><label for="orgType">Company type</label><select id="orgType"></select></div>
       <button type="button" class="btn btn-amber" id="createAcceptBtn">Create Company &amp; Accept</button>
     </div>
     <div class="card">
-      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.5rem;">My company is already on Site Tracker</h3>
+      <h3 class="card-heading" style="margin-bottom:0.5rem;">My company is already on Site Tracker</h3>
       <p class="hint" style="margin-bottom:0.8rem;">Ask to join it. Its administrator has to approve you first. Then open this invite link again to accept.</p>
       <div class="btn-row"><input type="text" id="orgSearch" placeholder="Company name" style="flex:1; min-width:180px;"><button type="button" class="btn btn-outline btn-sm" id="searchBtn">Search</button></div>
       <div id="searchResults"></div>

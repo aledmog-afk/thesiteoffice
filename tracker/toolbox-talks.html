@@ -38,7 +38,7 @@
     </div>
 
     <div class="card">
-      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Recent Talks</h3>
+      <h3 class="card-heading">Recent Talks</h3>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Title</th><th>Status</th><th>Started</th><th>Delivered By</th><th>Attendees</th></tr></thead>
@@ -50,7 +50,7 @@
 
     <div class="card" id="templateLibraryCard" style="margin-top:2rem;">
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem;">
-        <h3 style="font-family:var(--font-display); font-size:1rem; margin:0;">Our Organisation's Templates</h3>
+        <h3 class="card-heading" style="margin:0;">Our Organisation's Templates</h3>
         <button type="button" class="btn btn-outline btn-sm" id="newTemplateBtn" style="display:none;">+ New Template</button>
       </div>
       <p class="hint" style="margin-bottom:1rem;">The standard library (shown when starting a talk) also includes talks provided with Site Tracker — this section is only your own organisation's custom ones.</p>
@@ -68,7 +68,7 @@
 <!-- Start Talk: search/browse the library, pick one -->
 <div class="modal-backdrop" id="startModal" style="display:none;">
   <div class="modal-box" style="max-width:560px;">
-    <h3 style="font-family:var(--font-display); margin-top:0;">Start a Toolbox Talk</h3>
+    <h3 class="display-font" style="margin-top:0;">Start a Toolbox Talk</h3>
     <input type="text" id="templateSearchInput" placeholder="Search talks (e.g. Working at Height)" style="margin-bottom:0.8rem;">
     <div id="templatePickerRows" style="max-height:400px; overflow-y:auto;"></div>
     <div class="btn-row" style="margin-top:1rem;">
@@ -82,7 +82,7 @@
      in the delivery view. -->
 <div class="modal-backdrop" id="templateFormModal" style="display:none;">
   <div class="modal-box" style="max-width:640px;">
-    <h3 style="font-family:var(--font-display); margin-top:0;" id="templateFormTitle">New Template</h3>
+    <h3 class="display-font" style="margin-top:0;" id="templateFormTitle">New Template</h3>
     <div class="field"><label for="tfTitle">Title</label><input type="text" id="tfTitle"></div>
     <div class="field"><label for="tfDescription">Description</label><input type="text" id="tfDescription"></div>
     <div class="field"><label for="tfIntroduction">Introduction (read out at the start)</label><textarea id="tfIntroduction" rows="3"></textarea></div>

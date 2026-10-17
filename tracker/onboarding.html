@@ -23,18 +23,18 @@
   <div id="errorBox" class="error-box"></div>
 
   <div id="setupNotice" class="card" style="display:none; border-left:4px solid var(--amber);">
-    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.4rem;">Set up your company</h3>
+    <h3 class="card-heading" style="margin-bottom:0.4rem;">Set up your company</h3>
     <p class="hint">New projects belong to your own company. You're not an administrator of a company on Site Tracker yet, so set yours up first — it only takes a moment. Projects you've been invited to aren't affected.</p>
   </div>
 
   <div id="chooserView">
     <div class="card">
-      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.5rem;">Create my own organisation</h3>
+      <h3 class="card-heading" style="margin-bottom:0.5rem;">Create my own organisation</h3>
       <p class="hint" style="margin-bottom:1rem;">Set up your own company/workspace and start using Site Tracker straight away — no approval needed. Good if you're working independently or want to manage your own sites.</p>
       <button type="button" class="btn btn-amber" id="showCreateBtn">Create My Organisation</button>
     </div>
     <div class="card">
-      <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.5rem;">Join an existing organisation</h3>
+      <h3 class="card-heading" style="margin-bottom:0.5rem;">Join an existing organisation</h3>
       <p class="hint" style="margin-bottom:1rem;">Request to join a company that's already using Site Tracker. An administrator there will need to approve your request before you get access.</p>
       <button type="button" class="btn btn-outline" id="showJoinBtn">Find an Organisation</button>
     </div>
@@ -44,7 +44,7 @@
   </div>
 
   <div id="createView" class="card" style="display:none;">
-    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Create my own organisation</h3>
+    <h3 class="card-heading">Create my own organisation</h3>
     <div class="field">
       <label for="orgName">Organisation / company name</label>
       <input type="text" id="orgName" placeholder="e.g. ABC Plumbing Ltd">
@@ -61,7 +61,7 @@
   </div>
 
   <div id="joinView" class="card" style="display:none;">
-    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:1rem;">Join an existing organisation</h3>
+    <h3 class="card-heading">Join an existing organisation</h3>
     <div class="field">
       <label for="orgSearch">Search by organisation name</label>
       <div class="btn-row">
@@ -76,7 +76,7 @@
   </div>
 
   <div id="pendingView" class="card" style="display:none;">
-    <h3 style="font-family:var(--font-display); font-size:1rem; margin-bottom:0.8rem;">Request sent</h3>
+    <h3 class="card-heading" style="margin-bottom:0.8rem;">Request sent</h3>
     <p id="pendingMessage"></p>
     <div class="btn-row" style="margin-top:1rem;">
       <a href="dashboard.html" class="btn btn-amber">Continue to Dashboard</a>
