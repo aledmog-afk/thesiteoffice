@@ -63,7 +63,7 @@ function emptySupabase() {
   };
 }
 
-function makeContext({ members, moduleCatalog = MODULE_CATALOG, moduleGrants = [], currentUserId = "owner-1", myRole = "owner", setProjectModuleRoleImpl, supabase, ownerAuto = false } = {}) {
+function makeContext({ members, moduleCatalog = MODULE_CATALOG, moduleGrants = [], currentUserId = "owner-1", myRole = "owner", setProjectModuleRoleImpl, supabase, ownerSideUserIds = [] } = {}) {
   const calls = [];
   const sb = supabase || emptySupabase();
   const origRpc = sb.rpc.bind(sb);
@@ -108,8 +108,14 @@ function makeContext({ members, moduleCatalog = MODULE_CATALOG, moduleGrants = [
     setProjectModuleRole: setProjectModuleRoleImpl || (async (projectId, userId, moduleName, role) => {
       calls.push({ fn: "setProjectModuleRole", projectId, userId, moduleName, role });
     }),
-    // v67: false = the database doesn't have the owner rule yet (before v67).
-    commercialOwnerAccessEnabled: async () => ownerAuto,
+    // Stands in for the database's answer (is_owner_side_user per owner-role
+    // member — the real helper is unit-tested in commercial_v67_fallbacks).
+    // Mirrors it: only members whose role is 'owner' AND who are in the
+    // project's company come back.
+    getCommercialOwnerAccessUserIds: async (projectId, ms) => {
+      calls.push({ fn: "getCommercialOwnerAccessUserIds", projectId });
+      return new Set((ms || []).filter((m) => m.role === "owner" && ownerSideUserIds.includes(m.user_id)).map((m) => m.user_id));
+    },
     __calls: calls,
   };
   return ctx;
@@ -268,8 +274,10 @@ test("Module Permissions (v66): an old 'approver' grant (before v66 is applied) 
   assert.equal(select.value, "contributor");
 });
 
-test("Module Permissions (v67): once the database treats the owner as Contributor, the owner's Dayworks & Variations cell says 'Owner — full access' instead of a dropdown; other members keep theirs", async () => {
-  const ctx = makeContext({ members: [OWNER, COLLAB], ownerAuto: true });
+const OWNER_ROW_NOT_IN_ORG = { member_id: "m4", user_id: "owner-outside", email: "outside@sub.example.com", role: "owner", joined_at: "2026-01-04T00:00:00Z" };
+
+test("Module Permissions: an owner who is in the project's company (the database confirms owner access) shows 'Owner — full access' instead of a dropdown; other members keep theirs", async () => {
+  const ctx = makeContext({ members: [OWNER, COLLAB], ownerSideUserIds: ["owner-1"] });
   const { document } = await run(ctx);
   await wait(30);
   assert.equal(document.querySelector(`select[data-user="owner-1"][data-module="commercial"]`), null, "no dropdown for the owner's commercial cell");
@@ -278,12 +286,34 @@ test("Module Permissions (v67): once the database treats the owner as Contributo
   assert.match(label.textContent, /Owner — full access/);
   assert.ok(document.querySelector(`select[data-user="collab-1"][data-module="commercial"]`), "a collaborator still gets a dropdown");
   assert.ok(document.querySelector(`select[data-user="owner-1"][data-module="toolbox_talks"]`), "other modules are unchanged for the owner");
+  assert.ok(ctx.__calls.some((c) => c.fn === "getCommercialOwnerAccessUserIds" && c.projectId === "p1"), "the page asks the database");
 });
 
-test("Module Permissions (v67): before v67 is applied (no owner rule in the database yet) the owner's commercial cell is still a dropdown", async () => {
-  const ctx = makeContext({ members: [OWNER, COLLAB], ownerAuto: false });
+test("Module Permissions: a member whose project role is 'owner' but who is NOT in the project's company gets no owner label — the normal grant dropdown, showing their real grant", async () => {
+  const ctx = makeContext({ members: [OWNER, OWNER_ROW_NOT_IN_ORG, COLLAB], ownerSideUserIds: ["owner-1"], moduleGrants: [{ user_id: "owner-outside", module: "commercial", role: "viewer" }] });
   const { document } = await run(ctx);
   await wait(30);
-  assert.ok(document.querySelector(`select[data-user="owner-1"][data-module="commercial"]`));
+  assert.equal(document.querySelector(`[data-owner-full-access="owner-outside"]`), null, "no owner label for an owner row outside the company");
+  const select = document.querySelector(`select[data-user="owner-outside"][data-module="commercial"]`);
+  assert.ok(select, "they get the normal dropdown");
+  assert.equal(select.value, "viewer", "showing their actual grant");
+  assert.ok(document.querySelector(`[data-owner-full-access="owner-1"]`), "the in-company owner still gets the label");
+});
+
+test("Module Permissions: a non-owner never gets the owner label, even if the database check were (wrongly) to say they're in the company", async () => {
+  const ctx = makeContext({ members: [OWNER, COLLAB], ownerSideUserIds: ["owner-1", "collab-1"] });
+  const { document } = await run(ctx);
+  await wait(30);
+  assert.equal(document.querySelector(`[data-owner-full-access="collab-1"]`), null);
+  assert.ok(document.querySelector(`select[data-user="collab-1"][data-module="commercial"]`));
+});
+
+test("Module Permissions: if the database check fails, nobody gets the owner label (fails closed to the normal dropdown)", async () => {
+  const ctx = makeContext({ members: [OWNER, COLLAB], ownerSideUserIds: ["owner-1"] });
+  ctx.getCommercialOwnerAccessUserIds = async () => { throw new Error("network"); };
+  const { document } = await run(ctx);
+  await wait(30);
   assert.equal(document.querySelector(`[data-owner-full-access]`), null);
+  assert.ok(document.querySelector(`select[data-user="owner-1"][data-module="commercial"]`));
+  assert.equal(document.getElementById("modulePermissionsErrorBox").textContent, "", "and the card still loads without an error");
 });

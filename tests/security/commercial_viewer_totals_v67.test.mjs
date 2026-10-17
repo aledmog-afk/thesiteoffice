@@ -392,3 +392,19 @@ test("schema.sql runs twice cleanly with Supabase-style default grants, and v67'
   // And the Viewer is still locked out after the re-runs.
   await as(VIEWER, async (c) => { for (const t of PRICE_TABLES) assert.deepEqual(await rows(c, `select * from public.${t}`), [], t); });
 });
+
+// ─── project settings label (follow-up to PR #42) ──────────────────
+test("project settings: is_owner_side_user — what the Module Permissions card asks for each owner-role member — agrees with the database's owner rule: true for the in-company owner, false for an owner row outside the company", async () => {
+  await sql("update public.project_members set role='owner' where project_id=$1 and user_id=$2", [fx.proj, SUB]);
+  try {
+    await as(OWNER, async (c) => {
+      assert.equal((await one(c, "select public.is_owner_side_user($1,$2) x", [fx.proj, OWNER])).x, true);
+      assert.equal((await one(c, "select public.is_owner_side_user($1,$2) x", [fx.proj, SUB])).x, false);
+    });
+    // …which is exactly what each of them gets from commercial_access_role.
+    await as(OWNER, async (c) => assert.equal((await one(c, "select public.commercial_access_role($1) r", [fx.proj])).r, "contributor"));
+    await as(SUB, async (c) => assert.equal((await one(c, "select public.commercial_access_role($1) r", [fx.proj])).r, null));
+  } finally {
+    await sql("update public.project_members set role='collaborator' where project_id=$1 and user_id=$2", [fx.proj, SUB]);
+  }
+});
