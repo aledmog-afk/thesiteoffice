@@ -255,8 +255,11 @@ test("B: the callers still work — assigning an action (can_be_assigned_work in
       `select * from public.request_commercial_approval($1,$2,null,null,168)`, [fx.eventId, `client-${crypto.randomUUID()}@example.invalid`]
     )).rows[0];
     assert.ok(req.token);
-    const pc = await owner.query("select public.party_cap($1, 'snags') as ok", [fx.proj]);
-    assert.equal(typeof pc.rows[0].ok, "boolean");
+    // v68: party_cap is internal-only now; its callers (can_see_party_row,
+    // the snag RLS helpers) still answer.
+    await assert.rejects(owner.query("select public.party_cap($1, 'snags')", [fx.proj]), /permission denied for function/i);
+    const pc = await owner.query("select public.can_see_party_row($1, null) as ok", [fx.proj]);
+    assert.equal(pc.rows[0].ok, true);
   } finally {
     await owner.end();
   }

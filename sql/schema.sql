@@ -12829,3 +12829,79 @@ begin
     execute format('grant execute on function %s to authenticated', f);
   end loop;
 end $$;
+
+-- ─── v68 ADDITIONS: close 13 unused SECURITY DEFINER functions to signed-in users; remove_party_member scope fix ───
+-- Security housekeeping (approved by Adam, 17 Oct 2026). Review:
+-- /workspace/secdef-review/REVIEW.md. Nothing user-visible changes.
+--
+-- (A) 13 SECURITY DEFINER functions that no page, edge function, RLS
+-- policy, view or SECURITY INVOKER function calls. Each is either dead
+-- (can_approve_commercial, can_write_snags), a retired invite stub that
+-- only raises (join_project_by_invite, regenerate_*_invite_code), a
+-- legacy invite-code clean-up nothing calls (revoke_*_invite_code), or
+-- only ever called from inside other SECURITY DEFINER functions/triggers
+-- — which run as the owner, so they keep working (same as v65). CLOSED,
+-- NOT DROPPED: all 13 stay defined. Two of them answer questions about
+-- any user or project (is_project_member_user, party_member_role_for).
+-- Redone here at the END so re-running the earlier v-blocks that grant
+-- them (and Supabase's default ACL on a fresh install) ends revoked.
+do $$
+declare f text;
+begin
+  foreach f in array array[
+    'public.can_approve_commercial(uuid)',
+    'public.can_write_snags(uuid)',
+    'public.can_submit_commercial(uuid)',
+    'public.can_verify_snag(uuid, uuid)',
+    'public.own_party_row(uuid, uuid)',
+    'public.party_cap(uuid, text)',
+    'public.party_member_role_for(uuid, text)',
+    'public.is_project_member_user(uuid, uuid)',
+    'public.join_project_by_invite(text)',
+    'public.regenerate_invite_code(uuid)',
+    'public.regenerate_snagging_invite_code(uuid)',
+    'public.revoke_invite_code(uuid)',
+    'public.revoke_snagging_invite_code(uuid)'
+  ] loop
+    execute format('revoke execute on function %s from public, anon, authenticated', f);
+  end loop;
+end $$;
+
+-- (B) The totals view. It is security_invoker and already returns nothing
+-- to anon, but anon still held every table privilege on it from
+-- Supabase's default ACL. Nothing unauthenticated reads it (the approval
+-- link RPCs are SECURITY DEFINER and read it as the owner), so anon and
+-- PUBLIC get nothing. Signed-in users keep SELECT.
+revoke all on table public.commercial_event_totals from public, anon;
+grant select on table public.commercial_event_totals to authenticated;
+
+-- (C) remove_party_member: the caller had to be an admin of the company
+-- (or the project owner), but the user id was passed straight to
+-- detach_party_member, which deletes that user's project membership if
+-- they are neither owner-side nor in an active company on the job. So an
+-- admin of one company could remove a project member who has nothing to
+-- do with that company. Now the person must actually be in this company
+-- on this job (a party belongs to exactly one project). Legitimate
+-- removals — a company admin removing their own staff, the owner
+-- removing someone from a company — are unchanged.
+create or replace function public.remove_party_member(p_party_id uuid, p_user_id uuid)
+returns void
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_pp public.project_parties;
+begin
+  select * into v_pp from public.project_parties where id = p_party_id;
+  if v_pp.id is null or not (public.is_org_admin(v_pp.org_id) or public.is_project_owner(v_pp.project_id)) then
+    raise exception 'Not allowed' using errcode = '42501';
+  end if;
+  if p_user_id is null or not exists (
+       select 1 from public.project_party_members m where m.party_id = p_party_id and m.user_id = p_user_id) then
+    raise exception 'That person isn''t in this company on this job' using errcode = '42501';
+  end if;
+  perform public.detach_party_member(p_party_id, p_user_id);
+end;
+$$;
+revoke all on function public.remove_party_member(uuid, uuid) from public;
+revoke execute on function public.remove_party_member(uuid, uuid) from anon;
+grant execute on function public.remove_party_member(uuid, uuid) to authenticated;

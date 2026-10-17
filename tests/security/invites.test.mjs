@@ -30,10 +30,17 @@ before(async () => {
 after(async () => { await dropTestDatabase(DB); });
 
 for (const code of ["legacy-code", "legacy-snag", "unknown-code"]) {
-  test(`A retired invite code (${code}) refuses with the friendly message and grants nothing`, async () => {
+  // v68: join_project_by_invite is closed to signed-in users (no page calls
+  // it; join.html explains the retirement itself), so a direct call is
+  // refused outright. The stub itself still refuses with the friendly
+  // message (checked below as the owner role).
+  test(`A retired invite code (${code}) is refused and grants nothing`, async () => {
     const joiner = await userClient(DB, JOINER);
     try {
-      await assert.rejects(joiner.query("select public.join_project_by_invite($1)", [code]), /no longer used.*company invite/);
+      await assert.rejects(joiner.query("select public.join_project_by_invite($1)", [code]), /permission denied for function/i);
+      const a0 = adminClient(DB); await a0.connect();
+      try { await assert.rejects(a0.query("select public.join_project_by_invite($1)", [code]), /no longer used.*company invite/); }
+      finally { await a0.end(); }
       const proj = await joiner.query("select 1 from public.projects where id = $1", [fx.proj]);
       assert.equal(proj.rowCount, 0);
     } finally { await joiner.end(); }
@@ -46,10 +53,16 @@ for (const code of ["legacy-code", "legacy-snag", "unknown-code"]) {
   });
 }
 
-test("Even the owner can no longer generate new invite codes", async () => {
+test("Even the owner can no longer generate (or clear) invite codes — the retired functions are refused (v68)", async () => {
   const owner = await userClient(DB, OWNER);
   try {
-    await assert.rejects(owner.query("select public.regenerate_invite_code($1)", [fx.proj]), /invite_retired/);
-    await assert.rejects(owner.query("select public.regenerate_snagging_invite_code($1)", [fx.proj]), /invite_retired/);
+    for (const f of ["regenerate_invite_code", "regenerate_snagging_invite_code", "revoke_invite_code", "revoke_snagging_invite_code"]) {
+      await assert.rejects(owner.query(`select public.${f}($1)`, [fx.proj]), /permission denied for function/i, f);
+    }
   } finally { await owner.end(); }
+  const admin = adminClient(DB); await admin.connect();
+  try {
+    await assert.rejects(admin.query("select public.regenerate_invite_code($1)", [fx.proj]), /invite_retired/);
+    await assert.rejects(admin.query("select public.regenerate_snagging_invite_code($1)", [fx.proj]), /invite_retired/);
+  } finally { await admin.end(); }
 });

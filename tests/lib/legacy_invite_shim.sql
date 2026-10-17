@@ -7,6 +7,10 @@
 -- and is added to the project (as add_org_member_to_project() would) —
 -- so those tests keep testing what they always tested. The real,
 -- retired functions are covered by tests/security/invites.test.mjs.
+-- v68: the retired functions are also closed to signed-in users (EXECUTE
+-- revoked from authenticated), so these shims are the ONLY way a test
+-- can still put a same-company colleague on a project this way. The
+-- shims never call the retired functions themselves.
 create or replace function public.test_regenerate_invite_code(p_project_id uuid)
 returns text language plpgsql security definer set search_path = public as $$
 declare c text := replace(gen_random_uuid()::text, '-', '');

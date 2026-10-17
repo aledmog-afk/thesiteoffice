@@ -70,8 +70,14 @@ test("v66: an existing approver keeps their access as a contributor, approver ca
 
     // The migrated user still has full contributor powers: approve with a signature.
     const a2 = await userClient(db, APPR);
-    const caps = (await a2.query("select public.can_view_commercial($1) v, public.can_edit_commercial($1) e, public.can_submit_commercial($1) s, public.can_approve_commercial($1) ap", [proj])).rows[0];
-    assert.deepEqual(caps, { v: true, e: true, s: true, ap: false });
+    const caps = (await a2.query("select public.can_view_commercial($1) v, public.can_edit_commercial($1) e", [proj])).rows[0];
+    assert.deepEqual(caps, { v: true, e: true });
+    // v68: can_submit_commercial / can_approve_commercial are internal-only
+    // (the commercial_events trigger calls can_submit_commercial as owner);
+    // the approval below proves submit rights still work through it.
+    await assert.rejects(a2.query("select public.can_submit_commercial($1)", [proj]), /permission denied for function/i);
+    await assert.rejects(a2.query("select public.can_approve_commercial($1)", [proj]), /permission denied for function/i);
+    assert.equal((await admin.query("select public.can_approve_commercial($1) ap", [proj])).rows[0].ap, false);
     await a2.query("update public.commercial_events set status='approved', pending_signature_typed_name='Client' where id=$1", [ev]);
     assert.equal((await a2.query("select status from public.commercial_events where id=$1", [ev])).rows[0].status, "approved");
     await a2.end();
@@ -97,10 +103,10 @@ test("v66: an existing approver keeps their access as a contributor, approver ca
     assert.equal(srcs.length, 4);
     for (const r of srcs) assert.ok(!r.prosrc.includes("approver"), `${r.proname} still mentions approver`);
 
-    // Grants stay signed-in only.
-    for (const f of ["can_view_commercial", "can_edit_commercial", "can_submit_commercial", "can_approve_commercial"]) {
+    // Grants stay signed-in only (v68: submit/approve closed to signed-in users too).
+    for (const [f, au] of [["can_view_commercial", true], ["can_edit_commercial", true], ["can_submit_commercial", false], ["can_approve_commercial", false]]) {
       const { rows } = await admin.query(`select has_function_privilege('anon', 'public.${f}(uuid)', 'EXECUTE') an, has_function_privilege('authenticated', 'public.${f}(uuid)', 'EXECUTE') au`);
-      assert.deepEqual(rows[0], { an: false, au: true }, f);
+      assert.deepEqual(rows[0], { an: false, au }, f);
     }
 
     // Apply again: nothing changes.
