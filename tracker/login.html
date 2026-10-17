@@ -59,7 +59,9 @@
   const passwordInput = document.getElementById("password");
   const forgotHint = document.getElementById("forgotHint");
   const signupToggleRow = document.getElementById("signupToggleRow");
-  let mode = "signin";
+  // The front page's "Create one" link opens this page straight in sign-up
+  // mode (login.html?mode=signup). Anything else keeps the normal sign-in.
+  let mode = getParam("mode") === "signup" ? "signup" : "signin";
 
   // Resolves where a signed-in user should actually land: `next` (the
   // dashboard, by default) if they already have at least one approved
@@ -108,6 +110,8 @@
     clearError(errorBox);
   });
 
+  if (mode !== "signin") applyMode();
+
   forgotBtn.addEventListener("click", () => {
     mode = "forgot";
     applyMode();
@@ -143,7 +147,17 @@
         if (error) throw error;
         window.location.href = await landingPageFor(data.user.id);
       } else {
-        const { data, error } = await supabase.auth.signUp({ email, password });
+        // The confirmation email links back to this sign-in page on the
+        // address it was opened on. This page picks up the new session and
+        // sends a brand-new user to onboarding, like any other sign-in.
+        // Supabase only honours it once the address is on the project's
+        // redirect allow list; until then it falls back to the project's
+        // Site URL, exactly as before this change.
+        let emailRedirectTo;
+        try { emailRedirectTo = new URL("login.html", window.location.href).href; } catch { emailRedirectTo = undefined; }
+        const { data, error } = await supabase.auth.signUp(
+          emailRedirectTo ? { email, password, options: { emailRedirectTo } } : { email, password }
+        );
         if (error) throw error;
         if (data.session) {
           // A brand-new account, not an existing user signing back in —

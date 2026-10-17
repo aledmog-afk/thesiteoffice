@@ -59,6 +59,7 @@ There's no login for the contractor — they only ever receive the PDF/email you
    ```
    The anon key is safe to ship in client-side code — the SQL script's Row Level Security policies are what actually control access (any signed-in user can read/write; nobody else can).
 5. Deploy as normal (this repo's Cloudflare Pages integration picks up static files automatically). Visit `/tracker/`.
+   In Supabase, **Authentication → URL Configuration** must list your deployment's address in **Redirect URLs** (for example `https://thesiteoffice.uk/tracker/**`), or password-reset and sign-up confirmation links fall back to the **Site URL**.
 6. On first visit, click **Create one** on the sign-in page to make your first account (yourself). Anyone else on your team can do the same — Supabase's default settings will email a confirmation link.
 
 ### Updating an existing project (schema changes)
