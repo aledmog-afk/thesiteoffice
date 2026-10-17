@@ -80,6 +80,37 @@ const ANON_EXECUTABLE_DEFINER_SQL = `
      and has_function_privilege('anon', p.oid, 'EXECUTE')
    order by 1`;
 
+// v63 — the 13 SECURITY INVOKER helpers taken away from anon (and PUBLIC).
+// authenticated keeps them: storage.objects policies call the *_authorized
+// ones as the calling role.
+const V63_REVOKED = [
+  "commercial_approval_token_hash(text)",
+  "controlled_documents_path_project(text)",
+  "controlled_documents_read_authorized(text)",
+  "controlled_documents_write_authorized(text)",
+  "normalise_weekly_report_photo_ids(jsonb)",
+  "site_photos_authorized(text)",
+  "site_photos_path_parts(text)",
+  "site_photos_ref_to_path(text)",
+  "valid_action_status_transition(text,text)",
+  "valid_commercial_event_status_transition(text,text)",
+  "valid_rfi_status_transition(text,text)",
+  "valid_toolbox_talk_status_transition(text,text)",
+  "valid_weekly_report_status_transition(text,text)",
+];
+
+// v63 — every app-defined public function anon can execute, SECURITY
+// DEFINER or not. Extension members are skipped: the local test setup
+// installs pgcrypto into public, while live keeps it in `extensions`.
+const ANON_EXECUTABLE_ANY_SQL = `
+  select p.oid::regprocedure::text as sig
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public'
+     and has_function_privilege('anon', p.oid, 'EXECUTE')
+     and not exists (select 1 from pg_depend d
+                      where d.classid = 'pg_proc'::regclass and d.objid = p.oid and d.deptype = 'e')
+   order by 1`;
+
 let fx;
 
 before(async () => {
@@ -147,11 +178,15 @@ test("ALLOWLIST CI GUARD holds even with Supabase's default-ACL auto-grant (EXEC
   const schemaPath = path.join(__dirname, "../../sql/schema.sql");
   await runSqlFile(admin, schemaPath);
   const first = (await admin.query(ANON_EXECUTABLE_DEFINER_SQL)).rows.map((r) => r.sig).sort();
+  const firstAny = (await admin.query(ANON_EXECUTABLE_ANY_SQL)).rows.map((r) => r.sig).sort();
   await runSqlFile(admin, schemaPath); // the file is re-run top to bottom in production
   const second = (await admin.query(ANON_EXECUTABLE_DEFINER_SQL)).rows.map((r) => r.sig).sort();
+  const secondAny = (await admin.query(ANON_EXECUTABLE_ANY_SQL)).rows.map((r) => r.sig).sort();
   await admin.end();
   assert.deepEqual(first, ANON_ALLOWLIST);
   assert.deepEqual(second, ANON_ALLOWLIST, "a re-run of schema.sql must not hand anon its grants back");
+  assert.deepEqual(firstAny, ANON_ALLOWLIST, "v63: with the default-ACL auto-grant, anon must still reach only the 4 approval-link functions");
+  assert.deepEqual(secondAny, ANON_ALLOWLIST, "v63: a re-run of schema.sql must not hand anon any function back");
 });
 
 test("every function in the v59 revoke list actually exists with that exact signature and is SECURITY DEFINER", async () => {
@@ -163,6 +198,71 @@ test("every function in the v59 revoke list actually exists with that exact sign
     assert.equal(rows[0].prosecdef, true, `public.${sig} should be SECURITY DEFINER`);
   }
   await admin.end();
+});
+
+test("ALLOWLIST CI GUARD (v63): the public functions anon can execute — SECURITY DEFINER OR INVOKER — are EXACTLY the 4 client-approval-link RPCs", async () => {
+  const admin = adminClient(DB);
+  await admin.connect();
+  const { rows } = await admin.query(ANON_EXECUTABLE_ANY_SQL);
+  await admin.end();
+  assert.deepEqual(
+    rows.map((r) => r.sig).sort(),
+    ANON_ALLOWLIST,
+    "anon must not be able to EXECUTE any other public function. Revoke it from public AND anon and grant it to " +
+      "authenticated (see sql/schema.sql v63), or add it to ANON_ALLOWLIST only if logged-out visitors genuinely need it."
+  );
+});
+
+test("v63: the 13 helpers exist with these exact signatures; authenticated keeps EXECUTE, anon and PUBLIC have none", async () => {
+  const admin = adminClient(DB);
+  await admin.connect();
+  try {
+    for (const sig of V63_REVOKED) {
+      const { rows } = await admin.query(
+        `select p.prosecdef,
+                has_function_privilege('authenticated', p.oid, 'EXECUTE') as auth_ok,
+                has_function_privilege('anon', p.oid, 'EXECUTE') as anon_ok,
+                exists (select 1 from aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
+                         where a.grantee = 0 and a.privilege_type = 'EXECUTE') as public_ok
+           from pg_proc p where p.oid = to_regprocedure($1)`,
+        [`public.${sig}`]
+      );
+      assert.equal(rows.length, 1, `public.${sig} not found`);
+      assert.equal(rows[0].prosecdef, false, `public.${sig} should be SECURITY INVOKER`);
+      assert.equal(rows[0].auth_ok, true, `authenticated must keep EXECUTE on ${sig}`);
+      assert.equal(rows[0].anon_ok, false, `anon must not have EXECUTE on ${sig}`);
+      assert.equal(rows[0].public_ok, false, `PUBLIC must not have EXECUTE on ${sig}`);
+    }
+  } finally {
+    await admin.end();
+  }
+});
+
+test("v63: anon calling a revoked helper directly gets permission denied", async () => {
+  const anon = await anonClient(DB);
+  try {
+    await assert.rejects(anon.query("select public.valid_rfi_status_transition('open','answered')"), /permission denied for function/i);
+    await assert.rejects(anon.query("select public.site_photos_authorized('x/y.jpg')"), /permission denied for function/i);
+    await assert.rejects(anon.query("select public.commercial_approval_token_hash('x')"), /permission denied for function/i);
+  } finally {
+    await anon.end();
+  }
+});
+
+test("v63: a signed-in user can still call the helpers the storage policies rely on", async () => {
+  const owner = await userClient(DB, OWNER);
+  try {
+    const { rows } = await owner.query(
+      `select public.site_photos_authorized($1 || '/reports/a.jpg') as sp,
+              public.controlled_documents_read_authorized($1 || '/a.pdf') as cr,
+              public.controlled_documents_write_authorized($1 || '/a.pdf') as cw,
+              public.valid_rfi_status_transition('open','answered') as t`,
+      [fx.proj]
+    );
+    assert.deepEqual(rows[0], { sp: true, cr: true, cw: true, t: true });
+  } finally {
+    await owner.end();
+  }
 });
 
 // ─── (2) Each of the 25 rejects anon ─────────────────────────────────

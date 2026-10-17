@@ -12092,3 +12092,66 @@ end $$;
 revoke execute on function public.snag_items_before_write() from public, anon, authenticated;
 revoke execute on function public.rfis_before_write() from public, anon, authenticated;
 revoke execute on function public.actions_before_write() from public, anon, authenticated;
+
+-- ─── v63 ADDITIONS: anon can no longer EXECUTE the SECURITY INVOKER helpers ───
+-- v59 only covered SECURITY DEFINER functions; these 13 INVOKER helpers
+-- still had PUBLIC plus the direct anon default-ACL grant. Nothing calls
+-- them before sign-in. authenticated must keep EXECUTE: the storage.objects
+-- policies call site_photos_authorized() / controlled_documents_*_authorized()
+-- as the calling role, and those call the *_path_* helpers. Three of those
+-- storage policies still apply to PUBLIC, so an anon upload now fails with
+-- "permission denied for function site_photos_authorized" one level
+-- earlier; it was refused before too. Keep at the END of the file (v59).
+-- Rollback, per function: grant execute on function public.<f>(<args>) to public, anon;
+
+revoke all on function public.commercial_approval_token_hash(text) from public;
+revoke execute on function public.commercial_approval_token_hash(text) from anon;
+grant execute on function public.commercial_approval_token_hash(text) to authenticated;
+
+revoke all on function public.controlled_documents_path_project(text) from public;
+revoke execute on function public.controlled_documents_path_project(text) from anon;
+grant execute on function public.controlled_documents_path_project(text) to authenticated;
+
+revoke all on function public.controlled_documents_read_authorized(text) from public;
+revoke execute on function public.controlled_documents_read_authorized(text) from anon;
+grant execute on function public.controlled_documents_read_authorized(text) to authenticated;
+
+revoke all on function public.controlled_documents_write_authorized(text) from public;
+revoke execute on function public.controlled_documents_write_authorized(text) from anon;
+grant execute on function public.controlled_documents_write_authorized(text) to authenticated;
+
+revoke all on function public.normalise_weekly_report_photo_ids(jsonb) from public;
+revoke execute on function public.normalise_weekly_report_photo_ids(jsonb) from anon;
+grant execute on function public.normalise_weekly_report_photo_ids(jsonb) to authenticated;
+
+revoke all on function public.site_photos_authorized(text) from public;
+revoke execute on function public.site_photos_authorized(text) from anon;
+grant execute on function public.site_photos_authorized(text) to authenticated;
+
+revoke all on function public.site_photos_path_parts(text) from public;
+revoke execute on function public.site_photos_path_parts(text) from anon;
+grant execute on function public.site_photos_path_parts(text) to authenticated;
+
+revoke all on function public.site_photos_ref_to_path(text) from public;
+revoke execute on function public.site_photos_ref_to_path(text) from anon;
+grant execute on function public.site_photos_ref_to_path(text) to authenticated;
+
+revoke all on function public.valid_action_status_transition(text, text) from public;
+revoke execute on function public.valid_action_status_transition(text, text) from anon;
+grant execute on function public.valid_action_status_transition(text, text) to authenticated;
+
+revoke all on function public.valid_commercial_event_status_transition(text, text) from public;
+revoke execute on function public.valid_commercial_event_status_transition(text, text) from anon;
+grant execute on function public.valid_commercial_event_status_transition(text, text) to authenticated;
+
+revoke all on function public.valid_rfi_status_transition(text, text) from public;
+revoke execute on function public.valid_rfi_status_transition(text, text) from anon;
+grant execute on function public.valid_rfi_status_transition(text, text) to authenticated;
+
+revoke all on function public.valid_toolbox_talk_status_transition(text, text) from public;
+revoke execute on function public.valid_toolbox_talk_status_transition(text, text) from anon;
+grant execute on function public.valid_toolbox_talk_status_transition(text, text) to authenticated;
+
+revoke all on function public.valid_weekly_report_status_transition(text, text) from public;
+revoke execute on function public.valid_weekly_report_status_transition(text, text) from anon;
+grant execute on function public.valid_weekly_report_status_transition(text, text) to authenticated;
