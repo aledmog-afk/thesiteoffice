@@ -133,6 +133,11 @@
       <div class="tile-name">RFIs</div>
       <div class="tile-stats"><div><strong id="rfisOpenCount">–</strong>open</div></div>
     </a>
+    <a class="tile" href="companies.html?project=" id="companiesTile" style="display:none;">
+      <div class="tile-icon">🏢</div>
+      <div class="tile-name">Companies</div>
+      <div class="tile-stats"><div>Invite and manage the companies on this job</div></div>
+    </a>
     <a class="tile" href="drawings.html?project=" id="drawingsTile">
       <div class="tile-icon">📐</div>
       <div class="tile-name">Drawings &amp; Layouts</div>
@@ -213,29 +218,30 @@
   </div>
 
   <div class="card" id="collaboratorsCard" style="margin-top:2rem;">
-    <h3 class="card-heading">Collaborators</h3>
+    <h3 class="card-heading" style="margin-bottom:0.4rem;">People on this job</h3>
+    <p class="hint" style="margin-bottom:0.8rem;">Everyone who can open this job, grouped by company. Full access can use everything on the job; Snagging only can see and work on snags. People from another company are managed by that company.</p>
     <div class="table-wrap">
-      <table>
-        <thead><tr><th>Email</th><th>Role</th><th>Joined</th><th></th></tr></thead>
+      <table class="stack-mobile">
+        <thead><tr><th>Person</th><th>Access</th><th>Joined</th><th></th></tr></thead>
         <tbody id="memberRows"></tbody>
       </table>
     </div>
     <div id="inviteSection" style="margin-top:1rem; display:none;">
-      <p class="hint" style="margin-bottom:0.5rem;">Invite other companies, or add people from your own company, on the Companies page.</p>
-      <a class="btn btn-outline btn-sm" id="companiesLink" href="#">Manage companies on this project →</a>
+      <p class="hint" style="margin-bottom:0.5rem;">Invite another company, or add someone from your own company, on the Companies page.</p>
+      <a class="btn btn-outline btn-sm" id="companiesLink" href="#">Companies on this job →</a>
     </div>
   </div>
 
   <div class="card" id="modulePermissionsCard" style="margin-top:2rem; display:none;">
     <h3 class="card-heading" style="margin-bottom:0.4rem;">Module Permissions</h3>
-    <p class="hint" style="margin-bottom:0.5rem;">Choose what each person can do in these modules. Dayworks &amp; Variations is off until you switch it on for someone. Everyone with full access gets Toolbox Talks as a Contributor automatically; picking a role here replaces that.</p>
+    <p class="hint" style="margin-bottom:0.5rem;">Choose what each person can do in these modules. The project owner gets Dayworks &amp; Variations automatically (shown below as "Owner — full access"); for everyone else it's off until you switch it on. Everyone with Full access gets Toolbox Talks as a Contributor automatically; picking a role here replaces that. People from another company can be given these too; a grant here adds to whatever their company's access allows.</p>
     <ul class="hint" style="margin:0 0 1rem 1.1rem;">
       <li><strong>Dayworks &amp; Variations.</strong> Viewer can see dayworks and variations. Contributor can also create, edit and submit them, send them to the client for approval, and capture the client's signature to approve or reject them on the spot.</li>
       <li><strong>Toolbox Talks.</strong> Viewer can see talks. Contributor can also run talks and record attendees and signatures. Editor can also change your company's library of talk templates.</li>
     </ul>
     <div id="modulePermissionsErrorBox" class="error-box"></div>
     <div class="table-wrap">
-      <table>
+      <table class="stack-mobile">
         <thead><tr id="modulePermissionsHead"></tr></thead>
         <tbody id="modulePermissionsRows"></tbody>
       </table>
@@ -265,6 +271,7 @@
   document.getElementById("actionsTile").href = `actions.html?project=${projectId}`;
   document.getElementById("inspectionsTile").href = `inspections.html?project=${projectId}`;
   document.getElementById("rfisTile").href = `rfis.html?project=${projectId}`;
+  document.getElementById("companiesTile").href = `companies.html?project=${projectId}`;
 
   let project = null;
   let plotsCount = 0;
@@ -291,22 +298,75 @@
     document.getElementById("companiesLink").href = `companies.html?project=${projectId}`;
   }
 
-  const ROLE_LABEL = { owner: "Owner", collaborator: "Collaborator", snagging: "Snagging" };
+  // Item 11: one wording everywhere (matches the Companies page).
+  const ROLE_LABEL = { owner: "Owner", collaborator: "Full access", snagging: "Snagging only" };
   const ROLE_BADGE = { owner: "badge-green", collaborator: "badge-grey", snagging: "badge-blue" };
+  const PARTY_ROLE_LABEL = { main_contractor: "Main Contractor", subcontractor: "Subcontractor", clerk_of_works: "Clerk of Works", client: "Client", consultant: "Consultant" };
+  const partyText = (p) => { const l = PARTY_ROLE_LABEL[p.party_role] || p.party_role; return p.trade ? `${l} (${p.trade})` : l; };
+
+  // Item 11: group the job's people by company. Anyone not in one of the
+  // job's companies (parties) is on the project owner's side. Uses only
+  // get_project_parties + project_party_members, which the database already
+  // lets the owner side read; with no parties (or a database without them)
+  // everyone falls into the one group.
+  let peopleGroups = [];
+  async function loadPeopleGroups(members) {
+    let parties = [];
+    let links = [];
+    try {
+      const { data, error } = await supabase.rpc("get_project_parties", { p_project_id: projectId });
+      if (!error && Array.isArray(data)) parties = data;
+      if (parties.length) {
+        const { data: pm } = await supabase.from("project_party_members").select("party_id, user_id").in("party_id", parties.map((p) => p.party_id));
+        links = Array.isArray(pm) ? pm : [];
+      }
+    } catch { /* grouping is optional */ }
+    const partyOf = new Map();
+    for (const l of links) if (!partyOf.has(l.user_id) && parties.some((p) => p.party_id === l.party_id)) partyOf.set(l.user_id, l.party_id);
+    const viewerParty = partyOf.get(currentUserId);
+    const ordered = [];
+    for (const p of parties.filter((x) => !x.parent_party_id)) {
+      ordered.push(p);
+      for (const c of parties.filter((x) => x.parent_party_id === p.party_id)) ordered.push(c);
+    }
+    for (const p of parties) if (!ordered.includes(p)) ordered.push(p);
+    const own = { key: "own", party: null, title: viewerParty ? "Project owner's company" : "Your company (your team)", people: [] };
+    const groups = ordered.map((p) => ({ key: p.party_id, party: p, title: p.company, people: [] }));
+    for (const m of members) {
+      const pid = m.role === "owner" ? null : partyOf.get(m.user_id);
+      (pid ? groups.find((g) => g.key === pid) : own).people.push(m);
+    }
+    peopleGroups = [own, ...groups].filter((g) => g.people.length || g.party);
+    return peopleGroups;
+  }
+
+  function groupHeaderHtml(g, colspan, isOwner) {
+    if (!g.party) return `<tr class="people-group" data-group="own"><td colspan="${colspan}"><strong>${escapeHtml(g.title)}</strong></td></tr>`;
+    const p = g.party;
+    const lead = p.lead_email ? `Lead contact: ${escapeHtml(p.lead_email)}` : `<span class="badge badge-red">Needs a lead contact</span>`;
+    const brought = p.parent_party_id ? ` <span class="hint">(brought in by ${escapeHtml((peopleGroups.find((x) => x.key === p.parent_party_id) || {}).title || "another company")})</span>` : "";
+    const manage = isOwner ? ` · <a href="companies.html?project=${encodeURIComponent(projectId)}#party-${encodeURIComponent(p.party_id)}" data-manage-party="${escapeHtml(p.party_id)}">Manage this company</a>` : "";
+    return `<tr class="people-group" data-group="${escapeHtml(p.party_id)}"><td colspan="${colspan}"><strong>${escapeHtml(g.title)}</strong>${brought} <span class="hint">${escapeHtml(partyText(p))}</span><br><span class="hint" data-lead-for="${escapeHtml(p.party_id)}">${lead}</span>${manage}</td></tr>`;
+  }
 
   function renderMembers(members, isOwner) {
-    document.getElementById("memberRows").innerHTML = members.map((m) => {
+    const groups = peopleGroups.length ? peopleGroups : [{ key: "own", party: null, title: "Your company (your team)", people: members }];
+    document.getElementById("memberRows").innerHTML = groups.map((g) => groupHeaderHtml(g, 4, isOwner) + g.people.map((m) => {
       const isYou = m.user_id === currentUserId;
-      const canRemove = m.role !== "owner" && (isOwner || isYou);
+      const company = !!g.party;
+      const canRemove = m.role !== "owner" && (isYou || (isOwner && !company));
+      const action = canRemove
+        ? `<button class="btn btn-outline btn-sm" onclick="removeMember('${m.member_id}', '${escapeHtml(m.email).replace(/'/g, "\\'")}', ${isYou})">${isYou ? "Leave" : "Remove"}</button>`
+        : company ? `<span class="hint" data-managed-by-company="${m.user_id}">Managed by their company</span>` : "";
       return `
         <tr>
           <td>${escapeHtml(m.email)}${isYou ? ` <span class="hint">(you)</span>` : ""}</td>
-          <td><span class="badge ${ROLE_BADGE[m.role]}">${ROLE_LABEL[m.role]}</span></td>
-          <td>${formatDate(m.joined_at?.slice(0, 10))}</td>
-          <td>${canRemove ? `<button class="btn btn-outline btn-sm" onclick="removeMember('${m.member_id}', '${escapeHtml(m.email).replace(/'/g, "\\'")}', ${isYou})">${isYou ? "Leave" : "Remove"}</button>` : ""}</td>
+          <td data-label="Access"><span class="badge ${ROLE_BADGE[m.role] || "badge-grey"}">${ROLE_LABEL[m.role] || escapeHtml(m.role)}</span></td>
+          <td data-label="Joined">${formatDate(m.joined_at?.slice(0, 10))}</td>
+          <td>${action}</td>
         </tr>
       `;
-    }).join("");
+    }).join("")).join("");
   }
 
   async function loadMembers() {
@@ -314,9 +374,11 @@
     const { data: members, error } = await supabase.rpc("get_project_members", { p_project_id: projectId });
     if (error) { showError(pageErrorBox, error); return; }
     const isOwner = (members || []).some((m) => m.user_id === currentUserId && m.role === "owner");
+    await loadPeopleGroups(members || []);
     renderMembers(members || [], isOwner);
     renderInviteSection("collaborator", isOwner);
     renderInviteSection("snagging", isOwner);
+    document.getElementById("companiesTile").style.display = isOwner ? "" : "none";
     // Deleting the whole site is owner-only at the database level too —
     // hide the button for collaborators rather than let them hit an error.
     document.getElementById("deleteBtn").style.display = isOwner ? "inline-flex" : "none";
@@ -370,7 +432,8 @@
     document.getElementById("modulePermissionsHead").innerHTML =
       `<th>Member</th>` + modules.map((m) => `<th>${escapeHtml(moduleLabel(m))}</th>`).join("");
 
-    document.getElementById("modulePermissionsRows").innerHTML = members.map((member) => {
+    const groups = peopleGroups.length ? peopleGroups : [{ key: "own", party: null, title: "Your company (your team)", people: members }];
+    const rowHtml = (member) => {
       const cells = modules.map((m) => {
         const rolesForModule = catalog.filter((r) => r.module === m);
         const grant = moduleGrants.find((g) => g.user_id === member.user_id && g.module === m);
@@ -381,17 +444,21 @@
         // automatic default", so the empty option must say so rather
         // than implying access is absent.
         if (m === "commercial" && commercialOwnerAccessUserIds.has(member.user_id)) {
-          return `<td><span class="hint" data-owner-full-access="${member.user_id}">Owner — full access (Contributor, automatic)</span></td>`;
+          return `<td data-label="${escapeHtml(moduleLabel(m))}"><span class="hint" data-owner-full-access="${member.user_id}">Owner — full access (Contributor, automatic)</span></td>`;
         }
         const hasAutoDefault = m === "toolbox_talks" && (member.role === "owner" || member.role === "collaborator");
         const emptyLabel = hasAutoDefault ? "Default (Contributor — automatic)" : "— No access —";
         const options = `<option value="">${emptyLabel}</option>` + rolesForModule.map((r) =>
           `<option value="${escapeHtml(r.role)}" ${current?.role === r.role ? "selected" : ""}>${escapeHtml(roleOptionLabel(r.role))}</option>`
         ).join("");
-        return `<td><select data-user="${member.user_id}" data-module="${escapeHtml(m)}">${options}</select></td>`;
+        return `<td data-label="${escapeHtml(moduleLabel(m))}"><select data-user="${member.user_id}" data-module="${escapeHtml(m)}">${options}</select></td>`;
       }).join("");
       return `<tr><td>${escapeHtml(member.email)}</td>${cells}</tr>`;
-    }).join("");
+    };
+    document.getElementById("modulePermissionsRows").innerHTML = groups
+      .filter((g) => g.people.length)
+      .map((g) => groupHeaderHtml(g, modules.length + 1, true) + g.people.map(rowHtml).join(""))
+      .join("");
 
     document.querySelectorAll("#modulePermissionsRows select[data-user]").forEach((select) => {
       select.addEventListener("change", async () => {
@@ -735,7 +802,7 @@
     document.getElementById("controlCard").style.display = "none";
     document.getElementById("detailsCard").style.display = "none";
     document.getElementById("collaboratorsCard").style.display = "none";
-    ["reportsTile", "monthlyReportsTile", "plotHandoversTile", "hsAuditsTile", "commercialsTile", "commercialModuleTile", "toolboxTalksTile", "drawingsTile", "actionsTile", "inspectionsTile", "rfisTile", "programmeTile"].forEach((id) => {
+    ["reportsTile", "monthlyReportsTile", "plotHandoversTile", "hsAuditsTile", "commercialsTile", "commercialModuleTile", "toolboxTalksTile", "drawingsTile", "actionsTile", "inspectionsTile", "rfisTile", "programmeTile", "companiesTile"].forEach((id) => {
       document.getElementById(id).style.display = "none";
     });
   }
