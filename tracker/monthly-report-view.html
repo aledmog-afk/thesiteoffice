@@ -229,7 +229,7 @@
         <div><dt>Employer's Agent</dt><dd>${escapeHtml(project.employers_agent_name) || "—"}</dd></div>
       </dl>
 
-      ${r.baseline_progress_pct !== null && r.actual_progress_pct !== null ? `<div class="doc-section">${renderProgressBlock(r.baseline_progress_pct, r.actual_progress_pct, r.rag_status)}</div>` : ""}
+      ${r.baseline_progress_pct !== null && r.actual_progress_pct !== null ? `<div class="doc-section">${renderProgressBlock(r.baseline_progress_pct, r.actual_progress_pct, r.rag_status)}${r.progress_basis_note ? `<p class="hint" id="progressBasisNote" style="margin-top:0.4rem;">${escapeHtml(r.progress_basis_note)}</p>` : ""}</div>` : ""}
 
       ${weatherSection(r.weather_summary, r.weather_lost_days, r.total_lost_hours)}
       ${progressSection(r.progress_items)}

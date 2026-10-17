@@ -201,20 +201,77 @@
           <input type="number" id="totalPlots" min="1" step="1" placeholder="e.g. 22">
         </div>
       </div>
-      <div class="field">
-        <label for="externalWorksPct">External / Engineering Works (%)</label>
-        <div class="btn-row" style="align-items:center;">
-          <input type="number" id="externalWorksPct" min="0" max="100" step="1" style="max-width:120px;">
-          <button type="button" class="btn btn-outline btn-sm" id="suggestExternalWorksBtn">Suggest from Milestones</button>
-        </div>
-      </div>
-      <p class="hint">Each plot's own progress is set on its Plot Handovers page. External / Engineering Works covers civils, drainage, and landscaping — work that isn't any one plot; tag weekly report items to "External / Engineering Works" in the plot picker to log progress against it, same as a plot. Total Plots is just a target count — set it and use "Generate Missing Plots" above to create any that don't exist yet, each with its own quality gates, handover documents, and snag list.</p>
+      <p class="hint">Each plot's progress is worked out from its build stages (fed by weekly reports and the plot page). External / Engineering Works has its own card below, where every change needs a note. Total Plots is just a target count — set it and use "Generate Missing Plots" above to create any that don't exist yet, each with its own quality gates, handover documents, and snag list.</p>
       <div class="btn-row">
         <button type="submit" class="btn btn-amber">Save Changes</button>
         <button type="button" class="btn btn-outline" id="cancelEditBtn">Cancel</button>
         <button type="button" class="btn btn-danger" id="deleteBtn" style="margin-left:auto;">Delete Project</button>
       </div>
     </form>
+  </div>
+
+  <div class="card" id="externalWorksCard" style="margin-top:2rem;">
+    <div style="display:flex; justify-content:space-between; align-items:center; gap:0.75rem; flex-wrap:wrap;">
+      <h3 class="card-heading" style="margin:0;">External / Engineering Works</h3>
+      <div id="externalWorksFlags" style="display:flex; gap:0.4rem; flex-wrap:wrap;"></div>
+    </div>
+    <p class="hint" style="margin:0.4rem 0 0.8rem;">Site-wide civils, drainage, roads, sewers, services and landscaping that aren't any one plot. Set by a person, never automatically. Every change needs a dated note. The share is how much of the whole job this work is worth.</p>
+    <div id="externalWorksErrorBox" class="error-box"></div>
+    <dl class="doc-facts" id="externalWorksFacts"></dl>
+
+    <details id="externalWorksEditWrap" style="margin-top:0.9rem;">
+      <summary style="cursor:pointer; font-weight:600;">Update figure or share</summary>
+      <div class="form-grid" style="margin-top:0.6rem; align-items:end;">
+        <div class="field">
+          <label for="externalWorksPct">External works complete (%)</label>
+          <input type="number" id="externalWorksPct" min="0" max="100" step="0.5">
+          <p class="hint" id="externalWorksPctHint"></p>
+        </div>
+        <div class="field">
+          <label for="externalWorksShare">Share of the whole job (%)</label>
+          <input type="number" id="externalWorksShare" min="0" max="100" step="0.5" placeholder="Not set">
+          <p class="hint">Leave blank to keep the current weighting (external works counts as one plot).</p>
+        </div>
+        <div class="field" style="grid-column:1 / -1;">
+          <label for="externalWorksNote">Note (required)</label>
+          <textarea id="externalWorksNote" rows="2" maxlength="500" placeholder="What changed on site? e.g. sewer connection made, roads to base course"></textarea>
+        </div>
+        <div class="btn-row"><button type="button" class="btn btn-amber" id="saveExternalWorksBtn">Save with note</button></div>
+      </div>
+    </details>
+
+    <h4 style="margin:1.2rem 0 0.4rem;">Packages</h4>
+    <p class="hint" style="margin-bottom:0.5rem;">Optional. Name the parts of the external works (for example excavation, roads, sewers, services). Each has its own %, its own share of the external works and its own notes. With packages, the external works % is their weighted average. Weekly report tasks tagged "External / Engineering Works" are listed beside the package whose stages they match (read-only).</p>
+    <div id="externalWorksPackages"></div>
+    <details id="packageFormWrap" style="margin-top:0.6rem;">
+      <summary style="cursor:pointer; font-weight:600;" id="packageFormSummary">Add a package</summary>
+      <input type="hidden" id="packageId">
+      <div class="form-grid" style="margin-top:0.6rem; align-items:end;">
+        <div class="field"><label for="packageName">Name</label><input type="text" id="packageName" maxlength="80" placeholder="e.g. Sewers"></div>
+        <div class="field"><label for="packageShare">Share of external works (%)</label><input type="number" id="packageShare" min="0.5" max="100" step="0.5"></div>
+        <div class="field"><label for="packagePct">Complete (%)</label><input type="number" id="packagePct" min="0" max="100" step="0.5"></div>
+        <div class="field" style="grid-column:1 / -1;">
+          <label>Weekly report stages that belong to this package</label>
+          <div id="packageStages" style="display:flex; flex-wrap:wrap; gap:0.3rem 1rem;"></div>
+        </div>
+        <div class="field" style="grid-column:1 / -1;">
+          <label for="packageNote">Note (required)</label>
+          <textarea id="packageNote" rows="2" maxlength="500"></textarea>
+        </div>
+        <div class="btn-row">
+          <button type="button" class="btn btn-amber" id="savePackageBtn">Save package</button>
+          <button type="button" class="btn btn-outline" id="cancelPackageBtn">Cancel</button>
+        </div>
+      </div>
+    </details>
+
+    <h4 style="margin:1.2rem 0 0.4rem;">Report tasks not assigned to a package</h4>
+    <div id="externalWorksUnassigned"></div>
+
+    <details style="margin-top:1.2rem;" id="externalWorksHistoryWrap">
+      <summary style="cursor:pointer; font-weight:600;">Notes history</summary>
+      <div id="externalWorksHistory" style="margin-top:0.5rem;"></div>
+    </details>
   </div>
 
   <div class="card" id="collaboratorsCard" style="margin-top:2rem;">
@@ -251,7 +308,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, geocodePostcode, recalculateActualProgress, generateMissingPlots, suggestPlotProgress, EXTERNAL_WORKS_TAG, monthStartISO, getProjectControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, isFindingOutstanding, categoriseSnag, isSnagOutstanding, getProjectPlotReadiness, getMyCommercialRole, commercialCapabilities, getMyToolboxTalkRole, toolboxTalkCapabilities, getModuleRolesCatalog, getProjectModuleRoles, setProjectModuleRole, getCommercialOwnerAccessUserIds } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, formatDateTime, showError, clearError, RAG_LABEL, renderProgressBlock, geocodePostcode, generateMissingPlots, EXTERNAL_WORKS_TAG, BUILD_MILESTONES, externalWorksStale, externalWorksShareSet, externalWorksSuggestions, EXTERNAL_WORKS_STALE_DAYS, monthStartISO, getProjectControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, isFindingOutstanding, categoriseSnag, isSnagOutstanding, getProjectPlotReadiness, getMyCommercialRole, commercialCapabilities, getMyToolboxTalkRole, toolboxTalkCapabilities, getModuleRolesCatalog, getProjectModuleRoles, setProjectModuleRole, getCommercialOwnerAccessUserIds } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("id");
@@ -510,7 +567,7 @@
       <div><dt>Clerk of Works</dt><dd>${escapeHtml(project.clerk_of_works_name) || "—"}</dd></div>
       <div><dt>Site Manager</dt><dd>${escapeHtml(project.site_manager_name) || "—"}</dd></div>
       <div><dt>Total Plots (target)</dt><dd>${project.total_plots || "—"}</dd></div>
-      <div><dt>External / Engineering Works</dt><dd>${project.external_works_pct || 0}%</dd></div>
+      <div><dt>External / Engineering Works</dt><dd>${Number(project.external_works_pct) || 0}%${externalWorksShareSet(project) ? ` <span class="hint">(${Number(project.external_works_share)}% of the job)</span>` : ` <span class="badge badge-amber">Share not set</span>`}</dd></div>
     `;
   }
 
@@ -529,7 +586,6 @@
     document.getElementById("ragStatusInput").value = project.rag_status;
     document.getElementById("baselinePct").value = project.baseline_progress_pct;
     document.getElementById("totalPlots").value = project.total_plots || "";
-    document.getElementById("externalWorksPct").value = project.external_works_pct || 0;
   }
 
   document.getElementById("editBtn").addEventListener("click", () => {
@@ -564,7 +620,6 @@
       rag_status: document.getElementById("ragStatusInput").value,
       baseline_progress_pct: Number(document.getElementById("baselinePct").value) || 0,
       total_plots: totalPlotsVal === "" ? null : Number(totalPlotsVal),
-      external_works_pct: Math.max(0, Math.min(100, Number(document.getElementById("externalWorksPct").value) || 0)),
     };
 
     // Only re-geocode when the postcode actually changed — avoids an
@@ -590,15 +645,6 @@
     if (error) { showError(errorBox, error); return; }
     project = data;
 
-    // Recalculating can change actual_progress_pct on the row we just
-    // fetched (external_works_pct may have just changed), so pull the
-    // fresh value back in rather than trusting the pre-recalc `data`. A
-    // failure here is non-fatal — the site details themselves already
-    // saved fine.
-    try {
-      project.actual_progress_pct = await recalculateActualProgress(projectId);
-    } catch { /* non-fatal — details are already saved */ }
-
     renderHeaderAndFacts();
     updateGeneratePlotsButton();
     if (!errorBox.textContent) document.getElementById("cancelEditBtn").click();
@@ -611,21 +657,171 @@
     window.location.href = "dashboard.html";
   });
 
-  document.getElementById("suggestExternalWorksBtn").addEventListener("click", async (e) => {
-    const btn = e.currentTarget;
-    btn.disabled = true;
-    btn.textContent = "Checking weekly reports…";
-    clearError(pageErrorBox);
-    try {
-      const suggested = await suggestPlotProgress(projectId, EXTERNAL_WORKS_TAG);
-      document.getElementById("externalWorksPct").value = suggested;
-    } catch (err) {
-      showError(pageErrorBox, err);
-    } finally {
-      btn.disabled = false;
-      btn.textContent = "Suggest from Milestones";
-    }
+  // ─── External / Engineering Works (v69) ─────────────────────────
+  // Figure, share and packages change only through note-required RPCs
+  // (set_external_works / save_external_works_package /
+  // retire_external_works_package); the database recalculates the site
+  // figure. Report tasks tagged EXTERNAL_WORKS_TAG are only ever shown
+  // here as read-only suggestions; nothing applies them.
+  const ewErrorBox = document.getElementById("externalWorksErrorBox");
+  let ewPackages = [];
+  let ewReports = [];
+  const fmt = (v) => `${Math.round((Number(v) || 0) * 10) / 10}%`;
+  const fmtWeek = (d) => (d ? formatDate(d) : "no date");
+
+  function suggestionListHtml(entries) {
+    if (!entries.length) return `<p class="hint">No report tasks.</p>`;
+    return `<ul class="hint" style="margin:0.2rem 0 0 1.1rem;">${entries.slice(0, 12).map((e) =>
+      `<li>w/e ${escapeHtml(fmtWeek(e.week_ending))}: ${escapeHtml(e.stage || "no stage chosen")}${e.text ? ` — ${escapeHtml(e.text)}` : ""} · ${escapeHtml(fmt(e.percent))}</li>`).join("")}${entries.length > 12 ? `<li>…and ${entries.length - 12} more</li>` : ""}</ul>`;
+  }
+
+  function renderExternalWorks() {
+    const stale = externalWorksStale(project);
+    const shareSet = externalWorksShareSet(project);
+    const flags = [];
+    if (!shareSet) flags.push(`<span class="badge badge-amber" id="ewShareNotSet">Share not set</span>`);
+    if (stale) flags.push(`<span class="badge badge-red" id="ewStale">Not updated for over ${EXTERNAL_WORKS_STALE_DAYS} days</span>`);
+    document.getElementById("externalWorksFlags").innerHTML = flags.join("");
+    const last = project.external_works_updated_at;
+    document.getElementById("externalWorksFacts").innerHTML = `
+      <div><dt>Complete</dt><dd>${escapeHtml(fmt(project.external_works_pct))}${ewPackages.length ? ` <span class="hint">(from ${ewPackages.length} package${ewPackages.length === 1 ? "" : "s"})</span>` : ""}</dd></div>
+      <div><dt>Share of the job</dt><dd>${shareSet ? escapeHtml(fmt(project.external_works_share)) : "Not set — counts as one plot's worth, as before"}</dd></div>
+      <div><dt>Last note</dt><dd>${last ? escapeHtml(formatDateTime(last)) : "None yet"}</dd></div>`;
+    const pctInput = document.getElementById("externalWorksPct");
+    pctInput.value = Number(project.external_works_pct) || 0;
+    pctInput.disabled = ewPackages.length > 0;
+    document.getElementById("externalWorksPctHint").textContent = ewPackages.length ? "Worked out from the packages below." : "";
+    document.getElementById("externalWorksShare").value = shareSet ? Number(project.external_works_share) : "";
+
+    const { byPackage, unassigned } = externalWorksSuggestions(ewReports, ewPackages);
+    const totalShare = ewPackages.reduce((sum, p) => sum + Number(p.share || 0), 0);
+    document.getElementById("externalWorksPackages").innerHTML = ewPackages.length ? `
+      <div class="table-wrap"><table class="stack-mobile">
+        <thead><tr><th>Package</th><th>Share</th><th>Complete</th><th>Report tasks (read-only)</th><th></th></tr></thead>
+        <tbody>${ewPackages.map((p) => `<tr data-package-id="${p.id}">
+          <td><strong>${escapeHtml(p.name)}</strong>${(p.report_stages || []).length ? `<div class="hint">${escapeHtml(p.report_stages.join(", "))}</div>` : ""}</td>
+          <td>${escapeHtml(fmt(p.share))}</td>
+          <td>${escapeHtml(fmt(p.percent))}</td>
+          <td>${suggestionListHtml(byPackage.get(p.id) || [])}</td>
+          <td><div class="btn-row"><button type="button" class="btn btn-outline btn-sm pkg-edit" data-package-id="${p.id}">Update</button><button type="button" class="btn btn-outline btn-sm pkg-retire" data-package-id="${p.id}">Remove</button></div></td>
+        </tr>`).join("")}</tbody>
+      </table></div>
+      ${Math.abs(totalShare - 100) > 0.01 ? `<p class="hint">Package shares add up to ${escapeHtml(fmt(totalShare))}; they're used as relative weights.</p>` : ""}`
+      : `<p class="hint">No packages. The external works figure is set directly.</p>`;
+    document.getElementById("externalWorksUnassigned").innerHTML = suggestionListHtml(unassigned);
+    document.querySelectorAll(".pkg-edit").forEach((b) => b.addEventListener("click", () => openPackageForm(ewPackages.find((p) => p.id === b.dataset.packageId))));
+    document.querySelectorAll(".pkg-retire").forEach((b) => b.addEventListener("click", () => retirePackage(ewPackages.find((p) => p.id === b.dataset.packageId))));
+  }
+
+  const EW_KIND_LABEL = { site: "Figure / share", package_added: "Package added", package_updated: "Package updated", package_retired: "Package removed" };
+  function renderExternalWorksHistory(rows) {
+    const wrap = document.getElementById("externalWorksHistory");
+    if (!rows || !rows.length) { wrap.innerHTML = `<p class="hint">No notes yet.</p>`; return; }
+    const change = (a, b) => (a === b || (a === null && b === null) ? (b === null ? "—" : fmt(b)) : `${a === null || a === undefined ? "—" : fmt(a)} → ${b === null || b === undefined ? "—" : fmt(b)}`);
+    wrap.innerHTML = `<div class="table-wrap"><table class="stack-mobile">
+      <thead><tr><th>Date</th><th>What</th><th>%</th><th>Share</th><th>Note</th><th>Who</th></tr></thead>
+      <tbody>${rows.map((h) => `<tr>
+        <td>${escapeHtml(formatDateTime(h.changed_at))}</td>
+        <td>${escapeHtml(EW_KIND_LABEL[h.kind] || h.kind)}${h.package_name ? `: ${escapeHtml(h.package_name)}` : ""}</td>
+        <td>${escapeHtml(change(h.old_pct, h.new_pct))}</td>
+        <td>${escapeHtml(change(h.old_share, h.new_share))}</td>
+        <td>${escapeHtml(h.note)}</td>
+        <td>${escapeHtml(h.changed_by_email || "")}</td>
+      </tr>`).join("")}</tbody></table></div>`;
+  }
+
+  async function loadExternalWorks() {
+    clearError(ewErrorBox);
+    const [{ data: proj }, { data: pkgs }, { data: reports }, { data: history }] = await Promise.all([
+      supabase.from("projects").select("*").eq("id", projectId).single(),
+      supabase.from("external_works_packages").select("*").eq("project_id", projectId).is("retired_at", null).order("sort_order", { ascending: true }),
+      supabase.from("weekly_reports").select("week_ending, progress_items").eq("project_id", projectId),
+      supabase.from("external_works_updates").select("*").eq("project_id", projectId).order("changed_at", { ascending: false }),
+    ]);
+    if (proj) project = proj;
+    ewPackages = pkgs || [];
+    ewReports = reports || [];
+    renderExternalWorks();
+    renderExternalWorksHistory(history || []);
+  }
+
+  function renderPackageStages(selected) {
+    const set = new Set(selected || []);
+    document.getElementById("packageStages").innerHTML = BUILD_MILESTONES.map((m, i) =>
+      `<label style="font-weight:normal; display:flex; gap:0.3rem; align-items:center;"><input type="checkbox" class="pkg-stage" value="${escapeHtml(m)}" id="pkgStage${i}" ${set.has(m) ? "checked" : ""}>${escapeHtml(m)}</label>`).join("");
+  }
+
+  function openPackageForm(pkg) {
+    document.getElementById("packageId").value = pkg?.id || "";
+    document.getElementById("packageName").value = pkg?.name || "";
+    document.getElementById("packageShare").value = pkg ? Number(pkg.share) : "";
+    document.getElementById("packagePct").value = pkg ? Number(pkg.percent) : 0;
+    document.getElementById("packageNote").value = "";
+    document.getElementById("packageFormSummary").textContent = pkg ? `Update package: ${pkg.name}` : "Add a package";
+    renderPackageStages(pkg?.report_stages || []);
+    document.getElementById("packageFormWrap").open = true;
+  }
+
+  async function afterExternalWorksChange() {
+    await loadExternalWorks();
+    renderHeaderAndFacts();
+  }
+
+  document.getElementById("saveExternalWorksBtn").addEventListener("click", async () => {
+    clearError(ewErrorBox);
+    const note = document.getElementById("externalWorksNote").value.trim();
+    if (note.length < 3) { showError(ewErrorBox, "Add a short note saying what changed."); return; }
+    const shareRaw = document.getElementById("externalWorksShare").value;
+    const pctRaw = document.getElementById("externalWorksPct").value;
+    const { error } = await supabase.rpc("set_external_works", {
+      p_project_id: projectId,
+      p_percent: ewPackages.length ? null : Math.max(0, Math.min(100, Number(pctRaw) || 0)),
+      p_share: shareRaw === "" ? null : Math.max(0, Math.min(100, Number(shareRaw))),
+      p_note: note,
+    });
+    if (error) { showError(ewErrorBox, error); return; }
+    document.getElementById("externalWorksNote").value = "";
+    document.getElementById("externalWorksEditWrap").open = false;
+    await afterExternalWorksChange();
   });
+
+  document.getElementById("savePackageBtn").addEventListener("click", async () => {
+    clearError(ewErrorBox);
+    const note = document.getElementById("packageNote").value.trim();
+    if (note.length < 3) { showError(ewErrorBox, "Add a short note for this package change."); return; }
+    const stages = [...document.querySelectorAll(".pkg-stage")].filter((c) => c.checked).map((c) => c.value);
+    const { error } = await supabase.rpc("save_external_works_package", {
+      p_project_id: projectId,
+      p_package_id: document.getElementById("packageId").value || null,
+      p_name: document.getElementById("packageName").value.trim(),
+      p_share: Number(document.getElementById("packageShare").value),
+      p_percent: Math.max(0, Math.min(100, Number(document.getElementById("packagePct").value) || 0)),
+      p_report_stages: stages,
+      p_note: note,
+    });
+    if (error) { showError(ewErrorBox, error); return; }
+    document.getElementById("packageFormWrap").open = false;
+    openPackageForm(null);
+    document.getElementById("packageFormWrap").open = false;
+    await afterExternalWorksChange();
+  });
+
+  document.getElementById("cancelPackageBtn").addEventListener("click", () => {
+    openPackageForm(null);
+    document.getElementById("packageFormWrap").open = false;
+  });
+
+  async function retirePackage(pkg) {
+    if (!pkg) return;
+    const note = prompt(`Remove the "${pkg.name}" package? Its history is kept. Add a note:`);
+    if (note === null) return;
+    if (note.trim().length < 3) { showError(ewErrorBox, "A note is required to remove a package."); return; }
+    const { error } = await supabase.rpc("retire_external_works_package", { p_package_id: pkg.id, p_note: note.trim() });
+    if (error) { showError(ewErrorBox, error); return; }
+    await afterExternalWorksChange();
+  }
+
+  renderPackageStages([]);
 
   function updateGeneratePlotsButton() {
     const wrap = document.getElementById("generatePlotsWrap");
@@ -857,6 +1053,7 @@
     renderHeaderAndFacts();
 
     if (myRole === "snagging") {
+      document.getElementById("externalWorksCard").style.display = "none";
       applySnaggingOnlyView();
       const [{ data: snags }, { count: documentsCount }] = await Promise.all([
         supabase.from("snag_items").select("status, due_date, priority").eq("project_id", projectId),
@@ -870,6 +1067,7 @@
     }
 
     loadMembers();
+    loadExternalWorks().catch((err) => showError(ewErrorBox, err));
     loadControlSummary();
     loadCommercialModuleTile();
     loadToolboxTalksTile();

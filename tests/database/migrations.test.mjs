@@ -539,7 +539,7 @@ test("Weekly Reporting: new columns, indexes, trigger, and inspection_findings.r
     assert.equal(indexes.rows[0].n, 2, "exactly 2 new named indexes on weekly_reports, never duplicated");
 
     const triggers = await client.query("select count(*)::int as n from pg_trigger where tgrelid = 'public.weekly_reports'::regclass and tgname like 'trg_%'");
-    assert.equal(triggers.rows[0].n, 3, "exactly 3 triggers on weekly_reports (pre-existing audit + the new before-write trigger + v62 commercial-notes divert), never duplicated");
+    assert.equal(triggers.rows[0].n, 4, "exactly 4 triggers on weekly_reports (pre-existing audit + the new before-write trigger + v62 commercial-notes divert + v69 stage raise), never duplicated");
 
     const fn = await client.query("select count(*)::int as n from information_schema.routines where routine_schema = 'public' and routine_name = 'valid_weekly_report_status_transition'");
     assert.equal(fn.rows[0].n, 1);

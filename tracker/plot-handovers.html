@@ -165,7 +165,8 @@
     const milestoneMeta = new Map();
     (milestones || []).forEach((m) => {
       if (!milestonesByPlot.has(m.plot_id)) milestonesByPlot.set(m.plot_id, new Map());
-      milestonesByPlot.get(m.plot_id).set(m.milestone_key, m.percent);
+      // v69: an N/A stage exports as "N/A", distinct from a genuine 0%.
+      milestonesByPlot.get(m.plot_id).set(m.milestone_key, m.applicable === false ? "N/A" : m.percent);
       const existing = milestoneMeta.get(m.milestone_key);
       if (!existing || m.sort_order < existing.sort_order) milestoneMeta.set(m.milestone_key, { title: m.title, sort_order: m.sort_order });
     });
@@ -219,7 +220,8 @@
         supabase.from("projects").select("name, baseline_progress_pct, actual_progress_pct, external_works_pct").eq("id", projectId).single(),
         supabase.from("plots").select("id, plot_number, block_id, progress_pct").eq("project_id", projectId),
         supabase.from("blocks").select("id, block_name, progress_pct").eq("project_id", projectId),
-        supabase.from("internal_milestones").select("plot_id, milestone_key, title, percent, sort_order").eq("project_id", projectId),
+        // v69: only the live 33-stage rows (the old grid is retired, not deleted).
+        supabase.from("internal_milestones").select("plot_id, milestone_key, title, percent, sort_order, applicable").eq("project_id", projectId).not("stage_key", "is", null).is("retired_at", null),
       ]);
 
       if (!allPlots?.length && !blocks?.length) {
@@ -376,7 +378,7 @@
       return `
         <tr class="row-link" onclick="window.location.href='plot-detail.html?id=${p.id}'">
           <td><strong>${escapeHtml(p.plot_number)}</strong></td>
-          <td><span class="badge ${p.progress_pct >= 100 ? "badge-green" : "badge-amber"}">${p.progress_pct || 0}%</span></td>
+          <td><span class="badge ${p.progress_pct >= 100 ? "badge-green" : "badge-amber"}">${p.progress_pct || 0}%</span>${p.progress_override != null && Number(p.progress_override) > Number(p.progress_calculated || 0) ? ` <span class="hint" title="Manual figure; switches back to automatic when the stages catch up">manual</span>` : ""}</td>
           <td>${readinessCell}</td>
           <td>${blockersCell}</td>
           <td>${warningsCell}</td>

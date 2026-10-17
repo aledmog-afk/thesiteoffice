@@ -4,6 +4,7 @@
 // not just that the RPC exists).
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { progressHelpers } from "../lib/progress_helpers.mjs";
 import { extractScript, runPage, fireEvent, wait } from "../lib/jsdom-harness.mjs";
 
 const HTML = new URL("../../tracker/dashboard.html", import.meta.url).pathname;
@@ -40,6 +41,7 @@ function makeSupabase({ ensureOrgId = "org-1", projects = [] } = {}) {
 
 async function run(supabase) {
   return runPage(HTML, extractScript(HTML), {
+    ...progressHelpers,
     __url: "https://example.com/dashboard.html",
     supabase,
     requireAuth: async () => ({ id: "u1" }),

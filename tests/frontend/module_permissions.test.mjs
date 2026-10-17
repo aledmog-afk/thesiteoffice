@@ -8,6 +8,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { progressHelpers } from "../lib/progress_helpers.mjs";
 import { extractScript, runPage, fireEvent, wait } from "../lib/jsdom-harness.mjs";
 
 const HTML = new URL("../../tracker/project.html", import.meta.url).pathname;
@@ -75,6 +76,7 @@ function makeContext({ members, moduleCatalog = MODULE_CATALOG, moduleGrants = [
   sb.auth.getUser = async () => ({ data: { user: { id: currentUserId } } });
 
   const ctx = {
+    ...progressHelpers,
     __url: "https://example.com/project.html?id=p1",
     supabase: sb,
     requireAuth: async () => ({ id: currentUserId }),

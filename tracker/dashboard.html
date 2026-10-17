@@ -52,9 +52,16 @@
           <input type="email" id="contractorEmail" placeholder="reports@contractor.co.uk">
         </div>
       </div>
-      <div class="field">
-        <label for="startDate">Start date</label>
-        <input type="date" id="startDate">
+      <div class="form-grid">
+        <div class="field">
+          <label for="startDate">Start date</label>
+          <input type="date" id="startDate">
+        </div>
+        <div class="field">
+          <label for="externalWorksShare">External works share of the job (%)</label>
+          <input type="number" id="externalWorksShare" min="0" max="100" step="0.5" placeholder="Optional, e.g. 15">
+          <p class="hint">How much of the whole job the site-wide civils, roads, sewers and landscaping are worth. You can set or change it later on Site Details.</p>
+        </div>
       </div>
       <div class="btn-row">
         <button type="submit" class="btn btn-amber">Create Project</button>
@@ -124,7 +131,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, ensureOrganisation, getPortfolioControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, isSnagOutstanding } from "./js/app.js";
+  import { requireAuth, renderHeader, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, ensureOrganisation, getPortfolioControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, isSnagOutstanding, externalWorksStale, externalWorksShareSet, EXTERNAL_WORKS_STALE_DAYS } from "./js/app.js";
 
   await requireAuth();
   renderHeader([{ label: "Dashboard" }]);
@@ -175,6 +182,18 @@
       };
       const { data, error } = await supabase.from("projects").insert(payload).select().single();
       if (error) throw error;
+      // v69: the share is saved through the note-required RPC, with the
+      // note "Set at site setup", so it starts its own dated history.
+      const shareRaw = document.getElementById("externalWorksShare").value;
+      if (shareRaw !== "") {
+        const { error: shareError } = await supabase.rpc("set_external_works", {
+          p_project_id: data.id,
+          p_percent: 0,
+          p_share: Math.max(0, Math.min(100, Number(shareRaw))),
+          p_note: "Set at site setup",
+        });
+        if (shareError) throw shareError;
+      }
       window.location.href = `project.html?id=${data.id}`;
     } catch (err) {
       showError(errorBox, err);
@@ -307,6 +326,14 @@
       }
     });
 
+    // v69: external works reminders (never set automatically).
+    function externalWorksFlagsHtml(p) {
+      const flags = [];
+      if (!externalWorksShareSet(p)) flags.push(`<span class="badge badge-amber">External works share not set</span>`);
+      if (externalWorksStale(p)) flags.push(`<span class="badge badge-red">External works not updated for ${EXTERNAL_WORKS_STALE_DAYS}+ days</span>`);
+      return flags.length ? `<div class="tile-flags" style="display:flex; flex-wrap:wrap; gap:0.3rem; margin:0.4rem 0;">${flags.join("")}</div>` : "";
+    }
+
     grid.innerHTML = projects.map((p) => `
       <a class="tile" href="project.html?id=${p.id}">
         <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:0.6rem;">
@@ -315,6 +342,7 @@
         </div>
         <div class="tile-meta">${escapeHtml(p.main_contractor_name || "No contractor set")}${p.status !== "active" ? ` · <span class="badge badge-grey">${escapeHtml(p.status)}</span>` : ""}</div>
         ${renderProgressBlock(p.baseline_progress_pct, p.actual_progress_pct, p.rag_status)}
+        ${externalWorksFlagsHtml(p)}
         <div class="tile-stats">
           <div><strong>${openSnagCount[p.id] || 0}</strong>open snags</div>
           <div><strong>${lastReport[p.id] ? formatDate(lastReport[p.id]) : "—"}</strong>last report</div>

@@ -12905,3 +12905,1235 @@ $$;
 revoke all on function public.remove_party_member(uuid, uuid) from public;
 revoke execute on function public.remove_party_member(uuid, uuid) from anon;
 grant execute on function public.remove_party_member(uuid, uuid) to authenticated;
+
+-- ─── v69 ADDITIONS: one 33-stage list feeding plot % and site %; plot overrides; external works share and packages ───
+-- Design: tracker/docs/SITE_PROGRESS_SPEC.md. In short:
+--   * public.progress_stages is the one 33-stage list (weekly report
+--     dropdown and plot page grid). internal_milestones gains stage_key,
+--     applicable (N/A), retired_at, updated_at/by, last_source and
+--     last_report_id. The old 16/18-row grid is retired, never deleted.
+--   * Saving a weekly report raises (never lowers) the tagged plots'
+--     stages, via the shared tag parser resolve_plot_tags(): ranges
+--     ("22-27") expand; block names, "External / Engineering Works" and
+--     unknown tags are skipped.
+--   * Plot % = GREATEST(manual override, average of applicable stages),
+--     kept in plots.progress_pct by the database. An override needs a
+--     note, is logged in plot_progress_overrides, and falls away by itself
+--     ("superseded") once the calculated figure reaches it.
+--   * Site % is kept in projects.actual_progress_pct by the database:
+--     share set   -> share x external works + (1 - share) x plots/blocks part
+--     share unset -> today's formula exactly (external works = one plot).
+--   * External works % is never set automatically. It, its share and any
+--     named packages change only through RPCs that require a note
+--     (external_works_updates). With packages, the % is their weighted
+--     average.
+-- Every stored column the dashboard, monthly reports, handover pages and
+-- the tracker export read (plots.progress_pct, blocks.progress_pct,
+-- projects.actual_progress_pct / external_works_pct) is kept.
+-- The one-time go-live data step is guarded by public.progress_migration_runs,
+-- so re-running schema.sql never re-backfills, re-carries or resets
+-- overrides. It aborts (and changes nothing) if any plot or site figure
+-- would differ from the snapshot taken just before it.
+
+-- (A) Session flags. Transaction-local GUCs set only by the definer
+-- functions below; PostgREST clients cannot set them.
+create or replace function public.progress_internal()
+returns boolean language sql stable set search_path = public as $$
+  select coalesce(current_setting('app.progress_internal', true), '') = 'on'
+$$;
+
+create or replace function public.progress_bulk()
+returns boolean language sql stable set search_path = public as $$
+  select coalesce(current_setting('app.progress_bulk', true), '') = 'on'
+$$;
+
+-- (B) The canonical stage list.
+create table if not exists public.progress_stages (
+  stage_key text primary key,
+  name text not null unique,
+  sort_order integer not null unique,
+  house_default_applicable boolean not null,
+  flat_default_applicable boolean not null
+);
+alter table public.progress_stages enable row level security;
+drop policy if exists "signed-in read progress_stages" on public.progress_stages;
+create policy "signed-in read progress_stages" on public.progress_stages for select to authenticated using (true);
+
+insert into public.progress_stages (stage_key, name, sort_order, house_default_applicable, flat_default_applicable) values
+  ('st_site_setup',       'Site Set-Up / Enabling Works',   1, false, false),
+  ('st_groundworks',      'Groundworks',                    2, true,  false),
+  ('st_foundations',      'Foundations (Foots)',            3, true,  false),
+  ('st_drainage',         'Drainage (Below Ground)',        4, true,  false),
+  ('st_slab',             'Slab Pour / Oversite',           5, true,  false),
+  ('st_timber_frame',     'Timber Frame Erect',             6, true,  false),
+  ('st_brick_block',      'Brick & Block Superstructure',   7, true,  false),
+  ('st_scaffold_erect',   'Scaffold Erect',                 8, true,  false),
+  ('st_roofing',          'Roofing',                        9, true,  false),
+  ('st_windows_doors',    'Windows & External Doors',      10, true,  false),
+  ('st_scaffold_drop',    'Scaffold Drop',                 11, true,  false),
+  ('st_render',           'Render',                        12, true,  false),
+  ('st_cladding',         'Cladding / External Finishes',  13, true,  false),
+  ('st_1fix_carpentry',   '1st Fix – Carpentry',           14, true,  true),
+  ('st_1fix_electrical',  '1st Fix – Electrical',          15, true,  true),
+  ('st_1fix_plumbing',    '1st Fix – Plumbing & Heating',  16, true,  true),
+  ('st_1fix_gas',         '1st Fix – Gas',                 17, true,  false),
+  ('st_plaster_dryline',  'Plastering / Drylining',        18, true,  true),
+  ('st_2fix_carpentry',   '2nd Fix – Carpentry',           19, true,  true),
+  ('st_2fix_electrical',  '2nd Fix – Electrical',          20, true,  true),
+  ('st_2fix_plumbing',    '2nd Fix – Plumbing & Heating',  21, true,  true),
+  ('st_carpentry_finals', 'Carpentry Finals',              22, true,  true),
+  ('st_kitchen',          'Kitchen Fit',                   23, true,  true),
+  ('st_bathroom',         'Bathroom Fit',                  24, true,  true),
+  ('st_decorating',       'Painting & Decorating',         25, true,  true),
+  ('st_flooring',         'Flooring',                      26, true,  true),
+  ('st_mastic',           'Mastic',                        27, true,  true),
+  ('st_pv',               'Solar Panels (PV)',             28, true,  false),
+  ('st_external_works',   'External Works / Landscaping',  29, false, false),
+  ('st_testing',          'Testing & Commissioning',       30, true,  true),
+  ('st_clean',            'Clean',                         31, true,  true),
+  ('st_snagging',         'Snagging',                      32, true,  true),
+  ('st_handover',         'Handover / Practical Completion', 33, true, true)
+on conflict (stage_key) do nothing;
+
+-- (C) internal_milestones becomes the single per-plot stage table.
+alter table public.internal_milestones add column if not exists stage_key text references public.progress_stages(stage_key);
+alter table public.internal_milestones add column if not exists applicable boolean not null default true;
+alter table public.internal_milestones add column if not exists retired_at timestamptz;
+alter table public.internal_milestones add column if not exists updated_at timestamptz;
+alter table public.internal_milestones add column if not exists updated_by uuid;
+alter table public.internal_milestones add column if not exists last_source text;
+alter table public.internal_milestones add column if not exists last_report_id uuid;
+alter table public.internal_milestones drop constraint if exists internal_milestones_last_source_check;
+alter table public.internal_milestones add constraint internal_milestones_last_source_check
+  check (last_source is null or last_source in ('plot_page', 'report', 'migration', 'backfill'));
+create unique index if not exists internal_milestones_plot_stage_live_idx
+  on public.internal_milestones (plot_id, stage_key) where stage_key is not null;
+create index if not exists internal_milestones_stage_live_idx
+  on public.internal_milestones (plot_id) where stage_key is not null and retired_at is null;
+
+-- (D) Plot override and calculated columns; site share and timestamps.
+alter table public.plots add column if not exists progress_calculated numeric not null default 0;
+alter table public.plots add column if not exists progress_override numeric;
+alter table public.plots add column if not exists progress_override_note text;
+alter table public.plots add column if not exists progress_override_by uuid;
+alter table public.plots add column if not exists progress_override_at timestamptz;
+alter table public.plots drop constraint if exists plots_progress_override_check;
+alter table public.plots add constraint plots_progress_override_check
+  check (progress_override is null or (progress_override >= 0 and progress_override <= 100
+         and progress_override_note is not null and length(btrim(progress_override_note)) >= 3));
+
+alter table public.projects add column if not exists external_works_share numeric;
+alter table public.projects drop constraint if exists projects_external_works_share_check;
+alter table public.projects add constraint projects_external_works_share_check
+  check (external_works_share is null or (external_works_share >= 0 and external_works_share <= 100));
+alter table public.projects add column if not exists external_works_updated_at timestamptz;
+-- When stage-based progress went live for this site (drives the one-line
+-- note on the first monthly report after go-live).
+alter table public.projects add column if not exists stage_progress_since timestamptz;
+alter table public.monthly_reports add column if not exists progress_basis_note text;
+
+-- (E) History tables (append-only; written only by definer functions).
+create table if not exists public.progress_stage_events (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  plot_id uuid not null references public.plots(id) on delete cascade,
+  stage_key text not null,
+  old_percent numeric,
+  new_percent numeric,
+  old_applicable boolean,
+  new_applicable boolean,
+  source text not null check (source in ('plot_page', 'report', 'migration', 'backfill')),
+  weekly_report_id uuid,
+  note text,
+  changed_by uuid,
+  changed_at timestamptz not null default now()
+);
+create index if not exists progress_stage_events_plot_idx on public.progress_stage_events (plot_id, changed_at desc);
+create index if not exists progress_stage_events_project_idx on public.progress_stage_events (project_id);
+alter table public.progress_stage_events enable row level security;
+drop policy if exists "editors read progress_stage_events" on public.progress_stage_events;
+create policy "editors read progress_stage_events" on public.progress_stage_events for select to authenticated
+  using (public.is_project_editor(project_id)
+         or project_id in (select public.party_cap_projects('programme_read'))
+         or project_id in (select public.party_cap_projects('programme_write')));
+
+create table if not exists public.plot_progress_overrides (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  plot_id uuid not null references public.plots(id) on delete cascade,
+  action text not null check (action in ('set', 'cleared', 'superseded', 'carried_over')),
+  old_override numeric,
+  new_override numeric,
+  calculated numeric,
+  note text not null check (length(btrim(note)) >= 3),
+  changed_by uuid,
+  changed_by_email text,
+  changed_at timestamptz not null default now()
+);
+create index if not exists plot_progress_overrides_plot_idx on public.plot_progress_overrides (plot_id, changed_at desc);
+create index if not exists plot_progress_overrides_project_idx on public.plot_progress_overrides (project_id);
+alter table public.plot_progress_overrides enable row level security;
+drop policy if exists "members read plot_progress_overrides" on public.plot_progress_overrides;
+create policy "members read plot_progress_overrides" on public.plot_progress_overrides for select to authenticated
+  using (public.is_project_member(project_id));
+
+create table if not exists public.external_works_packages (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  name text not null check (length(btrim(name)) between 1 and 80),
+  share numeric not null check (share > 0 and share <= 100),
+  percent numeric not null default 0 check (percent >= 0 and percent <= 100),
+  report_stages text[] not null default '{}',
+  sort_order integer not null default 0,
+  retired_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists external_works_packages_project_idx on public.external_works_packages (project_id);
+alter table public.external_works_packages enable row level security;
+drop policy if exists "members read external_works_packages" on public.external_works_packages;
+create policy "members read external_works_packages" on public.external_works_packages for select to authenticated
+  using (public.is_project_member(project_id));
+
+create table if not exists public.external_works_updates (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  package_id uuid references public.external_works_packages(id) on delete set null,
+  kind text not null check (kind in ('site', 'package_added', 'package_updated', 'package_retired')),
+  package_name text,
+  old_pct numeric,
+  new_pct numeric,
+  old_share numeric,
+  new_share numeric,
+  note text not null check (length(btrim(note)) between 3 and 500),
+  changed_by uuid,
+  changed_by_email text,
+  changed_at timestamptz not null default now()
+);
+create index if not exists external_works_updates_project_idx on public.external_works_updates (project_id, changed_at desc);
+create index if not exists external_works_updates_package_idx on public.external_works_updates (package_id);
+alter table public.external_works_updates enable row level security;
+drop policy if exists "members read external_works_updates" on public.external_works_updates;
+create policy "members read external_works_updates" on public.external_works_updates for select to authenticated
+  using (public.is_project_member(project_id));
+
+-- Migration bookkeeping: run marker, flags (e.g. Dry Lining vs Plastering
+-- more than 25 apart) and a log of every old-grid -> new-stage mapping.
+create table if not exists public.progress_migration_runs (
+  step text primary key,
+  ran_at timestamptz not null default now(),
+  detail jsonb
+);
+alter table public.progress_migration_runs enable row level security;
+
+create table if not exists public.progress_migration_flags (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  plot_id uuid references public.plots(id) on delete cascade,
+  flag text not null,
+  detail text,
+  created_at timestamptz not null default now()
+);
+alter table public.progress_migration_flags enable row level security;
+drop policy if exists "editors read progress_migration_flags" on public.progress_migration_flags;
+create policy "editors read progress_migration_flags" on public.progress_migration_flags for select to authenticated
+  using (public.is_project_editor(project_id));
+
+create table if not exists public.progress_stage_mapping_log (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null,
+  plot_id uuid not null,
+  stage_key text not null,
+  old_keys text[] not null,
+  old_values numeric[] not null,
+  new_percent numeric not null,
+  created_at timestamptz not null default now()
+);
+alter table public.progress_stage_mapping_log enable row level security;
+
+-- Snapshots taken once, immediately before the go-live data step.
+create table if not exists public.legacy_v69_internal_milestones (
+  id uuid primary key, project_id uuid, plot_id uuid, milestone_key text, title text,
+  percent numeric, sort_order integer, created_at timestamptz, captured_at timestamptz not null default now()
+);
+create table if not exists public.legacy_v69_plot_progress (
+  plot_id uuid primary key, project_id uuid, block_id uuid, progress_pct numeric, captured_at timestamptz not null default now()
+);
+create table if not exists public.legacy_v69_block_progress (
+  block_id uuid primary key, project_id uuid, progress_pct numeric, captured_at timestamptz not null default now()
+);
+create table if not exists public.legacy_v69_project_progress (
+  project_id uuid primary key, actual_progress_pct numeric, external_works_pct numeric, captured_at timestamptz not null default now()
+);
+alter table public.legacy_v69_internal_milestones enable row level security;
+alter table public.legacy_v69_plot_progress enable row level security;
+alter table public.legacy_v69_block_progress enable row level security;
+alter table public.legacy_v69_project_progress enable row level security;
+
+-- (F) Shared plot-tag parser. JS twin: resolvePlotTags() in
+-- tracker/js/app.js; both are checked against the same case table in
+-- tests/lib/plot_tag_cases.json.
+create or replace function public.plot_tag_token(p_text text)
+returns text language sql immutable set search_path = public as $$
+  select case
+    when p_text is null then null
+    when substring(p_text from '[0-9]+') is not null
+      then coalesce(nullif(ltrim(substring(p_text from '[0-9]+'), '0'), ''), '0')
+    else lower(btrim(p_text))
+  end
+$$;
+
+create or replace function public.resolve_plot_tags(p_project_id uuid, p_tag text)
+returns setof uuid
+language plpgsql stable security definer set search_path = public as $$
+declare
+  v_seg text;
+  v_a int;
+  v_b int;
+  v_tokens text[] := '{}';
+  v_blocks text[];
+begin
+  if p_tag is null or btrim(p_tag) = '' then return; end if;
+  if lower(btrim(p_tag)) = lower('External / Engineering Works') then return; end if;
+  select coalesce(array_agg(lower(btrim(b.block_name))), '{}') into v_blocks
+    from public.blocks b where b.project_id = p_project_id;
+  if lower(btrim(p_tag)) = any(v_blocks) then return; end if;
+
+  foreach v_seg in array string_to_array(p_tag, ',') loop
+    v_seg := btrim(v_seg);
+    continue when v_seg = '';
+    continue when lower(v_seg) = any(v_blocks);
+    continue when lower(v_seg) = lower('External / Engineering Works');
+    if v_seg ~* '[0-9]{1,6}\s*[-–]\s*(plots?\s*|flats?\s*)?[0-9]{1,6}' then
+      v_a := (regexp_match(v_seg, '([0-9]{1,6})\s*[-–]\s*(?:[Pp][Ll][Oo][Tt][Ss]?\s*|[Ff][Ll][Aa][Tt][Ss]?\s*)?[0-9]{1,6}'))[1]::int;
+      v_b := (regexp_match(v_seg, '[0-9]{1,6}\s*[-–]\s*(?:[Pp][Ll][Oo][Tt][Ss]?\s*|[Ff][Ll][Aa][Tt][Ss]?\s*)?([0-9]{1,6})'))[1]::int;
+      if abs(v_b - v_a) <= 200 then
+        v_tokens := v_tokens || array(select g::text from generate_series(least(v_a, v_b), greatest(v_a, v_b)) g);
+      end if;
+    else
+      v_tokens := v_tokens || public.plot_tag_token(v_seg);
+    end if;
+  end loop;
+
+  return query
+    select p.id from public.plots p
+    where p.project_id = p_project_id
+      and public.plot_tag_token(p.plot_number) = any(v_tokens);
+end;
+$$;
+
+-- (G) Plot % = GREATEST(override, average of applicable live stages).
+-- The plots AFTER trigger then recalculates the site when plot % moved
+-- (skipped while app.progress_bulk is on; bulk callers recalc sites once).
+create or replace function public.recalc_plot_progress(p_plot_id uuid)
+returns void
+language plpgsql security definer set search_path = public as $$
+declare
+  v_plot public.plots%rowtype;
+  v_calc numeric;
+  v_override numeric;
+  v_new numeric;
+  v_prev text := coalesce(current_setting('app.progress_internal', true), '');
+begin
+  select * into v_plot from public.plots where id = p_plot_id;
+  if not found then return; end if;
+
+  select coalesce(round(avg(m.percent), 1), 0) into v_calc
+    from public.internal_milestones m
+   where m.plot_id = p_plot_id and m.stage_key is not null and m.retired_at is null and m.applicable;
+
+  v_override := v_plot.progress_override;
+  perform set_config('app.progress_internal', 'on', true);
+
+  if v_override is not null and v_calc >= v_override then
+    insert into public.plot_progress_overrides (project_id, plot_id, action, old_override, new_override, calculated, note, changed_by)
+    values (v_plot.project_id, v_plot.id, 'superseded', v_override, null, v_calc,
+            'Calculated progress reached the manual figure; back to automatic', auth.uid());
+    update public.plots
+       set progress_override = null, progress_override_note = null,
+           progress_override_by = null, progress_override_at = null
+     where id = p_plot_id;
+    v_override := null;
+  end if;
+
+  v_new := greatest(coalesce(v_override, 0), v_calc);
+  if v_plot.progress_calculated is distinct from v_calc or v_plot.progress_pct is distinct from v_new then
+    update public.plots set progress_calculated = v_calc, progress_pct = v_new where id = p_plot_id;
+  end if;
+
+  perform set_config('app.progress_internal', v_prev, true);
+end;
+$$;
+
+-- (H) Site %. With no share set this is today's browser formula exactly
+-- (app.js recalculateActualProgress, now removed): external works counts
+-- as one plot's worth and each block counts once per flat (min 1).
+create or replace function public.recalc_project_progress(p_project_id uuid)
+returns void
+language plpgsql security definer set search_path = public as $$
+declare
+  v_proj public.projects%rowtype;
+  v_ext numeric;
+  v_plot_sum numeric;
+  v_plot_n numeric;
+  v_block_sum numeric;
+  v_block_w numeric;
+  v_part numeric;
+  v_site numeric;
+  v_pkg_share numeric;
+  v_pkg_weighted numeric;
+  v_prev text := coalesce(current_setting('app.progress_internal', true), '');
+begin
+  select * into v_proj from public.projects where id = p_project_id;
+  if not found then return; end if;
+
+  v_ext := coalesce(v_proj.external_works_pct, 0);
+  select sum(k.share), sum(k.share * k.percent) into v_pkg_share, v_pkg_weighted
+    from public.external_works_packages k
+   where k.project_id = p_project_id and k.retired_at is null;
+  if coalesce(v_pkg_share, 0) > 0 then
+    v_ext := round(v_pkg_weighted / v_pkg_share, 1);
+  end if;
+
+  select coalesce(sum(p.progress_pct), 0), count(*) into v_plot_sum, v_plot_n
+    from public.plots p where p.project_id = p_project_id;
+  select coalesce(sum(b.progress_pct * greatest(f.n, 1)), 0), coalesce(sum(greatest(f.n, 1)), 0)
+    into v_block_sum, v_block_w
+    from public.blocks b
+    cross join lateral (select count(*) as n from public.plots fp where fp.block_id = b.id) f
+   where b.project_id = p_project_id;
+
+  if v_proj.external_works_share is null then
+    v_site := round((v_plot_sum + v_block_sum + v_ext) / (v_plot_n + v_block_w + 1), 1);
+  elsif v_plot_n + v_block_w = 0 then
+    v_site := round(v_ext, 1);
+  else
+    v_part := (v_plot_sum + v_block_sum) / (v_plot_n + v_block_w);
+    v_site := round(v_proj.external_works_share / 100 * v_ext + (1 - v_proj.external_works_share / 100) * v_part, 1);
+  end if;
+  v_site := least(greatest(v_site, 0), 100);
+
+  if v_proj.actual_progress_pct is distinct from v_site or v_proj.external_works_pct is distinct from v_ext then
+    perform set_config('app.progress_internal', 'on', true);
+    update public.projects set actual_progress_pct = v_site, external_works_pct = v_ext where id = p_project_id;
+    perform set_config('app.progress_internal', v_prev, true);
+  end if;
+end;
+$$;
+
+-- (I) internal_milestones triggers: stamp, log, recalc.
+create or replace function public.internal_milestones_v69_before()
+returns trigger
+language plpgsql security definer set search_path = public as $$
+declare
+  v_src text := nullif(current_setting('app.progress_source', true), '');
+begin
+  if tg_op = 'INSERT' then
+    if not public.progress_internal() then
+      new.retired_at := null;
+      new.last_source := null;
+      new.last_report_id := null;
+    end if;
+    return new;
+  end if;
+
+  -- Legacy (retired) grid rows: left alone apart from what earlier
+  -- schema.sql sections do on a re-run.
+  if old.stage_key is null and new.stage_key is null then
+    return new;
+  end if;
+
+  if not public.progress_internal() then
+    -- Clients (plot page) may change percent and applicable only.
+    new.id := old.id;
+    new.project_id := old.project_id;
+    new.plot_id := old.plot_id;
+    new.milestone_key := old.milestone_key;
+    new.stage_key := old.stage_key;
+    new.title := old.title;
+    new.sort_order := old.sort_order;
+    new.retired_at := old.retired_at;
+    new.created_at := old.created_at;
+    if old.retired_at is not null then
+      new.percent := old.percent;
+      new.applicable := old.applicable;
+    end if;
+    if new.percent is distinct from old.percent or new.applicable is distinct from old.applicable then
+      new.last_source := 'plot_page';
+      new.last_report_id := null;
+    else
+      new.last_source := old.last_source;
+      new.last_report_id := old.last_report_id;
+    end if;
+  elsif v_src is not null and (new.percent is distinct from old.percent or new.applicable is distinct from old.applicable) then
+    new.last_source := v_src;
+    new.last_report_id := nullif(current_setting('app.progress_report_id', true), '')::uuid;
+  end if;
+
+  if new.percent is distinct from old.percent or new.applicable is distinct from old.applicable then
+    new.updated_at := now();
+    new.updated_by := auth.uid();
+  end if;
+  return new;
+end;
+$$;
+
+create or replace function public.internal_milestones_v69_after()
+returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if tg_op = 'DELETE' then
+    if old.stage_key is not null and not public.progress_bulk() then
+      perform public.recalc_plot_progress(old.plot_id);
+    end if;
+    return old;
+  end if;
+
+  if tg_op = 'UPDATE' and new.stage_key is not null
+     and (new.percent is distinct from old.percent or new.applicable is distinct from old.applicable) then
+    insert into public.progress_stage_events (project_id, plot_id, stage_key, old_percent, new_percent,
+      old_applicable, new_applicable, source, weekly_report_id, note, changed_by)
+    values (new.project_id, new.plot_id, new.stage_key, old.percent, new.percent, old.applicable, new.applicable,
+      coalesce(new.last_source, 'plot_page'), new.last_report_id,
+      nullif(current_setting('app.progress_note', true), ''), auth.uid());
+  end if;
+
+  if not public.progress_bulk()
+     and (new.stage_key is not null or (tg_op = 'UPDATE' and old.stage_key is not null))
+     and (tg_op = 'INSERT' or new.percent is distinct from old.percent
+          or new.applicable is distinct from old.applicable
+          or new.retired_at is distinct from old.retired_at) then
+    perform public.recalc_plot_progress(new.plot_id);
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_internal_milestones_v69_before on public.internal_milestones;
+create trigger trg_internal_milestones_v69_before before insert or update on public.internal_milestones
+  for each row execute function public.internal_milestones_v69_before();
+drop trigger if exists trg_internal_milestones_v69_after on public.internal_milestones;
+create trigger trg_internal_milestones_v69_after after insert or update or delete on public.internal_milestones
+  for each row execute function public.internal_milestones_v69_after();
+
+-- (J) plots / blocks / projects: stored figures are database-owned.
+create or replace function public.plots_v69_progress_guard()
+returns trigger
+language plpgsql security invoker set search_path = public as $$
+begin
+  -- Only signed-in clients are held to this; the definer functions set
+  -- app.progress_internal, and service/maintenance roles are trusted.
+  if public.progress_internal() or current_user not in ('authenticated', 'anon') then return new; end if;
+  if tg_op = 'INSERT' then
+    new.progress_pct := 0;
+    new.progress_calculated := 0;
+    new.progress_override := null;
+    new.progress_override_note := null;
+    new.progress_override_by := null;
+    new.progress_override_at := null;
+  else
+    -- Ignored rather than rejected, so an old cached page can't break.
+    new.progress_pct := old.progress_pct;
+    new.progress_calculated := old.progress_calculated;
+    new.progress_override := old.progress_override;
+    new.progress_override_note := old.progress_override_note;
+    new.progress_override_by := old.progress_override_by;
+    new.progress_override_at := old.progress_override_at;
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists trg_plots_v69_progress_guard on public.plots;
+create trigger trg_plots_v69_progress_guard before insert or update on public.plots
+  for each row execute function public.plots_v69_progress_guard();
+
+create or replace function public.plots_v69_after()
+returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.progress_bulk() then return null; end if;
+  if tg_op = 'DELETE' then
+    perform public.recalc_project_progress(old.project_id);
+  elsif tg_op = 'INSERT' then
+    perform public.recalc_project_progress(new.project_id);
+  elsif new.progress_pct is distinct from old.progress_pct or new.block_id is distinct from old.block_id
+        or new.project_id is distinct from old.project_id then
+    perform public.recalc_project_progress(new.project_id);
+    if new.project_id is distinct from old.project_id then
+      perform public.recalc_project_progress(old.project_id);
+    end if;
+  end if;
+  return null;
+end;
+$$;
+drop trigger if exists trg_plots_v69_after on public.plots;
+create trigger trg_plots_v69_after after insert or update or delete on public.plots
+  for each row execute function public.plots_v69_after();
+
+create or replace function public.blocks_v69_after()
+returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if public.progress_bulk() then return null; end if;
+  if tg_op = 'DELETE' then
+    perform public.recalc_project_progress(old.project_id);
+  elsif tg_op = 'INSERT' or new.progress_pct is distinct from old.progress_pct then
+    perform public.recalc_project_progress(new.project_id);
+  end if;
+  return null;
+end;
+$$;
+drop trigger if exists trg_blocks_v69_after on public.blocks;
+create trigger trg_blocks_v69_after after insert or update or delete on public.blocks
+  for each row execute function public.blocks_v69_after();
+
+create or replace function public.projects_v69_progress_guard()
+returns trigger
+language plpgsql security invoker set search_path = public as $$
+begin
+  if public.progress_internal() or current_user not in ('authenticated', 'anon') then return new; end if;
+  if tg_op = 'INSERT' then
+    -- A new site starts at 0, with no share; the share and first figure
+    -- are then set with a note through set_external_works().
+    new.actual_progress_pct := 0;
+    new.external_works_pct := 0;
+    new.external_works_share := null;
+    new.external_works_updated_at := null;
+    new.stage_progress_since := null;
+    return new;
+  end if;
+  new.actual_progress_pct := old.actual_progress_pct;
+  new.stage_progress_since := old.stage_progress_since;
+  new.external_works_updated_at := old.external_works_updated_at;
+  if new.external_works_pct is distinct from old.external_works_pct
+     or new.external_works_share is distinct from old.external_works_share then
+    raise exception 'External works changes need a note. Use Site Details.' using errcode = '42501';
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists trg_projects_v69_progress_guard on public.projects;
+create trigger trg_projects_v69_progress_guard before insert or update on public.projects
+  for each row execute function public.projects_v69_progress_guard();
+
+-- (K) Weekly report save -> raise-only stage updates (any status, drafts
+-- included; status-only changes don't re-fire because the content is
+-- unchanged). Never lowers; N/A stages are never raised.
+create or replace function public.apply_weekly_report_progress(p_report_id uuid, p_source text default 'report')
+returns integer
+language plpgsql security definer set search_path = public as $$
+declare
+  v_rep record;
+  v_item jsonb;
+  v_stage text;
+  v_pct numeric;
+  v_hit uuid[];
+  v_plots uuid[] := '{}';
+  v_total integer := 0;
+  v_pid uuid;
+  v_prev_int text := coalesce(current_setting('app.progress_internal', true), '');
+  v_prev_bulk text := coalesce(current_setting('app.progress_bulk', true), '');
+  v_prev_src text := coalesce(current_setting('app.progress_source', true), '');
+  v_prev_rep text := coalesce(current_setting('app.progress_report_id', true), '');
+begin
+  if p_source not in ('report', 'backfill') then
+    raise exception 'apply_weekly_report_progress: bad source %', p_source;
+  end if;
+  select w.id, w.project_id, w.progress_items into v_rep from public.weekly_reports w where w.id = p_report_id;
+  if not found or v_rep.progress_items is null or jsonb_typeof(v_rep.progress_items) <> 'array' then
+    return 0;
+  end if;
+
+  perform set_config('app.progress_internal', 'on', true);
+  perform set_config('app.progress_bulk', 'on', true);
+  perform set_config('app.progress_source', p_source, true);
+  perform set_config('app.progress_report_id', p_report_id::text, true);
+
+  for v_item in select value from jsonb_array_elements(v_rep.progress_items) loop
+    continue when jsonb_typeof(v_item) <> 'object';
+    select s.stage_key into v_stage from public.progress_stages s where s.name = btrim(coalesce(v_item->>'milestone', ''));
+    continue when v_stage is null;
+    v_pct := case
+      when jsonb_typeof(v_item->'percent') = 'number' then (v_item->>'percent')::numeric
+      when jsonb_typeof(v_item->'percent') = 'string' and btrim(v_item->>'percent') ~ '^[0-9]{1,3}(\.[0-9]+)?$'
+        then btrim(v_item->>'percent')::numeric
+    end;
+    continue when v_pct is null or v_pct <= 0 or v_pct > 100;
+
+    with u as (
+      update public.internal_milestones m
+         set percent = v_pct
+       where m.project_id = v_rep.project_id
+         and m.stage_key = v_stage
+         and m.retired_at is null
+         and m.applicable
+         and m.percent < v_pct
+         and m.plot_id in (select public.resolve_plot_tags(v_rep.project_id, v_item->>'plot'))
+      returning m.plot_id
+    )
+    select coalesce(array_agg(u.plot_id), '{}') into v_hit from u;
+    v_plots := v_plots || v_hit;
+    v_total := v_total + coalesce(array_length(v_hit, 1), 0);
+  end loop;
+
+  -- The go-live backfill recalculates everything once at the end itself.
+  if p_source = 'report' then
+    for v_pid in select distinct x from unnest(v_plots) x loop
+      perform public.recalc_plot_progress(v_pid);
+    end loop;
+    if v_total > 0 then
+      perform public.recalc_project_progress(v_rep.project_id);
+    end if;
+  end if;
+
+  perform set_config('app.progress_internal', v_prev_int, true);
+  perform set_config('app.progress_bulk', v_prev_bulk, true);
+  perform set_config('app.progress_source', v_prev_src, true);
+  perform set_config('app.progress_report_id', v_prev_rep, true);
+  return v_total;
+end;
+$$;
+
+create or replace function public.weekly_reports_v69_progress()
+returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if tg_op = 'INSERT' or new.progress_items is distinct from old.progress_items then
+    perform public.apply_weekly_report_progress(new.id, 'report');
+  end if;
+  return null;
+end;
+$$;
+drop trigger if exists trg_weekly_reports_v69_progress on public.weekly_reports;
+create trigger trg_weekly_reports_v69_progress after insert or update of progress_items on public.weekly_reports
+  for each row execute function public.weekly_reports_v69_progress();
+
+-- (L) Plot overrides (RPCs; the note is required here and by a CHECK).
+create or replace function public.set_plot_override(p_plot_id uuid, p_percent numeric, p_note text)
+returns numeric
+language plpgsql security definer set search_path = public as $$
+declare
+  v_plot public.plots%rowtype;
+  v_prev text := coalesce(current_setting('app.progress_internal', true), '');
+begin
+  select * into v_plot from public.plots where id = p_plot_id;
+  if not found or not public.is_project_editor(v_plot.project_id) then
+    raise exception 'You don''t have permission to change this plot''s progress.' using errcode = '42501';
+  end if;
+  if p_note is null or length(btrim(p_note)) < 3 or length(btrim(p_note)) > 500 then
+    raise exception 'A note is required (3 to 500 characters).' using errcode = '22023';
+  end if;
+  if p_percent is null or p_percent < 0 or p_percent > 100 then
+    raise exception 'The manual figure must be between 0 and 100.' using errcode = '22023';
+  end if;
+  if p_percent <= v_plot.progress_calculated then
+    raise exception using errcode = '22023',
+      message = format('The manual figure must be higher than the calculated %s%%.', v_plot.progress_calculated);
+  end if;
+
+  perform set_config('app.progress_internal', 'on', true);
+  insert into public.plot_progress_overrides (project_id, plot_id, action, old_override, new_override, calculated, note, changed_by, changed_by_email)
+  values (v_plot.project_id, v_plot.id, 'set', v_plot.progress_override, round(p_percent, 1), v_plot.progress_calculated,
+          btrim(p_note), auth.uid(), (select u.email from auth.users u where u.id = auth.uid()));
+  update public.plots
+     set progress_override = round(p_percent, 1), progress_override_note = btrim(p_note),
+         progress_override_by = auth.uid(), progress_override_at = now()
+   where id = p_plot_id;
+  perform public.recalc_plot_progress(p_plot_id);
+  perform set_config('app.progress_internal', v_prev, true);
+  return (select progress_pct from public.plots where id = p_plot_id);
+end;
+$$;
+
+create or replace function public.clear_plot_override(p_plot_id uuid, p_note text default null)
+returns numeric
+language plpgsql security definer set search_path = public as $$
+declare
+  v_plot public.plots%rowtype;
+  v_prev text := coalesce(current_setting('app.progress_internal', true), '');
+begin
+  select * into v_plot from public.plots where id = p_plot_id;
+  if not found or not public.is_project_editor(v_plot.project_id) then
+    raise exception 'You don''t have permission to change this plot''s progress.' using errcode = '42501';
+  end if;
+  if v_plot.progress_override is null then
+    return v_plot.progress_pct;
+  end if;
+  perform set_config('app.progress_internal', 'on', true);
+  insert into public.plot_progress_overrides (project_id, plot_id, action, old_override, new_override, calculated, note, changed_by, changed_by_email)
+  values (v_plot.project_id, v_plot.id, 'cleared', v_plot.progress_override, null, v_plot.progress_calculated,
+          coalesce(nullif(left(btrim(p_note), 500), ''), 'Switched back to automatic'),
+          auth.uid(), (select u.email from auth.users u where u.id = auth.uid()));
+  update public.plots
+     set progress_override = null, progress_override_note = null, progress_override_by = null, progress_override_at = null
+   where id = p_plot_id;
+  perform public.recalc_plot_progress(p_plot_id);
+  perform set_config('app.progress_internal', v_prev, true);
+  return (select progress_pct from public.plots where id = p_plot_id);
+end;
+$$;
+
+-- (M) External works: figure, share and packages, each change with a note.
+create or replace function public.external_works_check(p_project_id uuid, p_note text)
+returns void
+language plpgsql stable security definer set search_path = public as $$
+begin
+  if p_project_id is null or not public.is_project_editor(p_project_id) or public.is_party_only(p_project_id) then
+    raise exception 'You don''t have permission to change external works for this site.' using errcode = '42501';
+  end if;
+  if p_note is null or length(btrim(p_note)) < 3 or length(btrim(p_note)) > 500 then
+    raise exception 'A note is required (3 to 500 characters).' using errcode = '22023';
+  end if;
+end;
+$$;
+
+create or replace function public.set_external_works(p_project_id uuid, p_percent numeric, p_share numeric, p_note text)
+returns void
+language plpgsql security definer set search_path = public as $$
+declare
+  v_proj public.projects%rowtype;
+  v_has_pkgs boolean;
+  v_pct numeric;
+  v_prev text := coalesce(current_setting('app.progress_internal', true), '');
+begin
+  perform public.external_works_check(p_project_id, p_note);
+  select * into v_proj from public.projects where id = p_project_id for update;
+  select exists (select 1 from public.external_works_packages k where k.project_id = p_project_id and k.retired_at is null)
+    into v_has_pkgs;
+  v_pct := coalesce(p_percent, v_proj.external_works_pct);
+  if v_has_pkgs and v_pct is distinct from v_proj.external_works_pct then
+    raise exception 'This site''s external works %% is worked out from its packages. Update the packages instead.' using errcode = '22023';
+  end if;
+  if v_pct < 0 or v_pct > 100 then
+    raise exception 'External works must be between 0 and 100.' using errcode = '22023';
+  end if;
+  if p_share is not null and (p_share < 0 or p_share > 100) then
+    raise exception 'The share must be between 0 and 100.' using errcode = '22023';
+  end if;
+
+  perform set_config('app.progress_internal', 'on', true);
+  insert into public.external_works_updates (project_id, kind, old_pct, new_pct, old_share, new_share, note, changed_by, changed_by_email)
+  values (p_project_id, 'site', v_proj.external_works_pct, v_pct, v_proj.external_works_share, p_share,
+          btrim(p_note), auth.uid(), (select u.email from auth.users u where u.id = auth.uid()));
+  update public.projects
+     set external_works_pct = v_pct, external_works_share = p_share, external_works_updated_at = now()
+   where id = p_project_id;
+  perform public.recalc_project_progress(p_project_id);
+  perform set_config('app.progress_internal', v_prev, true);
+end;
+$$;
+
+create or replace function public.save_external_works_package(
+  p_project_id uuid, p_package_id uuid, p_name text, p_share numeric, p_percent numeric,
+  p_report_stages text[], p_note text)
+returns uuid
+language plpgsql security definer set search_path = public as $$
+declare
+  v_old public.external_works_packages%rowtype;
+  v_id uuid;
+  v_stages text[];
+  v_prev text := coalesce(current_setting('app.progress_internal', true), '');
+begin
+  perform public.external_works_check(p_project_id, p_note);
+  if p_name is null or length(btrim(p_name)) < 1 or length(btrim(p_name)) > 80 then
+    raise exception 'Give the package a name (up to 80 characters).' using errcode = '22023';
+  end if;
+  if p_share is null or p_share <= 0 or p_share > 100 then
+    raise exception 'The package share must be more than 0 and at most 100.' using errcode = '22023';
+  end if;
+  if p_percent is null or p_percent < 0 or p_percent > 100 then
+    raise exception 'The package %% must be between 0 and 100.' using errcode = '22023';
+  end if;
+  select coalesce(array_agg(s.name order by s.sort_order), '{}') into v_stages
+    from public.progress_stages s where s.name = any(coalesce(p_report_stages, '{}'));
+
+  perform set_config('app.progress_internal', 'on', true);
+  if p_package_id is null then
+    insert into public.external_works_packages (project_id, name, share, percent, report_stages, sort_order)
+    values (p_project_id, btrim(p_name), p_share, p_percent, v_stages,
+            coalesce((select max(sort_order) + 1 from public.external_works_packages where project_id = p_project_id), 1))
+    returning id into v_id;
+    insert into public.external_works_updates (project_id, package_id, kind, package_name, old_pct, new_pct, old_share, new_share, note, changed_by, changed_by_email)
+    values (p_project_id, v_id, 'package_added', btrim(p_name), null, p_percent, null, p_share,
+            btrim(p_note), auth.uid(), (select u.email from auth.users u where u.id = auth.uid()));
+  else
+    select * into v_old from public.external_works_packages
+     where id = p_package_id and project_id = p_project_id and retired_at is null for update;
+    if not found then
+      raise exception 'That package no longer exists.' using errcode = '22023';
+    end if;
+    update public.external_works_packages
+       set name = btrim(p_name), share = p_share, percent = p_percent, report_stages = v_stages, updated_at = now()
+     where id = p_package_id;
+    v_id := p_package_id;
+    insert into public.external_works_updates (project_id, package_id, kind, package_name, old_pct, new_pct, old_share, new_share, note, changed_by, changed_by_email)
+    values (p_project_id, v_id, 'package_updated', btrim(p_name), v_old.percent, p_percent, v_old.share, p_share,
+            btrim(p_note), auth.uid(), (select u.email from auth.users u where u.id = auth.uid()));
+  end if;
+  update public.projects set external_works_updated_at = now() where id = p_project_id;
+  perform public.recalc_project_progress(p_project_id);
+  perform set_config('app.progress_internal', v_prev, true);
+  return v_id;
+end;
+$$;
+
+create or replace function public.retire_external_works_package(p_package_id uuid, p_note text)
+returns void
+language plpgsql security definer set search_path = public as $$
+declare
+  v_old public.external_works_packages%rowtype;
+  v_prev text := coalesce(current_setting('app.progress_internal', true), '');
+begin
+  select * into v_old from public.external_works_packages where id = p_package_id;
+  perform public.external_works_check(v_old.project_id, p_note);
+  if v_old.retired_at is not null then return; end if;
+  perform set_config('app.progress_internal', 'on', true);
+  update public.external_works_packages set retired_at = now(), updated_at = now() where id = p_package_id;
+  insert into public.external_works_updates (project_id, package_id, kind, package_name, old_pct, new_pct, old_share, new_share, note, changed_by, changed_by_email)
+  values (v_old.project_id, v_old.id, 'package_retired', v_old.name, v_old.percent, null, v_old.share, null,
+          btrim(p_note), auth.uid(), (select u.email from auth.users u where u.id = auth.uid()));
+  update public.projects set external_works_updated_at = now() where id = v_old.project_id;
+  perform public.recalc_project_progress(v_old.project_id);
+  perform set_config('app.progress_internal', v_prev, true);
+end;
+$$;
+
+-- (N) New plots get the 33 stages (gates, documents and snag list unchanged).
+create or replace function public.seed_plot_defaults()
+returns trigger as $$
+begin
+  if new.block_id is null then
+    insert into public.quality_gates (project_id, plot_id, gate_key, title, sort_order, checklist) values
+      (new.project_id, new.id, 'substructure_drainage', 'Substructure & Drainage', 1, '[
+         {"text": "Foundation excavation inspected by Building Control", "checked": false, "checked_at": null},
+         {"text": "Drainage test (air/water) passed and recorded", "checked": false, "checked_at": null},
+         {"text": "DPC level verified", "checked": false, "checked_at": null},
+         {"text": "Building Control sign-off for substructure received", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      (new.project_id, new.id, 'frame_watertight', 'Frame & Wind/Watertight', 2, '[
+         {"text": "Moisture readings recorded", "checked": false, "checked_at": null},
+         {"text": "Cavity barriers inspected", "checked": false, "checked_at": null},
+         {"text": "Structural engineer sign-off uploaded", "checked": false, "checked_at": null},
+         {"text": "Roof confirmed watertight", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      (new.project_id, new.id, 'pre_plaster_first_fix', 'Pre-Plaster / First Fix', 3, '[
+         {"text": "First fix electrical inspected", "checked": false, "checked_at": null},
+         {"text": "First fix plumbing & heating inspected", "checked": false, "checked_at": null},
+         {"text": "Insulation installed and inspected", "checked": false, "checked_at": null},
+         {"text": "Pre-plaster inspection sign-off received", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      (new.project_id, new.id, 'pre_handover_pc', 'Pre-Handover / PC', 4, '[
+         {"text": "Snagging list closed out", "checked": false, "checked_at": null},
+         {"text": "O&M manuals received", "checked": false, "checked_at": null},
+         {"text": "All statutory certificates received", "checked": false, "checked_at": null},
+         {"text": "Final client walkthrough completed", "checked": false, "checked_at": null}
+       ]'::jsonb)
+    on conflict (plot_id, gate_key) do nothing;
+
+    insert into public.handover_documents (project_id, plot_id, doc_key, title) values
+      (new.project_id, new.id, 'building_control', 'Building Control Sign-off (Initial/Final)'),
+      (new.project_id, new.id, 'air_acoustic_test', 'Air Permeability / Acoustic Test Certificates'),
+      (new.project_id, new.id, 'elec_gas_certs', 'Electrical & Gas Safety Certificates'),
+      (new.project_id, new.id, 'warranty_cover_note', 'NHBC/Structural Warranty Cover Note'),
+      (new.project_id, new.id, 'om_manuals', 'Draft O&M Manuals')
+    on conflict (plot_id, doc_key) do nothing;
+
+  else
+    insert into public.quality_gates (project_id, plot_id, gate_key, title, sort_order, checklist) values
+      (new.project_id, new.id, 'flat_first_fix', '1st Fix (All Trades)', 1, '[
+         {"text": "First fix electrical inspected", "checked": false, "checked_at": null},
+         {"text": "First fix plumbing & heating inspected", "checked": false, "checked_at": null},
+         {"text": "Insulation installed and inspected", "checked": false, "checked_at": null},
+         {"text": "Pre-plaster inspection sign-off received", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      (new.project_id, new.id, 'flat_second_fix', '2nd Fix (All Trades)', 2, '[
+         {"text": "Second fix electrical complete and tested", "checked": false, "checked_at": null},
+         {"text": "Second fix plumbing & heating complete and tested", "checked": false, "checked_at": null},
+         {"text": "Sockets, switches and fittings installed", "checked": false, "checked_at": null},
+         {"text": "Heating system commissioned", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      (new.project_id, new.id, 'flat_kitchen_bathroom', 'Kitchen & Bathroom Fit', 3, '[
+         {"text": "Kitchen units, worktops and appliances installed", "checked": false, "checked_at": null},
+         {"text": "Bathroom / en-suite sanitaryware and tiling complete", "checked": false, "checked_at": null},
+         {"text": "Water pressure and drainage tested", "checked": false, "checked_at": null},
+         {"text": "Extractor fans tested", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      (new.project_id, new.id, 'flat_pre_handover', 'Decoration, Flooring & Pre-Handover Snagging', 4, '[
+         {"text": "Decoration (walls, ceilings, woodwork) complete", "checked": false, "checked_at": null},
+         {"text": "Flooring / carpets fitted", "checked": false, "checked_at": null},
+         {"text": "Unit snagging list closed out", "checked": false, "checked_at": null},
+         {"text": "Final clean completed", "checked": false, "checked_at": null}
+       ]'::jsonb)
+    on conflict (plot_id, gate_key) do nothing;
+
+    insert into public.handover_documents (project_id, plot_id, doc_key, title) values
+      (new.project_id, new.id, 'flat_air_acoustic_test', 'Air Permeability / Acoustic Test Certificate'),
+      (new.project_id, new.id, 'flat_elec_gas_certs', 'Electrical & Gas Safety Certificates'),
+      (new.project_id, new.id, 'flat_epc', 'EPC (Energy Performance Certificate)'),
+      (new.project_id, new.id, 'flat_warranty', 'Unit Warranty Cover Note'),
+      (new.project_id, new.id, 'flat_om_manuals', 'O&M Manuals (Unit)')
+    on conflict (plot_id, doc_key) do nothing;
+
+  end if;
+
+  -- v69: the 33 canonical stages (one shared list with weekly reports),
+  -- with house/flat N/A defaults from public.progress_stages.
+  insert into public.internal_milestones (project_id, plot_id, milestone_key, stage_key, title, sort_order, applicable)
+  select new.project_id, new.id, s.stage_key, s.stage_key, s.name, s.sort_order,
+         case when new.block_id is null then s.house_default_applicable else s.flat_default_applicable end
+  from public.progress_stages s
+  on conflict (plot_id, milestone_key) do nothing;
+
+  insert into public.snag_lists (project_id, plot_id, title)
+  values (new.project_id, new.id, new.plot_number)
+  on conflict (plot_id) do nothing;
+
+  return new;
+end;
+$$ language plpgsql set search_path = public;
+-- (O) One-time go-live data step. Guarded by progress_migration_runs so a
+-- re-run of schema.sql never re-maps, re-backfills or re-carries.
+do $v69$
+declare
+  v_diff text;
+  v_detail jsonb;
+  v_pid uuid;
+begin
+  perform set_config('app.progress_internal', 'on', true);
+  perform set_config('app.progress_bulk', 'on', true);
+
+  if exists (select 1 from public.progress_migration_runs where step = 'v69_go_live') then
+    -- Re-run: earlier (v23/v24) sections re-insert their old grid keys for
+    -- plots created since go-live. Retire them again; nothing else.
+    update public.internal_milestones set retired_at = now() where stage_key is null and retired_at is null;
+    perform set_config('app.progress_internal', '', true);
+    perform set_config('app.progress_bulk', '', true);
+    return;
+  end if;
+
+  -- 1. Snapshots (first run only; never overwritten).
+  insert into public.legacy_v69_internal_milestones (id, project_id, plot_id, milestone_key, title, percent, sort_order, created_at)
+  select id, project_id, plot_id, milestone_key, title, percent, sort_order, created_at
+    from public.internal_milestones where stage_key is null
+  on conflict (id) do nothing;
+  insert into public.legacy_v69_plot_progress (plot_id, project_id, block_id, progress_pct)
+  select id, project_id, block_id, progress_pct from public.plots on conflict (plot_id) do nothing;
+  insert into public.legacy_v69_block_progress (block_id, project_id, progress_pct)
+  select id, project_id, progress_pct from public.blocks on conflict (block_id) do nothing;
+  insert into public.legacy_v69_project_progress (project_id, actual_progress_pct, external_works_pct)
+  select id, actual_progress_pct, external_works_pct from public.projects on conflict (project_id) do nothing;
+
+  -- 2-3. 33 stage rows per plot, carrying the old grid across.
+  create temporary table v69_map (old_key text primary key, stage_key text not null) on commit drop;
+  insert into v69_map values
+    ('timber_frame', 'st_timber_frame'), ('roof_covering', 'st_roofing'),
+    ('carpentry_first_fix', 'st_1fix_carpentry'), ('electrical_first_fix', 'st_1fix_electrical'),
+    ('mechanical_first_fix', 'st_1fix_plumbing'), ('dry_lining', 'st_plaster_dryline'),
+    ('plastering', 'st_plaster_dryline'), ('second_fix_carpentry', 'st_2fix_carpentry'),
+    ('second_fix_electrical', 'st_2fix_electrical'), ('second_fix_mechanical', 'st_2fix_plumbing'),
+    ('carpentry_finals', 'st_carpentry_finals'), ('kitchen', 'st_kitchen'), ('bathroom', 'st_bathroom'),
+    ('decoration', 'st_decorating'), ('flooring', 'st_flooring'), ('mastic', 'st_mastic'),
+    ('clean', 'st_clean'), ('snagging', 'st_snagging');
+
+  create temporary table v69_carried on commit drop as
+  select m.project_id, m.plot_id, mp.stage_key,
+         array_agg(m.milestone_key order by m.milestone_key) as old_keys,
+         array_agg(m.percent order by m.milestone_key) as old_values,
+         round(avg(m.percent), 1) as new_percent
+    from public.internal_milestones m
+    join v69_map mp on mp.old_key = m.milestone_key
+   where m.stage_key is null and m.retired_at is null
+   group by m.project_id, m.plot_id, mp.stage_key;
+
+  insert into public.internal_milestones (project_id, plot_id, milestone_key, stage_key, title, sort_order, applicable,
+                                          percent, last_source, updated_at)
+  select p.project_id, p.id, s.stage_key, s.stage_key, s.name, s.sort_order,
+         case when p.block_id is null then s.house_default_applicable else s.flat_default_applicable end,
+         coalesce(c.new_percent, 0), 'migration', now()
+    from public.plots p
+   cross join public.progress_stages s
+    left join v69_carried c on c.plot_id = p.id and c.stage_key = s.stage_key
+  on conflict (plot_id, milestone_key) do nothing;
+
+  insert into public.progress_stage_mapping_log (project_id, plot_id, stage_key, old_keys, old_values, new_percent)
+  select project_id, plot_id, stage_key, old_keys, old_values, new_percent from v69_carried;
+
+  insert into public.progress_stage_events (project_id, plot_id, stage_key, old_percent, new_percent,
+                                            old_applicable, new_applicable, source, note)
+  select c.project_id, c.plot_id, c.stage_key, null, c.new_percent, null, null, 'migration',
+         'Carried from old grid: ' || array_to_string(array(
+           select k || '=' || v from unnest(c.old_keys, c.old_values) as t(k, v)), ', ')
+    from v69_carried c where c.new_percent > 0;
+
+  insert into public.progress_migration_flags (project_id, plot_id, flag, detail)
+  select c.project_id, c.plot_id, 'dry_lining_vs_plastering',
+         'Dry Lining ' || c.old_values[1] || ' and Plastering ' || c.old_values[2]
+         || ' are more than 25 points apart; merged to ' || c.new_percent
+    from v69_carried c
+   where c.stage_key = 'st_plaster_dryline' and array_length(c.old_values, 1) = 2
+     and abs(c.old_values[1] - c.old_values[2]) > 25;
+
+  -- 4. Retire (not delete) the old grid rows.
+  update public.internal_milestones set retired_at = now() where stage_key is null and retired_at is null;
+
+  -- 5. Backfill every weekly report, raise-only, with the shared parser.
+  for v_pid in select w.id from public.weekly_reports w order by w.week_ending, w.created_at, w.id loop
+    perform public.apply_weekly_report_progress(v_pid, 'backfill');
+  end loop;
+  perform set_config('app.progress_internal', 'on', true);
+  perform set_config('app.progress_bulk', 'on', true);
+  perform set_config('app.progress_source', '', true);
+  perform set_config('app.progress_report_id', '', true);
+
+  -- 6. Calculated plot % (stored separately; plots.progress_pct untouched yet).
+  update public.plots p
+     set progress_calculated = coalesce((
+       select round(avg(m.percent), 1) from public.internal_milestones m
+        where m.plot_id = p.id and m.stage_key is not null and m.retired_at is null and m.applicable), 0);
+
+  -- 7. Carry today's figure over as a manual override on every plot that
+  -- has one above zero (all Heol Crwys and Tudor Inn plots with a figure;
+  -- Red Dragon and County Flats are all 0 today). Step 8 then marks any
+  -- whose calculated figure already reaches it as superseded (logged).
+  insert into public.plot_progress_overrides (project_id, plot_id, action, old_override, new_override, calculated, note)
+  select p.project_id, p.id, 'carried_over', null, l.progress_pct,
+         p.progress_calculated, 'Carried over at go-live — site taken over mid-build'
+    from public.plots p join public.legacy_v69_plot_progress l on l.plot_id = p.id
+   where l.progress_pct > 0;
+  update public.plots p
+     set progress_override = l.progress_pct,
+         progress_override_note = 'Carried over at go-live — site taken over mid-build',
+         progress_override_at = now()
+    from public.legacy_v69_plot_progress l
+   where l.plot_id = p.id and l.progress_pct > 0;
+
+  -- 8. Recalculate every plot, then every site.
+  for v_pid in select id from public.plots loop
+    perform public.recalc_plot_progress(v_pid);
+  end loop;
+  -- Bookkeeping only (not a user change), so it's kept out of audit_log.
+  alter table public.projects disable trigger trg_audit_projects;
+  update public.projects set stage_progress_since = now() where stage_progress_since is null;
+  alter table public.projects enable trigger trg_audit_projects;
+  for v_pid in select id from public.projects loop
+    perform public.recalc_project_progress(v_pid);
+  end loop;
+
+  -- 9. HARD ACCEPTANCE: every plot and site figure must be unchanged.
+  select string_agg(x, '; ') into v_diff from (
+    select 'plot ' || p.id || ': ' || l.progress_pct || ' -> ' || p.progress_pct as x
+      from public.plots p join public.legacy_v69_plot_progress l on l.plot_id = p.id
+     where p.progress_pct is distinct from l.progress_pct
+    union all
+    select 'block ' || b.id || ': ' || l.progress_pct || ' -> ' || b.progress_pct
+      from public.blocks b join public.legacy_v69_block_progress l on l.block_id = b.id
+     where b.progress_pct is distinct from l.progress_pct
+    union all
+    select 'site ' || j.id || ': ' || l.actual_progress_pct || '/' || l.external_works_pct
+           || ' -> ' || j.actual_progress_pct || '/' || j.external_works_pct
+      from public.projects j join public.legacy_v69_project_progress l on l.project_id = j.id
+     where j.actual_progress_pct is distinct from l.actual_progress_pct
+        or j.external_works_pct is distinct from l.external_works_pct
+    limit 50
+  ) d;
+  if v_diff is not null then
+    raise exception 'v69 go-live stopped: figures would change (%). Nothing was applied.', v_diff;
+  end if;
+
+  select jsonb_build_object(
+    'plots', (select count(*) from public.plots),
+    'stage_rows', (select count(*) from public.internal_milestones where stage_key is not null),
+    'legacy_rows_retired', (select count(*) from public.internal_milestones where stage_key is null),
+    'mapped_cells', (select count(*) from v69_carried),
+    'backfill_raises', (select count(*) from public.progress_stage_events where source = 'backfill'),
+    'overrides_carried', (select count(*) from public.plot_progress_overrides where action = 'carried_over'),
+    'flags', (select count(*) from public.progress_migration_flags)
+  ) into v_detail;
+  insert into public.progress_migration_runs (step, detail) values ('v69_go_live', v_detail);
+
+  perform set_config('app.progress_internal', '', true);
+  perform set_config('app.progress_bulk', '', true);
+end;
+$v69$;
+
+-- (P) Grants (v59/v63/v65/v68 pattern). Signed-in RPCs: authenticated
+-- only, nothing to anon. Internal functions: nobody but the owner.
+do $v69g$
+declare
+  f text;
+begin
+  foreach f in array array[
+    'public.resolve_plot_tags(uuid, text)',
+    'public.recalc_plot_progress(uuid)',
+    'public.recalc_project_progress(uuid)',
+    'public.apply_weekly_report_progress(uuid, text)',
+    'public.external_works_check(uuid, text)',
+    'public.internal_milestones_v69_before()',
+    'public.internal_milestones_v69_after()',
+    'public.plots_v69_after()',
+    'public.blocks_v69_after()',
+    'public.weekly_reports_v69_progress()'
+  ] loop
+    execute format('revoke all on function %s from public', f);
+    execute format('revoke execute on function %s from anon, authenticated', f);
+  end loop;
+end;
+$v69g$;
+
+-- Evaluated as the calling role (INVOKER triggers / plain helpers).
+revoke all on function public.progress_internal() from public;
+revoke execute on function public.progress_internal() from anon;
+grant execute on function public.progress_internal() to authenticated;
+revoke all on function public.progress_bulk() from public;
+revoke execute on function public.progress_bulk() from anon;
+grant execute on function public.progress_bulk() to authenticated;
+revoke all on function public.plot_tag_token(text) from public;
+revoke execute on function public.plot_tag_token(text) from anon;
+grant execute on function public.plot_tag_token(text) to authenticated;
+revoke all on function public.plots_v69_progress_guard() from public;
+revoke execute on function public.plots_v69_progress_guard() from anon;
+grant execute on function public.plots_v69_progress_guard() to authenticated;
+revoke all on function public.projects_v69_progress_guard() from public;
+revoke execute on function public.projects_v69_progress_guard() from anon;
+grant execute on function public.projects_v69_progress_guard() to authenticated;
+
+-- The note-required RPCs the pages call.
+revoke all on function public.set_plot_override(uuid, numeric, text) from public;
+revoke execute on function public.set_plot_override(uuid, numeric, text) from anon;
+grant execute on function public.set_plot_override(uuid, numeric, text) to authenticated;
+revoke all on function public.clear_plot_override(uuid, text) from public;
+revoke execute on function public.clear_plot_override(uuid, text) from anon;
+grant execute on function public.clear_plot_override(uuid, text) to authenticated;
+revoke all on function public.set_external_works(uuid, numeric, numeric, text) from public;
+revoke execute on function public.set_external_works(uuid, numeric, numeric, text) from anon;
+grant execute on function public.set_external_works(uuid, numeric, numeric, text) to authenticated;
+revoke all on function public.save_external_works_package(uuid, uuid, text, numeric, numeric, text[], text) from public;
+revoke execute on function public.save_external_works_package(uuid, uuid, text, numeric, numeric, text[], text) from anon;
+grant execute on function public.save_external_works_package(uuid, uuid, text, numeric, numeric, text[], text) to authenticated;
+revoke all on function public.retire_external_works_package(uuid, text) from public;
+revoke execute on function public.retire_external_works_package(uuid, text) from anon;
+grant execute on function public.retire_external_works_package(uuid, text) to authenticated;
+
+-- seed_plot_defaults keeps its v59 shape (trigger only).
+revoke all on function public.seed_plot_defaults() from public;
+revoke execute on function public.seed_plot_defaults() from anon, authenticated;
+
+-- Tables: read-only to signed-in users (RLS above decides which rows);
+-- bookkeeping and snapshots are not exposed at all.
+do $v69t$
+declare
+  t text;
+begin
+  foreach t in array array['progress_stages', 'progress_stage_events', 'plot_progress_overrides',
+                           'external_works_packages', 'external_works_updates', 'progress_migration_flags'] loop
+    execute format('revoke all on table public.%I from anon', t);
+    execute format('revoke insert, update, delete, truncate, references, trigger on table public.%I from authenticated', t);
+    execute format('grant select on table public.%I to authenticated', t);
+  end loop;
+  foreach t in array array['progress_migration_runs', 'progress_stage_mapping_log',
+                           'legacy_v69_internal_milestones', 'legacy_v69_plot_progress',
+                           'legacy_v69_block_progress', 'legacy_v69_project_progress'] loop
+    execute format('revoke all on table public.%I from anon, authenticated', t);
+  end loop;
+end;
+$v69t$;

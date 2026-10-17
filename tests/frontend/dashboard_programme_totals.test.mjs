@@ -7,6 +7,7 @@
 // page, just two more boxes in the existing bar.
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { progressHelpers } from "../lib/progress_helpers.mjs";
 import { extractScript, runPage, wait } from "../lib/jsdom-harness.mjs";
 
 function permissiveFrom() {
@@ -26,6 +27,7 @@ const DASHBOARD_HTML = new URL("../../tracker/dashboard.html", import.meta.url).
 
 async function runDashboard(controlSummary) {
   return runPage(DASHBOARD_HTML, extractScript(DASHBOARD_HTML), {
+    ...progressHelpers,
     __url: "https://example.com/dashboard.html",
     supabase: { auth: { getUser: async () => ({ data: { user: { id: "u1" } } }) }, rpc: () => Promise.resolve({ data: null, error: null }), from: permissiveFrom },
     requireAuth: async () => ({ id: "u1" }),
@@ -83,6 +85,7 @@ function progCounts(overrides = {}) {
 
 async function runProjectPage({ counts, plotReadinessRows = [] }) {
   return runPage(PROJECT_HTML, extractScript(PROJECT_HTML), {
+    ...progressHelpers,
     __url: "https://example.com/project.html?id=p1",
     supabase: { from: permissiveFrom, rpc: () => Promise.resolve({ data: [], error: null }), auth: { getUser: async () => ({ data: { user: { id: "u1" } } }) } },
     getParam: () => "p1",
@@ -163,6 +166,7 @@ test("project.html: a project with no plots at all shows no Plot Summary row —
 test("project.html: a failed plot-readiness fetch degrades gracefully — the rest of the control card still renders, and the Plot Summary row is simply omitted rather than showing misleading zeros", async () => {
   const supabase = { from: permissiveFrom, rpc: () => Promise.resolve({ data: [], error: null }), auth: { getUser: async () => ({ data: { user: { id: "u1" } } }) } };
   const { document } = await runPage(PROJECT_HTML, extractScript(PROJECT_HTML), {
+    ...progressHelpers,
     __url: "https://example.com/project.html?id=p1",
     supabase,
     getParam: () => "p1",

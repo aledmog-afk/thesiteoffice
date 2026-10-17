@@ -15,6 +15,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { progressHelpers } from "../lib/progress_helpers.mjs";
 import { extractScript, runPage, wait } from "../lib/jsdom-harness.mjs";
 
 const SCRIPT_PAYLOAD = "<script>alert(1)</script>";
@@ -81,6 +82,7 @@ test("dashboard.html: a malicious site name and contractor name render as inert 
     },
   };
   const { document } = await runPage(htmlPath, extractScript(htmlPath), {
+    ...progressHelpers,
     __url: "https://example.com/dashboard.html",
     supabase,
     requireAuth: async () => ({ id: "u1" }),
@@ -114,6 +116,7 @@ test("commercials.html: a malicious commercial item title renders as inert text"
     },
   };
   const { document } = await runPage(htmlPath, extractScript(htmlPath), {
+    ...progressHelpers,
     __url: "https://example.com/commercials.html?project=p1",
     supabase,
     requireAuth: async () => ({ id: "u1" }),
@@ -156,6 +159,7 @@ test("snag-list-edit.html: malicious snag description/location/trade render as i
     },
   };
   const { document } = await runPage(htmlPath, extractScript(htmlPath), {
+    ...progressHelpers,
     __url: "https://example.com/snag-list-edit.html?id=l1",
     supabase,
     requireAuth: async () => ({ id: "u1" }),
@@ -199,6 +203,7 @@ test("snag-list-view.html: malicious location/description in the Photo Round-Up 
     },
   };
   const { document } = await runPage(htmlPath, extractScript(htmlPath), {
+    ...progressHelpers,
     __url: "https://example.com/snag-list-view.html?id=l1",
     supabase,
     requireAuth: async () => ({ id: "u1" }),
@@ -232,6 +237,7 @@ test("settings.html: a malicious organisation name is set via .value (never inte
     },
   };
   const { document } = await runPage(htmlPath, extractScript(htmlPath), {
+    ...progressHelpers,
     __url: "https://example.com/settings.html",
     supabase,
     requireAuth: async () => ({ id: "u1" }),
