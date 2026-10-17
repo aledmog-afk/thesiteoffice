@@ -16,7 +16,7 @@
 //     writing this: is_org_admin() is never used to bypass a project-
 //     level is_project_owner() check anywhere in schema.sql today, so
 //     no such bypass is introduced here either);
-//   - viewer/contributor/approver map to exactly the capability matrix
+//   - viewer/contributor (v66 removed approver) map to exactly the capability matrix
 //     the approved architecture specifies.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
@@ -62,7 +62,7 @@ before(async () => {
   const ownerA2 = await userClient(DB, OWNER_A);
   await ownerA2.query(`insert into public.project_module_roles (project_id, user_id, module, role, granted_by) values ($1,$2,'commercial','viewer',$3)`, [projA, VIEWER_A, OWNER_A]);
   await ownerA2.query(`insert into public.project_module_roles (project_id, user_id, module, role, granted_by) values ($1,$2,'commercial','contributor',$3)`, [projA, CONTRIBUTOR_A, OWNER_A]);
-  await ownerA2.query(`insert into public.project_module_roles (project_id, user_id, module, role, granted_by) values ($1,$2,'commercial','approver',$3)`, [projA, APPROVER_A, OWNER_A]);
+  await ownerA2.query(`insert into public.project_module_roles (project_id, user_id, module, role, granted_by) values ($1,$2,'commercial','contributor',$3)`, [projA, APPROVER_A, OWNER_A]);
   await ownerA2.end();
 
   const ownerB = await userClient(DB, OWNER_B);
@@ -79,14 +79,13 @@ after(async () => {
 
 // ─── module_roles reference integrity ──────────────────────────────
 
-test("module_roles: seeded with exactly the three V1 commercial roles, readable by any authenticated user", async () => {
+test("module_roles: seeded with exactly the two commercial roles (v66 removed approver), readable by any authenticated user", async () => {
   const viewer = await userClient(DB, VIEWER_A);
   try {
     const { rows } = await viewer.query("select module, role from public.module_roles where module = 'commercial' order by sort_order");
     assert.deepEqual(rows, [
       { module: "commercial", role: "viewer" },
       { module: "commercial", role: "contributor" },
-      { module: "commercial", role: "approver" },
     ]);
   } finally {
     await viewer.end();
@@ -212,7 +211,7 @@ test("Project owner WITHOUT an explicit commercial grant has NO commercial acces
   }
 });
 
-// ─── capability matrix: viewer / contributor / approver ───────────
+// ─── capability matrix: viewer / contributor (v66: no approver) ───────────
 
 test("Viewer: can view, cannot create, cannot edit, cannot submit, cannot approve", async () => {
   const viewer = await userClient(DB, VIEWER_A);
@@ -280,7 +279,7 @@ test("Contributor: can view, create, edit draft/rejected, submit, and (v48) sign
   }
 });
 
-test("Approver: can view, create, edit draft/rejected, submit, and (v48) approve ANOTHER user's record or their own", async () => {
+test("A second contributor (formerly the Approver fixture, v66): can view, create, edit draft/rejected, submit, and (v48) approve ANOTHER user's record or their own", async () => {
   const contributor = await userClient(DB, CONTRIBUTOR_A);
   const approver = await userClient(DB, APPROVER_A);
   try {
@@ -341,7 +340,7 @@ test("A commercial grant alone, without real project membership, is never suffic
   // without ever inviting them to the project — proves the module
   // grant cannot outrun the platform's own membership boundary.
   const ownerA = await userClient(DB, OWNER_A);
-  await ownerA.query(`insert into public.project_module_roles (project_id, user_id, module, role, granted_by) values ($1,$2,'commercial','approver',$3)`, [fx.projA, STRANGER, OWNER_A]);
+  await ownerA.query(`insert into public.project_module_roles (project_id, user_id, module, role, granted_by) values ($1,$2,'commercial','contributor',$3)`, [fx.projA, STRANGER, OWNER_A]);
   await ownerA.end();
 
   const stranger = await userClient(DB, STRANGER);

@@ -186,7 +186,7 @@ function makeStore() {
 
     async submitCommercialEvent(eventId) {
       const row = events.get(eventId);
-      if (!["contributor", "approver"].includes(this.__role)) throw new Error("You do not have permission to submit commercial events on this project");
+      if (!["contributor"].includes(this.__role)) throw new Error("You do not have permission to submit commercial events on this project");
       if (!TRANSITIONS[row.status].includes("submitted")) throw new Error(`Invalid commercial event status transition: ${row.status} -> submitted`);
       row.status = "submitted"; row.submitted_by = this.__userId; row.submitted_at = "2026-09-02T00:00:00Z";
       signatures.push({ commercial_event_id: eventId, action: "submitted", signed_by_user_id: this.__userId });
@@ -198,7 +198,7 @@ function makeStore() {
       // block — the mandatory signature (enforced client-side before
       // this is even called; see the "blocked client-side" test below)
       // is the assurance now, not the account role or a distinct signer.
-      if (!["contributor", "approver"].includes(this.__role)) throw new Error("You do not have permission to approve commercial events on this project");
+      if (!["contributor"].includes(this.__role)) throw new Error("You do not have permission to approve commercial events on this project");
       if (!TRANSITIONS[row.status].includes("approved")) throw new Error(`Invalid commercial event status transition: ${row.status} -> approved`);
       row.status = "approved"; row.approved_by = this.__userId; row.approved_at = "2026-09-03T00:00:00Z";
       signatures.push({ commercial_event_id: eventId, action: "approved", signed_by_user_id: this.__userId });
@@ -206,7 +206,7 @@ function makeStore() {
     },
     async rejectCommercialEvent(eventId, reason) {
       const row = events.get(eventId);
-      if (!["contributor", "approver"].includes(this.__role)) throw new Error("You do not have permission to reject commercial events on this project");
+      if (!["contributor"].includes(this.__role)) throw new Error("You do not have permission to reject commercial events on this project");
       if (!TRANSITIONS[row.status].includes("rejected")) throw new Error(`Invalid commercial event status transition: ${row.status} -> rejected`);
       row.status = "rejected"; row.rejected_by = this.__userId; row.rejected_at = "2026-09-03T00:00:00Z"; row.rejection_reason = reason || null;
       signatures.push({ commercial_event_id: eventId, action: "rejected", signed_by_user_id: this.__userId });
@@ -214,7 +214,7 @@ function makeStore() {
     },
     async reopenCommercialEvent(eventId) {
       const row = events.get(eventId);
-      if (!["contributor", "approver"].includes(this.__role)) throw new Error("You do not have permission to edit commercial events on this project");
+      if (!["contributor"].includes(this.__role)) throw new Error("You do not have permission to edit commercial events on this project");
       if (!TRANSITIONS[row.status].includes("draft")) throw new Error(`Invalid commercial event status transition: ${row.status} -> draft`);
       row.status = "draft";
       return { ...row };
@@ -389,7 +389,7 @@ test("Workflow: an eligible Approver (not the creator) can approve a submitted r
   await store.addCommercialLineItem(event.id, { lineType: "labour", description: "Labour", quantity: 1, rate: 10 });
   await store.submitCommercialEvent(event.id);
 
-  const { document } = await run(store, { role: "approver", userId: APPROVER_A, eventId: event.id });
+  const { document } = await run(store, { role: "contributor", userId: APPROVER_A, eventId: event.id });
   await wait(30);
   const approveBtn = [...document.getElementById("workflowActions").querySelectorAll("button")].find((b) => b.textContent === "Sign & Approve");
   assert.ok(approveBtn, "an eligible approver should see a Sign & Approve button");
@@ -412,7 +412,7 @@ test("Workflow: approving without a signature or typed name is blocked client-si
   await store.addCommercialLineItem(event.id, { lineType: "labour", description: "Labour", quantity: 1, rate: 10 });
   await store.submitCommercialEvent(event.id);
 
-  const { document } = await run(store, { role: "approver", userId: APPROVER_A, eventId: event.id });
+  const { document } = await run(store, { role: "contributor", userId: APPROVER_A, eventId: event.id });
   await wait(30);
   const approveBtn = [...document.getElementById("workflowActions").querySelectorAll("button")].find((b) => b.textContent === "Sign & Approve");
   fireEvent(approveBtn, "click");
@@ -429,7 +429,7 @@ test("Workflow: a submitted record can be rejected, with a reason, and returned 
   await store.addCommercialLineItem(event.id, { lineType: "labour", description: "Labour", quantity: 1, rate: 10 });
   await store.submitCommercialEvent(event.id);
 
-  let { document } = await run(store, { role: "approver", userId: APPROVER_A, eventId: event.id });
+  let { document } = await run(store, { role: "contributor", userId: APPROVER_A, eventId: event.id });
   await wait(30);
   const rejectBtn = [...document.getElementById("workflowActions").querySelectorAll("button")].find((b) => b.textContent === "Reject");
   assert.ok(rejectBtn);
@@ -458,10 +458,10 @@ test("Workflow: an approved record shows no edit/delete controls at all — comp
   const event = await store.createDaywork.call(Object.assign(store, { __userId: CONTRIBUTOR_A, __role: "contributor" }), "p1", { title: "Locked test" });
   await store.addCommercialLineItem(event.id, { lineType: "labour", description: "Labour", quantity: 1, rate: 10 });
   await store.submitCommercialEvent(event.id);
-  store.__userId = APPROVER_A; store.__role = "approver";
+  store.__userId = APPROVER_A; store.__role = "contributor";
   await store.approveCommercialEvent(event.id);
 
-  const { document } = await run(store, { role: "approver", userId: APPROVER_A, eventId: event.id });
+  const { document } = await run(store, { role: "contributor", userId: APPROVER_A, eventId: event.id });
   await wait(30);
   assert.equal(document.getElementById("editHeaderBtn").style.display, "none");
   assert.equal(document.getElementById("lineItemAddRow").style.display, "none");
@@ -479,7 +479,7 @@ test("Workflow: an invalid transition (approving a draft directly) is rejected a
   // would never offer a button for — proving the underlying call used by
   // the page (not just the button's visibility) rejects it correctly.
   await assert.rejects(
-    store.approveCommercialEvent.call(Object.assign(store, { __userId: APPROVER_A, __role: "approver" }), event.id),
+    store.approveCommercialEvent.call(Object.assign(store, { __userId: APPROVER_A, __role: "contributor" }), event.id),
     /Invalid commercial event status transition: draft -> approved/
   );
   assert.equal(store.events.get(event.id).status, "draft", "the status must be unchanged after a rejected transition attempt");
@@ -503,7 +503,7 @@ test("Permissions: a Viewer sees the record but no mutation controls anywhere on
 
 test("Permissions: a Viewer never sees Sign & Approve/Reject on a submitted record", async () => {
   const store = makeStore();
-  const event = await store.createDaywork.call(Object.assign(store, { __userId: APPROVER_A, __role: "approver" }), "p1", { title: "Viewer-cannot-approve test" });
+  const event = await store.createDaywork.call(Object.assign(store, { __userId: APPROVER_A, __role: "contributor" }), "p1", { title: "Viewer-cannot-approve test" });
   await store.addCommercialLineItem(event.id, { lineType: "labour", description: "Labour", quantity: 1, rate: 10 });
   await store.submitCommercialEvent(event.id);
 
@@ -516,7 +516,7 @@ test("Permissions: a Viewer never sees Sign & Approve/Reject on a submitted reco
 
 test("Permissions (v48): a Contributor CAN sign & approve a submitted record they didn't create — Sign & Approve/Reject buttons appear", async () => {
   const store = makeStore();
-  const event = await store.createDaywork.call(Object.assign(store, { __userId: APPROVER_A, __role: "approver" }), "p1", { title: "Contributor-can-approve test" });
+  const event = await store.createDaywork.call(Object.assign(store, { __userId: APPROVER_A, __role: "contributor" }), "p1", { title: "Contributor-can-approve test" });
   await store.addCommercialLineItem(event.id, { lineType: "labour", description: "Labour", quantity: 1, rate: 10 });
   await store.submitCommercialEvent(event.id);
 
@@ -529,11 +529,11 @@ test("Permissions (v48): a Contributor CAN sign & approve a submitted record the
 
 test("Permissions (v48): an Approver CAN sign & approve their OWN submission on the spot — no self-approval block, matching the on-site hand-the-device-to-the-client flow", async () => {
   const store = makeStore();
-  const event = await store.createDaywork.call(Object.assign(store, { __userId: APPROVER_A, __role: "approver" }), "p1", { title: "Self-approval test" });
+  const event = await store.createDaywork.call(Object.assign(store, { __userId: APPROVER_A, __role: "contributor" }), "p1", { title: "Self-approval test" });
   await store.addCommercialLineItem(event.id, { lineType: "labour", description: "Labour", quantity: 1, rate: 10 });
   await store.submitCommercialEvent(event.id);
 
-  const { document } = await run(store, { role: "approver", userId: APPROVER_A, eventId: event.id });
+  const { document } = await run(store, { role: "contributor", userId: APPROVER_A, eventId: event.id });
   await wait(30);
   const buttons = [...document.getElementById("workflowActions").querySelectorAll("button")].map((b) => b.textContent);
   assert.ok(buttons.includes("Sign & Approve"), "an approver must see Sign & Approve on their own submission now");
@@ -601,10 +601,10 @@ test("Evidence: cannot be added or removed once the record is approved", async (
   await store.addCommercialLineItem(event.id, { lineType: "labour", description: "Labour", quantity: 1, rate: 10 });
   await store.addCommercialEvidencePhoto(event.id, "p1", { name: "before.jpg" });
   await store.submitCommercialEvent(event.id);
-  store.__userId = APPROVER_A; store.__role = "approver";
+  store.__userId = APPROVER_A; store.__role = "contributor";
   await store.approveCommercialEvent(event.id);
 
-  const { document } = await run(store, { role: "approver", userId: APPROVER_A, eventId: event.id });
+  const { document } = await run(store, { role: "contributor", userId: APPROVER_A, eventId: event.id });
   await wait(30);
   assert.equal(document.getElementById("addEvidenceRow").style.display, "none");
   assert.equal(document.querySelectorAll("[data-remove-evidence]").length, 0);
@@ -658,7 +658,7 @@ test("PDF export: Generate PDF is hidden on a draft, shown once submitted or app
 
   await store.addCommercialLineItem(event.id, { lineType: "labour", description: "Labour", quantity: 1, rate: 10 });
   await store.submitCommercialEvent(event.id);
-  ({ document } = await run(store, { role: "approver", userId: APPROVER_A, eventId: event.id }));
+  ({ document } = await run(store, { role: "contributor", userId: APPROVER_A, eventId: event.id }));
   await wait(30);
   assert.equal(document.getElementById("generatePdfBtn").style.display, "inline-flex", "a submitted record may be sent to the client for approval");
 });

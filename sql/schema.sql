@@ -12406,3 +12406,74 @@ revoke all on function public.resolve_commercial_approval_evidence(text, uuid) f
 grant execute on function public.resolve_commercial_approval_evidence(text, uuid) to anon, authenticated;
 revoke all on function public.reject_commercial_approval_request(text, text, text) from public;
 grant execute on function public.reject_commercial_approval_request(text, text, text) to anon, authenticated;
+
+-- ─── v66 ADDITIONS: remove the Dayworks & Variations 'approver' role ───
+-- Since v48 'approver' granted exactly what 'contributor' grants (approve/
+-- reject only need can_submit_commercial plus a mandatory signature), so
+-- the role is removed (Aled, 17 Oct 2026). Commercial roles are now just
+-- viewer and contributor.
+--
+-- Order matters and every step is safe to re-run:
+--   1. any existing approver grant becomes contributor (same powers, so
+--      nobody gains or loses anything);
+--   2. the module_roles reference row is deleted. project_module_roles has
+--      a foreign key to module_roles, so this would fail rather than
+--      orphan a grant, and from now on an 'approver' grant is refused;
+--   3. the helpers stop accepting 'approver'.
+-- The v40 seed earlier in this file still inserts the approver row on a
+-- re-run (on conflict do nothing); step 2 deletes it again, so a fresh
+-- build and a re-run both end with no approver row.
+--
+-- can_approve_commercial() is unused since v48 (no function body, policy
+-- or dependency references it on live, checked 17 Oct 2026). It is kept,
+-- with the same signature and grants, but always returns false, rather
+-- than dropped — dropping it would change the v59 anon-grants allowlist
+-- that v65 is also editing, for no security gain.
+update public.project_module_roles
+  set role = 'contributor'
+  where module = 'commercial' and role = 'approver';
+
+delete from public.module_roles
+  where module = 'commercial' and role = 'approver';
+
+create or replace function public.can_view_commercial(p_project_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select public.project_module_role(p_project_id, 'commercial') in ('viewer', 'contributor');
+$$;
+
+create or replace function public.can_edit_commercial(p_project_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select public.project_module_role(p_project_id, 'commercial') = 'contributor';
+$$;
+
+create or replace function public.can_submit_commercial(p_project_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select public.project_module_role(p_project_id, 'commercial') = 'contributor';
+$$;
+
+create or replace function public.can_approve_commercial(p_project_id uuid)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select false;
+$$;
+
+-- Grants (v59/v63 pattern): signed-in users only, never anon or PUBLIC.
+revoke all on function public.can_view_commercial(uuid) from public;
+revoke execute on function public.can_view_commercial(uuid) from anon;
+grant execute on function public.can_view_commercial(uuid) to authenticated;
+revoke all on function public.can_edit_commercial(uuid) from public;
+revoke execute on function public.can_edit_commercial(uuid) from anon;
+grant execute on function public.can_edit_commercial(uuid) to authenticated;
+revoke all on function public.can_submit_commercial(uuid) from public;
+revoke execute on function public.can_submit_commercial(uuid) from anon;
+grant execute on function public.can_submit_commercial(uuid) to authenticated;
+revoke all on function public.can_approve_commercial(uuid) from public;
+revoke execute on function public.can_approve_commercial(uuid) from anon;
+grant execute on function public.can_approve_commercial(uuid) to authenticated;

@@ -4861,7 +4861,7 @@ export async function setProjectModuleRole(projectId, userId, moduleName, role) 
 // a round-trip confirms it — every value actually persisted or
 // displayed as final always comes back from the database.
 
-export const COMMERCIAL_ROLE_LABEL = { viewer: "Viewer", contributor: "Contributor", approver: "Approver" };
+export const COMMERCIAL_ROLE_LABEL = { viewer: "Viewer", contributor: "Contributor" };
 
 export const COMMERCIAL_STATUS_LABEL = { draft: "Draft", submitted: "Submitted", approved: "Approved", rejected: "Rejected" };
 export const COMMERCIAL_STATUS_BADGE = { draft: "badge-grey", submitted: "badge-amber", approved: "badge-green", rejected: "badge-red" };
@@ -4900,20 +4900,24 @@ export async function getMyCommercialRole(projectId) {
 // can_submit_commercial, sql/schema.sql) — kept as one small pure
 // function so every page computes it identically.
 //
-// v48: canApprove now matches canSubmit exactly. A real signature is
+// v48: canApprove matches canSubmit exactly. A real signature is
 // mandatory to approve at all (v47) — that signature is the assurance a
-// client actually reviewed and signed the record, not the signer's
-// account role — so approving no longer needs the separate 'approver'
-// role, and it's no longer blocked when the approver is also the
-// creator: the common case is the raiser's own device being handed to
-// the client to sign on the spot, right after raising it.
-export function commercialCapabilities(role) {
+// client actually reviewed and signed the record — and the creator may
+// approve, since the common case is the raiser's own device being handed
+// to the client to sign on the spot.
+//
+// v66: the 'approver' role is gone; the roles are viewer and contributor.
+// Until v66 is applied an old 'approver' grant could still come back from
+// the database — it has always had Contributor's powers, so it's read as
+// 'contributor' (role is reported as such too).
+export function commercialCapabilities(rawRole) {
+  const role = rawRole === "approver" ? "contributor" : rawRole;
   return {
     role,
-    canView: role === "viewer" || role === "contributor" || role === "approver",
-    canEdit: role === "contributor" || role === "approver",
-    canSubmit: role === "contributor" || role === "approver",
-    canApprove: role === "contributor" || role === "approver",
+    canView: role === "viewer" || role === "contributor",
+    canEdit: role === "contributor",
+    canSubmit: role === "contributor",
+    canApprove: role === "contributor",
   };
 }
 
