@@ -278,11 +278,15 @@ for (const [sig, sql, argType] of REVOKED) {
   });
 }
 
-// ─── (3) authenticated keeps EXECUTE on all 25 ───────────────────────
-test("authenticated still has EXECUTE on all 25 v59 functions (catalog check), and PUBLIC no longer does", async () => {
+// ─── (3) authenticated keeps EXECUTE (all but commercial_event_hash, v65) ───
+test("authenticated still has EXECUTE on the v59 functions (all but commercial_event_hash since v65), and PUBLIC no longer does", async () => {
   const admin = adminClient(DB);
   await admin.connect();
   for (const [sig] of REVOKED) {
+    // v65 then took commercial_event_hash away from authenticated too (it is
+    // only ever called from SECURITY DEFINER functions) — see
+    // v65_storage_roles_lookups.test.mjs.
+    const authExpected = sig !== "commercial_event_hash(uuid)";
     const { rows } = await admin.query(
       `select has_function_privilege('authenticated', to_regprocedure($1), 'EXECUTE') as auth_ok,
               has_function_privilege('anon', to_regprocedure($1), 'EXECUTE') as anon_ok,
@@ -290,7 +294,7 @@ test("authenticated still has EXECUTE on all 25 v59 functions (catalog check), a
                        where p.oid = to_regprocedure($1) and a.grantee = 0 and a.privilege_type = 'EXECUTE') as public_ok`,
       [`public.${sig}`]
     );
-    assert.equal(rows[0].auth_ok, true, `authenticated must keep EXECUTE on ${sig}`);
+    assert.equal(rows[0].auth_ok, authExpected, `authenticated EXECUTE on ${sig} should be ${authExpected}`);
     assert.equal(rows[0].anon_ok, false, `anon must not have EXECUTE on ${sig}`);
     assert.equal(rows[0].public_ok, false, `PUBLIC must not have EXECUTE on ${sig}`);
   }
@@ -302,14 +306,15 @@ test("a signed-in member can still call the helpers and gets real answers", asyn
   try {
     const { rows } = await owner.query(
       `select public.is_project_member($1) as m, public.is_project_owner($1) as o, public.get_my_role($1) as r,
-              public.can_view_commercial($1) as cv, length(public.commercial_event_hash($2)) as h`,
-      [fx.proj, fx.eventId]
+              public.can_view_commercial($1) as cv`,
+      [fx.proj]
     );
     assert.equal(rows[0].m, true);
     assert.equal(rows[0].o, true);
     assert.equal(rows[0].r, "owner");
     assert.equal(rows[0].cv, true);
-    assert.equal(rows[0].h, 64);
+    // v65: commercial_event_hash is internal-only now; a direct call is refused.
+    await assert.rejects(owner.query("select public.commercial_event_hash($1)", [fx.eventId]), /permission denied for function/i);
   } finally {
     await owner.end();
   }

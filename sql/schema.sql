@@ -12406,3 +12406,45 @@ revoke all on function public.resolve_commercial_approval_evidence(text, uuid) f
 grant execute on function public.resolve_commercial_approval_evidence(text, uuid) to anon, authenticated;
 revoke all on function public.reject_commercial_approval_request(text, text, text) from public;
 grant execute on function public.reject_commercial_approval_request(text, text, text) to anon, authenticated;
+
+-- ─── v65 ADDITIONS: storage write rules to signed-in only; internal lookups off the API ───
+-- (A) The three storage.objects write policies were created without a
+-- role, so they were also evaluated for anon (which then failed inside
+-- site_photos_authorized() with "permission denied"). Same checks, now
+-- `to authenticated` only. Redefined here at the END so a re-run of the
+-- earlier v27 and v34 sections can't hand them back to PUBLIC.
+drop policy if exists "project editors upload site-photos" on storage.objects;
+create policy "project editors upload site-photos" on storage.objects
+  for insert to authenticated with check (bucket_id = 'site-photos' and public.site_photos_authorized(name));
+
+drop policy if exists "project editors delete site-photos" on storage.objects;
+create policy "project editors delete site-photos" on storage.objects
+  for delete to authenticated using (bucket_id = 'site-photos' and public.site_photos_authorized(name));
+
+drop policy if exists "project editors upload controlled-documents" on storage.objects;
+create policy "project editors upload controlled-documents" on storage.objects
+  for insert to authenticated with check (bucket_id = 'controlled-documents' and public.controlled_documents_write_authorized(name));
+
+-- (B) SECURITY DEFINER lookups that take an arbitrary user/party id and
+-- have no caller check. These six are only ever called from other
+-- SECURITY DEFINER functions/triggers (which run as the owner, so they
+-- keep working) — never from an RLS policy, view, INVOKER function or
+-- the client — so a signed-in user no longer needs, or gets, direct
+-- EXECUTE. Deliberately NOT changed: is_owner_side_user(uuid, uuid)
+-- (used by the "read project_party_members" policy) and
+-- is_project_editor_user(uuid, uuid) (actions/rfis insert/update
+-- policies); both are evaluated as the calling role, so authenticated
+-- must keep EXECUTE.
+revoke execute on function public.is_party_member_user(uuid, uuid) from public, anon, authenticated;
+revoke execute on function public.party_cap_user(uuid, uuid, text) from public, anon, authenticated;
+revoke execute on function public.user_party_ids(uuid, uuid) from public, anon, authenticated;
+revoke execute on function public.can_be_assigned_work(uuid, uuid, uuid, text) from public, anon, authenticated;
+revoke execute on function public.party_and_descendants(uuid) from public, anon, authenticated;
+revoke execute on function public.commercial_event_hash(uuid) from public, anon, authenticated;
+-- The two kept lookups: re-assert the v59/v63 shape (signed-in only).
+revoke all on function public.is_owner_side_user(uuid, uuid) from public;
+revoke execute on function public.is_owner_side_user(uuid, uuid) from anon;
+grant execute on function public.is_owner_side_user(uuid, uuid) to authenticated;
+revoke all on function public.is_project_editor_user(uuid, uuid) from public;
+revoke execute on function public.is_project_editor_user(uuid, uuid) from anon;
+grant execute on function public.is_project_editor_user(uuid, uuid) to authenticated;
