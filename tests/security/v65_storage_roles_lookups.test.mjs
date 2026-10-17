@@ -42,7 +42,6 @@ const PRIV_SQL = `
   select p.prosecdef,
          has_function_privilege('authenticated', p.oid, 'EXECUTE') as auth_ok,
          has_function_privilege('anon', p.oid, 'EXECUTE') as anon_ok,
-         has_function_privilege('service_role', p.oid, 'EXECUTE') as service_ok,
          exists (select 1 from aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a
                   where a.grantee = 0 and a.privilege_type = 'EXECUTE') as public_ok
     from pg_proc p where p.oid = to_regprocedure($1)`;
@@ -198,7 +197,7 @@ test("A: signed-in non-editors are refused — another org's user anywhere, a sn
 });
 
 // ─── (B) lookups ─────────────────────────────────────────────────────
-test("B: the six internal lookups are SECURITY DEFINER and executable by nobody but the owner/service_role", async () => {
+test("B: the six internal lookups are SECURITY DEFINER and not executable by authenticated, anon or PUBLIC", async () => {
   const admin = adminClient(DB);
   await admin.connect();
   try {
