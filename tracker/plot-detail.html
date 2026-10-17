@@ -1,0 +1,657 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Plot – Site Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title" id="plotTitle">Loading…</div>
+      <div class="page-sub" id="projectSub"></div>
+    </div>
+    <button class="btn btn-danger btn-sm" id="deletePlotBtn">Delete Plot</button>
+  </div>
+
+  <div id="errorBox" class="error-box"></div>
+
+  <h3 class="display-font" style="font-size:1.1rem; margin-bottom:1rem;">Plot Control</h3>
+  <div id="plotControlWrap" style="margin-bottom:2.5rem;">Loading…</div>
+
+  <h3 class="display-font" style="font-size:1.1rem; margin-bottom:1rem;">Plot Progress</h3>
+  <div class="card" id="plotProgressCard" style="margin-bottom:2.5rem;">
+    <div style="display:flex; align-items:baseline; gap:0.75rem; flex-wrap:wrap;">
+      <div class="display-font" id="plotProgressFigure" style="font-size:2rem;">–</div>
+      <span class="badge" id="plotProgressMode"></span>
+    </div>
+    <p class="hint" id="plotProgressExplain" style="margin-top:0.4rem;"></p>
+    <div id="plotOverrideActive" style="display:none; margin-top:0.75rem;"></div>
+    <details id="plotOverrideFormWrap" style="margin-top:0.9rem;">
+      <summary style="cursor:pointer; font-weight:600;">Set a manual figure</summary>
+      <p class="hint" style="margin:0.5rem 0;">Use this when the stages don't yet reflect what's on site (for example, a plot taken over mid-build). The plot shows the higher of your figure and the calculated one, and switches back to automatic by itself once the stages catch up. A note is required.</p>
+      <div class="form-grid" style="align-items:end;">
+        <div class="field">
+          <label for="plotOverrideInput">Manual figure (%)</label>
+          <input type="number" id="plotOverrideInput" min="0" max="100" step="0.5">
+        </div>
+        <div class="field" style="grid-column:1 / -1;">
+          <label for="plotOverrideNote">Note (required)</label>
+          <textarea id="plotOverrideNote" rows="2" maxlength="500" placeholder="Why this figure? e.g. checked on site, frame and roof complete"></textarea>
+        </div>
+        <div class="btn-row">
+          <button type="button" class="btn btn-amber" id="saveOverrideBtn">Save manual figure</button>
+        </div>
+      </div>
+    </details>
+    <details id="plotOverrideHistoryWrap" style="margin-top:0.6rem;">
+      <summary style="cursor:pointer; font-weight:600;">Manual figure history</summary>
+      <div id="plotOverrideHistory" style="margin-top:0.5rem;"></div>
+    </details>
+    <p class="hint" id="progressSavedHint" style="margin-top:0.5rem;"></p>
+  </div>
+
+  <h3 class="display-font" id="gatesSection" style="font-size:1.1rem; margin-bottom:1rem;">Quality Gates</h3>
+  <div id="gatesWrap" style="margin-bottom:2.5rem;">Loading…</div>
+
+  <h3 class="display-font" style="font-size:1.1rem; margin-bottom:1rem;">Build Stages</h3>
+  <div class="card" style="margin-bottom:2.5rem;">
+    <p class="hint" style="margin-bottom:0.6rem;">The same 33 stages as the weekly report. An issued weekly report (never a draft) raises a tagged plot's stages, never lowers them; you can set any value here, or mark a stage N/A so it doesn't count. Plot progress is the average of the applicable stages.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Stage</th><th>Status</th><th>% Complete</th><th>N/A</th><th>Last set by</th></tr>
+        </thead>
+        <tbody id="milestoneRows"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <h3 class="display-font" id="documentsSection" style="font-size:1.1rem; margin-bottom:1rem;">Handover Documents</h3>
+  <div class="card" style="margin-bottom:2.5rem;">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Document</th><th>Status</th><th>File</th></tr>
+        </thead>
+        <tbody id="docRows"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <h3 class="display-font" style="font-size:1.1rem; margin-bottom:1rem;">Linked Items</h3>
+  <div class="card">
+    <div class="hint" style="margin-bottom:0.6rem;">Actions, Inspection Findings and Snags already tied to this plot — nothing to search for separately.</div>
+    <div id="linkedItemsWrap">Loading…</div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, uploadImage, plotProgressMode, PLOT_STAGE_SOURCE_LABEL, formatDate, formatDateTime, historyActorName, checkAndMarkPlotHandedOver, getPlotHandoverReadiness, PLOT_READINESS_LABEL, PLOT_READINESS_BADGE, RFI_STATUS_BADGE, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE } from "./js/app.js";
+
+  await requireAuth();
+  const plotId = getParam("id");
+  if (!plotId) window.location.href = "dashboard.html";
+
+  const errorBox = document.getElementById("errorBox");
+  let plot = null;
+
+  // ─── Plot Control / Handover Readiness (Priority 12, Phase 1) ───
+  // System Handover Readiness — derived from the configured control
+  // signals below (Quality Gates, Handover Documents, Programme,
+  // Snags). This is NOT a legal or contractual determination of
+  // handover readiness, only a summary of what the app itself knows.
+  const plotControlWrap = document.getElementById("plotControlWrap");
+
+  function reasonHref(code) {
+    if (code === "gates_outstanding") return "#gatesSection";
+    if (code === "documents_outstanding") return "#documentsSection";
+    if (code.startsWith("snags_")) return plot?.snagListId ? `snag-list-edit.html?id=${plot.snagListId}` : null;
+    if (code.startsWith("programme_") || code === "approaching_with_unresolved") return `programme.html?project=${plot.project_id}`;
+    return null;
+  }
+
+  function reasonListHtml(reasons) {
+    if (!reasons.length) return "";
+    return `<ul class="checklist" style="list-style:disc; padding-left:1.4rem; margin:0.4rem 0 0;">
+      ${reasons.map((r) => {
+        const href = reasonHref(r.code);
+        const text = escapeHtml(r.label);
+        return `<li style="display:list-item;">${href ? `<a href="${href}">${text}</a>` : text}</li>`;
+      }).join("")}
+    </ul>`;
+  }
+
+  function renderPlotControl(readiness) {
+    const status = readiness.status;
+    const badge = PLOT_READINESS_BADGE[status];
+    const label = PLOT_READINESS_LABEL[status];
+
+    let headline = `<span class="badge ${badge}" style="font-size:0.95rem; padding:0.3rem 0.7rem;">${label}</span>`;
+    if (status === "not_ready") headline += ` <strong>${readiness.blockers.length} blocker${readiness.blockers.length === 1 ? "" : "s"}</strong>`;
+    else if (status === "at_risk") headline += ` <strong>${readiness.warnings.length} warning${readiness.warnings.length === 1 ? "" : "s"}</strong>`;
+
+    let restrictedNote = "";
+    if (status === "restricted") {
+      restrictedNote = `<p class="hint" style="margin-top:0.5rem;">Quality Gates, Handover Documents and Programme aren't visible at your access level — this position reflects Snagging only.</p>`;
+    }
+    let handedOverNote = "";
+    if (status === "handed_over" && (readiness.blockers.length || readiness.warnings.length)) {
+      handedOverNote = `<p class="hint" style="margin-top:0.5rem;">Note: new item(s) have been raised since this plot was marked handed over — see below.</p>`;
+    }
+
+    plotControlWrap.innerHTML = `
+      <div class="card" style="margin-bottom:1rem;">
+        <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.6rem; margin-bottom:0.3rem;">
+          <strong>System Handover Readiness</strong>
+          <span class="hint">As of ${new Date().toLocaleDateString("en-GB")} — derived from the control signals below, not a legal/contractual determination.</span>
+        </div>
+        <p style="margin:0.4rem 0 0;">${headline}</p>
+        ${restrictedNote}${handedOverNote}
+        ${readiness.blockers.length ? `<div style="margin-top:0.7rem;"><strong style="color:var(--red);">Blockers</strong>${reasonListHtml(readiness.blockers)}</div>` : ""}
+        ${readiness.warnings.length ? `<div style="margin-top:0.7rem;"><strong style="color:var(--amber, #b5860b);">Warnings</strong>${reasonListHtml(readiness.warnings)}</div>` : ""}
+      </div>
+      <div class="grid" style="grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:0.8rem;">
+        <div class="card">
+          <div class="hint">Programme</div>
+          ${readiness.programme.hasActivities
+            ? `<div>${readiness.programme.total} activit${readiness.programme.total === 1 ? "y" : "ies"} tagged to this plot</div>
+               <div class="hint">Overdue: ${readiness.programme.overdueProgrammeActivities + readiness.programme.overdueProgrammeMilestones} · Forecast late: ${readiness.programme.materialForecastLateProgrammeActivities + readiness.programme.forecastLateProgrammeMilestones}</div>`
+            : `<div class="hint">No programme activities tagged to this plot</div>`}
+        </div>
+        <div class="card">
+          <div class="hint">Snags</div>
+          <div>${readiness.snags.open} open of ${readiness.snags.total}</div>
+          <div class="hint">Blocking: ${readiness.snags.blocking} · Warning: ${readiness.snags.warning}</div>
+        </div>
+        <div class="card">
+          <div class="hint">Quality Gates</div>
+          ${readiness.qualityGates.total
+            ? `<div>${readiness.qualityGates.approved} of ${readiness.qualityGates.total} approved / N/A</div>`
+            : `<div class="hint">No quality gates recorded</div>`}
+        </div>
+        <div class="card">
+          <div class="hint">Handover Documents</div>
+          ${readiness.handoverDocuments.total
+            ? `<div>${readiness.handoverDocuments.approved} of ${readiness.handoverDocuments.total} approved / final</div>`
+            : `<div class="hint">No handover documents recorded</div>`}
+        </div>
+        <div class="card">
+          <div class="hint">Actions</div>
+          ${readiness.actions.total
+            ? `<div>${readiness.actions.open} open of ${readiness.actions.total}</div><div class="hint">Blocking: ${readiness.actions.blocking} · Warning: ${readiness.actions.warning}</div>`
+            : `<div class="hint">0 Actions linked to this plot — not necessarily clean; a project-level Action may exist unlinked</div>`}
+        </div>
+        <div class="card">
+          <div class="hint">Inspection Findings</div>
+          ${readiness.findings.total
+            ? `<div>${readiness.findings.open} open of ${readiness.findings.total}</div><div class="hint">Critical: ${readiness.findings.blocking} · High: ${readiness.findings.warning}</div>`
+            : `<div class="hint">0 Findings linked to this plot — not necessarily clean; a project-level Finding may exist unlinked</div>`}
+        </div>
+      </div>
+    `;
+  }
+
+  async function loadPlotControl() {
+    try {
+      const { readiness } = await getPlotHandoverReadiness(plotId);
+      const { data: list } = await supabase.from("snag_lists").select("id").eq("plot_id", plotId).maybeSingle();
+      plot.snagListId = list?.id || null;
+      renderPlotControl(readiness);
+    } catch (err) {
+      plotControlWrap.innerHTML = `<div class="error-box" style="display:block;">Couldn't load plot control position: ${escapeHtml(err.message || String(err))}</div>`;
+    }
+  }
+
+  // ─── Linked Items (Priority 13) ──────────────────────────────────
+  // "Plot -> Finding -> Action" and "Plot -> Snag -> Action" without
+  // manually searching. Actions/Findings are reached via their own new
+  // plot_id (Priority 13); Snags via the plot's own auto-seeded list —
+  // the same effective-plot resolution getPlotSnags()/
+  // getProjectPlotReadiness() already use internally, mirrored here
+  // (kept local rather than exported from app.js purely for display,
+  // since nothing else outside this page needs the raw list).
+  function linkedItemRowHtml(label, href, statusBadge) {
+    return `<div style="display:flex; align-items:center; justify-content:space-between; gap:0.6rem; padding:0.4rem 0; border-bottom:1px solid var(--rule);">
+      <a href="${href}">${escapeHtml(label)}</a>${statusBadge}
+    </div>`;
+  }
+
+  async function loadLinkedItems() {
+    const wrap = document.getElementById("linkedItemsWrap");
+    try {
+      const [{ data: actions }, { data: findings }, { data: list }, { data: rfis }] = await Promise.all([
+        supabase.from("actions").select("id, title, status, priority").eq("plot_id", plotId),
+        supabase.from("inspection_findings").select("id, title, severity, status, inspection_id").eq("plot_id", plotId),
+        supabase.from("snag_lists").select("id").eq("plot_id", plotId).maybeSingle(),
+        supabase.from("rfis").select("id, reference, title, status").eq("plot_id", plotId),
+      ]);
+      const { data: directTagged } = await supabase.from("snag_items").select("id, description, status, snag_list_id").eq("plot_id", plotId);
+      const { data: byList } = list?.id
+        ? await supabase.from("snag_items").select("id, description, status, snag_list_id").eq("snag_list_id", list.id)
+        : { data: [] };
+      const snagsById = new Map();
+      for (const s of [...(byList || []), ...(directTagged || [])]) snagsById.set(s.id, s);
+      const snags = [...snagsById.values()];
+
+      const sections = [
+        ["Actions", actions || [], (a) => linkedItemRowHtml(a.title, `actions.html?project=${plot.project_id}`, `<span class="badge ${a.status === "completed" ? "badge-green" : a.status === "blocked" ? "badge-red" : "badge-grey"}">${escapeHtml(a.status)}</span>`)],
+        ["Inspection Findings", findings || [], (f) => linkedItemRowHtml(f.title, `inspection-detail.html?id=${f.inspection_id}`, `<span class="badge ${f.severity === "critical" || f.severity === "high" ? "badge-red" : "badge-grey"}">${escapeHtml(f.status)}</span>`)],
+        ["Snags", snags, (s) => linkedItemRowHtml(s.description, `snag-list-edit.html?id=${s.snag_list_id}`, `<span class="badge ${SNAG_STATUS_BADGE[s.status]}">${escapeHtml(SNAG_STATUS_LABEL[s.status] || s.status)}</span>`)],
+        ["RFIs", rfis || [], (r) => linkedItemRowHtml(`${r.reference} — ${r.title}`, `rfi-detail.html?id=${r.id}`, `<span class="badge ${RFI_STATUS_BADGE[r.status]}">${escapeHtml(r.status)}</span>`)],
+      ];
+
+      wrap.innerHTML = sections.map(([label, rows, rowFn]) => `
+        <div style="margin-bottom:1rem;">
+          <strong>${label}</strong> <span class="hint">(${rows.length})</span>
+          ${rows.length ? rows.map(rowFn).join("") : `<div class="hint" style="padding:0.3rem 0;">None</div>`}
+        </div>
+      `).join("");
+    } catch (err) {
+      wrap.innerHTML = `<div class="error-box" style="display:block;">Couldn't load linked items: ${escapeHtml(err.message || String(err))}</div>`;
+    }
+  }
+
+  // ─── Quality Gates ──────────────────────────────────────────────
+  const gateStatusBadge = { not_started: "badge-grey", in_progress: "badge-blue", under_review: "badge-amber", approved: "badge-green", not_applicable: "badge-grey" };
+  const gateStatusLabel = { not_started: "Not Started", in_progress: "In Progress", under_review: "Under Review", approved: "Approved", not_applicable: "N/A" };
+  const gatesWrap = document.getElementById("gatesWrap");
+
+  function gateCardHtml(gate) {
+    const checklist = Array.isArray(gate.checklist) ? gate.checklist : [];
+    return `
+      <div class="card gate-card" data-gate-id="${gate.id}">
+        <div class="gate-head">
+          <div>
+            <span class="badge ${gateStatusBadge[gate.status]}" style="margin-bottom:0.4rem; display:inline-block;">${gateStatusLabel[gate.status]}</span>
+            <div class="gate-head-title">${escapeHtml(gate.title)}</div>
+          </div>
+          <select class="gate-status-select" data-gate-id="${gate.id}">
+            <option value="not_started">Not Started</option>
+            <option value="in_progress">In Progress</option>
+            <option value="under_review">Under Review</option>
+            <option value="approved">Approved</option>
+            <option value="not_applicable">N/A</option>
+          </select>
+        </div>
+        <ul class="checklist">
+          ${checklist.map((item, i) => `
+            <li class="checklist-item ${item.checked ? "checked" : ""}">
+              <input type="checkbox" id="chk-${gate.id}-${i}" data-gate-id="${gate.id}" data-index="${i}" ${item.checked ? "checked" : ""}>
+              <label for="chk-${gate.id}-${i}">${escapeHtml(item.text)}</label>
+              <span class="checked-at">${item.checked_at ? new Date(item.checked_at).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : ""}</span>
+            </li>
+          `).join("")}
+        </ul>
+      </div>
+    `;
+  }
+
+  function wireGateCard(gate) {
+    const select = document.querySelector(`select.gate-status-select[data-gate-id="${gate.id}"]`);
+    select.value = gate.status;
+    select.addEventListener("change", async () => {
+      const newStatus = select.value;
+      const { error } = await supabase.from("quality_gates").update({ status: newStatus }).eq("id", gate.id);
+      if (error) { alert("Couldn't save that status change: " + error.message); select.value = gate.status; return; }
+      gate.status = newStatus;
+      await checkAndMarkPlotHandedOver(plotId);
+      rerenderGateCard(gate);
+      loadPlotControl();
+    });
+
+    document.querySelectorAll(`input[type="checkbox"][data-gate-id="${gate.id}"]`).forEach((cb) => {
+      cb.addEventListener("change", async () => {
+        const i = Number(cb.dataset.index);
+        const previousChecklist = gate.checklist;
+        const checklist = Array.isArray(gate.checklist) ? [...gate.checklist] : [];
+        checklist[i] = { ...checklist[i], checked: cb.checked, checked_at: cb.checked ? new Date().toISOString() : null };
+        const { error } = await supabase.from("quality_gates").update({ checklist }).eq("id", gate.id);
+        if (error) { alert("Couldn't save that checklist change: " + error.message); gate.checklist = previousChecklist; rerenderGateCard(gate); return; }
+        gate.checklist = checklist;
+        rerenderGateCard(gate);
+      });
+    });
+  }
+
+  function rerenderGateCard(gate) {
+    const el = document.querySelector(`.gate-card[data-gate-id="${gate.id}"]`);
+    el.outerHTML = gateCardHtml(gate);
+    wireGateCard(gate);
+  }
+
+  async function loadGates() {
+    const { data: gates, error } = await supabase
+      .from("quality_gates")
+      .select("*")
+      .eq("plot_id", plotId)
+      .order("sort_order", { ascending: true });
+
+    if (error || !gates || !gates.length) {
+      gatesWrap.innerHTML = `<div class="empty"><p>No quality gates found for this plot.</p></div>`;
+      return;
+    }
+    gatesWrap.innerHTML = gates.map(gateCardHtml).join("");
+    gates.forEach(wireGateCard);
+  }
+
+  // ─── Build stages (v69: one 33-stage list) ──────────────────────
+  // One row per stage. Weekly reports raise these in the database
+  // (never lower them); here any value can be set, including lower, and
+  // a stage can be marked N/A so it's left out of the plot's average.
+  // The database recalculates plot % and site % after every change.
+  function milestoneStatusBadge(m) {
+    if (!m.applicable) return "badge-grey";
+    return m.percent <= 0 ? "badge-grey" : m.percent >= 100 ? "badge-green" : "badge-blue";
+  }
+  function milestoneStatusLabel(m) {
+    if (!m.applicable) return "N/A";
+    return m.percent <= 0 ? "Not Started" : m.percent >= 100 ? "Complete" : "In Progress";
+  }
+  function stageSourceLabel(m) {
+    const label = PLOT_STAGE_SOURCE_LABEL[m.last_source] || "";
+    if (!label) return "";
+    return m.updated_at ? `${label}, ${formatDateTime(m.updated_at)}` : label;
+  }
+
+  function milestoneRowHtml(m) {
+    return `
+      <tr data-milestone-id="${m.id}" style="${m.applicable ? "" : "opacity:0.55;"}">
+        <td><strong>${escapeHtml(m.title)}</strong></td>
+        <td><span class="badge ${milestoneStatusBadge(m)}">${milestoneStatusLabel(m)}</span></td>
+        <td><input type="number" class="milestone-percent" data-milestone-id="${m.id}" min="0" max="100" step="5" value="${m.percent}" style="width:90px;" ${m.applicable ? "" : "disabled"}></td>
+        <td><input type="checkbox" class="milestone-na" data-milestone-id="${m.id}" ${m.applicable ? "" : "checked"} aria-label="${escapeHtml(m.title)} not applicable"></td>
+        <td class="hint">${escapeHtml(stageSourceLabel(m))}</td>
+      </tr>
+    `;
+  }
+
+  async function saveMilestone(m, patch) {
+    const previous = { percent: m.percent, applicable: m.applicable };
+    const { error } = await supabase.from("internal_milestones").update(patch).eq("id", m.id);
+    if (error) {
+      alert("Couldn't save that change: " + error.message);
+      Object.assign(m, previous);
+      rerenderMilestoneRow(m);
+      return;
+    }
+    Object.assign(m, patch, { last_source: "plot_page", updated_at: new Date().toISOString() });
+    rerenderMilestoneRow(m);
+    await loadPlotProgress();
+  }
+
+  function wireMilestoneRow(m) {
+    const input = document.querySelector(`input.milestone-percent[data-milestone-id="${m.id}"]`);
+    input.addEventListener("change", async () => {
+      const pct = Math.max(0, Math.min(100, Number(input.value) || 0));
+      await saveMilestone(m, { percent: pct });
+    });
+    const na = document.querySelector(`input.milestone-na[data-milestone-id="${m.id}"]`);
+    na.addEventListener("change", async () => {
+      await saveMilestone(m, { applicable: !na.checked });
+    });
+  }
+
+  function rerenderMilestoneRow(m) {
+    const el = document.querySelector(`tr[data-milestone-id="${m.id}"]`);
+    el.outerHTML = milestoneRowHtml(m);
+    wireMilestoneRow(m);
+  }
+
+  async function loadMilestones() {
+    const { data: milestones, error } = await supabase
+      .from("internal_milestones")
+      .select("*")
+      .eq("plot_id", plotId)
+      .not("stage_key", "is", null)
+      .is("retired_at", null)
+      .order("sort_order", { ascending: true });
+
+    if (error || !milestones || !milestones.length) {
+      document.getElementById("milestoneRows").innerHTML = `<tr><td colspan="5" style="text-align:center; color:var(--ink-soft);">No build stages found for this plot.</td></tr>`;
+      return;
+    }
+    document.getElementById("milestoneRows").innerHTML = milestones.map(milestoneRowHtml).join("");
+    milestones.forEach(wireMilestoneRow);
+  }
+
+  // ─── Handover Documents ─────────────────────────────────────────
+  const docStatusBadge = { missing: "badge-red", draft_received: "badge-amber", approved_final: "badge-green" };
+  const docStatusLabel = { missing: "Missing", draft_received: "Draft Received", approved_final: "Approved / Final" };
+
+  function docRowHtml(doc) {
+    return `
+      <tr data-doc-id="${doc.id}">
+        <td><strong>${escapeHtml(doc.title)}</strong></td>
+        <td>
+          <select class="status-select" data-doc-id="${doc.id}" style="width:auto;">
+            <option value="missing">Missing</option>
+            <option value="draft_received">Draft Received</option>
+            <option value="approved_final">Approved / Final</option>
+          </select>
+        </td>
+        <td class="file-row">
+          ${doc.file_url ? `<a class="file-link" href="${doc.file_url}" target="_blank">📄 ${escapeHtml(doc.file_name || "View file")}</a><br>` : ""}
+          <input type="file" data-doc-id="${doc.id}" accept="application/pdf,image/*">
+        </td>
+      </tr>
+    `;
+  }
+
+  function wireDocRow(doc) {
+    const select = document.querySelector(`select.status-select[data-doc-id="${doc.id}"]`);
+    select.value = doc.status;
+    select.addEventListener("change", async () => {
+      const newStatus = select.value;
+      const { error } = await supabase.from("handover_documents").update({ status: newStatus, updated_at: new Date().toISOString() }).eq("id", doc.id);
+      if (error) { alert("Couldn't save that status change: " + error.message); select.value = doc.status; return; }
+      doc.status = newStatus;
+      await checkAndMarkPlotHandedOver(plotId);
+      loadPlotControl();
+    });
+
+    const fileInput = document.querySelector(`input[type="file"][data-doc-id="${doc.id}"]`);
+    fileInput.addEventListener("change", async () => {
+      const file = fileInput.files[0];
+      if (!file) return;
+      clearError(errorBox);
+      fileInput.disabled = true;
+      try {
+        const url = await uploadImage(file, `${plot.project_id}/handover`);
+        const patch = { file_url: url, file_name: file.name, updated_at: new Date().toISOString() };
+        if (doc.status === "missing") patch.status = "draft_received";
+        const { error } = await supabase.from("handover_documents").update(patch).eq("id", doc.id);
+        if (error) throw error;
+        Object.assign(doc, patch);
+        rerenderDocRow(doc);
+      } catch (err) {
+        showError(errorBox, err);
+      } finally {
+        fileInput.disabled = false;
+      }
+    });
+  }
+
+  function rerenderDocRow(doc) {
+    const el = document.querySelector(`tr[data-doc-id="${doc.id}"]`);
+    el.outerHTML = docRowHtml(doc);
+    wireDocRow(doc);
+  }
+
+  async function loadDocs() {
+    const { data, error } = await supabase
+      .from("handover_documents")
+      .select("*")
+      .eq("plot_id", plotId)
+      .order("doc_key", { ascending: true });
+
+    if (error || !data || !data.length) {
+      document.getElementById("docRows").innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--ink-soft);">No handover documents found for this plot.</td></tr>`;
+      return;
+    }
+    document.getElementById("docRows").innerHTML = data.map(docRowHtml).join("");
+    data.forEach(wireDocRow);
+  }
+
+  // ─── Plot progress (v69: worked out by the database) ────────────
+  // progress_pct = the higher of the manual figure (if any) and the
+  // average of the applicable stages. Only the manual figure is set
+  // here, always with a note, through set_plot_override(); the database
+  // checks the note and the permission, keeps the history, and drops
+  // the manual figure by itself once the stages catch up.
+  function fmtPct(v) {
+    const n = Number(v) || 0;
+    return `${Math.round(n * 10) / 10}%`;
+  }
+
+  function renderPlotProgress() {
+    const mode = plotProgressMode(plot);
+    document.getElementById("plotProgressFigure").textContent = fmtPct(plot.progress_pct);
+    const badge = document.getElementById("plotProgressMode");
+    badge.textContent = mode === "manual" ? "Manual" : "Automatic";
+    badge.className = `badge ${mode === "manual" ? "badge-amber" : "badge-green"}`;
+    document.getElementById("plotProgressExplain").textContent = mode === "manual"
+      ? `Calculated from the stages: ${fmtPct(plot.progress_calculated)}. Showing the manual figure until the stages reach ${fmtPct(plot.progress_override)}.`
+      : `Calculated from the stages below: the average of the applicable stages.`;
+    const active = document.getElementById("plotOverrideActive");
+    if (mode === "manual") {
+      active.style.display = "";
+      active.innerHTML = `
+        <div class="hint"><strong>Manual figure ${escapeHtml(fmtPct(plot.progress_override))}</strong>${plot.progress_override_at ? ` · set ${escapeHtml(formatDateTime(plot.progress_override_at))}` : ""}</div>
+        <div style="margin:0.3rem 0 0.5rem;">${escapeHtml(plot.progress_override_note || "")}</div>
+        <button type="button" class="btn btn-outline btn-sm" id="clearOverrideBtn">Switch back to automatic</button>`;
+      document.getElementById("clearOverrideBtn").addEventListener("click", clearOverride);
+    } else {
+      active.style.display = "none";
+      active.innerHTML = "";
+    }
+  }
+
+  const OVERRIDE_ACTION_LABEL = {
+    set: "Manual figure set",
+    cleared: "Switched back to automatic",
+    superseded: "Stages caught up, back to automatic",
+    carried_over: "Carried over at go-live",
+  };
+
+  async function loadOverrideHistory() {
+    const { data, error } = await supabase
+      .from("plot_progress_overrides")
+      .select("action, old_override, new_override, calculated, note, changed_by_name, changed_at")
+      .eq("plot_id", plotId)
+      .order("changed_at", { ascending: false });
+    const wrap = document.getElementById("plotOverrideHistory");
+    if (error || !data || !data.length) {
+      wrap.innerHTML = `<p class="hint">No manual figures have been set for this plot.</p>`;
+      return;
+    }
+    wrap.innerHTML = `<div class="table-wrap"><table>
+      <thead><tr><th>When</th><th>What</th><th>Figure</th><th>Calculated</th><th>Note</th><th>Who</th></tr></thead>
+      <tbody>${data.map((h) => `<tr>
+        <td>${escapeHtml(formatDateTime(h.changed_at))}</td>
+        <td>${escapeHtml(OVERRIDE_ACTION_LABEL[h.action] || h.action)}</td>
+        <td>${h.new_override !== null && h.new_override !== undefined ? escapeHtml(fmtPct(h.new_override)) : (h.old_override !== null && h.old_override !== undefined ? `<s>${escapeHtml(fmtPct(h.old_override))}</s>` : "")}</td>
+        <td>${h.calculated !== null && h.calculated !== undefined ? escapeHtml(fmtPct(h.calculated)) : ""}</td>
+        <td>${escapeHtml(h.note || "")}</td>
+        <td>${escapeHtml(historyActorName(h))}</td>
+      </tr>`).join("")}</tbody></table></div>`;
+  }
+
+  async function loadPlotProgress() {
+    const { data } = await supabase
+      .from("plots")
+      .select("progress_pct, progress_calculated, progress_override, progress_override_note, progress_override_at")
+      .eq("id", plotId)
+      .single();
+    if (data) Object.assign(plot, data);
+    renderPlotProgress();
+    loadOverrideHistory();
+  }
+
+  async function clearOverride() {
+    clearError(errorBox);
+    if (!confirm("Switch this plot back to its calculated figure?")) return;
+    const { error } = await supabase.rpc("clear_plot_override", { p_plot_id: plotId, p_note: "Switched back to automatic" });
+    if (error) { showError(errorBox, error); return; }
+    document.getElementById("progressSavedHint").textContent = "Switched back to automatic. Site progress has been updated.";
+    await loadPlotProgress();
+  }
+
+  document.getElementById("saveOverrideBtn").addEventListener("click", async () => {
+    clearError(errorBox);
+    const pct = Number(document.getElementById("plotOverrideInput").value);
+    const note = document.getElementById("plotOverrideNote").value.trim();
+    if (!note || note.length < 3) { showError(errorBox, "Add a short note explaining the manual figure."); return; }
+    if (!Number.isFinite(pct) || pct < 0 || pct > 100) { showError(errorBox, "Enter a figure between 0 and 100."); return; }
+    const btn = document.getElementById("saveOverrideBtn");
+    btn.disabled = true;
+    try {
+      const { error } = await supabase.rpc("set_plot_override", { p_plot_id: plotId, p_percent: pct, p_note: note });
+      if (error) throw error;
+      document.getElementById("plotOverrideInput").value = "";
+      document.getElementById("plotOverrideNote").value = "";
+      document.getElementById("plotOverrideFormWrap").open = false;
+      document.getElementById("progressSavedHint").textContent = "Manual figure saved. Site progress has been updated.";
+      await loadPlotProgress();
+    } catch (err) {
+      showError(errorBox, err);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // ─── Delete plot ────────────────────────────────────────────────
+  document.getElementById("deletePlotBtn").addEventListener("click", async () => {
+    if (!confirm(`Delete "${plot.plot_number}" and all its quality gates and handover documents? This cannot be undone.`)) return;
+    const { error } = await supabase.from("plots").delete().eq("id", plotId);
+    if (error) { showError(errorBox, error); return; }
+    window.location.href = plot.block_id
+      ? `block-detail.html?id=${plot.block_id}`
+      : `plot-handovers.html?project=${plot.project_id}`;
+  });
+
+  // ─── Init ───────────────────────────────────────────────────────
+  async function init() {
+    const { data, error } = await supabase.from("plots").select("*, projects(*), blocks(*)").eq("id", plotId).single();
+    if (error) { document.getElementById("plotTitle").textContent = "Plot not found"; return; }
+    plot = data;
+    const project = plot.projects;
+    const block = plot.blocks;
+
+    document.getElementById("plotTitle").textContent = plot.plot_number;
+    document.getElementById("projectSub").textContent = block ? `${project.name} — part of ${block.block_name}` : project.name;
+    renderPlotProgress();
+    loadOverrideHistory();
+    document.getElementById("deletePlotBtn").textContent = block ? "Delete Flat" : "Delete Plot";
+    renderHeader(block ? [
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project.name, href: `project.html?id=${project.id}` },
+      { label: "Plot Handovers", href: `plot-handovers.html?project=${project.id}` },
+      { label: block.block_name, href: `block-detail.html?id=${block.id}` },
+      { label: plot.plot_number },
+    ] : [
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project.name, href: `project.html?id=${project.id}` },
+      { label: "Plot Handovers", href: `plot-handovers.html?project=${project.id}` },
+      { label: plot.plot_number },
+    ]);
+
+    loadGates();
+    loadMilestones();
+    loadDocs();
+    loadPlotControl();
+    loadLinkedItems();
+  }
+
+  init();
+</script>
+</body>
+</html>
