@@ -2563,55 +2563,82 @@ export const EXTERNAL_WORKS_TAG = "External / Engineering Works";
 // A weekly report item's plot tag is free text: "5", "Plot 5", "5,6,7",
 // "22-27", "Plots 1-3", a block name ("Flats 14-19"), the site-wide
 // EXTERNAL_WORKS_TAG, or something else entirely ("S278"). These rules
-// are IDENTICAL to resolve_plot_tags() in sql/schema.sql (which raises
-// plot stages when a report is saved) and are checked against the same
-// case table, tests/lib/plot_tag_cases.json:
-//   * the whole tag equal to a block name or EXTERNAL_WORKS_TAG -> no plots
-//   * split on commas; a part equal to a block name -> skipped
-//   * a numeric range "a-b" (optionally "a-Plot b") -> every plot a..b
-//     (ignored if more than 200 apart)
-//   * otherwise the first run of digits, leading zeros dropped, or the
-//     lower-case text when there are no digits
-//   * unknown tokens match nothing
-export function plotTagToken(s) {
-  if (s === null || s === undefined) return null;
-  const str = String(s);
-  const digits = (str.match(/[0-9]+/) || [])[0];
-  if (digits !== undefined) return digits.replace(/^0+/, "") || "0";
-  return str.replace(/^ +| +$/g, "").toLowerCase();
+// are IDENTICAL to resolve_plot_tags_detail() in sql/schema.sql (which
+// raises plot stages from an issued report) and are checked against the
+// same case table, tests/lib/plot_tag_cases.json. Whole names and whole
+// ranges only; anything unclear is skipped (and, in the database,
+// logged), never guessed:
+//   * split on commas; trim, lower-case, collapse spaces
+//   * the tag or a part equal to a block name or EXTERNAL_WORKS_TAG -> not
+//     a plot (skipped, not reported)
+//   * a whole-part range "22-27" / "Plots 22-24" / "Plot 22 - Plot 24"
+//     (hyphen or en dash, at most 200 apart) -> those numbers
+//   * otherwise the part is one plot name
+//   * names compare by plotTagKey(): a leading Plot/Flat/Unit/House/
+//     Apartment/Apt/No word before a number is dropped, leading zeros are
+//     dropped, "22 A" = "22a", any other text is kept whole. So "22" is
+//     plot 22 only (never 22A/22B) and "block1" is not flat 1.
+//   * a key with no plot -> skipped "unmatched"; the rest still applies
+//   * a key with more than one plot -> "ambiguous": the WHOLE tag is skipped
+const TAG_SPACE = (x) => String(x ?? "").replace(/^\s+|\s+$/g, "").replace(/\s+/g, " ").toLowerCase();
+const PLOT_RANGE_RE = /^(?:(?:plots?|flats?|units?|houses?) ?)?([0-9]{1,6}) ?[-–] ?(?:(?:plots?|flats?|units?|houses?) ?)?([0-9]{1,6})$/;
+export function plotTagKey(s) {
+  let t = TAG_SPACE(s);
+  if (/^(plots?|flats?|units?|houses?|apartments?|apt|no)\.? ?#? ?[0-9]/.test(t)) {
+    t = t.replace(/^(plots?|flats?|units?|houses?|apartments?|apt|no)\.? ?#? ?/, "");
+  }
+  t = t.replace(/^0+([0-9])/, "$1").replace(/^([0-9]+) ([a-z])$/, "$1$2");
+  return t === "" ? null : t;
 }
 
-const PLOT_RANGE_RE = /([0-9]{1,6})\s*[-–]\s*(?:plots?\s*|flats?\s*)?([0-9]{1,6})/i;
-
-// plots: [{ id, plot_number }]; blockNames: array of the site's block names.
-// Returns the matching plot ids (deduplicated, in plot order).
-export function resolvePlotTags(tag, plots, blockNames = []) {
-  if (tag === null || tag === undefined) return [];
-  const trim = (x) => String(x).replace(/^ +| +$/g, "");
-  const whole = trim(tag).toLowerCase();
-  if (!whole) return [];
-  const external = EXTERNAL_WORKS_TAG.toLowerCase();
-  const blocks = new Set((blockNames || []).map((b) => trim(b || "").toLowerCase()));
-  if (whole === external || blocks.has(whole)) return [];
-  const tokens = new Set();
+// plots: [{ id, plot_number }]; blockNames: the site's block names.
+// Returns { ids (matching plot ids, in plot order), skipped: [{ token, reason }] }.
+export function resolvePlotTagsDetailed(tag, plots, blockNames = []) {
+  const none = { ids: [], skipped: [] };
+  if (tag === null || tag === undefined) return none;
+  const external = TAG_SPACE(EXTERNAL_WORKS_TAG);
+  const whole = TAG_SPACE(tag);
+  const blocks = new Set((blockNames || []).map((b) => TAG_SPACE(b)));
+  if (!whole || whole === external || blocks.has(whole)) return none;
+  const byKey = new Map();
+  (plots || []).forEach((p) => {
+    const k = plotTagKey(p.plot_number);
+    if (k === null) return;
+    if (!byKey.has(k)) byKey.set(k, []);
+    byKey.get(k).push(p.id);
+  });
+  const found = new Set();
+  const skipped = [];
+  let ambiguous = false;
   String(tag).split(",").forEach((raw) => {
-    const seg = trim(raw);
-    if (!seg) return;
-    const low = seg.toLowerCase();
-    if (blocks.has(low) || low === external) return;
-    const m = seg.match(PLOT_RANGE_RE);
+    const low = TAG_SPACE(raw);
+    if (!low || low === external || blocks.has(low)) return;
+    const m = low.match(PLOT_RANGE_RE);
+    let keys;
     if (m) {
       const a = Number(m[1]);
       const b = Number(m[2]);
-      if (Math.abs(b - a) <= 200) {
-        for (let n = Math.min(a, b); n <= Math.max(a, b); n++) tokens.add(String(n));
-      }
+      if (Math.abs(b - a) > 200) { skipped.push({ token: low, reason: "range_too_wide" }); return; }
+      keys = [];
+      for (let n = Math.min(a, b); n <= Math.max(a, b); n++) keys.push(String(n));
     } else {
-      tokens.add(plotTagToken(seg));
+      keys = [plotTagKey(low)];
     }
+    keys.forEach((k) => {
+      if (k === null) return;
+      const hits = byKey.get(k) || [];
+      if (!hits.length) skipped.push({ token: k, reason: "unmatched" });
+      else if (hits.length > 1) { ambiguous = true; skipped.push({ token: k, reason: "ambiguous" }); }
+      else found.add(hits[0]);
+    });
   });
-  if (!tokens.size) return [];
-  return (plots || []).filter((p) => tokens.has(plotTagToken(p.plot_number))).map((p) => p.id);
+  const dedupe = (list) => list.filter((x, i) => list.findIndex((y) => y.token === x.token && y.reason === x.reason) === i);
+  if (ambiguous) return { ids: [], skipped: dedupe(skipped) };
+  return { ids: (plots || []).filter((p) => found.has(p.id)).map((p) => p.id), skipped: dedupe(skipped) };
+}
+
+export function resolvePlotTags(tag, plots, blockNames = []) {
+  return resolvePlotTagsDetailed(tag, plots, blockNames).ids;
 }
 
 // ─── Plot progress: automatic vs manual (v69) ───────────────────
@@ -2640,11 +2667,31 @@ export const EXTERNAL_WORKS_STALE_DAYS = 21;
 // One line on the first monthly report after a site's go-live (v69).
 export const MONTHLY_PROGRESS_BASIS_NOTE = "From this report, site progress is worked out from each plot's build stages (raised by weekly reports). Plots taken over mid-build keep their previous figure as a manual starting point until the stages catch up.";
 
+// Stale only applies once the site's share has been set at least once
+// (external_works_share_set_at); before that "Share not set" is the only flag.
 export function externalWorksStale(project, now = new Date()) {
   if (!project || project.status === "complete") return false;
-  const last = project.external_works_updated_at || project.created_at;
-  if (!last) return true;
+  if (!project.external_works_share_set_at) return false;
+  const last = project.external_works_updated_at || project.external_works_share_set_at;
   return now.getTime() - new Date(last).getTime() > EXTERNAL_WORKS_STALE_DAYS * 86400000;
+}
+
+// Who made a history change. The database stores a display name
+// (changed_by_name), never an email. System actions read "Automatic".
+export const HISTORY_ACTOR_FALLBACK = "A team member";
+export function historyActorName(row) {
+  if (!row) return HISTORY_ACTOR_FALLBACK;
+  if (row.action === "superseded" || row.action === "carried_over") return "Automatic";
+  const name = typeof row.changed_by_name === "string" ? row.changed_by_name.trim() : "";
+  return name && !name.includes("@") ? name : HISTORY_ACTOR_FALLBACK;
+}
+
+// Package shares are relative weights; this is each one's share of the
+// external works as a percentage of the live packages' total.
+export function normalisedPackageShare(pkg, packages) {
+  const total = (packages || []).reduce((sum, p) => sum + (Number(p.share) || 0), 0);
+  if (!total) return 0;
+  return Math.round(((Number(pkg?.share) || 0) / total) * 1000) / 10;
 }
 
 export function externalWorksShareSet(project) {

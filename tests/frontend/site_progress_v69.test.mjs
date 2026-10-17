@@ -110,12 +110,17 @@ test("plot page: no typed % input or Suggest button any more; automatic figure s
 test("plot page: a manual figure above the calculated one shows 'Manual', its note, and a 'Switch back to automatic' button that calls clear_plot_override", async () => {
   const plot = { ...PLOT_BASE, progress_pct: 85, progress_calculated: 41.9, progress_override: 85,
     progress_override_note: "Carried over at go-live — site taken over mid-build", progress_override_at: "2026-10-17T11:00:00Z",
-    history: [{ action: "carried_over", new_override: 85, calculated: 41.9, note: "Carried over at go-live — site taken over mid-build", changed_at: "2026-10-17T11:00:00Z" }] };
+    history: [
+      { action: "set", new_override: 85, calculated: 41.9, note: "Raised after walkround", changed_by_name: null, changed_at: "2026-10-17T11:30:00Z" },
+      { action: "carried_over", new_override: 85, calculated: 41.9, note: "Carried over at go-live — site taken over mid-build", changed_at: "2026-10-17T11:00:00Z" }] };
   const { document, window, sb } = await runPlotPage(plot);
   assert.equal(document.getElementById("plotProgressMode").textContent, "Manual");
   assert.match(document.getElementById("plotProgressExplain").textContent, /Calculated from the stages: 41\.9%/);
   assert.match(document.getElementById("plotOverrideActive").textContent, /Carried over at go-live/);
   assert.match(document.getElementById("plotOverrideHistory").textContent, /Carried over at go-live/);
+  const histText = document.getElementById("plotOverrideHistory").textContent;
+  assert.match(histText, /Raised after walkround[\s\S]*A team member/);
+  assert.match(histText, /Carried over at go-live[\s\S]*Automatic/);
   fireEvent(document.getElementById("clearOverrideBtn"), "click");
   await wait(20);
   const call = sb.calls.find((c) => c.op === "rpc" && c.name === "clear_plot_override");
@@ -188,17 +193,27 @@ async function runSiteDetails(project, { packages = [], reports = [], history = 
   return { ...r, sb };
 }
 
-test("Site Details: no share yet shows 'Share not set' and, with no note for 21+ days, the stale flag; the old Suggest button is gone", async () => {
+test("Site Details: before a share has ever been set, 'Share not set' is the ONLY flag (no stale flag, however old); the old Suggest button is gone", async () => {
   const { document } = await runSiteDetails(PROJECT_BASE);
   assert.equal(document.getElementById("suggestExternalWorksBtn"), null);
   assert.ok(document.getElementById("ewShareNotSet"));
-  assert.match(document.getElementById("ewStale").textContent, /over 21 days/);
+  assert.equal(document.getElementById("ewStale"), null, "no stale flag before the share is first set");
   assert.match(document.getElementById("externalWorksFacts").textContent, /Not set — counts as one plot's worth/);
+});
+
+test("Site Details: once the share has been set, 21+ days without a note shows the stale flag (even if the share was later cleared)", async () => {
+  const old = "2026-09-01T09:00:00Z";
+  const { document } = await runSiteDetails({ ...PROJECT_BASE, external_works_share: 15, external_works_share_set_at: old, external_works_updated_at: old });
+  assert.equal(document.getElementById("ewShareNotSet"), null);
+  assert.match(document.getElementById("ewStale").textContent, /over 21 days/);
+  const cleared = await runSiteDetails({ ...PROJECT_BASE, external_works_share: null, external_works_share_set_at: old, external_works_updated_at: old });
+  assert.ok(cleared.document.getElementById("ewShareNotSet"));
+  assert.ok(cleared.document.getElementById("ewStale"));
 });
 
 test("Site Details: a recent note clears the stale flag; a set share shows; a complete site is never stale", async () => {
   const recent = new Date(Date.now() - 3 * 86400000).toISOString();
-  const { document } = await runSiteDetails({ ...PROJECT_BASE, external_works_share: 15, external_works_updated_at: recent });
+  const { document } = await runSiteDetails({ ...PROJECT_BASE, external_works_share: 15, external_works_share_set_at: recent, external_works_updated_at: recent });
   assert.equal(document.getElementById("ewStale"), null);
   assert.equal(document.getElementById("ewShareNotSet"), null);
   assert.match(document.getElementById("externalWorksFacts").textContent, /15%/);
@@ -219,15 +234,35 @@ test("Site Details: packages show their share and %, with report tasks read-only
       { plot: "Plot 3", milestone: "Groundworks", text: "Not external", percent: 50 },
     ] },
   ];
-  const history = [{ kind: "package_added", package_name: "Roads", old_pct: null, new_pct: 50, old_share: null, new_share: 60, note: "Roads package set up", changed_by_email: "aled@example.test", changed_at: "2026-10-01T10:00:00Z" }];
+  const history = [
+    { kind: "package_added", package_name: "Roads", old_pct: null, new_pct: 50, old_share: null, new_share: 60, note: "Roads package set up", changed_by_name: "Fake Person", changed_at: "2026-10-01T10:00:00Z" },
+    { kind: "site", old_pct: 0, new_pct: 0, old_share: null, new_share: 15, note: "Share agreed", changed_by_name: null, changed_at: "2026-09-01T10:00:00Z" },
+  ];
   const { document } = await runSiteDetails({ ...PROJECT_BASE, external_works_pct: 70, external_works_share: 15 }, { packages, reports, history });
   const pk = document.getElementById("externalWorksPackages").textContent;
   assert.match(pk, /Sewers[\s\S]*40%[\s\S]*100%[\s\S]*Sewer connection/);
   assert.match(pk, /Roads[\s\S]*60%[\s\S]*50%[\s\S]*Road base/);
+  const norm = [...document.querySelectorAll(".pkg-share-normalised")].map((e) => e.textContent);
+  assert.deepEqual(norm, ["(40% of external works)", "(60% of external works)"]);
   assert.doesNotMatch(pk, /Not external/);
   assert.match(document.getElementById("externalWorksUnassigned").textContent, /no stage chosen — Fencing/);
   assert.equal(document.getElementById("externalWorksPct").disabled, true, "worked out from packages");
-  assert.match(document.getElementById("externalWorksHistory").textContent, /Roads package set up/);
+  const hist = document.getElementById("externalWorksHistory").textContent;
+  assert.match(hist, /Roads package set up[\s\S]*Fake Person/);
+  assert.match(hist, /Share agreed[\s\S]*A team member/, "no name -> 'A team member'");
+  assert.doesNotMatch(hist, /@/);
+});
+
+test("Site Details: package weights needn't add to 100; each shows its normalised share", async () => {
+  const packages = [
+    { id: "k1", name: "Sewers", share: 30, percent: 100, report_stages: [], sort_order: 1 },
+    { id: "k2", name: "Roads", share: 30, percent: 50, report_stages: [], sort_order: 2 },
+    { id: "k3", name: "Landscaping", share: 15, percent: 0, report_stages: [], sort_order: 3 },
+  ];
+  const { document } = await runSiteDetails({ ...PROJECT_BASE, external_works_share: 15 }, { packages, reports: [], history: [] });
+  const norm = [...document.querySelectorAll(".pkg-share-normalised")].map((e) => e.textContent);
+  assert.deepEqual(norm, ["(40% of external works)", "(40% of external works)", "(20% of external works)"]);
+  assert.match(document.getElementById("externalWorksPackages").textContent, /add up to 75%/);
 });
 
 test("Site Details: saving the figure/share needs a note, then calls set_external_works; the Site Details form no longer writes external_works_pct", async () => {
@@ -279,34 +314,57 @@ function dashboardContext(sb) {
   };
 }
 
-test("dashboard: site tiles keep the stored site % and flag 'share not set' and stale external works", async () => {
+test("dashboard: site tiles keep the stored site % and flag 'share not set' (only) before a share is set, and stale once it has been", async () => {
   const recent = new Date(Date.now() - 86400000).toISOString();
+  const old = "2026-09-01T09:00:00Z";
   const projects = [
     { ...PROJECT_BASE, id: "p1", name: "Fake Meadows", actual_progress_pct: 94.5 },
-    { ...PROJECT_BASE, id: "p2", name: "Fake Orchard", actual_progress_pct: 3, external_works_share: 15, external_works_updated_at: recent },
+    { ...PROJECT_BASE, id: "p2", name: "Fake Orchard", actual_progress_pct: 3, external_works_share: 15, external_works_share_set_at: recent, external_works_updated_at: recent },
+    { ...PROJECT_BASE, id: "p3", name: "Fake Grange", actual_progress_pct: 50, external_works_share: 10, external_works_share_set_at: old, external_works_updated_at: old },
   ];
   const sb = mockSupabase({ tables: { projects } });
   const { document } = await runPage(page("dashboard.html"), extractScript(page("dashboard.html")), dashboardContext(sb));
   await wait(40);
   const tiles = [...document.querySelectorAll("a.tile")];
-  assert.equal(tiles.length, 2);
-  assert.match(tiles[0].textContent, /94\.5%/);
-  assert.match(tiles[0].textContent, /External works share not set/);
-  assert.match(tiles[0].textContent, /not updated for 21\+ days/);
-  assert.doesNotMatch(tiles[1].textContent, /share not set|not updated/);
+  assert.equal(tiles.length, 3);
+  const tile = (n) => tiles.find((t) => t.textContent.includes(n)).textContent;
+  assert.match(tile("Fake Meadows"), /94\.5%/);
+  assert.match(tile("Fake Meadows"), /External works share not set/);
+  assert.doesNotMatch(tile("Fake Meadows"), /not updated/, "no stale flag before the share is set");
+  assert.doesNotMatch(tile("Fake Orchard"), /share not set|not updated/);
+  assert.match(tile("Fake Grange"), /not updated for 21\+ days/);
+  assert.doesNotMatch(tile("Fake Grange"), /share not set/);
 });
 
-test("dashboard: a share typed when creating a site is saved through set_external_works with 'Set at site setup'", async () => {
+test("dashboard: a new site and its share are created in ONE call (create_site) with 'Set at site setup'; no direct insert, no separate share call", async () => {
+  const sb = mockSupabase({ tables: { projects: [] }, rpc: { create_site: "new-site-id" } });
+  const { document } = await runPage(page("dashboard.html"), extractScript(page("dashboard.html")), dashboardContext(sb));
+  await wait(30);
+  document.getElementById("name").value = "Fake Fields";
+  document.getElementById("externalWorksShare").value = "12";
+  fireEvent(document.getElementById("projectForm"), "submit");
+  await wait(30);
+  assert.equal(sb.calls.filter((c) => c.op === "insert" && c.table === "projects").length, 0);
+  assert.equal(sb.calls.filter((c) => c.name === "set_external_works").length, 0);
+  const call = plain(sb.calls.find((c) => c.name === "create_site").args);
+  assert.equal(call.p_share, 12);
+  assert.equal(call.p_note, "Set at site setup");
+  assert.equal(call.p_site.name, "Fake Fields");
+  assert.ok(call.p_site.org_id);
+});
+
+test("dashboard: a failed create_site shows the error and doesn't navigate (nothing half-made to retry over)", async () => {
   const sb = mockSupabase({ tables: { projects: [] } });
+  const orig = sb.rpc.bind(sb);
+  sb.rpc = (name, args) => (name === "create_site" ? (sb.calls.push({ op: "rpc", name, args }), Promise.resolve({ data: null, error: { message: "The share must be between 0 and 100." } })) : orig(name, args));
   const { document, window } = await runPage(page("dashboard.html"), extractScript(page("dashboard.html")), dashboardContext(sb));
   await wait(30);
   document.getElementById("name").value = "Fake Fields";
   document.getElementById("externalWorksShare").value = "12";
   fireEvent(document.getElementById("projectForm"), "submit");
   await wait(30);
-  const ins = sb.calls.find((c) => c.op === "insert" && c.table === "projects");
-  assert.ok(ins && !("external_works_share" in ins.payload));
-  assert.deepEqual(plain(sb.calls.find((c) => c.name === "set_external_works").args), { p_project_id: "new-projects", p_percent: 0, p_share: 12, p_note: "Set at site setup" });
+  assert.match(document.getElementById("errorBox").textContent, /share must be between/);
+  assert.ok(!String(window.location.href).includes("project.html"));
 });
 
 // ─── Block page ────────────────────────────────────────────────────
@@ -368,14 +426,30 @@ test("weekly report save: a block-name or External tag alone advances no gate", 
   assert.equal(sb.calls.filter((c) => c.op === "update").length, 0);
 });
 
+test("weekly report save: gates use the tightened parser too — '22' doesn't hit 22A/22B, 'block1' isn't plot 1, an ambiguous tag moves nothing", async () => {
+  const items = GATE_MILESTONES.substructure_drainage.flatMap((m) => ["22", "block1", "9"].map((plot) => ({ plot, milestone: m, percent: 100 })));
+  const plots = [{ id: "a", plot_number: "22A" }, { id: "b", plot_number: "22B" }, { id: "c", plot_number: "Plot 1" }, { id: "d", plot_number: "Plot 9" }, { id: "e", plot_number: "Unit 9" }];
+  const gates = plots.map((p) => ({ id: `g-${p.id}`, plot_id: p.id, gate_key: "substructure_drainage", status: "not_started" }));
+  const sb = mockSupabase({ tables: { plots, blocks: [], weekly_reports: [{ progress_items: items }], quality_gates: gates } });
+  assert.equal(await makeSync(sb)("p1", items), 0);
+  assert.equal(sb.calls.filter((c) => c.op === "update").length, 0);
+});
+
 test("plotProgressMode / externalWorksStale helpers", () => {
   const { plotProgressMode, externalWorksStale } = progressHelpers;
   assert.equal(plotProgressMode({ progress_override: null, progress_calculated: 10 }), "auto");
   assert.equal(plotProgressMode({ progress_override: 50, progress_calculated: 10 }), "manual");
   assert.equal(plotProgressMode({ progress_override: 50, progress_calculated: 50 }), "auto");
   const now = new Date("2026-10-17T12:00:00Z");
-  assert.equal(externalWorksStale({ status: "active", external_works_updated_at: "2026-09-25T12:00:00Z" }, now), true, "22 days");
-  assert.equal(externalWorksStale({ status: "active", external_works_updated_at: "2026-09-27T12:00:00Z" }, now), false, "20 days");
-  assert.equal(externalWorksStale({ status: "active", external_works_updated_at: null, created_at: "2026-10-10T00:00:00Z" }, now), false, "falls back to created_at");
-  assert.equal(externalWorksStale({ status: "complete", external_works_updated_at: null, created_at: "2025-01-01" }, now), false);
+  const set = "2026-09-01T12:00:00Z";
+  assert.equal(externalWorksStale({ status: "active", external_works_share_set_at: set, external_works_updated_at: "2026-09-25T12:00:00Z" }, now), true, "22 days");
+  assert.equal(externalWorksStale({ status: "active", external_works_share_set_at: set, external_works_updated_at: "2026-09-27T12:00:00Z" }, now), false, "20 days");
+  assert.equal(externalWorksStale({ status: "active", external_works_updated_at: "2026-01-01T00:00:00Z", created_at: "2025-01-01" }, now), false, "never stale before the share is first set");
+  assert.equal(externalWorksStale({ status: "complete", external_works_share_set_at: set, external_works_updated_at: set }, now), false);
+  const { historyActorName, normalisedPackageShare } = progressHelpers;
+  assert.equal(historyActorName({ action: "set", changed_by_name: "Fake Person" }), "Fake Person");
+  assert.equal(historyActorName({ action: "set", changed_by_name: null }), "A team member");
+  assert.equal(historyActorName({ action: "set", changed_by_name: "x@y.test" }), "A team member");
+  assert.equal(historyActorName({ action: "carried_over" }), "Automatic");
+  assert.equal(normalisedPackageShare({ share: 30 }, [{ share: 30 }, { share: 45 }]), 40);
 });

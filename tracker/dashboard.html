@@ -159,7 +159,6 @@
   document.getElementById("projectForm").addEventListener("submit", async (e) => {
     e.preventDefault();
     clearError(errorBox);
-    const { data: { user } } = await supabase.auth.getUser();
     try {
       // v60: ensure_organisation() returns only a company the caller is an
       // ADMIN of, or null. Null means they have no company of their own
@@ -170,7 +169,7 @@
         window.location.href = "onboarding.html?reason=create_project";
         return;
       }
-      const payload = {
+      const site = {
         name: document.getElementById("name").value.trim(),
         contract_ref: document.getElementById("contractRef").value.trim() || null,
         address: document.getElementById("address").value.trim() || null,
@@ -178,23 +177,19 @@
         main_contractor_email: document.getElementById("contractorEmail").value.trim() || null,
         start_date: document.getElementById("startDate").value || null,
         org_id: orgId,
-        created_by: user.id,
       };
-      const { data, error } = await supabase.from("projects").insert(payload).select().single();
-      if (error) throw error;
-      // v69: the share is saved through the note-required RPC, with the
-      // note "Set at site setup", so it starts its own dated history.
+      // v69: the site and its external works share are created in ONE
+      // database call (create_site), so a failed share can't leave a
+      // half-made site behind that a retry would duplicate. The share's
+      // first note is "Set at site setup".
       const shareRaw = document.getElementById("externalWorksShare").value;
-      if (shareRaw !== "") {
-        const { error: shareError } = await supabase.rpc("set_external_works", {
-          p_project_id: data.id,
-          p_percent: 0,
-          p_share: Math.max(0, Math.min(100, Number(shareRaw))),
-          p_note: "Set at site setup",
-        });
-        if (shareError) throw shareError;
-      }
-      window.location.href = `project.html?id=${data.id}`;
+      const { data: newId, error } = await supabase.rpc("create_site", {
+        p_site: site,
+        p_share: shareRaw === "" ? null : Math.max(0, Math.min(100, Number(shareRaw))),
+        p_note: "Set at site setup",
+      });
+      if (error) throw error;
+      window.location.href = `project.html?id=${newId}`;
     } catch (err) {
       showError(errorBox, err);
     }

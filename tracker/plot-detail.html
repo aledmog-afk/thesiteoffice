@@ -63,7 +63,7 @@
 
   <h3 class="display-font" style="font-size:1.1rem; margin-bottom:1rem;">Build Stages</h3>
   <div class="card" style="margin-bottom:2.5rem;">
-    <p class="hint" style="margin-bottom:0.6rem;">The same 33 stages as the weekly report. Saving a weekly report raises a tagged plot's stages (never lowers them); you can set any value here, or mark a stage N/A so it doesn't count. Plot progress is the average of the applicable stages.</p>
+    <p class="hint" style="margin-bottom:0.6rem;">The same 33 stages as the weekly report. An issued weekly report (never a draft) raises a tagged plot's stages, never lowers them; you can set any value here, or mark a stage N/A so it doesn't count. Plot progress is the average of the applicable stages.</p>
     <div class="table-wrap">
       <table>
         <thead>
@@ -95,7 +95,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, uploadImage, plotProgressMode, PLOT_STAGE_SOURCE_LABEL, formatDate, formatDateTime, checkAndMarkPlotHandedOver, getPlotHandoverReadiness, PLOT_READINESS_LABEL, PLOT_READINESS_BADGE, RFI_STATUS_BADGE, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, uploadImage, plotProgressMode, PLOT_STAGE_SOURCE_LABEL, formatDate, formatDateTime, historyActorName, checkAndMarkPlotHandedOver, getPlotHandoverReadiness, PLOT_READINESS_LABEL, PLOT_READINESS_BADGE, RFI_STATUS_BADGE, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE } from "./js/app.js";
 
   await requireAuth();
   const plotId = getParam("id");
@@ -545,7 +545,7 @@
   async function loadOverrideHistory() {
     const { data, error } = await supabase
       .from("plot_progress_overrides")
-      .select("action, old_override, new_override, calculated, note, changed_by_email, changed_at")
+      .select("action, old_override, new_override, calculated, note, changed_by_name, changed_at")
       .eq("plot_id", plotId)
       .order("changed_at", { ascending: false });
     const wrap = document.getElementById("plotOverrideHistory");
@@ -561,7 +561,7 @@
         <td>${h.new_override !== null && h.new_override !== undefined ? escapeHtml(fmtPct(h.new_override)) : (h.old_override !== null && h.old_override !== undefined ? `<s>${escapeHtml(fmtPct(h.old_override))}</s>` : "")}</td>
         <td>${h.calculated !== null && h.calculated !== undefined ? escapeHtml(fmtPct(h.calculated)) : ""}</td>
         <td>${escapeHtml(h.note || "")}</td>
-        <td>${escapeHtml(h.changed_by_email || (h.action === "superseded" || h.action === "carried_over" ? "Automatic" : ""))}</td>
+        <td>${escapeHtml(historyActorName(h))}</td>
       </tr>`).join("")}</tbody></table></div>`;
   }
 

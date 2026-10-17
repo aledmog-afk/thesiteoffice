@@ -308,7 +308,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, formatDateTime, showError, clearError, RAG_LABEL, renderProgressBlock, geocodePostcode, generateMissingPlots, EXTERNAL_WORKS_TAG, BUILD_MILESTONES, externalWorksStale, externalWorksShareSet, externalWorksSuggestions, EXTERNAL_WORKS_STALE_DAYS, monthStartISO, getProjectControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, isFindingOutstanding, categoriseSnag, isSnagOutstanding, getProjectPlotReadiness, getMyCommercialRole, commercialCapabilities, getMyToolboxTalkRole, toolboxTalkCapabilities, getModuleRolesCatalog, getProjectModuleRoles, setProjectModuleRole, getCommercialOwnerAccessUserIds } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, formatDateTime, showError, clearError, RAG_LABEL, renderProgressBlock, geocodePostcode, generateMissingPlots, EXTERNAL_WORKS_TAG, BUILD_MILESTONES, externalWorksStale, externalWorksShareSet, externalWorksSuggestions, EXTERNAL_WORKS_STALE_DAYS, historyActorName, normalisedPackageShare, monthStartISO, getProjectControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, isFindingOutstanding, categoriseSnag, isSnagOutstanding, getProjectPlotReadiness, getMyCommercialRole, commercialCapabilities, getMyToolboxTalkRole, toolboxTalkCapabilities, getModuleRolesCatalog, getProjectModuleRoles, setProjectModuleRole, getCommercialOwnerAccessUserIds } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("id");
@@ -700,13 +700,13 @@
         <thead><tr><th>Package</th><th>Share</th><th>Complete</th><th>Report tasks (read-only)</th><th></th></tr></thead>
         <tbody>${ewPackages.map((p) => `<tr data-package-id="${p.id}">
           <td><strong>${escapeHtml(p.name)}</strong>${(p.report_stages || []).length ? `<div class="hint">${escapeHtml(p.report_stages.join(", "))}</div>` : ""}</td>
-          <td>${escapeHtml(fmt(p.share))}</td>
+          <td class="pkg-share">${escapeHtml(fmt(p.share))} <span class="hint pkg-share-normalised">(${escapeHtml(fmt(normalisedPackageShare(p, ewPackages)))} of external works)</span></td>
           <td>${escapeHtml(fmt(p.percent))}</td>
           <td>${suggestionListHtml(byPackage.get(p.id) || [])}</td>
           <td><div class="btn-row"><button type="button" class="btn btn-outline btn-sm pkg-edit" data-package-id="${p.id}">Update</button><button type="button" class="btn btn-outline btn-sm pkg-retire" data-package-id="${p.id}">Remove</button></div></td>
         </tr>`).join("")}</tbody>
       </table></div>
-      ${Math.abs(totalShare - 100) > 0.01 ? `<p class="hint">Package shares add up to ${escapeHtml(fmt(totalShare))}; they're used as relative weights.</p>` : ""}`
+      ${Math.abs(totalShare - 100) > 0.01 ? `<p class="hint">Package shares add up to ${escapeHtml(fmt(totalShare))}. They're relative weights, so each package's share of the external works is shown in brackets.</p>` : ""}`
       : `<p class="hint">No packages. The external works figure is set directly.</p>`;
     document.getElementById("externalWorksUnassigned").innerHTML = suggestionListHtml(unassigned);
     document.querySelectorAll(".pkg-edit").forEach((b) => b.addEventListener("click", () => openPackageForm(ewPackages.find((p) => p.id === b.dataset.packageId))));
@@ -726,7 +726,7 @@
         <td>${escapeHtml(change(h.old_pct, h.new_pct))}</td>
         <td>${escapeHtml(change(h.old_share, h.new_share))}</td>
         <td>${escapeHtml(h.note)}</td>
-        <td>${escapeHtml(h.changed_by_email || "")}</td>
+        <td>${escapeHtml(historyActorName(h))}</td>
       </tr>`).join("")}</tbody></table></div>`;
   }
 

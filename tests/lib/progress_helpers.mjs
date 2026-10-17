@@ -21,13 +21,14 @@ function grabFunction(name) {
 }
 
 const CONSTS = ["EXTERNAL_WORKS_TAG", "PROGRESS_STAGES", "BUILD_MILESTONES", "PLOT_STAGE_SOURCE_LABEL",
-  "EXTERNAL_WORKS_STALE_DAYS", "MONTHLY_PROGRESS_BASIS_NOTE"];
-const FUNCTIONS = ["plotTagToken", "resolvePlotTags", "plotProgressMode", "externalWorksStale",
-  "externalWorksShareSet", "externalWorksSuggestions", "formatDateTime"];
+  "EXTERNAL_WORKS_STALE_DAYS", "MONTHLY_PROGRESS_BASIS_NOTE", "HISTORY_ACTOR_FALLBACK"];
+const FUNCTIONS = ["plotTagKey", "resolvePlotTagsDetailed", "resolvePlotTags", "plotProgressMode", "externalWorksStale",
+  "externalWorksShareSet", "externalWorksSuggestions", "formatDateTime", "historyActorName", "normalisedPackageShare"];
 
 const src = [
   ...CONSTS.map(grabConst),
-  // PLOT_RANGE_RE is module-private but resolvePlotTags needs it.
+  // TAG_SPACE and PLOT_RANGE_RE are module-private but the parser needs them.
+  APP_JS.match(/const TAG_SPACE = .*;\n/)[0],
   APP_JS.match(/const PLOT_RANGE_RE = .*;\n/)[0],
   ...FUNCTIONS.map(grabFunction),
   `return { ${[...CONSTS, ...FUNCTIONS].join(", ")} };`,
