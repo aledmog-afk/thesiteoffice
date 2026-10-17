@@ -191,7 +191,7 @@ test("A Viewer can never link or unlink a Daywork, regardless of project", async
 test("Linking/unlinking is only permitted while the Variation is unlocked (draft/rejected) — locked while submitted or approved", async () => {
   const contributorA = await userClient(DB, CONTRIBUTOR_A);
   const owner = await userClient(DB, OWNER_A);
-  await owner.query(`insert into public.project_module_roles (project_id, user_id, module, role, granted_by) values ($1,$2,'commercial','approver',$2) on conflict do nothing`, [fx.projA, OWNER_A]);
+  await owner.query(`insert into public.project_module_roles (project_id, user_id, module, role, granted_by) values ($1,$2,'commercial','contributor',$2) on conflict do nothing`, [fx.projA, OWNER_A]);
   try {
     const variation = await createVariation(contributorA, fx.projA, "Lock state test");
     const daywork1 = await createDaywork(contributorA, fx.projA, "Daywork 1");

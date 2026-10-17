@@ -230,7 +230,7 @@
     <h3 class="card-heading" style="margin-bottom:0.4rem;">Module Permissions</h3>
     <p class="hint" style="margin-bottom:0.5rem;">Choose what each person can do in these modules. Dayworks &amp; Variations is off until you switch it on for someone. Everyone with full access gets Toolbox Talks as a Contributor automatically; picking a role here replaces that.</p>
     <ul class="hint" style="margin:0 0 1rem 1.1rem;">
-      <li><strong>Dayworks &amp; Variations.</strong> Viewer can see dayworks and variations. Contributor can also create, edit and submit them, and capture the client's signature to approve or reject them on the spot. Approver can currently do exactly what Contributor can.</li>
+      <li><strong>Dayworks &amp; Variations.</strong> Viewer can see dayworks and variations. Contributor can also create, edit and submit them, send them to the client for approval, and capture the client's signature to approve or reject them on the spot.</li>
       <li><strong>Toolbox Talks.</strong> Viewer can see talks. Contributor can also run talks and record attendees and signatures. Editor can also change your company's library of talk templates.</li>
     </ul>
     <div id="modulePermissionsErrorBox" class="error-box"></div>
@@ -338,7 +338,7 @@
 
   // ─── Module Permissions ─────────────────────────────────────────
   const MODULE_LABEL = { commercial: "Dayworks & Variations", toolbox_talks: "Toolbox Talks" };
-  const ROLE_OPTION_LABEL = { viewer: "Viewer", contributor: "Contributor", editor: "Editor", approver: "Approver" };
+  const ROLE_OPTION_LABEL = { viewer: "Viewer", contributor: "Contributor", editor: "Editor" };
 
   function moduleLabel(m) {
     return MODULE_LABEL[m] || m.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -354,15 +354,21 @@
   let moduleGrants = [];
 
   function renderModulePermissions(members) {
-    const modules = [...new Set(moduleCatalog.map((r) => r.module))];
+    // v66 removed the Dayworks & Variations 'approver' role. Until v66 is
+    // applied the catalog still lists it and an old grant could still say
+    // 'approver' (it has always had Contributor's powers), so hide the
+    // option and show any such grant as Contributor.
+    const catalog = moduleCatalog.filter((r) => !(r.module === "commercial" && r.role === "approver"));
+    const modules = [...new Set(catalog.map((r) => r.module))];
 
     document.getElementById("modulePermissionsHead").innerHTML =
       `<th>Member</th>` + modules.map((m) => `<th>${escapeHtml(moduleLabel(m))}</th>`).join("");
 
     document.getElementById("modulePermissionsRows").innerHTML = members.map((member) => {
       const cells = modules.map((m) => {
-        const rolesForModule = moduleCatalog.filter((r) => r.module === m);
-        const current = moduleGrants.find((g) => g.user_id === member.user_id && g.module === m);
+        const rolesForModule = catalog.filter((r) => r.module === m);
+        const grant = moduleGrants.find((g) => g.user_id === member.user_id && g.module === m);
+        const current = grant && m === "commercial" && grant.role === "approver" ? { ...grant, role: "contributor" } : grant;
         // v46: every owner/collaborator gets 'toolbox_talks' access
         // automatically (see sql/schema.sql's v46 section) — for them,
         // "no explicit grant" is not "no access", it's "use the

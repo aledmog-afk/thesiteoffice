@@ -65,9 +65,9 @@ before(async () => {
   // 'approver' — this is deliberate: it lets us prove that even the
   // highest role, held by the project owner themselves, still cannot
   // touch an approved record.
-  await ownerA.query(`insert into public.project_module_roles (project_id, user_id, module, role, granted_by) values ($1,$2,'commercial','approver',$2)`, [projA, OWNER_A]);
+  await ownerA.query(`insert into public.project_module_roles (project_id, user_id, module, role, granted_by) values ($1,$2,'commercial','contributor',$2)`, [projA, OWNER_A]);
   await ownerA.query(`insert into public.project_module_roles (project_id, user_id, module, role, granted_by) values ($1,$2,'commercial','contributor',$3)`, [projA, CONTRIBUTOR_A, OWNER_A]);
-  await ownerA.query(`insert into public.project_module_roles (project_id, user_id, module, role, granted_by) values ($1,$2,'commercial','approver',$3)`, [projA, APPROVER_A, OWNER_A]);
+  await ownerA.query(`insert into public.project_module_roles (project_id, user_id, module, role, granted_by) values ($1,$2,'commercial','contributor',$3)`, [projA, APPROVER_A, OWNER_A]);
   await ownerA.end();
 
   fx = { orgA, projA };

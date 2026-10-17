@@ -27,10 +27,10 @@ function formatCommercialGBP(value) {
 function commercialCapabilities(role) {
   return {
     role,
-    canView: role === "viewer" || role === "contributor" || role === "approver",
-    canEdit: role === "contributor" || role === "approver",
-    canSubmit: role === "contributor" || role === "approver",
-    canApprove: role === "contributor" || role === "approver", // v48
+    canView: role === "viewer" || role === "contributor",
+    canEdit: role === "contributor",
+    canSubmit: role === "contributor",
+    canApprove: role === "contributor", // v48
   };
 }
 const COMMERCIAL_STATUS_LABEL = { draft: "Draft", submitted: "Submitted", approved: "Approved", rejected: "Rejected" };
@@ -124,7 +124,7 @@ test("commercial-dashboard.html: summary cards, activity, and warnings all refle
     { id: "e3", reference: "DW-003", type: "daywork", title: "Approved one", status: "approved", total_value: 300, plot_id: null, created_at: "2026-09-01T00:00:00Z", submitted_at: "2026-09-02T00:00:00Z" },
     { id: "e4", reference: "DW-004", type: "daywork", title: "Rejected one", status: "rejected", total_value: 0, plot_id: null, created_at: "2026-09-01T00:00:00Z", submitted_at: "2026-09-02T00:00:00Z" },
   ];
-  const { document } = await runPage(DASHBOARD_HTML, extractScript(DASHBOARD_HTML), baseContext("approver", events, { tbc: ["e2"], evidence: ["e3"] }));
+  const { document } = await runPage(DASHBOARD_HTML, extractScript(DASHBOARD_HTML), baseContext("contributor", events, { tbc: ["e2"], evidence: ["e3"] }));
   await wait(30);
 
   assert.equal(document.getElementById("draftCount").textContent, "1");
@@ -236,7 +236,7 @@ test("commercial-dashboard.html: Variation-only summary cards reflect only Varia
     { id: "v1", reference: "VAR-001", type: "variation", title: "A variation", status: "submitted", total_value: 400, plot_id: null, created_at: "2026-09-01T00:00:00Z", submitted_at: "2026-09-02T00:00:00Z" },
     { id: "v2", reference: "VAR-002", type: "variation", title: "Another variation", status: "approved", total_value: 600, plot_id: null, created_at: "2026-09-01T00:00:00Z", submitted_at: "2026-09-02T00:00:00Z" },
   ];
-  const { document } = await runPage(DASHBOARD_HTML, extractScript(DASHBOARD_HTML), baseContext("approver", events));
+  const { document } = await runPage(DASHBOARD_HTML, extractScript(DASHBOARD_HTML), baseContext("contributor", events));
   await wait(30);
 
   // Combined cards include both types.

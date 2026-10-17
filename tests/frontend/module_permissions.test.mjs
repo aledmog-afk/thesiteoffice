@@ -33,7 +33,6 @@ const PROJECT = { id: "p1", name: "Elm Grove", status: "active", rag_status: "gr
 const MODULE_CATALOG = [
   { module: "commercial", role: "viewer", sort_order: 1 },
   { module: "commercial", role: "contributor", sort_order: 2 },
-  { module: "commercial", role: "approver", sort_order: 3 },
   { module: "toolbox_talks", role: "viewer", sort_order: 1 },
   { module: "toolbox_talks", role: "contributor", sort_order: 2 },
 ];
@@ -239,4 +238,30 @@ test("Module Permissions: a caller who is snagging-only never sees the card at a
 
   assert.equal(document.getElementById("modulePermissionsCard").style.display, "none");
   assert.equal(ctx.__calls.filter((c) => c.fn === "getModuleRolesCatalog").length, 0);
+});
+
+// ─── v66: the Dayworks & Variations 'approver' role is gone ─────────
+test("Module Permissions (v66): Approver is never offered for Dayworks & Variations, even if the database catalog still lists it (before v66 is applied)", async () => {
+  const legacyCatalog = [...MODULE_CATALOG, { module: "commercial", role: "approver", sort_order: 3 }];
+  const ctx = makeContext({ members: [OWNER, COLLAB], moduleCatalog: legacyCatalog });
+  const { document } = await run(ctx);
+  await wait(30);
+  const select = document.querySelector(`select[data-user="collab-1"][data-module="commercial"]`);
+  const values = [...select.options].map((o) => o.value);
+  assert.deepEqual(values, ["", "viewer", "contributor"]);
+  assert.ok(![...select.options].some((o) => /approver/i.test(o.textContent)), "no option may say Approver");
+  assert.ok(!/Approver/.test(document.getElementById("modulePermissionsCard").textContent), "the card's hint must not mention Approver");
+});
+
+test("Module Permissions (v66): an old 'approver' grant (before v66 is applied) shows as Contributor, not as No access", async () => {
+  const legacyCatalog = [...MODULE_CATALOG, { module: "commercial", role: "approver", sort_order: 3 }];
+  const ctx = makeContext({
+    members: [OWNER, COLLAB],
+    moduleCatalog: legacyCatalog,
+    moduleGrants: [{ id: "g1", user_id: "collab-1", module: "commercial", role: "approver" }],
+  });
+  const { document } = await run(ctx);
+  await wait(30);
+  const select = document.querySelector(`select[data-user="collab-1"][data-module="commercial"]`);
+  assert.equal(select.value, "contributor");
 });

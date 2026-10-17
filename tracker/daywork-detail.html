@@ -217,7 +217,7 @@
     caps = commercialCapabilities(role);
     if (!caps.canView) { document.getElementById("noAccessCard").style.display = "block"; return; }
     if (!caps.canEdit) {
-      showCommercialError(pageErrorBox, { message: "You have view-only Commercial access — only a Contributor or Approver can create a Daywork." });
+      showCommercialError(pageErrorBox, { message: "You have view-only Commercial access — only a Contributor can create a Daywork." });
       return;
     }
     const { data: plotRows } = await supabase.from("plots").select("id, plot_number").eq("project_id", projectId);
@@ -457,7 +457,7 @@
     details.innerHTML = rows.length ? `<dl class="doc-facts">${rows.join("")}</dl>` : `<p class="hint">No workflow activity yet — this Daywork is still in Draft.</p>`;
 
     if (event.status === "approved") {
-      details.innerHTML += `<p class="hint" style="margin-top:0.8rem;">This record is approved and permanently locked. If a correction is genuinely needed, contact your Dayworks &amp; Variations approver — a formal revision/supersession workflow is planned for a later phase, so for now any correction has to be handled outside Site Tracker.</p>`;
+      details.innerHTML += `<p class="hint" style="margin-top:0.8rem;">This record is approved and permanently locked. If a correction is genuinely needed, contact the project owner — a formal revision/supersession workflow is planned for a later phase, so for now any correction has to be handled outside Site Tracker.</p>`;
     }
 
     const actions = document.getElementById("workflowActions");

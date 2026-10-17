@@ -184,7 +184,7 @@ function makeStore() {
 
     async submitCommercialEvent(eventId) {
       const row = events.get(eventId);
-      if (!["contributor", "approver"].includes(this.__role)) throw new Error("You do not have permission to submit commercial events on this project");
+      if (!["contributor"].includes(this.__role)) throw new Error("You do not have permission to submit commercial events on this project");
       if (!TRANSITIONS[row.status].includes("submitted")) throw new Error(`Invalid commercial event status transition: ${row.status} -> submitted`);
       row.status = "submitted"; row.submitted_by = this.__userId; row.submitted_at = "2026-09-02T00:00:00Z";
       return { ...row };
@@ -195,21 +195,21 @@ function makeStore() {
       // block — the mandatory signature (enforced client-side before
       // this is even called) is the assurance now, not the account
       // role or a distinct signer.
-      if (!["contributor", "approver"].includes(this.__role)) throw new Error("You do not have permission to approve commercial events on this project");
+      if (!["contributor"].includes(this.__role)) throw new Error("You do not have permission to approve commercial events on this project");
       if (!TRANSITIONS[row.status].includes("approved")) throw new Error(`Invalid commercial event status transition: ${row.status} -> approved`);
       row.status = "approved"; row.approved_by = this.__userId; row.approved_at = "2026-09-03T00:00:00Z";
       return { ...row };
     },
     async rejectCommercialEvent(eventId, reason) {
       const row = events.get(eventId);
-      if (!["contributor", "approver"].includes(this.__role)) throw new Error("You do not have permission to reject commercial events on this project");
+      if (!["contributor"].includes(this.__role)) throw new Error("You do not have permission to reject commercial events on this project");
       if (!TRANSITIONS[row.status].includes("rejected")) throw new Error(`Invalid commercial event status transition: ${row.status} -> rejected`);
       row.status = "rejected"; row.rejected_by = this.__userId; row.rejected_at = "2026-09-03T00:00:00Z"; row.rejection_reason = reason || null;
       return { ...row };
     },
     async reopenCommercialEvent(eventId) {
       const row = events.get(eventId);
-      if (!["contributor", "approver"].includes(this.__role)) throw new Error("You do not have permission to edit commercial events on this project");
+      if (!["contributor"].includes(this.__role)) throw new Error("You do not have permission to edit commercial events on this project");
       if (!TRANSITIONS[row.status].includes("draft")) throw new Error(`Invalid commercial event status transition: ${row.status} -> draft`);
       row.status = "draft";
       return { ...row };
@@ -410,7 +410,7 @@ test("Workflow: an eligible Approver (not the creator) can approve a submitted V
   await store.addCommercialLineItem(variation.id, { lineType: "labour", description: "x", quantity: 1, rate: 10 });
   await store.submitCommercialEvent(variation.id);
 
-  const { document } = await run(store, { role: "approver", userId: APPROVER_A, eventId: variation.id });
+  const { document } = await run(store, { role: "contributor", userId: APPROVER_A, eventId: variation.id });
   await wait(30);
   const approveBtn = [...document.getElementById("workflowActions").querySelectorAll("button")].find((b) => b.textContent === "Sign & Approve");
   assert.ok(approveBtn);
@@ -429,10 +429,10 @@ test("Workflow: an approved Variation shows no edit/link/evidence controls at al
   const variation = await store.createVariation("p1", { title: "Locked test", markupPct: 0 });
   await store.addCommercialLineItem(variation.id, { lineType: "labour", description: "x", quantity: 1, rate: 10 });
   await store.submitCommercialEvent(variation.id);
-  store.__userId = APPROVER_A; store.__role = "approver";
+  store.__userId = APPROVER_A; store.__role = "contributor";
   await store.approveCommercialEvent(variation.id);
 
-  const { document } = await run(store, { role: "approver", userId: APPROVER_A, eventId: variation.id });
+  const { document } = await run(store, { role: "contributor", userId: APPROVER_A, eventId: variation.id });
   await wait(30);
   assert.equal(document.getElementById("editHeaderBtn").style.display, "none");
   assert.equal(document.getElementById("lineItemAddRow").style.display, "none");
@@ -444,12 +444,12 @@ test("Workflow: an approved Variation shows no edit/link/evidence controls at al
 
 test("Permissions (v48): an Approver CAN sign & approve their OWN Variation submission on the spot", async () => {
   const store = makeStore();
-  store.__userId = APPROVER_A; store.__role = "approver";
+  store.__userId = APPROVER_A; store.__role = "contributor";
   const variation = await store.createVariation("p1", { title: "Self-approval test", markupPct: 0 });
   await store.addCommercialLineItem(variation.id, { lineType: "labour", description: "x", quantity: 1, rate: 10 });
   await store.submitCommercialEvent(variation.id);
 
-  const { document } = await run(store, { role: "approver", userId: APPROVER_A, eventId: variation.id });
+  const { document } = await run(store, { role: "contributor", userId: APPROVER_A, eventId: variation.id });
   await wait(30);
   const buttons = [...document.getElementById("workflowActions").querySelectorAll("button")].map((b) => b.textContent);
   assert.ok(buttons.includes("Sign & Approve"), "an approver must see Sign & Approve on their own submission now");
@@ -465,7 +465,7 @@ test("Permissions (v48): an Approver CAN sign & approve their OWN Variation subm
 
 test("Permissions (v48): a Contributor CAN sign & approve a submitted Variation they didn't create", async () => {
   const store = makeStore();
-  store.__userId = APPROVER_A; store.__role = "approver";
+  store.__userId = APPROVER_A; store.__role = "contributor";
   const variation = await store.createVariation("p1", { title: "Contributor-can-approve test", markupPct: 0 });
   await store.addCommercialLineItem(variation.id, { lineType: "labour", description: "x", quantity: 1, rate: 10 });
   await store.submitCommercialEvent(variation.id);
@@ -516,7 +516,7 @@ test("PDF export: Generate PDF is hidden on a draft, shown once submitted or app
 
   await store.addCommercialLineItem(variation.id, { lineType: "labour", description: "Labour", quantity: 1, rate: 10 });
   await store.submitCommercialEvent(variation.id);
-  ({ document } = await run(store, { role: "approver", userId: APPROVER_A, eventId: variation.id }));
+  ({ document } = await run(store, { role: "contributor", userId: APPROVER_A, eventId: variation.id }));
   await wait(30);
   assert.equal(document.getElementById("generatePdfBtn").style.display, "inline-flex", "a submitted record may be sent to the client for approval");
 });
