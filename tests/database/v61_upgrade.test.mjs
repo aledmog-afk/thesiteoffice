@@ -56,7 +56,10 @@ test("v61: upgrading a populated v60 database keeps existing access and retires 
       await cl.end();
     }
     const late = await userClient(db, COLLEAGUE);
-    await assert.rejects(late.query("select public.join_project_by_invite($1)", [code]), /no longer used/);
+    // v68: the retired stub is closed to signed-in users; it still refuses
+    // with the friendly message if anything internal ever calls it.
+    await assert.rejects(late.query("select public.join_project_by_invite($1)", [code]), /permission denied for function/i);
+    await assert.rejects(admin.query("select public.join_project_by_invite($1)", [code]), /no longer used/);
     await late.end();
   } finally {
     await admin.end().catch(() => {});

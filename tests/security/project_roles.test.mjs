@@ -159,8 +159,8 @@ test("Invite links are retired (v61): nobody, not even a collaborator, can regen
   try {
     await assert.rejects(
       () => collab.query("select public.regenerate_invite_code($1)", [fx.proj]),
-      /invite_retired/,
-      "regenerating an invite code must refuse with the retired message"
+      /permission denied for function/i,
+      "regenerating an invite code must be refused (v68: closed to signed-in users)"
     );
   } finally {
     await collab.end();

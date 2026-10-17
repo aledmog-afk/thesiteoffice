@@ -278,15 +278,23 @@ for (const [sig, sql, argType] of REVOKED) {
   });
 }
 
-// ─── (3) authenticated keeps EXECUTE (all but commercial_event_hash, v65) ───
-test("authenticated still has EXECUTE on the v59 functions (all but commercial_event_hash since v65), and PUBLIC no longer does", async () => {
+// v68 closed these to signed-in users too (nothing outside other SECURITY
+// DEFINER functions calls them) — see v68_secdef_revokes.test.mjs.
+const V68_CLOSED_FROM_V59 = new Set([
+  "can_submit_commercial(uuid)", "can_approve_commercial(uuid)", "join_project_by_invite(text)",
+  "regenerate_invite_code(uuid)", "regenerate_snagging_invite_code(uuid)",
+  "revoke_invite_code(uuid)", "revoke_snagging_invite_code(uuid)",
+]);
+
+// ─── (3) authenticated keeps EXECUTE (except commercial_event_hash since v65, and the v68 seven) ───
+test("authenticated still has EXECUTE on the v59 functions (except commercial_event_hash since v65 and the seven v68 closed), and PUBLIC no longer does", async () => {
   const admin = adminClient(DB);
   await admin.connect();
   for (const [sig] of REVOKED) {
     // v65 then took commercial_event_hash away from authenticated too (it is
     // only ever called from SECURITY DEFINER functions) — see
     // v65_storage_roles_lookups.test.mjs.
-    const authExpected = sig !== "commercial_event_hash(uuid)";
+    const authExpected = sig !== "commercial_event_hash(uuid)" && !V68_CLOSED_FROM_V59.has(sig);
     const { rows } = await admin.query(
       `select has_function_privilege('authenticated', to_regprocedure($1), 'EXECUTE') as auth_ok,
               has_function_privilege('anon', to_regprocedure($1), 'EXECUTE') as anon_ok,
@@ -381,10 +389,12 @@ test("SMOKE: the anon reject path still works", async () => {
 });
 
 // ─── (5) v61: company invites work for signed-in users; old codes are retired ───
-test("signed-in users can still create/accept company invites; old invite codes are retired, revoke still works", async () => {
+// v68: the retired invite-code functions are now closed to signed-in users
+// too (no page calls them), so a direct call is refused outright.
+test("signed-in users can still create/accept company invites; the retired invite-code functions are refused (v68)", async () => {
   const owner = await userClient(DB, OWNER);
-  await assert.rejects(owner.query("select public.regenerate_invite_code($1)", [fx.proj]), /invite_retired/);
-  await assert.rejects(owner.query("select public.regenerate_snagging_invite_code($1)", [fx.proj]), /invite_retired/);
+  await assert.rejects(owner.query("select public.regenerate_invite_code($1)", [fx.proj]), /permission denied for function/i);
+  await assert.rejects(owner.query("select public.regenerate_snagging_invite_code($1)", [fx.proj]), /permission denied for function/i);
   const admin = adminClient(DB);
   await admin.connect();
   const joinerEmail = (await admin.query("select email from auth.users where id = $1", [JOINER])).rows[0].email;
@@ -393,14 +403,14 @@ test("signed-in users can still create/accept company invites; old invite codes 
   assert.ok(inv.token);
 
   const joiner = await userClient(DB, JOINER);
-  await assert.rejects(joiner.query("select public.join_project_by_invite('anything')"), /invite_retired/);
+  await assert.rejects(joiner.query("select public.join_project_by_invite('anything')"), /permission denied for function/i);
   const org = (await joiner.query("select public.create_organisation('Joiner Co', 'subcontractor') as id")).rows[0].id;
   assert.equal((await joiner.query("select public.accept_party_invite($1, $2) as p", [inv.token, org])).rows[0].p, fx.proj);
   assert.equal((await joiner.query("select public.get_my_role($1) as r", [fx.proj])).rows[0].r, "snagging");
   await joiner.end();
 
-  await owner.query("select public.revoke_invite_code($1)", [fx.proj]);
-  await owner.query("select public.revoke_snagging_invite_code($1)", [fx.proj]);
+  await assert.rejects(owner.query("select public.revoke_invite_code($1)", [fx.proj]), /permission denied for function/i);
+  await assert.rejects(owner.query("select public.revoke_snagging_invite_code($1)", [fx.proj]), /permission denied for function/i);
   await owner.end();
 });
 
@@ -431,3 +441,32 @@ for (const table of ["projects", "snag_items", "commercial_events", "commercial_
     }
   });
 }
+
+// ─── (7) v68: anon holds no privilege at all on the commercial_event_totals view ───
+const VIEW_PRIV_SQL = `
+  select a.privilege_type, case when a.grantee = 0 then 'PUBLIC' else pg_get_userbyid(a.grantee)::text end as grantee
+    from pg_class c, aclexplode(coalesce(c.relacl, acldefault('r', c.relowner))) a
+   where c.oid = 'public.commercial_event_totals'::regclass
+     and a.grantee in (0, 'anon'::regrole::oid, 'authenticated'::regrole::oid)
+   order by 2, 1`;
+
+test("v68: anon and PUBLIC hold NO privilege on commercial_event_totals; authenticated keeps SELECT", async () => {
+  const admin = adminClient(DB);
+  await admin.connect();
+  try {
+    const rows = (await admin.query(VIEW_PRIV_SQL)).rows;
+    assert.deepEqual(rows.filter((r) => r.grantee !== "authenticated"), [], "anon/PUBLIC must have no privilege on the view");
+    assert.ok(rows.some((r) => r.grantee === "authenticated" && r.privilege_type === "SELECT"), "authenticated keeps SELECT");
+  } finally {
+    await admin.end();
+  }
+});
+
+test("v68: anon reading commercial_event_totals is refused outright (permission denied)", async () => {
+  const anon = await anonClient(DB);
+  try {
+    await assert.rejects(anon.query("select * from public.commercial_event_totals"), /permission denied for (view|table) commercial_event_totals/i);
+  } finally {
+    await anon.end();
+  }
+});
