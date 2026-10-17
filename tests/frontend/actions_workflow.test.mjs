@@ -88,7 +88,7 @@ function makeStore() {
   };
 }
 
-async function run(store) {
+async function run(store, { getProjectParties = async () => [] } = {}) {
   const supabase = {
     rpc: async (name) => {
       if (name === "get_project_members") return { data: [OWNER, COLLAB], error: null };
@@ -118,6 +118,7 @@ async function run(store) {
     ACTION_DUE_LABEL, ACTION_DUE_BADGE, actionDueState, validActionStatusTransitions,
     listActions: store.listActions, createAction: store.createAction,
     updateAction: store.updateAction, deleteAction: store.deleteAction,
+    getProjectParties,
     alert: () => {}, confirm: () => true,
   });
 }
@@ -194,4 +195,30 @@ test("actions.html: create -> assign -> update -> complete workflow", async () =
   assert.ok(row.textContent.includes("Completed"));
   const stillHasCompleteBtn = Array.from(row.querySelectorAll("button")).some((b) => b.textContent === "Complete");
   assert.equal(stillHasCompleteBtn, false, "a completed action should no longer offer Complete/Cancel quick actions");
+});
+
+// Item 14: company column, from actions.party_id plus the existing
+// get_project_parties RPC (which decides which company names the caller
+// may see).
+test("actions.html: company column shows the name, a dash for none, and never names a hidden company", async () => {
+  const store = makeStore();
+  store.rows.push(
+    { id: "a1", project_id: "p1", status: "open", title: "Fix fence", priority: "medium", party_id: "pp1" },
+    { id: "a2", project_id: "p1", status: "open", title: "Order skip", priority: "medium", party_id: null },
+    { id: "a3", project_id: "p1", status: "open", title: "Tie scaffold", priority: "medium", party_id: "pp-hidden" },
+  );
+  const { document } = await run(store, { getProjectParties: async () => [{ party_id: "pp1", company: "Bennett Groundworks" }] });
+  await wait(30);
+  const row = (t) => [...document.querySelectorAll("#actionRows tr")].find((r) => r.textContent.includes(t)).textContent;
+  assert.match(row("Fix fence"), /Bennett Groundworks/);
+  assert.match(row("Order skip"), /—/);
+  assert.match(row("Tie scaffold"), /Another company/);
+});
+
+test("actions.html: if companies can't be loaded, the list still renders", async () => {
+  const store = makeStore();
+  store.rows.push({ id: "a1", project_id: "p1", status: "open", title: "Fix fence", priority: "medium", party_id: "pp1" });
+  const { document } = await run(store, { getProjectParties: async () => { throw new Error("boom"); } });
+  await wait(30);
+  assert.match(document.getElementById("actionRows").textContent, /Fix fence/);
 });

@@ -71,7 +71,7 @@
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>Title</th><th>Priority</th><th>Assigned To</th><th>Due</th><th>Status</th><th></th></tr>
+          <tr><th>Title</th><th>Priority</th><th>Company</th><th>Assigned To</th><th>Due</th><th>Status</th><th></th></tr>
         </thead>
         <tbody id="actionRows"></tbody>
       </table>
@@ -82,7 +82,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, ACTION_STATUSES, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, actionDueState, validActionStatusTransitions, listActions, createAction, updateAction, deleteAction } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, ACTION_STATUSES, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, actionDueState, validActionStatusTransitions, getProjectParties, listActions, createAction, updateAction, deleteAction } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -91,6 +91,7 @@
   let allActions = [];
   let editors = []; // { user_id, email } — owner/collaborator only, the only legitimate assignees
   let statusFilter = "active";
+  let parties = []; // companies on this job the caller is allowed to see
   let plotsById = {}; // plot.id -> plot_number — display only; actions.html never lets a user PICK a plot (see Priority 13 report: direct/project-level Action creation legitimately leaves plot_id null)
 
   const pageErrorBox = document.getElementById("pageErrorBox");
@@ -193,6 +194,13 @@
     return editors.find((m) => m.user_id === userId)?.email || "—";
   }
 
+  // An action can belong to a company the caller isn't allowed to see
+  // the name of, so it must not read as "no company".
+  function companyName(partyId) {
+    if (!partyId) return "—";
+    return parties.find((p) => p.party_id === partyId)?.company || "Another company";
+  }
+
   function visibleActions() {
     if (statusFilter === "all") return allActions;
     if (statusFilter === "active") return allActions.filter((a) => ["open", "in_progress", "blocked"].includes(a.status));
@@ -211,6 +219,7 @@
         <tr>
           <td><strong>${escapeHtml(a.title)}</strong>${a.plot_id ? `<div class="hint">Plot: <a href="plot-detail.html?id=${a.plot_id}">${escapeHtml(plotsById[a.plot_id] || "—")}</a></div>` : ""}${a.description ? `<div class="hint">${escapeHtml(a.description)}</div>` : ""}</td>
           <td><span class="badge ${ACTION_PRIORITY_BADGE[a.priority]}">${ACTION_PRIORITY_LABEL[a.priority]}</span></td>
+          <td>${escapeHtml(companyName(a.party_id))}</td>
           <td>${a.assigned_to ? escapeHtml(editorEmail(a.assigned_to)) : "Unassigned"}</td>
           <td>${dueText}${dueBadge}</td>
           <td><span class="badge ${ACTION_STATUS_BADGE[a.status]}">${ACTION_STATUS_LABEL[a.status]}</span></td>
@@ -229,6 +238,12 @@
     statusFilter = e.target.value;
     render();
   });
+
+  // If companies can't be loaded the column just shows dashes; the list
+  // itself must never fail over company names.
+  async function loadParties() {
+    try { parties = await getProjectParties(projectId); } catch { parties = []; }
+  }
 
   async function loadEditors() {
     const { data, error } = await supabase.rpc("get_project_members", { p_project_id: projectId });
@@ -259,7 +274,7 @@
     document.getElementById("projectSub").textContent = project ? `${project.name} — accountable follow-ups.` : "";
     const { data: plots } = await supabase.from("plots").select("id, plot_number").eq("project_id", projectId);
     (plots || []).forEach((p) => { plotsById[p.id] = p.plot_number; });
-    await loadEditors();
+    await Promise.all([loadEditors(), loadParties()]);
     load();
   }
 
