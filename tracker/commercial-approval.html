@@ -54,6 +54,7 @@
   <div id="loadingNotice" class="hint">Loading…</div>
 
   <div id="content" style="display:none;">
+    <div id="activeDetails">
     <div class="card">
       <h3 class="card-heading" style="margin-bottom:0.6rem;" id="eventHeading"></h3>
       <dl class="doc-facts" id="eventFacts"></dl>
@@ -111,6 +112,8 @@
       </div>
     </div>
 
+    </div>
+
     <div class="card" id="doneCard" style="display:none;">
       <p id="doneMessage"></p>
     </div>
@@ -129,6 +132,7 @@
     rejected: "Rejected",
     expired: "Link expired",
     revoked: "Link revoked",
+    closed: "No longer active",
   };
   const STATUS_BADGE = {
     pending: "badge-amber",
@@ -137,6 +141,7 @@
     rejected: "badge-red",
     expired: "badge-grey",
     revoked: "badge-grey",
+    closed: "badge-grey",
   };
 
   const params = new URLSearchParams(window.location.search);
@@ -152,11 +157,49 @@
     pageErrorBox.style.display = "block";
   }
 
+  // A link is only "active" while the request is pending/viewed. The
+  // database (v64) already strips everything else from inactive replies;
+  // this also covers a full reply from the pre-v64 backend, so prices
+  // never render for a used or dead link whichever side deploys first.
+  function isInactive(req) {
+    return req.active === false || !req.event || !(req.status === "pending" || req.status === "viewed");
+  }
+
+  function inactiveMessage(req) {
+    const ref = (req.reference || (req.event && req.event.reference) || "").trim();
+    const signer = (req.signer_name || "").trim();
+    const decidedAt = req.decided_at || (req.status === "approved" ? req.approved_at : req.status === "rejected" ? req.rejected_at : null);
+    const when = decidedAt ? ` on ${formatDate(String(decidedAt).slice(0, 10))}` : "";
+    if (req.status === "approved" || req.status === "rejected") {
+      return `You ${req.status} ${ref || "this"}${when}.${signer ? ` Signed by ${signer}.` : ""}`;
+    }
+    const org = (req.org_name || "").trim();
+    return `This approval link${ref ? ` for ${ref}` : ""} is no longer active. Contact ${org || "the contractor"} for a new one.`;
+  }
+
+  function renderInactive(req) {
+    document.getElementById("orgProjectSub").textContent = req.org_name || "";
+    // Clear anything an earlier active render left behind (e.g. straight
+    // after approving), not just hide it.
+    for (const id of ["eventHeading", "eventFacts", "linkedRows", "lineItemList", "grandTotal", "evidenceList", "recipientEmailLabel"]) {
+      document.getElementById(id).textContent = "";
+    }
+    document.getElementById("activeDetails").style.display = "none";
+    document.getElementById("doneCard").style.display = "block";
+    document.getElementById("doneMessage").textContent = inactiveMessage(req);
+  }
+
   function renderRequest(req) {
     const badge = document.getElementById("statusBadge");
     badge.style.display = "inline-block";
     badge.className = `badge ${STATUS_BADGE[req.status] || "badge-grey"}`;
     badge.textContent = STATUS_LABEL[req.status] || req.status;
+
+    if (isInactive(req)) {
+      renderInactive(req);
+      return;
+    }
+    document.getElementById("activeDetails").style.display = "block";
 
     document.getElementById("orgProjectSub").textContent = `${req.org_name || ""} — ${req.project_name || ""}`;
 
@@ -213,30 +256,15 @@
 
     const decisionCard = document.getElementById("decisionCard");
     const doneCard = document.getElementById("doneCard");
-    if (req.status === "pending" || req.status === "viewed") {
-      decisionCard.style.display = "block";
-      doneCard.style.display = "none";
-      document.getElementById("recipientEmailLabel").textContent = req.recipient_email || "";
-      if (req.recipient_name) document.getElementById("signerName").value = req.recipient_name;
-      if (req.recipient_company) document.getElementById("signerCompany").value = req.recipient_company;
-      // The canvas is inside a display:none container until this
-      // point, so getBoundingClientRect() would report zero width any
-      // earlier — size it only once it's actually laid out.
-      resizeSigCanvasIfNeeded();
-    } else {
-      decisionCard.style.display = "none";
-      doneCard.style.display = "block";
-      const doneMsg = document.getElementById("doneMessage");
-      if (req.status === "approved") {
-        doneMsg.textContent = `This record was approved${req.signer_name ? " by " + req.signer_name : ""}${req.approved_at ? " on " + formatDate(req.approved_at.slice(0, 10)) : ""}. No further action is needed.`;
-      } else if (req.status === "rejected") {
-        doneMsg.textContent = `This record was rejected${req.signer_name ? " by " + req.signer_name : ""}${req.rejection_reason ? ": " + req.rejection_reason : ""}. The contractor has been notified.`;
-      } else if (req.status === "expired") {
-        doneMsg.textContent = "This approval link has expired. Please contact the contractor for a new link.";
-      } else if (req.status === "revoked") {
-        doneMsg.textContent = "This approval link has been revoked. Please contact the contractor if you believe this is a mistake.";
-      }
-    }
+    decisionCard.style.display = "block";
+    doneCard.style.display = "none";
+    document.getElementById("recipientEmailLabel").textContent = req.recipient_email || "";
+    if (req.recipient_name) document.getElementById("signerName").value = req.recipient_name;
+    if (req.recipient_company) document.getElementById("signerCompany").value = req.recipient_company;
+    // The canvas is inside a display:none container until this
+    // point, so getBoundingClientRect() would report zero width any
+    // earlier — size it only once it's actually laid out.
+    resizeSigCanvasIfNeeded();
   }
 
   async function viewEvidence(evidenceLinkId, btn) {

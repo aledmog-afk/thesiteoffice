@@ -17,7 +17,7 @@
 //   - Signature validation: drawn vs typed, required-field enforcement,
 //     correct external attribution in commercial_signatures.
 //   - Evidence isolation: correct/cross-event access, revoked/expired
-//     denial, continued access once approved/rejected.
+//     denial, and (v64) no access once approved/rejected either.
 //   - State transitions, immutability of an externally-approved
 //     record, concurrency (no double-approval), and audit trail.
 import { test, before, after } from "node:test";
@@ -326,17 +326,18 @@ test("Token security 14: resolve_commercial_approval_evidence denies access once
   await anon.end();
 });
 
-test("Token security 15: evidence remains accessible AFTER a successful approval — a completed record's evidence stays reviewable", async () => {
+test("Token security 15 (v64): evidence is NO LONGER accessible after a successful approval — a used link only confirms the decision", async () => {
   const contributor = await userClient(DB, CONTRIBUTOR);
   const { eventId, evidenceLinkId: evidenceLink } = await createSubmittedEventWithEvidence(contributor);
   const req = await requestApproval(contributor, eventId);
   await contributor.end();
 
   const anon = await anonClient(DB);
+  const before = await anon.query(`select * from public.resolve_commercial_approval_evidence($1,$2)`, [req.token, evidenceLink]);
+  assert.equal(before.rows.length, 1, "evidence resolves while the link is active");
+  assert.equal(before.rows[0].object_path, "some/real/path.pdf");
   await anon.query(`select public.approve_commercial_approval_request($1,'Jane Client',null,null)`, [req.token]);
-  const { rows } = await anon.query(`select * from public.resolve_commercial_approval_evidence($1,$2)`, [req.token, evidenceLink]);
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0].object_path, "some/real/path.pdf");
+  await assert.rejects(anon.query(`select * from public.resolve_commercial_approval_evidence($1,$2)`, [req.token, evidenceLink]), /no longer valid/i);
   await anon.end();
 });
 
@@ -369,7 +370,7 @@ test("Token security 15b (v58): a LEGACY site-photos evidence revision (full pub
   await anon.end();
 });
 
-test("Token security 16: evidence remains accessible AFTER a rejection too", async () => {
+test("Token security 16 (v64): evidence is NO LONGER accessible after a rejection either", async () => {
   const contributor = await userClient(DB, CONTRIBUTOR);
   const { eventId, evidenceLinkId: evidenceLink } = await createSubmittedEventWithEvidence(contributor);
   const req = await requestApproval(contributor, eventId);
@@ -377,8 +378,7 @@ test("Token security 16: evidence remains accessible AFTER a rejection too", asy
 
   const anon = await anonClient(DB);
   await anon.query(`select public.reject_commercial_approval_request($1,'Jane Client','No good')`, [req.token]);
-  const { rows } = await anon.query(`select * from public.resolve_commercial_approval_evidence($1,$2)`, [req.token, evidenceLink]);
-  assert.equal(rows.length, 1);
+  await assert.rejects(anon.query(`select * from public.resolve_commercial_approval_evidence($1,$2)`, [req.token, evidenceLink]), /no longer valid/i);
   await anon.end();
 });
 
