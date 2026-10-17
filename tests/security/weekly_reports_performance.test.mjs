@@ -109,6 +109,11 @@ test(`Performance: getWeeklyReportPosition()'s 6 project-scoped queries complete
 test("Performance: EXPLAIN confirms the actions/snags lookups use the project_id indexes, not a sequential scan across the whole org", async () => {
   const owner = await userClient(DB, OWNER);
   try {
+    // ANALYZE first — without it, whether the planner has fresh stats for
+    // the rows just bulk-inserted above depends on autovacuum's background
+    // timing, which varies by environment and made this assertion flaky in
+    // CI even though the index/data shape was never actually wrong.
+    await owner.query("analyze public.actions; analyze public.snag_items;");
     const actionsPlan = await owner.query("explain select status, priority, due_date from public.actions where project_id = $1", [projectId]);
     const actionsText = actionsPlan.rows.map((r) => r["QUERY PLAN"]).join("\n");
     assert.ok(/Index/i.test(actionsText), `expected an index scan on actions, got:\n${actionsText}`);
