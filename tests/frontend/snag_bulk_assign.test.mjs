@@ -331,3 +331,37 @@ test("v61: a snagging-level (invited company) user never gets the picker — the
   await wait(30);
   assert.equal(document.getElementById("partyFieldWrap").style.display, "none");
 });
+
+// Item 14: company column on the snag list. Uses names from the existing
+// get_project_parties RPC for every role, including snagging-only, since
+// the RPC itself decides which companies the caller may see.
+function companyCell(document, itemNo) {
+  const row = [...document.querySelectorAll("#snagRows tr")].find((r) => r.children[1]?.textContent.trim() === String(itemNo));
+  const idx = [...document.querySelectorAll("#tableHead th")].findIndex((th) => th.textContent === "Company");
+  return row.children[idx].textContent.trim();
+}
+
+test("company column shows the name, a dash for none, and never names a hidden company", async () => {
+  const snags = sampleSnags();
+  snags[0].party_id = "pp1";
+  snags[1].party_id = "pp-hidden";
+  const store = makeStore(snags);
+  store.parties = [{ party_id: "pp1", company: "Bennett Groundworks" }];
+  const { document } = await run(store);
+  await wait(30);
+  assert.equal(companyCell(document, snags[0].item_no), "Bennett Groundworks");
+  assert.equal(companyCell(document, snags[1].item_no), "Another company");
+  if (snags[2]) assert.equal(companyCell(document, snags[2].item_no), "—");
+});
+
+test("snagging-only members still see company names, but not the company picker", async () => {
+  const snags = sampleSnags();
+  snags[0].party_id = "pp1";
+  const store = makeStore(snags);
+  store.role = "snagging";
+  store.parties = [{ party_id: "pp1", company: "Bennett Groundworks" }];
+  const { document } = await run(store);
+  await wait(30);
+  assert.equal(companyCell(document, snags[0].item_no), "Bennett Groundworks");
+  assert.equal(document.getElementById("partyFieldWrap").style.display, "none");
+});

@@ -153,6 +153,7 @@
   const prioritySelect = document.getElementById("priority");
   const assignedToSelect = document.getElementById("assignedTo");
   let parties = [];
+  let partyNames = []; // display only; the RPC already limits which companies the caller can see
 
   prioritySelect.innerHTML = SNAG_PRIORITIES.map((p) => `<option value="${p}">${SNAG_PRIORITY_LABEL[p]}</option>`).join("");
 
@@ -602,9 +603,9 @@
   function render() {
     const selectAllTh = `<th><input type="checkbox" id="selectAllCheckbox" title="Select all" onchange="toggleSelectAll(this.checked)"></th>`;
     if (isGeneralList) {
-      document.getElementById("tableHead").innerHTML = `<tr>${selectAllTh}<th>#</th><th>Plot</th><th>Location</th><th>Description</th><th>Trade</th><th>Priority</th><th>Assigned</th><th>Due</th><th>Status</th><th></th></tr>`;
+      document.getElementById("tableHead").innerHTML = `<tr>${selectAllTh}<th>#</th><th>Plot</th><th>Location</th><th>Description</th><th>Trade</th><th>Priority</th><th>Company</th><th>Assigned</th><th>Due</th><th>Status</th><th></th></tr>`;
     } else {
-      document.getElementById("tableHead").innerHTML = `<tr>${selectAllTh}<th>#</th><th>Location</th><th>Description</th><th>Trade</th><th>Priority</th><th>Assigned</th><th>Due</th><th>Status</th><th></th></tr>`;
+      document.getElementById("tableHead").innerHTML = `<tr>${selectAllTh}<th>#</th><th>Location</th><th>Description</th><th>Trade</th><th>Priority</th><th>Company</th><th>Assigned</th><th>Due</th><th>Status</th><th></th></tr>`;
     }
     document.getElementById("emptyState").style.display = allSnags.length ? "none" : "block";
     document.getElementById("snagRows").innerHTML = allSnags.map((s) => {
@@ -627,6 +628,7 @@
         <td>${escapeHtml(s.description)}${s.photo_url ? ' <span title="Has photo">📷</span>' : ""}${findingBadge}</td>
         <td>${escapeHtml(s.trade) || "—"}</td>
         <td><span class="badge ${SNAG_PRIORITY_BADGE[s.priority] || "badge-grey"}">${SNAG_PRIORITY_LABEL[s.priority] || s.priority}</span></td>
+        <td>${s.party_id ? escapeHtml(partyNames.find((p) => p.party_id === s.party_id)?.company || "Another company") : "—"}</td>
         <td>
           <select style="width:auto;" onchange="quickAssign('${s.id}', this.value)">
             <option value="">Unassigned</option>
@@ -730,7 +732,8 @@
     // (server-side). Missing RPC (database without v61) → picker hidden.
     try {
       const { data: partyRows, error: partyErr } = await supabase.rpc("get_project_parties", { p_project_id: snagList.project_id });
-      parties = (!partyErr && Array.isArray(partyRows) && myRole !== "snagging") ? partyRows : [];
+      partyNames = (!partyErr && Array.isArray(partyRows)) ? partyRows : [];
+      parties = myRole !== "snagging" ? partyNames : [];
     } catch { parties = []; }
     if (parties.length) {
       document.getElementById("partyId").innerHTML = `<option value="">Choose a company…</option><option value="__none__">Not assigned yet</option>` +
