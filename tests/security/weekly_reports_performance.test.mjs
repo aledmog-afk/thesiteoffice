@@ -106,21 +106,36 @@ test(`Performance: getWeeklyReportPosition()'s 6 project-scoped queries complete
   }
 });
 
-test("Performance: EXPLAIN confirms the actions/snags lookups use the project_id indexes, not a sequential scan across the whole org", async () => {
+test("Performance: the actions/snags project_id lookups are backed by a real index, not an accidental full-table dependency", async () => {
   const owner = await userClient(DB, OWNER);
   try {
-    // ANALYZE first — without it, whether the planner has fresh stats for
-    // the rows just bulk-inserted above depends on autovacuum's background
-    // timing, which varies by environment and made this assertion flaky in
-    // CI even though the index/data shape was never actually wrong.
-    await owner.query("analyze public.actions; analyze public.snag_items;");
-    const actionsPlan = await owner.query("explain select status, priority, due_date from public.actions where project_id = $1", [projectId]);
-    const actionsText = actionsPlan.rows.map((r) => r["QUERY PLAN"]).join("\n");
-    assert.ok(/Index/i.test(actionsText), `expected an index scan on actions, got:\n${actionsText}`);
+    // Checking EXPLAIN's chosen plan (Seq Scan vs Index Scan) was tried
+    // here first and reverted: it's not a reliable regression signal.
+    // Postgres' cost-based optimizer legitimately prefers a seq scan for
+    // small tables even when a usable index exists and selectivity is
+    // high — confirmed by reproducing BOTH assertions (actions at ~33%
+    // selectivity, and snag_items at 100% selectivity with no
+    // cross-project rows at all) choosing Seq Scan on GitHub Actions'
+    // postgres:16 container with accurate, freshly-ANALYZEd stats, while
+    // the identical code/data/index definitions chose Index Scan on a
+    // separate local Postgres 16 install. That's real environment-
+    // dependent cost-model behaviour, not evidence of a missing index.
+    //
+    // What actually regresses correctness here is the index being gone
+    // entirely (so even a 10,000-row future org would have no choice but
+    // to seq-scan), which pg_indexes answers directly and deterministically
+    // regardless of planner mood. The <2000ms timing assertion above is
+    // the real safety net for actual query cost at this fixture's scale.
+    const hasLeadingIndex = async (table) => {
+      const { rows } = await owner.query(
+        "select indexdef from pg_indexes where schemaname = 'public' and tablename = $1",
+        [table]
+      );
+      return rows.some((r) => /USING btree \(project_id[,)]/.test(r.indexdef));
+    };
 
-    const snagsPlan = await owner.query("explain select status, priority, due_date from public.snag_items where project_id = $1", [projectId]);
-    const snagsText = snagsPlan.rows.map((r) => r["QUERY PLAN"]).join("\n");
-    assert.ok(/Index/i.test(snagsText), `expected an index scan on snag_items, got:\n${snagsText}`);
+    assert.ok(await hasLeadingIndex("actions"), "expected an index on public.actions with project_id as its leading column");
+    assert.ok(await hasLeadingIndex("snag_items"), "expected an index on public.snag_items with project_id as its leading column");
   } finally {
     await owner.end();
   }
