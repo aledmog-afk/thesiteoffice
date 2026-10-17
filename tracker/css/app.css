@@ -234,6 +234,16 @@ tr:hover td { background: var(--off); }
   .item-row .item-edit-plot { flex: 1 1 100%; }
 }
 
+/* Tables marked stack-mobile turn each row into a block on phones, so
+   row controls stay on screen instead of behind a sideways scroll. */
+@media (max-width: 640px) {
+  table.stack-mobile thead { display: none; }
+  table.stack-mobile tr { display: block; padding: 0.7rem 0; border-bottom: 1px solid var(--rule); }
+  table.stack-mobile td { display: block; border-bottom: 0; padding: 0.25rem 0; }
+  table.stack-mobile td[data-label]::before { content: attr(data-label); display: block; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-soft); font-weight: 700; }
+  table.stack-mobile select, table.stack-mobile input { max-width: 100%; }
+}
+
 /* ─── LOGO SETTINGS ──────────────────────────────── */
 .logo-preview { max-width: 260px; max-height: 120px; object-fit: contain; border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem; background: var(--white); }
 

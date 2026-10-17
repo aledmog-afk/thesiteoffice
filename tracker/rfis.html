@@ -39,11 +39,12 @@
         <option value="all">Anyone assigned</option>
         <option value="unassigned">Unassigned</option>
       </select>
+      <select id="companyFilter" style="width:auto; display:none;"></select>
     </div>
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>Reference</th><th>Title</th><th>Plot / Area</th><th>Priority</th><th>Status</th><th>Assigned To</th><th>Due</th><th>Created</th></tr>
+          <tr><th>Reference</th><th>Title</th><th>Plot / Area</th><th>Priority</th><th>Status</th><th>Company</th><th>Assigned To</th><th>Due</th><th>Created</th></tr>
         </thead>
         <tbody id="rfiRows"></tbody>
       </table>
@@ -54,7 +55,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, RFI_STATUS_LABEL, RFI_STATUS_BADGE, RFI_PRIORITIES, RFI_PRIORITY_LABEL, RFI_PRIORITY_BADGE, listRfis, comparePlotNumbers } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, RFI_STATUS_LABEL, RFI_STATUS_BADGE, RFI_PRIORITIES, RFI_PRIORITY_LABEL, RFI_PRIORITY_BADGE, listRfis, comparePlotNumbers, getProjectParties } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -65,17 +66,27 @@
   let allRfis = [];
   let editors = []; // { user_id, email } — owner/collaborator only, the only legitimate assignees
   let plotsById = {}; // plot.id -> plot_number, display only
+  let parties = []; // companies on this job the caller is allowed to see
 
   let statusFilter = "active";
   let priorityFilter = "all";
   let assignedFilter = "all";
+  let companyFilter = "all";
 
   const pageErrorBox = document.getElementById("pageErrorBox");
   const priorityFilterSelect = document.getElementById("priorityFilter");
   const assignedFilterSelect = document.getElementById("assignedFilter");
+  const companyFilterSelect = document.getElementById("companyFilter");
 
   priorityFilterSelect.innerHTML = `<option value="all">All priorities</option>` +
     RFI_PRIORITIES.map((p) => `<option value="${p}">${RFI_PRIORITY_LABEL[p]}</option>`).join("");
+
+  // An RFI can belong to a company the caller isn't allowed to see the
+  // name of, so it must not read as "no company".
+  function companyName(partyId) {
+    if (!partyId) return "—";
+    return parties.find((p) => p.party_id === partyId)?.company || "Another company";
+  }
 
   function editorEmail(userId) {
     return editors.find((m) => m.user_id === userId)?.email || "—";
@@ -93,6 +104,8 @@
     if (priorityFilter !== "all") rows = rows.filter((r) => r.priority === priorityFilter);
     if (assignedFilter === "unassigned") rows = rows.filter((r) => !r.assigned_to);
     else if (assignedFilter !== "all") rows = rows.filter((r) => r.assigned_to === assignedFilter);
+    if (companyFilter === "none") rows = rows.filter((r) => !r.party_id);
+    else if (companyFilter !== "all") rows = rows.filter((r) => r.party_id === companyFilter);
     return rows;
   }
 
@@ -106,6 +119,7 @@
         <td>${r.plot_id ? escapeHtml(plotsById[r.plot_id] || "—") : "—"}</td>
         <td><span class="badge ${RFI_PRIORITY_BADGE[r.priority]}">${RFI_PRIORITY_LABEL[r.priority]}</span></td>
         <td><span class="badge ${RFI_STATUS_BADGE[r.status]}">${RFI_STATUS_LABEL[r.status]}</span></td>
+        <td>${escapeHtml(companyName(r.party_id))}</td>
         <td>${r.assigned_to ? escapeHtml(editorEmail(r.assigned_to)) : "Unassigned"}</td>
         <td>${r.due_date ? formatDate(r.due_date) : "—"}</td>
         <td>${formatDate(r.created_at)}</td>
@@ -116,6 +130,17 @@
   document.getElementById("statusFilter").addEventListener("change", (e) => { statusFilter = e.target.value; render(); });
   priorityFilterSelect.addEventListener("change", (e) => { priorityFilter = e.target.value; render(); });
   assignedFilterSelect.addEventListener("change", (e) => { assignedFilter = e.target.value; render(); });
+  companyFilterSelect.addEventListener("change", (e) => { companyFilter = e.target.value; render(); });
+
+  // The company column still renders if this fails; only the filter is
+  // hidden, so the RFI list never breaks over company names.
+  async function loadParties() {
+    try { parties = await getProjectParties(projectId); } catch { parties = []; }
+    if (!parties.length) return;
+    companyFilterSelect.innerHTML = `<option value="all">All companies</option><option value="none">No company</option>` +
+      parties.map((p) => `<option value="${p.party_id}">${escapeHtml(p.company)}${p.trade ? " (" + escapeHtml(p.trade) + ")" : ""}</option>`).join("");
+    companyFilterSelect.style.display = "";
+  }
 
   async function loadEditors() {
     const { data, error } = await supabase.rpc("get_project_members", { p_project_id: projectId });
@@ -146,7 +171,7 @@
     document.getElementById("projectSub").textContent = project ? `${project.name} — Requests For Information.` : "";
     const { data: plots } = await supabase.from("plots").select("id, plot_number").eq("project_id", projectId);
     (plots || []).slice().sort((a, b) => comparePlotNumbers(a.plot_number, b.plot_number)).forEach((p) => { plotsById[p.id] = p.plot_number; });
-    await loadEditors();
+    await Promise.all([loadEditors(), loadParties()]);
     load();
   }
 

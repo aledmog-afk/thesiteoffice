@@ -47,7 +47,7 @@ function makeSupabase() {
   };
 }
 
-async function run({ rfis = sampleRfis(), plots = [{ id: "plot1", plot_number: "Plot 1" }] } = {}) {
+async function run({ rfis = sampleRfis(), plots = [{ id: "plot1", plot_number: "Plot 1" }], getProjectParties = async () => [] } = {}) {
   const supabase = makeSupabase();
   supabase.from = (table) => {
     if (table === "plots") return { select: () => ({ eq: async () => ({ data: plots, error: null }) }) };
@@ -71,6 +71,7 @@ async function run({ rfis = sampleRfis(), plots = [{ id: "plot1", plot_number: "
     RFI_STATUS_LABEL, RFI_STATUS_BADGE, RFI_PRIORITIES, RFI_PRIORITY_LABEL, RFI_PRIORITY_BADGE,
     listRfis: async () => rfis,
     comparePlotNumbers: (a, b) => String(a).localeCompare(String(b)),
+    getProjectParties,
   });
 }
 
@@ -158,4 +159,57 @@ test("List: a load failure shows an error rather than crashing", async () => {
   await wait(30);
   assert.match(document.getElementById("pageErrorBox").textContent, /network failure/);
   assert.equal(document.getElementById("emptyState").style.display, "block");
+});
+
+// Item 13: company column and filter, from rfis.party_id plus the
+// existing get_project_parties RPC (which already decides which company
+// names the caller may see).
+function withParties() {
+  const rfis = sampleRfis();
+  rfis[0].party_id = "pp1";
+  rfis[2].party_id = "pp-hidden";
+  return {
+    rfis,
+    getProjectParties: async () => [{ party_id: "pp1", company: "Bennett Groundworks", trade: "Groundworks" }],
+  };
+}
+
+function rowFor(document, ref) {
+  return [...document.querySelectorAll("#rfiRows tr")].find((r) => r.textContent.includes(ref));
+}
+
+test("Company: column shows the company name, a dash for none, and never names a hidden company", async () => {
+  const { document } = await run(withParties());
+  await wait(30);
+  document.getElementById("statusFilter").value = "all";
+  fireEvent(document.getElementById("statusFilter"), "change");
+  assert.match(rowFor(document, "RFI-001").textContent, /Bennett Groundworks/);
+  assert.match(rowFor(document, "RFI-002").textContent, /—/);
+  assert.match(rowFor(document, "RFI-003").textContent, /Another company/);
+});
+
+test("Company: filter narrows to one company, and 'No company' shows only RFIs without one", async () => {
+  const { document } = await run(withParties());
+  await wait(30);
+  const select = document.getElementById("companyFilter");
+  assert.notEqual(select.style.display, "none");
+  document.getElementById("statusFilter").value = "all";
+  fireEvent(document.getElementById("statusFilter"), "change");
+  select.value = "pp1";
+  fireEvent(select, "change");
+  let rows = document.getElementById("rfiRows").textContent;
+  assert.match(rows, /RFI-001/);
+  assert.doesNotMatch(rows, /RFI-002|RFI-003/);
+  select.value = "none";
+  fireEvent(select, "change");
+  rows = document.getElementById("rfiRows").textContent;
+  assert.match(rows, /RFI-002/);
+  assert.doesNotMatch(rows, /RFI-001|RFI-003/);
+});
+
+test("Company: if companies can't be loaded, the filter is hidden and the list still renders", async () => {
+  const { document } = await run({ getProjectParties: async () => { throw new Error("boom"); } });
+  await wait(30);
+  assert.equal(document.getElementById("companyFilter").style.display, "none");
+  assert.match(document.getElementById("rfiRows").textContent, /RFI-001/);
 });
