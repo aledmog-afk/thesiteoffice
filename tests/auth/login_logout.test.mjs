@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
 import { JSDOM } from "jsdom";
-import { extractScript, bodyWithoutScript } from "../lib/jsdom-harness.mjs";
+import { extractScript, bodyWithoutScript, loadSafeNextPage } from "../lib/jsdom-harness.mjs";
 
 const APP_JS = fs.readFileSync(new URL("../../tracker/js/app.js", import.meta.url), "utf8");
 
@@ -100,6 +100,7 @@ async function runLogin(supabase) {
     showError: (el, err) => { el.textContent = (err && err.message) || String(err); el.style.display = "block"; },
     clearError: (el) => { el.textContent = ""; el.style.display = "none"; },
     getParam: () => null,
+    safeNextPage: loadSafeNextPage(),
   };
   const ctx = vm.createContext(context);
   const wrapped = `(async () => {\n${scriptSrc}\n})().then(()=>{ state.done = true; }).catch(e => { state.err = e; });`;

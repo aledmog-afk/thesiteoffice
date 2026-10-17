@@ -6,18 +6,15 @@
 // javascript: URL ran on the site's origin and https:// went off-site.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
 import vm from "node:vm";
 import { JSDOM } from "jsdom";
-import { extractScript, bodyWithoutScript } from "../lib/jsdom-harness.mjs";
+import { extractScript, bodyWithoutScript, loadSafeNextPage } from "../lib/jsdom-harness.mjs";
 
-const APP_JS = fs.readFileSync(new URL("../../tracker/js/app.js", import.meta.url), "utf8");
-const fnMatch = APP_JS.match(/export function safeNextPage\([\s\S]*?\n\}/);
-const safeNextPage = fnMatch
-  ? new Function(`return ${fnMatch[0].replace(/^export /, "")}`)()
+const realSafeNextPage = loadSafeNextPage();
+const safeNextPage = realSafeNextPage
   // Old code has no validator: hand the page an identity stand-in so the
   // page-level tests below run, and fail on what the page itself does.
-  : (raw, fallback = "dashboard.html") => raw || fallback;
+  || ((raw, fallback = "dashboard.html") => raw || fallback);
 
 const fromMock = (rows) => () => ({ select: () => ({ eq: () => ({ limit: async () => ({ data: rows, error: null }) }) }) });
 
@@ -107,7 +104,7 @@ test("login.html: no ?next= still lands on the dashboard", async () => {
 });
 
 test("safeNextPage(): the validator itself, including the fallback argument", () => {
-  assert.ok(fnMatch, "safeNextPage must exist in tracker/js/app.js");
+  assert.ok(realSafeNextPage, "safeNextPage must exist in tracker/js/app.js");
   for (const v of HOSTILE) assert.equal(safeNextPage(v), "dashboard.html", JSON.stringify(v));
   assert.equal(safeNextPage("https://evil.com", "login.html"), "login.html");
   assert.equal(safeNextPage(undefined), "dashboard.html");
