@@ -1,7 +1,7 @@
 {
   "name": "thesiteoffice-tests",
   "private": true,
-  "description": "Automated test suite for Site Tracker (tracker/). The app itself ships with zero build step and zero runtime dependencies — this file exists only to pin and install the tools the test suite needs.",
+  "description": "Automated test suite for The Site Office (tracker/). The app itself ships with zero build step and zero runtime dependencies — this file exists only to pin and install the tools the test suite needs.",
   "scripts": {
     "test": "node --test",
     "test:frontend": "node --test \"tests/auth/*.test.mjs\" \"tests/frontend/*.test.mjs\" \"tests/uploads/*.test.mjs\"",

@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
-<title>Variation – Site Tracker</title>
+<title>Variation – The Site Office</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/app.css">
@@ -205,7 +205,7 @@
 <div class="modal-backdrop" id="requestApprovalModal" style="display:none;">
   <div class="modal-box">
     <h3 class="display-font" style="margin-top:0;">Request Client Approval</h3>
-    <p class="hint" style="margin-bottom:0.8rem;">Sends a one-time link to a client who doesn't need a Site Tracker account. They'll see this record's items, total, and evidence, and can approve or reject it.</p>
+    <p class="hint" style="margin-bottom:0.8rem;">Sends a one-time link to a client who doesn't need a The Site Office account. They'll see this record's items, total, and evidence, and can approve or reject it.</p>
     <div class="field"><label for="reqEmail">Client email *</label><input type="email" id="reqEmail" required></div>
     <div class="field"><label for="reqName">Client name (optional)</label><input type="text" id="reqName"></div>
     <div class="field"><label for="reqCompany">Client company (optional)</label><input type="text" id="reqCompany"></div>
@@ -581,7 +581,7 @@
 
   // ─── Workflow (identical pattern to daywork-detail.html) ───────────
   function attestationText(action, userEmail) {
-    if (action === "submitted") return `Submit this Variation for approval?\n\nBy continuing, you confirm the pricing, linked Dayworks and details above are accurate to the best of your knowledge. This will be recorded against your account (${userEmail}) with a timestamp, and the record cannot be edited again once submitted.\n\nThis is an internal confirmation within Site Tracker, not a legally binding external signature.`;
+    if (action === "submitted") return `Submit this Variation for approval?\n\nBy continuing, you confirm the pricing, linked Dayworks and details above are accurate to the best of your knowledge. This will be recorded against your account (${userEmail}) with a timestamp, and the record cannot be edited again once submitted.\n\nThis is an internal confirmation within The Site Office, not a legally binding external signature.`;
     return "";
   }
 
@@ -595,7 +595,7 @@
     details.innerHTML = rows.length ? `<dl class="doc-facts">${rows.join("")}</dl>` : `<p class="hint">No workflow activity yet — this Variation is still in Draft.</p>`;
 
     if (event.status === "approved") {
-      details.innerHTML += `<p class="hint" style="margin-top:0.8rem;">This record is approved and permanently locked. If a correction is genuinely needed, contact the project owner — a formal revision/supersession workflow is planned for a later phase, so for now any correction has to be handled outside Site Tracker.</p>`;
+      details.innerHTML += `<p class="hint" style="margin-top:0.8rem;">This record is approved and permanently locked. If a correction is genuinely needed, contact the project owner — a formal revision/supersession workflow is planned for a later phase, so for now any correction has to be handled outside The Site Office.</p>`;
     }
 
     const actions = document.getElementById("workflowActions");

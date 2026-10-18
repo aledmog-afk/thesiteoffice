@@ -1,4 +1,4 @@
--- Site Tracker schema
+-- The Site Office schema
 -- Run this once in your Supabase project's SQL editor (Project → SQL Editor → New query).
 -- Safe to re-run: uses "if not exists" / "on conflict do nothing" throughout.
 
@@ -8129,7 +8129,7 @@ $$;
 
 -- ─── v50 ADDITIONS: Commercial — External Client Approval & Signing ───
 -- P18b. A contractor submits a Daywork/Variation, then wants a CLIENT
--- who has no Site Tracker account at all to review and sign off on it
+-- who has no The Site Office account at all to review and sign off on it
 -- externally — the same real-world need the on-site Sign & Approve flow
 -- (v48) addresses for a client who's physically present, extended to a
 -- client who isn't. This depended on the v49 fix (total_value being

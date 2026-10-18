@@ -543,7 +543,7 @@ export function renderHeader(crumbs = []) {
 
   el.innerHTML = `
     <div class="header-inner">
-      <a href="dashboard.html" class="brand">SITE <span>TRACKER</span></a>
+      <a href="dashboard.html" class="brand">THE SITE <span>OFFICE</span></a>
       <nav class="crumbs">${crumbHtml}</nav>
       <a href="settings.html" class="btn btn-ghost btn-sm">Settings</a>
       <button id="signOutBtn" class="btn btn-ghost btn-sm">Sign out</button>
@@ -6473,7 +6473,7 @@ export function buildCommercialEventPdfDocument({ jsPDFCtor, event, lineItems, l
     doc.setFontSize(8);
     doc.setTextColor(140, 140, 140);
     ensureSpace(14);
-    doc.text("Full evidence files remain attached and viewable in Site Tracker.", CE_PDF_MARGIN, y);
+    doc.text("Full evidence files remain attached and viewable in The Site Office.", CE_PDF_MARGIN, y);
     y += 18;
   }
 
@@ -6550,7 +6550,7 @@ export function buildCommercialEventPdfDocument({ jsPDFCtor, event, lineItems, l
     doc.setFont("helvetica", "normal");
     doc.setFontSize(8);
     doc.setTextColor(150, 150, 150);
-    doc.text("Commercial record export — Site Tracker.", CE_PDF_MARGIN, CE_PDF_PAGE.height - 20);
+    doc.text("Commercial record export — The Site Office.", CE_PDF_MARGIN, CE_PDF_PAGE.height - 20);
     doc.text(`Page ${i} of ${totalPages}`, CE_PDF_PAGE.width - CE_PDF_MARGIN, CE_PDF_PAGE.height - 20, { align: "right" });
   }
 

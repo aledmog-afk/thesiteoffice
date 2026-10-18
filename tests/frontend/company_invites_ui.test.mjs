@@ -100,7 +100,7 @@ test("invite.html: 'Set up my company' creates the company with name and type, t
   assert.deepEqual(calls.filter((c) => c[0] !== "get"), [["create", "Almo Carpentry", "subcontractor"], ["accept", TOKEN, "org-new"]]);
 });
 
-test("invite.html: 'already on Site Tracker' sends a membership request — it never accepts on the spot", async () => {
+test("invite.html: 'already on The Site Office' sends a membership request — it never accepts on the spot", async () => {
   const { ctx, calls } = inviteCtx(VALID);
   const { document } = await runPage(INVITE, extractScript(INVITE), ctx);
   await wait(20);

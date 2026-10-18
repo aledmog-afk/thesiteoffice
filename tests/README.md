@@ -1,4 +1,4 @@
-# Site Tracker — automated tests
+# The Site Office — automated tests
 
 The application itself (`tracker/`) ships with zero build step and zero
 runtime dependencies — that doesn't change. `package.json` at the repo

@@ -247,7 +247,7 @@ test("PDF: evidence is listed by title with uploader and date — referenced, no
   const { text } = await renderAndExtractText(doc);
   assert.ok(text.includes("Client email request.pdf"));
   assert.ok(text.includes("site.manager@example.com"));
-  assert.ok(/remain attached/i.test(text), "must point back at Site Tracker for the actual file, never claim to include it");
+  assert.ok(/remain attached/i.test(text), "must point back at The Site Office for the actual file, never claim to include it");
 });
 
 test("PDF: no evidence attached shows an explicit empty state, not a blank section", async () => {
