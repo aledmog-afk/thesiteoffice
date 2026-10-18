@@ -4,7 +4,7 @@
 # with different embeds (Stripe.js, checkout flows) that this policy was
 # never designed against, so it must never apply there.
 #
-# script-src includes 'unsafe-inline': every one of Site Tracker's pages
+# script-src includes 'unsafe-inline': every one of The Site Office's pages
 # is a single static HTML file with its logic in an inline
 # <script type="module"> block (no build step, so nothing bundles these
 # into external files to hash or nonce) — without 'unsafe-inline' every

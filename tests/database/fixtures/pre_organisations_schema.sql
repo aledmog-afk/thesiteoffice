@@ -1,4 +1,4 @@
--- Site Tracker schema
+-- The Site Office schema
 -- Run this once in your Supabase project's SQL editor (Project → SQL Editor → New query).
 -- Safe to re-run: uses "if not exists" / "on conflict do nothing" throughout.
 
