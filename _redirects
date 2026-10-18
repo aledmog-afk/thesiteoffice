@@ -1,0 +1,40 @@
+# Cloudflare Pages redirects for thesiteoffice.uk (The Site Office's home).
+# Format per line: <source> <destination> <status>. Redirects run before
+# static files, so a rule here always wins over a file with the same path.
+# Pages carries the incoming query string across a redirect; #fragments
+# never reach the server, so the browser keeps them itself.
+#
+# Never add a rule whose source starts with /tracker/ - every approval
+# link, invite link and bookmark already in use points there, and the
+# app's files stay exactly where they are. tests/frontend/redirects_file
+# .test.mjs enforces this.
+
+# Old Site Office template pages -> home page, with the "shop has closed"
+# notice shown. Both the pretty URL and the .html form are listed because
+# Pages matches the request path before it resolves pretty URLs.
+/Rams                     /#shop-closed 301
+/Rams.html                /#shop-closed 301
+/rams                     /#shop-closed 301
+/rams.html                /#shop-closed 301
+/cdm                      /#shop-closed 301
+/cdm.html                 /#shop-closed 301
+/commercial               /#shop-closed 301
+/commercial.html          /#shop-closed 301
+/contracts                /#shop-closed 301
+/contracts.html           /#shop-closed 301
+/health-safety            /#shop-closed 301
+/health-safety.html       /#shop-closed 301
+/hr                       /#shop-closed 301
+/hr.html                  /#shop-closed 301
+/quality                  /#shop-closed 301
+/quality.html             /#shop-closed 301
+/site-management          /#shop-closed 301
+/site-management.html     /#shop-closed 301
+/free-starter-pack        /#shop-closed 301
+/free-starter-pack.html   /#shop-closed 301
+
+# Short sign-in addresses. 302 (not 301) so they can change later
+# without browsers caching them for good.
+/login                    /tracker/login.html 302
+/signin                   /tracker/login.html 302
+/app                      /tracker/ 302

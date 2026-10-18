@@ -1,0 +1,49 @@
+# Cloudflare Pages applies these to every response whose request path
+# matches the rule. A response can match several rules; Pages joins
+# repeated headers with a comma, so each header is set by exactly one
+# rule: /* sets the shared security headers for every response
+# (including the 404 page, which is served at any unknown path), and a
+# more specific rule only ever replaces one, by first detaching it
+# ("! Name") and then setting its own value.
+#
+# The root pages (front page, 404, privacy, terms) carry no script at
+# all, so the default policy allows no script beyond 'self'.
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: geolocation=(), camera=(), microphone=(), payment=()
+  Strict-Transport-Security: max-age=31536000
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+
+# The Site Office itself (/tracker/*). Unchanged by the domain move.
+#
+# script-src includes 'unsafe-inline': every one of The Site Office's pages
+# is a single static HTML file with its logic in an inline
+# <script type="module"> block (no build step, so nothing bundles these
+# into external files to hash or nonce) — without 'unsafe-inline' every
+# page would fail to load at all. This is a real, deliberate gap in
+# script-src specifically; everything else below still holds regardless
+# (an attacker-injected <script src="..."> from an unlisted origin is
+# still blocked, and connect-src/img-src still block exfiltration to an
+# unlisted origin even from an inline-script context).
+/tracker/*
+  ! Content-Security-Policy
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://esm.sh; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://*.supabase.co; connect-src 'self' https://*.supabase.co https://api.postcodes.io https://api.open-meteo.com https://esm.sh; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+
+# /contents-inventory is a separate app page and Aled's decision; it is
+# left exactly as it was before this change (no headers from /*).
+/contents-inventory
+  ! X-Content-Type-Options
+  ! X-Frame-Options
+  ! Referrer-Policy
+  ! Permissions-Policy
+  ! Strict-Transport-Security
+  ! Content-Security-Policy
+/contents-inventory.html
+  ! X-Content-Type-Options
+  ! X-Frame-Options
+  ! Referrer-Policy
+  ! Permissions-Policy
+  ! Strict-Transport-Security
+  ! Content-Security-Policy

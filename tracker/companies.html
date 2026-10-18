@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Companies on this job – The Site Office</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page page-900">
+  <div class="page-head">
+    <div>
+      <div class="page-title">Companies on this job</div>
+      <div class="page-sub" id="projectName"></div>
+    </div>
+    <a class="btn btn-outline btn-sm" id="peopleLink" href="#">People on this job →</a>
+  </div>
+  <div id="errorBox" class="error-box"></div>
+  <div id="notAvailable" class="card" style="display:none;"><p>Companies couldn't be loaded for this project. Refresh the page, and if it keeps happening, contact support.</p></div>
+
+  <div id="ownerView" style="display:none;">
+    <div class="card" id="mcAccessCard" style="display:none; margin-bottom:1.2rem;">
+      <h3 class="card-heading" style="margin-bottom:0.4rem;">Main contractor access</h3>
+      <p class="hint" id="mcAccessText"></p>
+      <div class="btn-row">
+        <select id="mcAccessSelect" class="auto-width" style="max-width:100%;"><option value="full">Full project access</option><option value="narrow">Narrower (programme, actions, handovers, snags, RFIs)</option></select>
+        <button type="button" class="btn btn-outline btn-sm" id="mcAccessSaveBtn">Save</button>
+      </div>
+    </div>
+    <div class="card">
+      <h3 class="card-heading" style="margin-bottom:0.8rem;">Companies</h3>
+      <p class="hint" id="assignWorkLink" style="display:none;"><a href="#" id="assignWorkHref">Assign older RFIs and actions to companies</a> <span class="badge badge-amber" id="assignWorkFlag" style="display:none;"></span></p>
+      <div class="table-wrap"><table class="stack-mobile">
+        <thead><tr><th>Company</th><th>Role on this job</th><th>Lead contact</th><th>People</th><th></th></tr></thead>
+        <tbody id="partyRows"></tbody>
+      </table></div>
+      <p class="hint" id="noParties" style="display:none;">No other companies on this job yet.</p>
+    </div>
+
+    <div class="card" style="margin-top:1.2rem;">
+      <h3 class="card-heading" style="margin-bottom:0.4rem;">Invite a company</h3>
+      <p class="hint" style="margin-bottom:0.8rem;">Invite one lead person by email. You'll get a link to send them yourself (WhatsApp, text or email). It works only for that email address and expires after 14 days. They then add their own staff.</p>
+      <form id="inviteForm">
+        <div class="field"><label for="inviteEmail">Lead person's email</label><input type="email" id="inviteEmail" required></div>
+        <div class="field"><label for="inviteRole">Role on this job</label><select id="inviteRole"></select></div>
+        <div class="field" id="inviteTradeWrap"><label for="inviteTrade">Trade</label><input type="text" id="inviteTrade" placeholder="e.g. Carpentry"></div>
+        <button type="submit" class="btn btn-amber">Create Invite Link</button>
+      </form>
+      <div id="newLinkRow" class="btn-row" style="display:none; margin-top:0.8rem;">
+        <input type="text" id="newLinkInput" readonly style="flex:1; min-width:220px;">
+        <button type="button" class="btn btn-outline btn-sm" id="copyNewLinkBtn">Copy Link</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:1.2rem;">
+      <h3 class="card-heading" style="margin-bottom:0.8rem;">Waiting to accept</h3>
+      <div class="table-wrap"><table class="stack-mobile">
+        <thead><tr><th>Email</th><th>Role</th><th>Expires</th><th></th></tr></thead>
+        <tbody id="inviteRows"></tbody>
+      </table></div>
+      <p class="hint" id="noInvites" style="display:none;">No pending invites.</p>
+    </div>
+
+    <div class="card" style="margin-top:1.2rem;">
+      <h3 class="card-heading" style="margin-bottom:0.4rem;">Add someone from your own company</h3>
+      <div class="btn-row">
+        <select id="ownStaffSelect" style="flex:1; min-width:200px;"></select>
+        <select id="ownStaffRole"><option value="collaborator">Full access</option><option value="snagging">Snagging only</option></select>
+        <button type="button" class="btn btn-outline btn-sm" id="addOwnStaffBtn">Add</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="partyAdminView"></div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, PARTY_ROLES, partyRoleText, partyInviteLink, isMissingRpcError, getProjectParties, createPartyInvite, resendPartyInvite, cancelPartyInvite, getPendingPartyInvites, setPartyRole, removeParty, addPartyMember, removePartyMember, addOrgMemberToProject, getOrganisationMembers, partyRoleAccessText, setMainContractorAccess } from "./js/app.js";
+
+  const me = await requireAuth();
+  const projectId = getParam("project");
+  if (!projectId) window.location.href = "dashboard.html";
+  renderHeader([{ label: "Project", href: `project.html?id=${projectId}` }, { label: "Companies" }]);
+  document.getElementById("peopleLink").href = `project.html?id=${encodeURIComponent(projectId)}#collaboratorsCard`;
+
+  const errorBox = document.getElementById("errorBox");
+  const roleOptions = (sel) => PARTY_ROLES.map((r) => `<option value="${r.value}"${r.value === sel ? " selected" : ""}>${escapeHtml(r.label)}</option>`).join("");
+  document.getElementById("inviteRole").innerHTML = roleOptions("subcontractor");
+  const tradeWrap = document.getElementById("inviteTradeWrap");
+  document.getElementById("inviteRole").addEventListener("change", (e) => { tradeWrap.style.display = e.target.value === "subcontractor" ? "block" : "none"; });
+
+  async function copy(text) {
+    try { await navigator.clipboard.writeText(text); } catch { window.prompt("Copy this link:", text); }
+  }
+  function showLink(token) {
+    document.getElementById("newLinkInput").value = partyInviteLink(token);
+    document.getElementById("newLinkRow").style.display = "flex";
+  }
+  document.getElementById("copyNewLinkBtn").addEventListener("click", () => copy(document.getElementById("newLinkInput").value));
+
+  let project = null;
+  let parties = [];
+
+  async function loadOwner() {
+    document.getElementById("ownerView").style.display = "block";
+    const others = parties;
+    document.getElementById("noParties").style.display = others.length ? "none" : "block";
+    document.getElementById("partyRows").innerHTML = others.map((p) => `
+      <tr data-party="${p.party_id}" id="party-${escapeHtml(p.party_id)}">
+        <td>${escapeHtml(p.company)}${p.parent_party_id ? ` <span class="hint">(brought in by ${escapeHtml((parties.find((x) => x.party_id === p.parent_party_id) || {}).company || "another company")})</span>` : ""}</td>
+        <td data-label="Role on this job">${p.parent_party_id ? escapeHtml(partyRoleText(p.party_role, p.trade)) : `<select data-role-for="${p.party_id}">${roleOptions(p.party_role)}</select> <input data-trade-for="${p.party_id}" value="${escapeHtml(p.trade || "")}" placeholder="Trade" style="width:8rem;"> <button class="btn btn-outline btn-sm" data-save-role="${p.party_id}">Save</button>`}</td>
+        <td data-label="Lead contact">${p.lead_email ? escapeHtml(p.lead_email) : `<span class="badge badge-red">Needs a lead contact</span>`}</td>
+        <td data-label="People">${p.member_count}</td>
+        <td><button class="btn btn-outline btn-sm" data-remove-party="${p.party_id}" data-name="${escapeHtml(p.company)}">Remove</button></td>
+      </tr>`).join("");
+
+    highlightLinkedParty();
+
+    const invites = await getPendingPartyInvites(projectId);
+    document.getElementById("noInvites").style.display = invites.length ? "none" : "block";
+    document.getElementById("inviteRows").innerHTML = invites.map((i) => {
+      const expired = new Date(i.expires_at) < new Date();
+      return `<tr>
+        <td>${escapeHtml(i.invited_email)}</td>
+        <td data-label="Role">${escapeHtml(partyRoleText(i.party_role, i.trade))}</td>
+        <td data-label="Expires">${expired ? `<span class="badge badge-red">Expired</span>` : escapeHtml(formatDate(i.expires_at.slice(0, 10)))}</td>
+        <td><button class="btn btn-outline btn-sm" data-resend="${i.id}">Resend (new link)</button> <button class="btn btn-outline btn-sm" data-cancel="${i.id}">Cancel</button></td>
+      </tr>`;
+    }).join("");
+
+    const [staff, { data: onJob }] = await Promise.all([
+      getOrganisationMembers(project.org_id),
+      supabase.rpc("get_project_members", { p_project_id: projectId }),
+    ]);
+    const onJobIds = new Set((onJob || []).map((m) => m.user_id));
+    const addable = (staff || []).filter((m) => !onJobIds.has(m.user_id));
+    document.getElementById("ownStaffSelect").innerHTML = addable.length
+      ? addable.map((m) => `<option value="${m.user_id}">${escapeHtml(m.email)}</option>`).join("")
+      : `<option value="">Everyone in your company is already on this job</option>`;
+  }
+
+  // Item 11: "Manage this company" on the project page links here as
+  // #party-<id>; scroll to that company's row and highlight it.
+  function highlightLinkedParty() {
+    const m = /^#party-(.+)$/.exec(window.location.hash || "");
+    if (!m) return;
+    const row = document.getElementById(`party-${decodeURIComponent(m[1])}`);
+    if (!row) return;
+    row.classList.add("row-highlight");
+    row.style.background = "#fff6db";
+    row.style.outline = "2px solid #f0a500";
+    if (typeof row.scrollIntoView === "function") row.scrollIntoView({ block: "center" });
+  }
+
+  async function loadPartyAdmin() {
+    const mine = parties.filter((p) => p.i_admin);
+    const html = [];
+    for (const p of mine) {
+      const [staff, { data: onParty }] = await Promise.all([
+        getOrganisationMembers(p.org_id),
+        supabase.from("project_party_members").select("user_id").eq("party_id", p.party_id),
+      ]);
+      const on = new Set((onParty || []).map((r) => r.user_id));
+      html.push(`
+        <div class="card" style="margin-top:1.2rem;" data-admin-party="${p.party_id}">
+          <h3 class="card-heading" style="margin-bottom:0.3rem;">${escapeHtml(p.company)}: your team on this job</h3>
+          <p class="hint" style="margin-bottom:0.8rem;">${escapeHtml(partyRoleText(p.party_role, p.trade))}. People you add get your company's access on this job, never more.</p>
+          <div class="table-wrap"><table><tbody>
+            ${(staff || []).map((m) => `<tr><td>${escapeHtml(m.email)}</td><td>${on.has(m.user_id)
+              ? (m.user_id === me.id ? `<span class="hint">On this job</span>` : `<button class="btn btn-outline btn-sm" data-team-remove="${p.party_id}" data-user="${m.user_id}">Remove from job</button>`)
+              : `<button class="btn btn-outline btn-sm" data-team-add="${p.party_id}" data-user="${m.user_id}">Add to job</button>`}</td></tr>`).join("")}
+          </tbody></table></div>
+          ${p.party_role === "subcontractor" ? `
+            <form data-subsub-form="${p.party_id}" style="margin-top:1rem;">
+              <h4 style="font-size:0.95rem; margin-bottom:0.4rem;">Invite a sub-subcontractor</h4>
+              <p class="hint" style="margin-bottom:0.5rem;">They'll only see the snags assigned to them, never yours.</p>
+              <div class="btn-row">
+                <input type="email" name="email" placeholder="Lead person's email" required style="flex:1; min-width:180px;">
+                <input type="text" name="trade" placeholder="Trade" required style="width:9rem;">
+                <button type="submit" class="btn btn-outline btn-sm">Create Invite Link</button>
+              </div>
+              <div class="btn-row" data-subsub-link style="display:none; margin-top:0.5rem;"><input type="text" readonly style="flex:1;"><button type="button" class="btn btn-outline btn-sm" data-copy-subsub>Copy Link</button></div>
+            </form>` : ""}
+        </div>`);
+    }
+    document.getElementById("partyAdminView").innerHTML = html.join("");
+  }
+
+  async function load() {
+    clearError(errorBox);
+    const [{ data: proj, error: projErr }, { data: role }] = await Promise.all([
+      supabase.from("projects").select("id, name, org_id").eq("id", projectId).single(),
+      supabase.rpc("get_my_role", { p_project_id: projectId }),
+    ]);
+    if (projErr || !proj) { showError(errorBox, projErr || { message: "Project not found" }); return; }
+    project = proj;
+    document.getElementById("projectName").textContent = proj.name;
+    try {
+      parties = await getProjectParties(projectId);
+    } catch (err) {
+      if (isMissingRpcError(err)) { document.getElementById("notAvailable").style.display = "block"; return; }
+      showError(errorBox, err); return;
+    }
+    if (role === "owner") { await loadOwner(); await loadMcAccess(); }
+    await loadPartyAdmin();
+  }
+
+  // v62: the owner chooses how much the main contractor company can do.
+  // Hidden where the database predates v62 (no main_contractor_access).
+  async function loadMcAccess() {
+    const card = document.getElementById("mcAccessCard");
+    const { data, error } = await supabase.from("projects").select("main_contractor_access").eq("id", projectId).single();
+    if (error || !data || !data.main_contractor_access) { card.style.display = "none"; return; }
+    card.style.display = "block";
+    document.getElementById("assignWorkHref").href = `assign-companies.html?project=${projectId}`;
+    document.getElementById("assignWorkLink").style.display = "block";
+    try {
+      const { data: work } = await supabase.rpc("get_unassigned_company_work");
+      const mine = Array.isArray(work) ? work.find((w) => w.project_id === projectId) : null;
+      const n = mine ? mine.rfi_count + mine.action_count : 0;
+      const flag = document.getElementById("assignWorkFlag");
+      flag.textContent = `${n} need a company`; flag.style.display = n ? "" : "none";
+    } catch { /* flag is optional */ }
+    document.getElementById("mcAccessSelect").value = data.main_contractor_access;
+    document.getElementById("mcAccessText").textContent = partyRoleAccessText("main_contractor", data.main_contractor_access);
+  }
+  document.getElementById("mcAccessSaveBtn").addEventListener("click", () => {
+    const mode = document.getElementById("mcAccessSelect").value;
+    run(() => setMainContractorAccess(projectId, mode));
+  });
+
+  async function run(fn) {
+    clearError(errorBox);
+    try { await fn(); await load(); } catch (err) { showError(errorBox, err); }
+  }
+
+  document.getElementById("inviteForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearError(errorBox);
+    const roleVal = document.getElementById("inviteRole").value;
+    const trade = document.getElementById("inviteTrade").value.trim();
+    if (roleVal === "subcontractor" && !trade) { showError(errorBox, { message: "Enter the subcontractor's trade, e.g. Carpentry." }); return; }
+    try {
+      const inv = await createPartyInvite(projectId, document.getElementById("inviteEmail").value.trim(), roleVal, roleVal === "subcontractor" ? trade : null);
+      showLink(inv.token);
+      e.target.reset();
+      tradeWrap.style.display = "block";
+      await load();
+    } catch (err) { showError(errorBox, err); }
+  });
+
+  document.getElementById("addOwnStaffBtn").addEventListener("click", () => {
+    const uid = document.getElementById("ownStaffSelect").value;
+    if (!uid) return;
+    run(() => addOrgMemberToProject(projectId, uid, document.getElementById("ownStaffRole").value));
+  });
+
+  document.addEventListener("click", async (e) => {
+    const t = e.target;
+    if (!(t instanceof window.HTMLElement)) return;
+    if (t.dataset.saveRole) {
+      const id = t.dataset.saveRole;
+      const r = document.querySelector(`[data-role-for="${id}"]`).value;
+      const tr = document.querySelector(`[data-trade-for="${id}"]`).value.trim() || null;
+      run(() => setPartyRole(id, r, tr));
+    } else if (t.dataset.removeParty) {
+      if (window.confirm(`Remove ${t.dataset.name} from this job? Their people (and any sub-subcontractors they brought in) lose access straight away.`)) run(() => removeParty(t.dataset.removeParty));
+    } else if (t.dataset.resend) {
+      clearError(errorBox);
+      try { const inv = await resendPartyInvite(t.dataset.resend); showLink(inv.token); await load(); } catch (err) { showError(errorBox, err); }
+    } else if (t.dataset.cancel) {
+      run(() => cancelPartyInvite(t.dataset.cancel));
+    } else if (t.dataset.teamAdd) {
+      run(() => addPartyMember(t.dataset.teamAdd, t.dataset.user));
+    } else if (t.dataset.teamRemove) {
+      run(() => removePartyMember(t.dataset.teamRemove, t.dataset.user));
+    } else if (t.dataset.copySubsub !== undefined) {
+      copy(t.parentElement.querySelector("input").value);
+    }
+  });
+
+  document.addEventListener("submit", async (e) => {
+    const f = e.target;
+    if (!f.dataset || !f.dataset.subsubForm) return;
+    e.preventDefault();
+    clearError(errorBox);
+    try {
+      const inv = await createPartyInvite(projectId, f.elements.email.value.trim(), "subcontractor", f.elements.trade.value.trim(), f.dataset.subsubForm);
+      const row = f.querySelector("[data-subsub-link]");
+      row.querySelector("input").value = partyInviteLink(inv.token);
+      row.style.display = "flex";
+    } catch (err) { showError(errorBox, err); }
+  });
+
+  await load();
+</script>
+</body>
+</html>

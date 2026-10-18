@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Old invite link – The Site Office</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div class="auth-wrap">
+  <div class="auth-card">
+    <div class="auth-brand">THE SITE <span>OFFICE</span></div>
+    <p class="auth-sub" id="statusText">Joining project…</p>
+    <div class="btn-row" id="actionsRow" style="display:none; justify-content:center;">
+      <a class="btn btn-amber" href="dashboard.html">Go to Dashboard</a>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  const statusText = document.getElementById("statusText");
+  const actionsRow = document.getElementById("actionsRow");
+  // v61: per-project invite codes are retired. Opening an old link never
+  // joins anything — it explains what to do instead.
+  statusText.textContent = "This invite link is no longer used. Ask the project owner to send you a company invite instead — it will put your company on the job.";
+  actionsRow.style.display = "flex";
+</script>
+</body>
+</html>

@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Assign work to companies – The Site Office</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page page-900">
+  <div class="page-head">
+    <div>
+      <div class="page-title">Assign work to companies</div>
+      <div class="page-sub" id="projectName"></div>
+    </div>
+  </div>
+  <div id="errorBox" class="error-box"></div>
+  <div id="notAvailable" class="card" style="display:none;"><p id="notAvailableText">This isn't available for this project.</p></div>
+
+  <div id="body" style="display:none;">
+    <p class="hint">Older RFIs and actions were created before companies were on the job. A company only sees the RFIs and actions assigned to it — pick one for each.</p>
+    <div class="btn-row" style="margin-bottom:0.8rem;">
+      <label class="flex-row" style="gap:0.4rem;"><input type="checkbox" id="onlyUnassigned" checked> Only show ones with no company</label>
+    </div>
+    <div class="card">
+      <h3 class="card-heading" style="margin-bottom:0.4rem;">RFIs <span class="badge badge-amber" id="rfiFlag" style="display:none;"></span></h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Ref</th><th>Title</th><th>Status</th><th>Company</th></tr></thead>
+        <tbody id="rfiRows"></tbody>
+      </table></div>
+      <p class="hint" id="rfiEmpty" style="display:none;">Nothing to assign.</p>
+    </div>
+    <div class="card" style="margin-top:1.2rem;">
+      <h3 class="card-heading" style="margin-bottom:0.4rem;">Actions <span class="badge badge-amber" id="actionFlag" style="display:none;"></span></h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Title</th><th>Status</th><th>Company</th></tr></thead>
+        <tbody id="actionRows"></tbody>
+      </table></div>
+      <p class="hint" id="actionEmpty" style="display:none;">Nothing to assign.</p>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, getProjectParties, isMissingRpcError } from "./js/app.js";
+
+  await requireAuth();
+  const projectId = getParam("project");
+  renderHeader([{ label: "Dashboard", href: "dashboard.html" }, { label: "Project", href: `project.html?id=${projectId}` }, { label: "Assign work to companies" }]);
+  const errorBox = document.getElementById("errorBox");
+  let parties = [], rfis = [], actions = [];
+  const OPEN_RFI = (r) => r.status !== "closed";
+  const OPEN_ACTION = (a) => !["completed", "cancelled"].includes(a.status);
+
+  function notAvailable(text) {
+    document.getElementById("notAvailableText").textContent = text;
+    document.getElementById("notAvailable").style.display = "block";
+    document.getElementById("body").style.display = "none";
+  }
+
+  function picker(kind, row) {
+    const opts = [`<option value="">Not assigned yet</option>`].concat(parties.map((p) =>
+      `<option value="${p.party_id}"${row.party_id === p.party_id ? " selected" : ""}>${escapeHtml(p.company)}${p.trade ? " (" + escapeHtml(p.trade) + ")" : ""}</option>`));
+    return `<select data-kind="${kind}" data-id="${row.id}">${opts.join("")}</select>`;
+  }
+
+  function render() {
+    const only = document.getElementById("onlyUnassigned").checked;
+    const r = rfis.filter((x) => !only || !x.party_id);
+    const a = actions.filter((x) => !only || !x.party_id);
+    document.getElementById("rfiRows").innerHTML = r.map((x) => `<tr><td>${escapeHtml(x.reference || "")}</td><td>${escapeHtml(x.title)}</td><td>${escapeHtml(x.status)}</td><td>${picker("rfis", x)}</td></tr>`).join("");
+    document.getElementById("actionRows").innerHTML = a.map((x) => `<tr><td>${escapeHtml(x.title)}</td><td>${escapeHtml(x.status)}</td><td>${picker("actions", x)}</td></tr>`).join("");
+    document.getElementById("rfiEmpty").style.display = r.length ? "none" : "block";
+    document.getElementById("actionEmpty").style.display = a.length ? "none" : "block";
+    const ur = rfis.filter((x) => !x.party_id && OPEN_RFI(x)).length, ua = actions.filter((x) => !x.party_id && OPEN_ACTION(x)).length;
+    const rf = document.getElementById("rfiFlag"), af = document.getElementById("actionFlag");
+    rf.textContent = `${ur} open with no company`; rf.style.display = ur ? "" : "none";
+    af.textContent = `${ua} open with no company`; af.style.display = ua ? "" : "none";
+  }
+
+  async function load() {
+    clearError(errorBox);
+    const [{ data: proj }, { data: role }] = await Promise.all([
+      supabase.from("projects").select("id, name").eq("id", projectId).single(),
+      supabase.rpc("get_my_role", { p_project_id: projectId }),
+    ]);
+    if (proj) document.getElementById("projectName").textContent = proj.name;
+    if (role !== "owner") { notAvailable("Only the project owner can assign work to companies."); return; }
+    try { parties = await getProjectParties(projectId); }
+    catch (err) { if (isMissingRpcError(err)) { notAvailable("Companies couldn't be loaded for this project. Refresh the page, and if it keeps happening, contact support."); return; } showError(errorBox, err); return; }
+    const [rr, ar] = await Promise.all([
+      supabase.from("rfis").select("id, reference, title, status, party_id").eq("project_id", projectId).order("created_at", { ascending: true }),
+      supabase.from("actions").select("id, title, status, party_id").eq("project_id", projectId).order("created_at", { ascending: true }),
+    ]);
+    if (rr.error || ar.error) {
+      const e = rr.error || ar.error;
+      if (/party_id/.test(e.message || "")) { notAvailable("Older RFIs and actions couldn't be loaded. Refresh the page, and if it keeps happening, contact support."); return; }
+      showError(errorBox, e); return;
+    }
+    rfis = rr.data || []; actions = ar.data || [];
+    document.getElementById("body").style.display = "block";
+    render();
+  }
+
+  document.getElementById("onlyUnassigned").addEventListener("change", render);
+  document.addEventListener("change", async (e) => {
+    const t = e.target;
+    if (!t.dataset || !t.dataset.kind) return;
+    clearError(errorBox);
+    const value = t.value || null;
+    const { error } = await supabase.from(t.dataset.kind).update({ party_id: value }).eq("id", t.dataset.id);
+    if (error) { showError(errorBox, error); return; }
+    const list = t.dataset.kind === "rfis" ? rfis : actions;
+    const row = list.find((x) => x.id === t.dataset.id);
+    if (row) row.party_id = value;
+    render();
+  });
+
+  load();
+</script>
+</body>
+</html>
