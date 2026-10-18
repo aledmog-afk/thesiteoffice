@@ -1,4 +1,4 @@
-# Site Tracker
+# The Site Office
 
 A small internal app for logging **weekly reports** and **snagging sheets** per site, and sending them to your main contractor. Lives at `/tracker/` on this site. Plain HTML/JS, no build step — same as the rest of this repo — backed by [Supabase](https://supabase.com) for login, the database, and photo storage.
 

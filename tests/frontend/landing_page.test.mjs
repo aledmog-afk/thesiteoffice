@@ -23,9 +23,9 @@ function servedFile(href) {
   return undefined;
 }
 
-test("landing: a plain Site Tracker front page whose sign-in and sign-up links reach the real login page", () => {
+test("landing: a plain The Site Office front page whose sign-in and sign-up links reach the real login page", () => {
   const doc = load("index.html");
-  assert.match(doc.title, /Site Tracker/);
+  assert.match(doc.title, /The Site Office/);
   assert.equal(doc.getElementById("signInLink").getAttribute("href"), "/tracker/login.html");
   assert.equal(doc.getElementById("signUpLink").getAttribute("href"), "/tracker/login.html?mode=signup");
   assert.equal(doc.querySelector('link[rel="canonical"]').getAttribute("href"), "https://thesiteoffice.uk/");

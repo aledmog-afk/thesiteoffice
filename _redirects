@@ -1,4 +1,4 @@
-# Cloudflare Pages redirects for thesiteoffice.uk (Site Tracker's home).
+# Cloudflare Pages redirects for thesiteoffice.uk (The Site Office's home).
 # Format per line: <source> <destination> <status>. Redirects run before
 # static files, so a rule here always wins over a file with the same path.
 # Pages carries the incoming query string across a redirect; #fragments

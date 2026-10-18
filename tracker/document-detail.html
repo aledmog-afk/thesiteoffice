@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
-<title>Document – Site Tracker</title>
+<title>Document – The Site Office</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/app.css">
@@ -171,7 +171,7 @@
   }
 
   function render() {
-    document.title = `${doc.title} – Site Tracker`;
+    document.title = `${doc.title} – The Site Office`;
     document.getElementById("docTitle").textContent = doc.title;
     document.getElementById("docSub").textContent = doc.doc_number ? `${DOCUMENT_TYPE_LABEL[doc.document_type]} · ${doc.doc_number}` : DOCUMENT_TYPE_LABEL[doc.document_type];
     renderHeader([

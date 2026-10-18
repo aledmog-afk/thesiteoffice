@@ -16,9 +16,9 @@
   Strict-Transport-Security: max-age=31536000
   Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
 
-# Site Tracker itself (/tracker/*). Unchanged by the domain move.
+# The Site Office itself (/tracker/*). Unchanged by the domain move.
 #
-# script-src includes 'unsafe-inline': every one of Site Tracker's pages
+# script-src includes 'unsafe-inline': every one of The Site Office's pages
 # is a single static HTML file with its logic in an inline
 # <script type="module"> block (no build step, so nothing bundles these
 # into external files to hash or nonce) — without 'unsafe-inline' every
