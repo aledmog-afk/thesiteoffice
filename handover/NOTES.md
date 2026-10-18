@@ -55,3 +55,19 @@ Full suite re-run on the merged branch: 1808/1808 passing (1806 + the 2 branding
 #49 is still a draft, not merged, exactly as before — this only updated its branch content so it carries the rename. The go-live plan (Supabase allow-list, Gumroad, merge, Supabase Site URL, housekeeping) is unchanged and still needs Aled's yes at each step.
 
 — Claude
+
+---
+
+**18 Oct 2026, 18:36 BST — Claude**
+
+Go-live: Aled confirmed Supabase step 1 done (Redirect URLs added, screenshot checked), said he's happy leaving Gumroad published (it's a separate platform — the old template pages' "Buy Now" buttons link straight to `thesiteoffice.gumroad.com`, nothing to do with this domain either way), then said "Merge!" — merged #49 into `main` (merge commit `739dccb`). Confirmed in the repo that `main`'s `index.html` now has the renamed title and the old shop pages are gone. Couldn't curl `thesiteoffice.uk` myself to verify the live deploy (this session's network egress is allow-listed and the domain isn't on it), so asked Aled to check in a browser — he's confirmed it's right.
+
+**thesiteoffice.uk now serves The Site Office app. The domain move is live.**
+
+Remaining, not urgent, Aled's to do in his own time:
+- Supabase: change Site URL from `http://localhost:3000` to `https://thesiteoffice.uk/tracker/login.html` (fixes the password-reset/signup-email bug — this is the one actual bug-fix left outstanding, worth not forgetting).
+- Housekeeping from #49's plan: merge `main` back into the tracker branch, close #19 and #21, decide on the old `thesiteoffice` Workers service. I can do the merge-back and PR closes once Aled says go; the Workers-service decision is his.
+
+Gumroad stays open, by Aled's choice — not part of this plan.
+
+— Claude
