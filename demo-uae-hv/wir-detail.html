@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>WIR — The Site Office UAE HV Demo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/demo.css">
+<style>
+  .demo-modal-backdrop { position: fixed; inset: 0; background: rgba(15,17,23,0.6); display: flex; align-items: center; justify-content: center; padding: 20px; z-index: 50; }
+  .demo-modal { background: var(--white); border-radius: 10px; max-width: 700px; width: 100%; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; }
+  .demo-modal-head { display: flex; align-items: center; justify-content: space-between; padding: 1rem 1.2rem; border-bottom: 1px solid var(--rule); }
+  .demo-modal-body { flex: 1; overflow: auto; }
+  .demo-modal-body iframe { width: 100%; height: 70vh; border: none; display: block; }
+  .demo-modal-foot { padding: 0.8rem 1.2rem; border-top: 1px solid var(--rule); display: flex; gap: 0.6rem; justify-content: flex-end; }
+</style>
+</head>
+<body>
+<div class="demo-banner">Demonstration environment — synthetic data only — not linked from the production app</div>
+<header id="demo-header">
+  <div class="demo-header-inner">
+    <div>
+      <div class="demo-brand">THE SITE <span>OFFICE</span></div>
+      <a href="project.html" class="demo-hint" style="color:#c9ccd3;">&larr; Back to project</a>
+    </div>
+    <div class="demo-gst-clock" id="gstClock">—</div>
+  </div>
+</header>
+
+<main class="demo-page" id="wirRoot">
+  <p>Loading…</p>
+</main>
+
+<script type="module">
+  import { loadState, saveState } from "./js/demo-data.js";
+  import { formatGST, requireAccess, sha256Hex, shortHash, watermarkPhoto, generateWirPackPdf } from "./js/demo-app.js";
+  import { initSignaturePad } from "./js/signature-pad.js";
+
+  if (requireAccess()) {
+    let sigPad = null;
+    const state = loadState();
+    const params = new URLSearchParams(window.location.search);
+    const wirId = params.get("id");
+    const wir = state.wirs.find((w) => w.id === wirId);
+
+    tickClock();
+    setInterval(tickClock, 1000);
+    function tickClock() {
+      document.getElementById("gstClock").textContent = formatGST(new Date());
+    }
+
+    const WIR_BADGE = { approved: ["demo-badge-approved", "Approved / Signed Off"], pending_signoff: ["demo-badge-pending", "Pending SAP / Client QA Sign-off"], in_progress: ["demo-badge-progress", "In Progress"] };
+
+    const root = document.getElementById("wirRoot");
+    if (!wir) {
+      root.innerHTML = `<p>WIR not found. <a href="project.html">Back to project</a></p>`;
+    } else {
+      render();
+    }
+
+    function render() {
+      const locked = !!wir.signOff.lockedAtIso;
+      const [badgeClass, badgeLabel] = WIR_BADGE[wir.status] || ["demo-badge-progress", wir.status];
+
+      root.innerHTML = `
+        <span class="demo-badge ${badgeClass}">${badgeLabel}</span>
+        <div class="demo-page-title" style="margin-top:0.5rem;">${wir.id}</div>
+        <p class="demo-page-sub">${wir.title}</p>
+        <span class="demo-asset-tag">${wir.assetTag}</span>
+
+        <div class="demo-card" style="margin-top:1.2rem;">
+          <h3>QA Checklist</h3>
+          <ul class="demo-checklist" id="checklist"></ul>
+        </div>
+
+        <div class="demo-card">
+          <h3>Photo Evidence</h3>
+          <p class="demo-hint">Each photo is watermarked in the browser with the asset tag and a GST timestamp — nothing is uploaded anywhere; the hash shown covers exactly the watermarked image.</p>
+          <div id="photoGrid" style="display:flex; flex-wrap:wrap; gap:0.8rem; margin:0.6rem 0;"></div>
+          ${locked ? "" : `<input type="file" accept="image/*" id="photoInput">`}
+        </div>
+
+        <div class="demo-card">
+          <h3>Digital Sign-Off</h3>
+          ${locked ? renderLockedSignature() : renderSignaturePad()}
+        </div>
+
+        <div class="demo-btn-row">
+          ${locked ? "" : `<button id="lockBtn" class="demo-btn demo-btn-amber" disabled>Lock Gate &amp; Sign Off</button>`}
+          <button id="pdfBtn" class="demo-btn demo-btn-outline">Generate PMC WIR Pack (PDF)</button>
+        </div>
+        ${locked ? `<p class="demo-hint" style="margin-top:1rem;">Locked ${formatGST(wir.signOff.lockedAtIso)} · Verification hash: <span class="demo-hash">${wir.signOff.recordHash}</span></p>` : ""}
+      `;
+
+      renderChecklist(locked);
+      renderPhotos(locked);
+      if (!locked) wireInteractive();
+      document.getElementById("pdfBtn").addEventListener("click", onGeneratePdf);
+    }
+
+    function renderLockedSignature() {
+      const sig = wir.signOff.signature;
+      return `
+        ${sig?.dataUrl ? `<img src="${sig.dataUrl}" alt="Signature" style="max-width:220px; border:1px solid var(--rule); border-radius:6px; display:block; margin-bottom:0.5rem;">` : ""}
+        <p class="demo-hint" style="margin:0;">Signed by: <strong>${sig?.signedBy || "—"}</strong></p>
+        <p class="demo-hint">Signed: ${sig?.signedAtIso ? formatGST(sig.signedAtIso) : "—"}</p>
+      `;
+    }
+
+    function renderSignaturePad() {
+      return `
+        <label class="demo-hint" style="display:block;">Signing as (name)</label>
+        <input id="signerName" type="text" placeholder="Full name" style="width:100%; max-width:320px; padding:0.5rem 0.7rem; border:1px solid var(--rule); border-radius:6px; margin-bottom:0.7rem;" value="S. Patel">
+        <p class="demo-hint" style="margin:0 0 0.4rem;">Draw signature below — signing as SAP / Lead Commissioning Engineer</p>
+        <canvas id="sigCanvas"></canvas>
+        <button id="clearSigBtn" type="button" class="demo-btn demo-btn-outline" style="margin-top:0.5rem;">Clear</button>
+      `;
+    }
+
+    function renderChecklist(locked) {
+      const ul = document.getElementById("checklist");
+      ul.innerHTML = wir.signOff.checklist
+        .map(
+          (item) => `
+        <li>
+          <input type="checkbox" data-item="${item.id}" ${item.checked ? "checked" : ""} ${locked ? "disabled" : ""}>
+          <span>${item.label}</span>
+        </li>`
+        )
+        .join("");
+    }
+
+    function renderPhotos(locked) {
+      const grid = document.getElementById("photoGrid");
+      grid.innerHTML = wir.signOff.photos
+        .map(
+          (p) => `
+        <div>
+          <img class="demo-photo-thumb" src="${p.dataUrl}">
+          <p class="demo-hash">${shortHash(p.hash)}</p>
+        </div>`
+        )
+        .join("") || `<p class="demo-hint">No photo evidence attached yet.</p>`;
+    }
+
+    function wireInteractive() {
+      document.querySelectorAll("#checklist input[type=checkbox]").forEach((cb) => {
+        cb.addEventListener("change", () => {
+          const item = wir.signOff.checklist.find((c) => c.id === cb.dataset.item);
+          if (item) item.checked = cb.checked;
+          saveState(state);
+          updateLockButton();
+        });
+      });
+
+      const photoInput = document.getElementById("photoInput");
+      if (photoInput) {
+        photoInput.addEventListener("change", async () => {
+          const file = photoInput.files[0];
+          if (!file) return;
+          const { dataUrl, hash } = await watermarkPhoto(file, { assetTag: wir.assetTag, timestampIso: new Date().toISOString() });
+          wir.signOff.photos.push({ id: `photo-${Date.now()}`, assetTag: wir.assetTag, takenAtIso: new Date().toISOString(), hash, dataUrl });
+          saveState(state);
+          renderPhotos(false);
+          photoInput.value = "";
+          updateLockButton();
+        });
+      }
+
+      const canvas = document.getElementById("sigCanvas");
+      const clearBtn = document.getElementById("clearSigBtn");
+      sigPad = initSignaturePad(canvas, { clearButton: clearBtn });
+      canvas.addEventListener("pointerup", updateLockButton);
+      canvas.addEventListener("pointerdown", updateLockButton);
+      document.getElementById("signerName").addEventListener("input", updateLockButton);
+      clearBtn.addEventListener("click", updateLockButton);
+
+      document.getElementById("lockBtn").addEventListener("click", onLock);
+      updateLockButton();
+    }
+
+    function updateLockButton() {
+      const btn = document.getElementById("lockBtn");
+      if (!btn) return;
+      const allChecked = wir.signOff.checklist.every((c) => c.checked);
+      const hasPhoto = wir.signOff.photos.length > 0;
+      const name = document.getElementById("signerName")?.value.trim();
+      const signed = sigPad?.hasStroke();
+      btn.disabled = !(allChecked && hasPhoto && name && signed);
+    }
+
+    async function onLock() {
+      const name = document.getElementById("signerName").value.trim();
+      const signatureDataUrl = sigPad.toDataURL();
+      const nowIso = new Date().toISOString();
+      const canonical = JSON.stringify({
+        id: wir.id,
+        assetTag: wir.assetTag,
+        checklist: wir.signOff.checklist.map((c) => ({ id: c.id, checked: c.checked })),
+        photoHashes: wir.signOff.photos.map((p) => p.hash),
+        signedBy: name,
+        signedAtIso: nowIso,
+      });
+      const recordHash = await sha256Hex(canonical);
+
+      wir.signOff.signature = { dataUrl: signatureDataUrl, signedBy: `${name} — SAP / Lead Commissioning Engineer`, signedAtIso: nowIso };
+      wir.signOff.lockedAtIso = nowIso;
+      wir.signOff.recordHash = recordHash;
+      wir.status = "approved";
+      saveState(state);
+      render();
+    }
+
+    async function onGeneratePdf() {
+      const btn = document.getElementById("pdfBtn");
+      const original = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = "Building PDF…";
+      try {
+        const doc = await generateWirPackPdf({ project: state.project, wir });
+        const blobUrl = doc.output("bloburl");
+        showPdfModal(blobUrl, `${wir.id}-PMC-WIR-Pack.pdf`);
+      } catch (err) {
+        alert(err.message || "Could not generate the PDF.");
+      } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    }
+
+    function showPdfModal(blobUrl, filename) {
+      const backdrop = document.createElement("div");
+      backdrop.className = "demo-modal-backdrop";
+      backdrop.innerHTML = `
+        <div class="demo-modal">
+          <div class="demo-modal-head">
+            <strong>${filename}</strong>
+            <button class="demo-btn demo-btn-outline" id="closeModalBtn">Close</button>
+          </div>
+          <div class="demo-modal-body"><iframe src="${blobUrl}" title="WIR pack preview"></iframe></div>
+          <div class="demo-modal-foot">
+            <a class="demo-btn demo-btn-amber" href="${blobUrl}" download="${filename}">Download PDF</a>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(backdrop);
+      backdrop.querySelector("#closeModalBtn").addEventListener("click", () => backdrop.remove());
+      backdrop.addEventListener("click", (e) => { if (e.target === backdrop) backdrop.remove(); });
+    }
+  }
+</script>
+</body>
+</html>

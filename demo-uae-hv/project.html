@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>Al Marjan Island HV Package — The Site Office UAE HV Demo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/demo.css">
+</head>
+<body>
+<div class="demo-banner">Demonstration environment — synthetic data only — not linked from the production app</div>
+<header id="demo-header">
+  <div class="demo-header-inner">
+    <div>
+      <div class="demo-brand">THE SITE <span>OFFICE</span></div>
+      <div class="demo-project-name" id="projectName">—</div>
+    </div>
+    <div style="display:flex; align-items:center; gap:1rem; flex-wrap:wrap;">
+      <div class="demo-gst-clock" id="gstClock">—</div>
+      <button id="exportZipBtn" class="demo-btn demo-btn-amber">Export UAE Decennial Liability Archive (.ZIP)</button>
+      <button id="resetBtn" class="demo-btn demo-btn-ghost">Reset Demo Data</button>
+    </div>
+  </div>
+</header>
+
+<main class="demo-page">
+  <div class="demo-page-title">Project Overview</div>
+  <p class="demo-page-sub" id="projectSub">—</p>
+
+  <div class="demo-section-title">Work Inspection Requests (WIR Hold-Point Gates)</div>
+  <div class="demo-card-grid" id="wirGrid"></div>
+
+  <div class="demo-section-title">Non-Conformance Reports (NCRs)</div>
+  <div class="demo-card-grid" id="ncrGrid"></div>
+
+  <div class="demo-section-title">Site Instructions &amp; Variation Events</div>
+  <div class="demo-card-grid" id="varGrid"></div>
+</main>
+
+<script type="module">
+  import { loadState, saveState, resetState } from "./js/demo-data.js";
+  import { formatGST, requireAccess, watermarkPhoto, exportDecennialArchiveZip } from "./js/demo-app.js";
+
+  const WIR_BADGE = { approved: ["demo-badge-approved", "Approved / Signed Off"], pending_signoff: ["demo-badge-pending", "Pending SAP / Client QA Sign-off"], in_progress: ["demo-badge-progress", "In Progress"] };
+
+  if (requireAccess()) {
+    let state = loadState();
+    render();
+    tickClock();
+    setInterval(tickClock, 1000);
+
+    function tickClock() {
+      document.getElementById("gstClock").textContent = formatGST(new Date());
+    }
+
+    function render() {
+      document.getElementById("projectName").textContent = state.project.name;
+      document.getElementById("projectSub").textContent =
+        `${state.project.location} · Client: ${state.project.client} · PMC: ${state.project.pmc} · Primary substation asset: ${state.project.primarySubstationAssetTag}`;
+      renderWirs();
+      renderNcrs();
+      renderVariations();
+    }
+
+    function renderWirs() {
+      const grid = document.getElementById("wirGrid");
+      grid.innerHTML = "";
+      for (const wir of state.wirs) {
+        const [badgeClass, badgeLabel] = WIR_BADGE[wir.status] || ["demo-badge-progress", wir.status];
+        const checkedCount = wir.signOff.checklist.filter((c) => c.checked).length;
+        const card = document.createElement("div");
+        card.className = "demo-card";
+        card.innerHTML = `
+          <span class="demo-badge ${badgeClass}">${badgeLabel}</span>
+          <h3 style="margin-top:0.5rem;">${wir.id}</h3>
+          <p class="demo-meta">${wir.title}</p>
+          <span class="demo-asset-tag">${wir.assetTag}</span>
+          <p class="demo-hint">${checkedCount}/${wir.signOff.checklist.length} checklist items complete</p>
+          <a class="demo-btn demo-btn-outline" href="wir-detail.html?id=${encodeURIComponent(wir.id)}" style="margin-top:0.6rem;">Open WIR</a>
+        `;
+        grid.appendChild(card);
+      }
+    }
+
+    function renderNcrs() {
+      const grid = document.getElementById("ncrGrid");
+      grid.innerHTML = "";
+      for (const ncr of state.ncrs) {
+        const badgeClass = ncr.status === "closed" ? "demo-badge-closed" : "demo-badge-open";
+        const card = document.createElement("div");
+        card.className = "demo-card";
+        card.innerHTML = `
+          <span class="demo-badge ${badgeClass}">${ncr.status}</span>
+          <h3 style="margin-top:0.5rem;">${ncr.id}</h3>
+          <p class="demo-meta">${ncr.title}</p>
+          <span class="demo-asset-tag">${ncr.assetTag}</span>
+          <p class="demo-hint">${ncr.description}</p>
+          <p class="demo-hint">Raised by ${ncr.raisedBy} — ${formatGST(ncr.raisedAtIso)}</p>
+          <div style="display:flex; gap:0.8rem; flex-wrap:wrap; margin-top:0.6rem;">
+            <div>
+              <div class="demo-hint" style="margin:0;">Before</div>
+              ${ncr.beforePhoto ? `<img class="demo-photo-thumb" src="${ncr.beforePhoto.dataUrl}">` : `<input type="file" accept="image/*" data-ncr="${ncr.id}" data-slot="beforePhoto" class="ncrPhotoInput">`}
+            </div>
+            <div>
+              <div class="demo-hint" style="margin:0;">After</div>
+              ${ncr.afterPhoto ? `<img class="demo-photo-thumb" src="${ncr.afterPhoto.dataUrl}">` : `<input type="file" accept="image/*" data-ncr="${ncr.id}" data-slot="afterPhoto" class="ncrPhotoInput">`}
+            </div>
+          </div>
+          ${ncr.status !== "closed" && ncr.beforePhoto && ncr.afterPhoto ? `<button class="demo-btn demo-btn-outline" data-close-ncr="${ncr.id}" style="margin-top:0.6rem;">Mark as Closed</button>` : ""}
+        `;
+        grid.appendChild(card);
+      }
+      grid.querySelectorAll(".ncrPhotoInput").forEach((input) => {
+        input.addEventListener("change", onNcrPhoto);
+      });
+      grid.querySelectorAll("[data-close-ncr]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const ncr = state.ncrs.find((n) => n.id === btn.dataset.closeNcr);
+          if (ncr) {
+            ncr.status = "closed";
+            saveState(state);
+            renderNcrs();
+          }
+        });
+      });
+    }
+
+    async function onNcrPhoto(e) {
+      const input = e.target;
+      const file = input.files[0];
+      if (!file) return;
+      const ncr = state.ncrs.find((n) => n.id === input.dataset.ncr);
+      if (!ncr) return;
+      const slot = input.dataset.slot;
+      const { dataUrl, hash } = await watermarkPhoto(file, { assetTag: ncr.assetTag, timestampIso: new Date().toISOString() });
+      ncr[slot] = { dataUrl, hash, takenAtIso: new Date().toISOString() };
+      saveState(state);
+      renderNcrs();
+    }
+
+    function renderVariations() {
+      const grid = document.getElementById("varGrid");
+      grid.innerHTML = "";
+      for (const v of state.variations) {
+        const card = document.createElement("div");
+        card.className = "demo-card";
+        card.innerHTML = `
+          <h3>${v.id} — ${v.title}</h3>
+          <span class="demo-asset-tag">${v.assetTag}</span>
+          <p class="demo-hint">Logged ${formatGST(v.loggedAtIso)} · Status: ${v.status.replace("_", " ")}</p>
+          <p class="demo-meta" style="font-style:italic; margin-top:0.5rem;">Voice note transcript: ${v.transcript}</p>
+          <p class="demo-meta" style="margin-top:0.4rem;"><strong>${v.claim}</strong></p>
+        `;
+        grid.appendChild(card);
+      }
+    }
+
+    document.getElementById("resetBtn").addEventListener("click", () => {
+      if (!confirm("Reset all demo data back to the original seed? Any sign-offs, photos or NCR closures made in this demo will be lost.")) return;
+      state = resetState();
+      render();
+    });
+
+    document.getElementById("exportZipBtn").addEventListener("click", async (e) => {
+      const btn = e.currentTarget;
+      const original = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = "Building archive…";
+      try {
+        await exportDecennialArchiveZip(state);
+      } catch (err) {
+        alert(err.message || "Could not build the archive.");
+      } finally {
+        btn.disabled = false;
+        btn.textContent = original;
+      }
+    });
+  }
+</script>
+</body>
+</html>
