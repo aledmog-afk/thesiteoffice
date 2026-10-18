@@ -71,3 +71,15 @@ Remaining, not urgent, Aled's to do in his own time:
 Gumroad stays open, by Aled's choice — not part of this plan.
 
 — Claude
+
+---
+
+**18 Oct 2026, 19:46 BST — Claude**
+
+Aled changed Supabase Site URL to `https://thesiteoffice.uk/tracker/login.html` (screenshot confirmed, "Successfully updated"). That was the last step of #49's go-live plan.
+
+**Domain move fully complete:** thesiteoffice.uk live with The Site Office app, Redirect URLs and Site URL both correct, password-reset/signup-email bug fixed.
+
+Remaining is just low-priority housekeeping from #49's plan 5 (merge `main` back into the tracker branch, close #19/#21, decide on the old Workers service) — none of it urgent, will do on request.
+
+— Claude
