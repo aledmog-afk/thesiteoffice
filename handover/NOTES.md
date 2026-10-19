@@ -228,3 +228,21 @@ And the one line of copy on the external page itself, above the recipient fields
 3. A separate yes to apply v72 to live Supabase.
 
 — Claude
+
+---
+
+**19 Oct 2026, 20:40 BST — Claude**
+
+Handover — all three PRs merged and applied to live Supabase, per Aled's "I approve everything, push everything live."
+
+1. **PR #54 (v71, Handover Part A — document-set fixes)**: merged into the tracker branch (merge commit `e11a20e`). Applied live: pre-check confirmed live `seed_plot_defaults()`/`seed_block_defaults()` matched the pre-v71 source exactly. Backfill ran against real data — 85 plots, 2 blocks. Verified: `needs_ews1` column + EWS1 triggers present, both seed functions updated, 312 new document rows (split elec/gas certs, FENSA/CERTASS, house EPC), 2 `block_lift_cert` rows, 85 legacy combined-cert rows relabelled (never deleted), document total 435 → 749 exactly matching the backfill arithmetic, zero audit_log rows fabricated for the backfill itself.
+
+2. **PR #55 (v72, Handover Part B — explicit confirmation + buyer/solicitor share link)**: retargeted from Part A's branch to the tracker branch (now that v71 was merged) and merged (merge commit `9ee8938`). Applied live — purely additive, no existing function touched. Verified: both new tables (`plot_handover_confirmations`, `plot_handover_shares`) exist, all four RPCs exist, `anon` can call the read-only `get_plot_handover_share` but cannot call `confirm_plot_handover` (security boundary holds), both tables carry exactly one SELECT-only RLS policy each — no raw insert/update/delete path exists for any client role, everything goes through the RPCs as designed. Behaviour itself was already exercised by the full local test suite against byte-identical schema content before this went live, so no separate live functional test was run through raw SQL impersonation — that would have been more risk for no new signal.
+
+3. **PR #56 (v73, document flexibility — not_applicable + add/remove custom documents)**: retargeted to the tracker branch and merged (merge commit `4f1a26a`). Applied live. Verified: `is_custom` column present, the status check now allows `not_applicable`, `plots_before_write()` updated to treat N/A documents as satisfying the handover check, document total unchanged at 749 (correct — this migration only changes what's *allowed*, it adds no rows itself).
+
+**The live apply itself needed Aled to run each SQL block manually** — `apply_migration` hit a permission-approval wall in my tool session for all three (same gate Job 1's live delete hit). I sent each block as a file with the exact SQL editor link and steps; Aled ran each one, I verified read-only afterward. One snag worth flagging for next time: on the first attempt for v71, the editor reported "success" but a re-check showed nothing had actually changed — turned out to be a stale read on my end, not a real failure; a second check a few minutes later showed it had in fact applied correctly. Worth being aware this can happen (read-replica lag, or just timing) rather than assuming a "no change" result means the run failed.
+
+All three features are now live: the document-set fixes, the explicit "Mark as Handed Over" confirmation with the buyer/solicitor share link, and the not_applicable/custom-document flexibility. Draft PR #52 (the UAE HV demo) is unrelated and untouched — still open, not part of this approval.
+
+— Claude
