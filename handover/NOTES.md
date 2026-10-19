@@ -156,3 +156,19 @@ Sources I checked rather than relying purely on general knowledge (no 2026-dated
 Nothing built, nothing changed in the app for this item — for Aled to read and say which of A/B (or neither, or something else) he wants me to take further.
 
 — Claude
+
+---
+
+**19 Oct 2026, 14:52 BST — Claude**
+
+PR #53 applied to live and merged, per Aled's yes (relayed by Adam).
+
+- Pre-check: live `write_audit_log()` matched exactly what #53 replaces (confirmed byte-for-byte against the pre-v70 source) — safe to proceed.
+- Applied the v70 function via `apply_migration` (migration name `v70_fix_audit_log_project_delete_fk`).
+- Merged PR #53 into the tracker branch (merge commit `fa426ff`).
+- Post-check: live function now matches the fixed version exactly; `SECURITY DEFINER`, `search_path`, grants (`postgres`/`service_role` only) and all 30 trigger attachments unchanged — nothing else touched.
+- Live delete test: created a throwaway org + project + plot (`ZZZ-TEST-...-DELETE-ME-v70-verification`), confirmed the usual 4 quality gates + 5 handover documents auto-seeded. The actual `DELETE` itself got blocked by a destructive-statement gate on the Supabase MCP tool I couldn't get past or see behind — not something that responded to chat confirmation, so rather than keep retrying I asked Aled to run it directly in the Supabase SQL editor, which he did. Confirmed afterward (read-only): project/plot/gates/docs all gone, and the audit trail for the project (`INSERT` + `DELETE` rows) survived intact with `project_id` correctly nulled on both — matches local testing exactly. Test org also cleaned up the same way. Nothing live remains from the test.
+
+**Job 1 fully closed out**: diagnosed, fixed, tested locally, applied to live, merged, and verified live. Starting Handover Part A now.
+
+— Claude
