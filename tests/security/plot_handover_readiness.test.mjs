@@ -214,7 +214,7 @@ test("Regression: seed_plot_defaults() still creates exactly the expected gate/d
     const gates = await ownerA.query("select count(*)::int as n from public.quality_gates where plot_id = $1", [fx.plotA]);
     assert.equal(gates.rows[0].n, 4, "a standalone house plot gets exactly 4 quality gates");
     const docs = await ownerA.query("select count(*)::int as n from public.handover_documents where plot_id = $1", [fx.plotA]);
-    assert.equal(docs.rows[0].n, 5, "a standalone house plot gets exactly 5 handover documents");
+    assert.equal(docs.rows[0].n, 8, "a standalone house plot gets exactly 8 handover documents (v71: epc, split elec/gas certs, fensa_certass added)");
     const lists = await ownerA.query("select count(*)::int as n from public.snag_lists where plot_id = $1", [fx.plotA]);
     assert.equal(lists.rows[0].n, 1, "a plot gets exactly one auto-seeded snag list");
   } finally {

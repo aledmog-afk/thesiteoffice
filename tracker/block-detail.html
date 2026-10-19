@@ -43,6 +43,10 @@
 
   <h3 class="display-font" style="font-size:1.1rem; margin-bottom:1rem;">Handover Documents (Block)</h3>
   <div class="card" style="margin-bottom:2.5rem;">
+    <label style="display:flex; align-items:center; gap:0.5rem; margin-bottom:1rem; font-size:0.9rem;">
+      <input type="checkbox" id="needsEws1Input">
+      This block needs an EWS1 (External Wall System) form
+    </label>
     <div class="table-wrap">
       <table>
         <thead>
@@ -265,6 +269,27 @@
     }
   });
 
+  // ─── EWS1 flag (v71) ────────────────────────────────────────────
+  // Toggling this on triggers seed_block_ews1_document() server-side,
+  // which adds the EWS1 handover_documents row — see sql/schema.sql.
+  // Toggling it back off never removes that row once created (same
+  // "nothing already created gets deleted" rule as everywhere else).
+  document.getElementById("needsEws1Input").addEventListener("change", async (e) => {
+    const checked = e.target.checked;
+    e.target.disabled = true;
+    try {
+      const { error } = await supabase.from("blocks").update({ needs_ews1: checked }).eq("id", blockId);
+      if (error) throw error;
+      block.needs_ews1 = checked;
+      await loadDocs();
+    } catch (err) {
+      showError(errorBox, err);
+      e.target.checked = !checked;
+    } finally {
+      e.target.disabled = false;
+    }
+  });
+
   // ─── Flats within this block ──────────────────────────────────────
   async function createFlat() {
     const spec = prompt("Flat plot number(s) — a single number, a comma list (23,25,28), or a range (23-30):", "");
@@ -358,6 +383,7 @@
     document.getElementById("blockTitle").textContent = block.block_name;
     document.getElementById("projectSub").textContent = project.name;
     document.getElementById("blockProgressInput").value = block.progress_pct || 0;
+    document.getElementById("needsEws1Input").checked = !!block.needs_ews1;
     renderHeader([
       { label: "Dashboard", href: "dashboard.html" },
       { label: project.name, href: `project.html?id=${project.id}` },
