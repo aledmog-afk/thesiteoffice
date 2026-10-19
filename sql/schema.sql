@@ -14723,3 +14723,483 @@ from public.blocks b
 on conflict (block_id, doc_key) do nothing;
 
 alter table public.handover_documents enable trigger trg_audit_handover_documents;
+
+-- v72 ADDITIONS: Handover Part B — an explicit handover confirmation
+-- event (planning doc + Part A posted to the handover notes 19 Oct
+-- 2026). Closes the gap Job 2's review flagged: handed_over_at was
+-- only ever auto-stamped the instant readiness turned ready/at_risk
+-- (checkAndMarkPlotHandedOver(), called after every gate/document
+-- status change on plot-detail.html) — no one ever explicitly decided
+-- "this plot is handed over", and nothing recorded the state of
+-- gates/documents/snags, meter readings or a key log AT that moment.
+-- handed_over_at itself stays exactly as immutable as it already was
+-- (plots_before_write(), v53) — this migration adds a deliberate,
+-- auditable event on top of it, it does not change the immutability
+-- rule at all.
+--
+-- Architecture mirrors the Commercial module's external-approval
+-- pattern (v50/v62, commercial_approval_requests) deliberately, rather
+-- than inventing a new one:
+--   - plot_handover_confirmations: one immutable row per plot, written
+--     exactly once by confirm_plot_handover() (SECURITY DEFINER). No
+--     insert/update/delete policy exists for any client role — the
+--     RPC is the only write path, identical to how
+--     commercial_approval_requests/commercial_signatures are insert-
+--     only-via-RPC. A sha256 content_hash over the snapshot (gates +
+--     documents + snags + meter readings + key log) gives the same
+--     tamper-evidence the Commercial module already relies on.
+--   - plot_handover_shares: the optional external (buyer/solicitor)
+--     link. A 256-bit random token, generated server-side and
+--     returned ONCE to the internal caller; only its sha256 hash is
+--     ever stored (plot_handover_share_token_hash(), the one place
+--     that algorithm lives). anon has zero RLS grants on either new
+--     table — every anon-facing read goes through
+--     get_plot_handover_share(p_token), a SECURITY DEFINER RPC that
+--     re-derives the hash itself and returns a curated jsonb blob
+--     only, never raw rows. bound_content_hash is captured at link-
+--     creation time and re-verified (not merely trusted) against the
+--     confirmation's own content_hash on every read — defense in
+--     depth, even though a confirmation can never itself change after
+--     the fact.
+--   - Unlike Commercial's approval link, there is no external
+--     "approve/reject" action here at all: the buyer/solicitor link is
+--     read-only (view/print/download the handover pack). Nothing is
+--     ever sent automatically to any recipient — exactly like
+--     requestCommercialApproval() in tracker/js/app.js, the app only
+--     ever generates the link and a mailto: draft for a human to send
+--     from their own email client; see tracker/plot-handover-share.html
+--     and the app.js changes alongside this migration.
+--   - confirm_plot_handover() does not duplicate the readiness-blocker
+--     checks — it issues a plain `update plots set handed_over_at =
+--     now()`, which plots_before_write() (v53) already validates and
+--     enforces exactly as it does for any other caller. If that
+--     update raises, the whole function raises with it and no
+--     confirmation row is ever written for a plot that was not
+--     actually ready.
+
+-- Single place the token-hashing algorithm lives (external share
+-- links only — confirmations themselves have no token).
+create or replace function public.plot_handover_share_token_hash(p_token text)
+returns text
+language sql
+immutable
+set search_path = public, extensions
+as $$
+  select encode(digest(p_token, 'sha256'), 'hex');
+$$;
+-- Not SECURITY DEFINER, but still subject to the same default-ACL
+-- auto-grant as every other new function in this project — see the
+-- identical revoke pair beside commercial_approval_token_hash() (v63's
+-- anon lockdown pass). No caller ever needs to hash a token directly
+-- except the RPCs below, and they call this as their own definer
+-- (table owner), which always has EXECUTE on its own functions
+-- regardless of these grants.
+revoke all on function public.plot_handover_share_token_hash(text) from public;
+revoke execute on function public.plot_handover_share_token_hash(text) from anon;
+
+create table if not exists public.plot_handover_confirmations (
+  id uuid primary key default gen_random_uuid(),
+  plot_id uuid not null references public.plots(id) on delete cascade,
+  -- Denormalized, trigger-independent — set directly by the RPC, never
+  -- client-writable (there is no client insert path at all), same
+  -- reasoning write_audit_log()'s generic branch and every other
+  -- commercial table in this schema already relies on.
+  project_id uuid not null references public.projects(id) on delete cascade,
+  org_id uuid references public.organisations(id),
+  confirmed_by uuid references auth.users(id) on delete set null,
+  confirmed_at timestamptz not null default now(),
+  -- Mirrors commercial_signatures' own shape: a typed name is always
+  -- required (the same already-required confirming user's name doubles
+  -- as the typed attestation when no drawing is supplied — see
+  -- commercial_approval_requests' signer fields for the identical
+  -- reasoning), signature_data holds a drawn signature image (data
+  -- URL) when one was captured, null otherwise. Stored here (not left
+  -- ephemeral in the browser) so the handover PDF can be faithfully
+  -- regenerated later — e.g. for the buyer/solicitor share link — not
+  -- just downloaded once at confirmation time.
+  signed_by_name text not null,
+  signature_data text,
+  gates_snapshot jsonb not null default '[]'::jsonb,
+  documents_snapshot jsonb not null default '[]'::jsonb,
+  snags_snapshot jsonb not null default '[]'::jsonb,
+  meter_readings jsonb not null default '[]'::jsonb,
+  key_log jsonb not null default '[]'::jsonb,
+  content_hash text not null
+);
+
+-- One confirmation per plot, ever — handed_over_at is a one-time event
+-- (plots_before_write()) and this is its permanent record.
+create unique index if not exists plot_handover_confirmations_plot_idx on public.plot_handover_confirmations (plot_id);
+create index if not exists plot_handover_confirmations_project_idx on public.plot_handover_confirmations (project_id);
+
+alter table public.plot_handover_confirmations enable row level security;
+drop policy if exists "members read plot_handover_confirmations" on public.plot_handover_confirmations;
+create policy "members read plot_handover_confirmations" on public.plot_handover_confirmations for select to authenticated using (
+  public.is_project_member(project_id)
+);
+-- Deliberately NO insert/update/delete policy for any client role —
+-- the only write path is confirm_plot_handover() below (SECURITY
+-- DEFINER, bypasses RLS), so a client can never fabricate, backdate or
+-- edit a handover confirmation via a raw insert/update.
+
+drop trigger if exists trg_audit_plot_handover_confirmations on public.plot_handover_confirmations;
+create trigger trg_audit_plot_handover_confirmations
+  after insert or update or delete on public.plot_handover_confirmations
+  for each row execute function public.write_audit_log();
+
+create table if not exists public.plot_handover_shares (
+  id uuid primary key default gen_random_uuid(),
+  confirmation_id uuid not null references public.plot_handover_confirmations(id) on delete cascade,
+  plot_id uuid not null references public.plots(id) on delete cascade,
+  project_id uuid not null references public.projects(id) on delete cascade,
+  org_id uuid references public.organisations(id),
+  recipient_name text,
+  recipient_email text,
+  token_hash text not null unique,
+  status text not null default 'pending' check (status in ('pending', 'viewed', 'expired', 'revoked')),
+  -- The exact confirmation content being shared, bound at link-creation
+  -- time and re-verified (never re-derived and silently accepted) at
+  -- read time — see get_plot_handover_share() below.
+  bound_content_hash text not null,
+  expires_at timestamptz not null,
+  viewed_at timestamptz,
+  revoked_at timestamptz,
+  revoked_by uuid references auth.users(id) on delete set null,
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- At most one ACTIVE (pending/viewed) share link per confirmation — a
+-- second concurrent "create link" attempt hits this constraint rather
+-- than silently producing two live links for the same plot.
+create unique index if not exists plot_handover_shares_one_active_idx
+  on public.plot_handover_shares (confirmation_id)
+  where status in ('pending', 'viewed');
+create index if not exists plot_handover_shares_confirmation_idx on public.plot_handover_shares (confirmation_id);
+create index if not exists plot_handover_shares_project_idx on public.plot_handover_shares (project_id);
+create index if not exists plot_handover_shares_token_hash_idx on public.plot_handover_shares (token_hash);
+
+alter table public.plot_handover_shares enable row level security;
+drop policy if exists "members read plot_handover_shares" on public.plot_handover_shares;
+create policy "members read plot_handover_shares" on public.plot_handover_shares for select to authenticated using (
+  public.is_project_member(project_id)
+);
+-- Same insert-only-via-RPC shape as plot_handover_confirmations above
+-- (and commercial_approval_requests before it) — no insert/update/
+-- delete policy for any client role; anon gets no policy at all.
+
+drop trigger if exists trg_audit_plot_handover_shares on public.plot_handover_shares;
+create trigger trg_audit_plot_handover_shares
+  after insert or update or delete on public.plot_handover_shares
+  for each row execute function public.write_audit_log();
+
+-- ─── Internal (authenticated-only) RPCs ────────────────────────────────
+
+-- The ONLY path that may ever set plots.handed_over_at or write a
+-- plot_handover_confirmations row. Takes the meter readings and key
+-- log captured on the "Mark as Handed Over" screen as plain jsonb
+-- arrays (shape is validated client-side; this function trusts its
+-- caller's own project-editor permission check, not the shape, since
+-- malformed jsonb here can corrupt nothing it doesn't already own).
+create or replace function public.confirm_plot_handover(
+  p_plot_id uuid,
+  p_signer_name text,
+  p_meter_readings jsonb default '[]'::jsonb,
+  p_key_log jsonb default '[]'::jsonb,
+  p_signature_data text default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_plot public.plots%rowtype;
+  v_org_id uuid;
+  v_gates jsonb;
+  v_docs jsonb;
+  v_snags jsonb;
+  v_content_hash text;
+  v_confirmation_id uuid;
+  v_confirmed_at timestamptz;
+begin
+  select * into v_plot from public.plots where plots.id = p_plot_id;
+  if v_plot.id is null then
+    raise exception 'Plot not found';
+  end if;
+
+  -- "is not true", not a bare "not ..." — see the identical reasoning
+  -- on can_edit_commercial() throughout the Commercial module: this
+  -- SECURITY DEFINER function's own SELECT above already bypassed RLS
+  -- to read the plot at all, so this is the only real gate, and a bare
+  -- "not" would treat is_project_editor()'s NULL (no grant, not false)
+  -- as "condition false", silently skipping the raise.
+  if public.is_project_editor(v_plot.project_id) is not true then
+    raise exception 'You do not have permission to confirm handover on this plot';
+  end if;
+
+  if v_plot.handed_over_at is not null then
+    raise exception 'This plot was already handed over on %', v_plot.handed_over_at;
+  end if;
+
+  if exists (select 1 from public.plot_handover_confirmations where plot_id = p_plot_id) then
+    raise exception 'A handover confirmation already exists for this plot';
+  end if;
+
+  if p_signer_name is null or trim(p_signer_name) = '' then
+    raise exception 'The confirming user''s name is required';
+  end if;
+  if p_meter_readings is not null and jsonb_typeof(p_meter_readings) <> 'array' then
+    raise exception 'Meter readings must be a list';
+  end if;
+  if p_key_log is not null and jsonb_typeof(p_key_log) <> 'array' then
+    raise exception 'Key log must be a list';
+  end if;
+
+  -- The actual readiness enforcement (outstanding gates/documents,
+  -- open high-priority overdue snags, blocked/overdue actions,
+  -- unresolved critical findings) lives entirely in
+  -- plots_before_write() (v53) and fires on this UPDATE — no duplicate
+  -- logic here. If the plot isn't genuinely ready, this raises and the
+  -- whole function aborts before any confirmation row is written.
+  update public.plots set handed_over_at = now() where id = p_plot_id
+    returning handed_over_at into v_confirmed_at;
+
+  select org_id into v_org_id from public.projects where id = v_plot.project_id;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+    'gate_key', gate_key, 'title', title, 'status', status, 'checklist', checklist
+  ) order by sort_order), '[]'::jsonb) into v_gates
+  from public.quality_gates where plot_id = p_plot_id;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+    'doc_key', doc_key, 'title', title, 'status', status, 'file_name', file_name, 'updated_at', updated_at
+  ) order by doc_key), '[]'::jsonb) into v_docs
+  from public.handover_documents where plot_id = p_plot_id;
+
+  -- Same snag_lists indirection as plots_before_write()'s own blocker
+  -- check above (coalesce(si.plot_id, sl.plot_id)) — a plot's own
+  -- auto-seeded list is the normal path; snag_items.plot_id itself is
+  -- only populated for the rarer general/site-wide list's per-item tag.
+  select coalesce(jsonb_agg(jsonb_build_object(
+    'description', si.description, 'location', si.location, 'priority', si.priority,
+    'status', si.status, 'due_date', si.due_date
+  ) order by si.item_no), '[]'::jsonb) into v_snags
+  from public.snag_items si
+  left join public.snag_lists sl on sl.id = si.snag_list_id
+  where coalesce(si.plot_id, sl.plot_id) = p_plot_id;
+
+  v_content_hash := encode(digest(
+    coalesce(v_gates::text, '') || coalesce(v_docs::text, '') || coalesce(v_snags::text, '') ||
+    coalesce(p_meter_readings::text, '[]') || coalesce(p_key_log::text, '[]'),
+    'sha256'
+  ), 'hex');
+
+  insert into public.plot_handover_confirmations (
+    plot_id, project_id, org_id, confirmed_by, confirmed_at, signed_by_name, signature_data,
+    gates_snapshot, documents_snapshot, snags_snapshot, meter_readings, key_log, content_hash
+  ) values (
+    p_plot_id, v_plot.project_id, v_org_id, auth.uid(), v_confirmed_at, trim(p_signer_name), p_signature_data,
+    v_gates, v_docs, v_snags, coalesce(p_meter_readings, '[]'::jsonb), coalesce(p_key_log, '[]'::jsonb), v_content_hash
+  ) returning id into v_confirmation_id;
+
+  return jsonb_build_object(
+    'id', v_confirmation_id,
+    'confirmed_at', v_confirmed_at,
+    'signed_by_name', trim(p_signer_name),
+    'signature_data', p_signature_data,
+    'content_hash', v_content_hash,
+    'gates_snapshot', v_gates,
+    'documents_snapshot', v_docs,
+    'snags_snapshot', v_snags,
+    'meter_readings', coalesce(p_meter_readings, '[]'::jsonb),
+    'key_log', coalesce(p_key_log, '[]'::jsonb)
+  );
+end;
+$$;
+-- This project's ALTER DEFAULT PRIVILEGES entry auto-grants EXECUTE to
+-- anon AND authenticated on every newly created function regardless of
+-- a later `revoke all ... from public` — see the identical comment
+-- beside request_commercial_approval() (v50). Both REVOKE lines below
+-- are required; this RPC is internal/authenticated-only by design.
+revoke all on function public.confirm_plot_handover(uuid, text, jsonb, jsonb, text) from public;
+revoke execute on function public.confirm_plot_handover(uuid, text, jsonb, jsonb, text) from anon;
+grant execute on function public.confirm_plot_handover(uuid, text, jsonb, jsonb, text) to authenticated;
+
+create or replace function public.request_plot_handover_share(
+  p_plot_id uuid,
+  p_recipient_name text default null,
+  p_recipient_email text default null,
+  p_expiry_hours integer default 336
+)
+returns table (id uuid, token text, expires_at timestamptz)
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_plot public.plots%rowtype;
+  v_confirmation public.plot_handover_confirmations%rowtype;
+  v_token text;
+  v_share_id uuid;
+begin
+  select * into v_plot from public.plots where plots.id = p_plot_id;
+  if v_plot.id is null then
+    raise exception 'Plot not found';
+  end if;
+
+  if public.is_project_editor(v_plot.project_id) is not true then
+    raise exception 'You do not have permission to share this plot''s handover pack';
+  end if;
+
+  select * into v_confirmation from public.plot_handover_confirmations where plot_id = p_plot_id;
+  if v_confirmation.id is null then
+    raise exception 'This plot has not been handed over yet — confirm handover before creating a share link';
+  end if;
+
+  if p_expiry_hours is null or p_expiry_hours <= 0 or p_expiry_hours > 2160 then
+    raise exception 'Expiry must be between 1 hour and 90 days';
+  end if;
+
+  if exists (
+    select 1 from public.plot_handover_shares
+    where confirmation_id = v_confirmation.id and status in ('pending', 'viewed')
+  ) then
+    raise exception 'There is already an active share link for this plot — revoke it first, or wait for it to expire';
+  end if;
+
+  v_token := encode(gen_random_bytes(32), 'base64');
+
+  insert into public.plot_handover_shares (
+    confirmation_id, plot_id, project_id, org_id, recipient_name, recipient_email,
+    token_hash, bound_content_hash, expires_at, created_by
+  ) values (
+    v_confirmation.id, p_plot_id, v_plot.project_id,
+    -- "projects.id" is qualified here (and nowhere else in this
+    -- function needs it) because this function's own `returns table
+    -- (id uuid, ...)` implicitly declares an OUT parameter also named
+    -- "id", which would otherwise make a bare `id` ambiguous against
+    -- projects.id — see the identical, more detailed comment on
+    -- request_commercial_approval() (v50).
+    (select org_id from public.projects where projects.id = v_plot.project_id),
+    nullif(trim(coalesce(p_recipient_name, '')), ''), nullif(trim(coalesce(p_recipient_email, '')), ''),
+    public.plot_handover_share_token_hash(v_token), v_confirmation.content_hash,
+    now() + (p_expiry_hours || ' hours')::interval, auth.uid()
+  ) returning plot_handover_shares.id into v_share_id;
+
+  return query select v_share_id, v_token, (now() + (p_expiry_hours || ' hours')::interval);
+end;
+$$;
+revoke all on function public.request_plot_handover_share(uuid, text, text, integer) from public;
+revoke execute on function public.request_plot_handover_share(uuid, text, text, integer) from anon;
+grant execute on function public.request_plot_handover_share(uuid, text, text, integer) to authenticated;
+
+create or replace function public.revoke_plot_handover_share(p_share_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_project_id uuid;
+begin
+  select project_id into v_project_id from public.plot_handover_shares where id = p_share_id;
+  if v_project_id is null then
+    raise exception 'Share link not found';
+  end if;
+  if public.is_project_editor(v_project_id) is not true then
+    raise exception 'You do not have permission to revoke share links on this project';
+  end if;
+  update public.plot_handover_shares
+    set status = 'revoked', revoked_at = now(), revoked_by = auth.uid(), updated_at = now()
+    where id = p_share_id and status in ('pending', 'viewed');
+  if not found then
+    raise exception 'Only a pending or viewed share link can be revoked';
+  end if;
+end;
+$$;
+revoke all on function public.revoke_plot_handover_share(uuid) from public;
+revoke execute on function public.revoke_plot_handover_share(uuid) from anon;
+grant execute on function public.revoke_plot_handover_share(uuid) to authenticated;
+
+-- ─── External (anon-callable) RPC ──────────────────────────────────────
+-- Read-only: returns a curated jsonb blob only — never raw table rows.
+-- Unlike the Commercial approval link, there is nothing for an external
+-- recipient to approve/sign here, so this is the only anon-facing RPC
+-- this feature needs. Marks the link 'viewed' (from 'pending') as a
+-- side effect of the first genuine read, and lazily flips an overdue
+-- 'pending'/'viewed' link to 'expired'.
+create or replace function public.get_plot_handover_share(p_token text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_share public.plot_handover_shares%rowtype;
+  v_confirmation public.plot_handover_confirmations%rowtype;
+  v_plot public.plots%rowtype;
+  v_project_name text;
+  v_effective_status text;
+begin
+  if p_token is null or trim(p_token) = '' then
+    raise exception 'Invalid handover link';
+  end if;
+
+  select * into v_share from public.plot_handover_shares
+    where token_hash = public.plot_handover_share_token_hash(p_token);
+  if v_share.id is null then
+    raise exception 'Invalid handover link';
+  end if;
+
+  v_effective_status := v_share.status;
+  if v_effective_status in ('pending', 'viewed') and v_share.expires_at <= now() then
+    update public.plot_handover_shares set status = 'expired', updated_at = now()
+      where id = v_share.id and status in ('pending', 'viewed');
+    v_effective_status := 'expired';
+  elsif v_effective_status = 'pending' then
+    update public.plot_handover_shares set status = 'viewed', viewed_at = now(), updated_at = now()
+      where id = v_share.id and status = 'pending';
+    v_effective_status := 'viewed';
+  end if;
+
+  if v_effective_status in ('expired', 'revoked') then
+    -- No content for an expired/revoked link — just enough for the
+    -- page to show the right message.
+    return jsonb_build_object('status', v_effective_status);
+  end if;
+
+  select * into v_confirmation from public.plot_handover_confirmations where id = v_share.confirmation_id;
+
+  -- Defense in depth, matching get_commercial_approval_request(): a
+  -- confirmation can never actually change after the fact (no update/
+  -- delete policy or RPC exists for plot_handover_confirmations at
+  -- all), so this can never genuinely disagree — but re-derive and
+  -- compare rather than silently trust the stored bound hash.
+  if v_confirmation.content_hash is distinct from v_share.bound_content_hash then
+    raise exception 'Internal error: the handover record has changed since this link was created — refusing to display it';
+  end if;
+
+  select * into v_plot from public.plots where id = v_share.plot_id;
+  select name into v_project_name from public.projects where id = v_share.project_id;
+
+  return jsonb_build_object(
+    'status', v_effective_status,
+    'plot_number', v_plot.plot_number,
+    'project_name', v_project_name,
+    'confirmed_at', v_confirmation.confirmed_at,
+    'signed_by_name', v_confirmation.signed_by_name,
+    'signature_data', v_confirmation.signature_data,
+    'content_hash', v_confirmation.content_hash,
+    'gates_snapshot', v_confirmation.gates_snapshot,
+    'documents_snapshot', v_confirmation.documents_snapshot,
+    'snags_snapshot', v_confirmation.snags_snapshot,
+    'meter_readings', v_confirmation.meter_readings,
+    'key_log', v_confirmation.key_log,
+    'recipient_name', v_share.recipient_name
+  );
+end;
+$$;
+revoke all on function public.get_plot_handover_share(text) from public;
+grant execute on function public.get_plot_handover_share(text) to anon, authenticated;

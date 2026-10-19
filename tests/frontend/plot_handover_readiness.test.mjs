@@ -245,7 +245,7 @@ test("Combination: a blocker and several warnings together still resolve to Not 
 
 // ─── summarisePlotGates / summarisePlotDocuments ────────────────────
 
-test("summarisePlotGates: not_applicable counts as ready, matching checkAndMarkPlotHandedOver()'s own established rule exactly", () => {
+test("summarisePlotGates: not_applicable counts as ready, matching the server-side plots_before_write() blocker rule exactly", () => {
   const s = summarisePlotGates([gate("approved"), gate("not_applicable"), gate("not_started")]);
   assert.deepEqual(s, { total: 3, approved: 2, outstanding: 1 });
 });

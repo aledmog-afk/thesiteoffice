@@ -9,7 +9,7 @@
 // one anon can reach is part of the public attack surface.
 //
 // The ALLOWLIST CI GUARD below fails the build if anon can execute ANY
-// public SECURITY DEFINER function other than the 4 the external client
+// public SECURITY DEFINER function other than the 5 the external client
 // approval link genuinely needs. A new SECURITY DEFINER function must
 // either be added to the allowlist on purpose, or follow the convention:
 //   revoke all on function public.f(...) from public;
@@ -41,6 +41,11 @@ const ANON_ALLOWLIST = [
   "get_commercial_approval_request(text)",
   "reject_commercial_approval_request(text,text,text)",
   "resolve_commercial_approval_evidence(text,uuid)",
+  // v72 (Handover Part B): the read-only buyer/solicitor handover-pack
+  // link — mirrors get_commercial_approval_request() exactly (curated
+  // jsonb only, no approve/reject counterpart since there is nothing
+  // external to action here).
+  "get_plot_handover_share(text)",
 ].sort();
 
 // Internal functions v59 took away from anon. Each entry: signature as
@@ -154,7 +159,7 @@ after(async () => {
 });
 
 // ─── (1) Allowlist CI guard ──────────────────────────────────────────
-test("ALLOWLIST CI GUARD: the public SECURITY DEFINER functions anon can execute are EXACTLY the 4 client-approval-link RPCs", async () => {
+test("ALLOWLIST CI GUARD: the public SECURITY DEFINER functions anon can execute are EXACTLY the 5 client-approval-link RPCs", async () => {
   const admin = adminClient(DB);
   await admin.connect();
   const { rows } = await admin.query(ANON_EXECUTABLE_DEFINER_SQL);
@@ -185,7 +190,7 @@ test("ALLOWLIST CI GUARD holds even with Supabase's default-ACL auto-grant (EXEC
   await admin.end();
   assert.deepEqual(first, ANON_ALLOWLIST);
   assert.deepEqual(second, ANON_ALLOWLIST, "a re-run of schema.sql must not hand anon its grants back");
-  assert.deepEqual(firstAny, ANON_ALLOWLIST, "v63: with the default-ACL auto-grant, anon must still reach only the 4 approval-link functions");
+  assert.deepEqual(firstAny, ANON_ALLOWLIST, "v63: with the default-ACL auto-grant, anon must still reach only the 5 approval-link functions");
   assert.deepEqual(secondAny, ANON_ALLOWLIST, "v63: a re-run of schema.sql must not hand anon any function back");
 });
 
@@ -200,7 +205,7 @@ test("every function in the v59 revoke list actually exists with that exact sign
   await admin.end();
 });
 
-test("ALLOWLIST CI GUARD (v63): the public functions anon can execute — SECURITY DEFINER OR INVOKER — are EXACTLY the 4 client-approval-link RPCs", async () => {
+test("ALLOWLIST CI GUARD (v63): the public functions anon can execute — SECURITY DEFINER OR INVOKER — are EXACTLY the 5 client-approval-link RPCs", async () => {
   const admin = adminClient(DB);
   await admin.connect();
   const { rows } = await admin.query(ANON_EXECUTABLE_ANY_SQL);
