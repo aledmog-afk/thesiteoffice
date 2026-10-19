@@ -15203,3 +15203,130 @@ end;
 $$;
 revoke all on function public.get_plot_handover_share(text) from public;
 grant execute on function public.get_plot_handover_share(text) to anon, authenticated;
+
+-- v73 ADDITIONS: Handover document flexibility — "not all certs are
+-- always needed." Two changes, both scoped to handover_documents only
+-- (quality_gates already has an identical not_applicable option, added
+-- earlier — see quality_gates_status_check above):
+--   1. A 'not_applicable' status, exactly mirroring quality_gates'
+--      existing option. The row stays (full audit trail intact,
+--      nothing fabricated or destroyed), is excluded from the
+--      handover readiness/blocker check below, and is visibly greyed
+--      out on the plot/block page. There is still no literal delete
+--      path offered in the UI for a standard seeded document — N/A is
+--      the reversible, audited way to say "this plot doesn't need
+--      this one."
+--   2. is_custom: lets a user add a one-off extra document specific to
+--      a plot/block (e.g. something not in the standard set) via a
+--      plain insert — RLS already permits project editors to insert/
+--      delete handover_documents rows directly (no new RPC needed),
+--      this column only exists so the UI can tell a standard seeded
+--      row from a custom one apart and offer "Remove" only for the
+--      latter. Defaults false; every seed_*_defaults()/seed_block_
+--      ews1_document() insert leaves it at that default, unchanged by
+--      this migration.
+alter table public.handover_documents drop constraint if exists handover_documents_status_check;
+alter table public.handover_documents add constraint handover_documents_status_check
+  check (status in ('missing', 'draft_received', 'approved_final', 'not_applicable'));
+
+alter table public.handover_documents add column if not exists is_custom boolean not null default false;
+
+-- Full replacement of plots_before_write() (v53) — identical body,
+-- with exactly one change: the document blocker check now treats
+-- not_applicable the same as approved_final, matching the gate
+-- blocker check immediately above it (status not in ('approved',
+-- 'not_applicable')), which this mirrors exactly for documents.
+create or replace function public.plots_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_gate_outstanding boolean;
+  v_doc_outstanding boolean;
+  v_snag_blocking boolean;
+  v_action_blocking boolean;
+  v_finding_blocking boolean;
+begin
+  if TG_OP = 'UPDATE' and new.handed_over_at is distinct from old.handed_over_at then
+    -- A historical handover record must never be silently rewritten or
+    -- cleared — handed_over_at is a one-time, permanent event, not a
+    -- continuously recalculated field (see computePlotHandoverReadiness's
+    -- own status precedence: "handed_over" always wins, regardless of
+    -- current readiness). There is no "un-handover" feature in this
+    -- application, and this is not the phase to add one.
+    if old.handed_over_at is not null then
+      raise exception 'plots.handed_over_at is a historical record and cannot be changed once set';
+    end if;
+
+    -- old.handed_over_at is null here, new.handed_over_at is being set
+    -- for the first time — validate against the same blocker rules
+    -- computePlotHandoverReadiness() already uses. Warnings (Programme
+    -- variance, non-blocking Snags/Actions/Findings) are deliberately
+    -- NOT checked here — they make a plot AT RISK, not NOT READY, and
+    -- must not prevent the historical handover event.
+
+    select count(*) > 0 and bool_or(status not in ('approved', 'not_applicable'))
+      into v_gate_outstanding
+      from public.quality_gates where plot_id = new.id;
+
+    -- v73: not_applicable now excuses a document from this check
+    -- exactly like it already excuses a quality gate above.
+    select count(*) > 0 and bool_or(status not in ('approved_final', 'not_applicable'))
+      into v_doc_outstanding
+      from public.handover_documents where plot_id = new.id;
+
+    -- Snags: a plot's own auto-seeded list (snag_lists.plot_id) is the
+    -- normal path; snag_items.plot_id itself is only populated for the
+    -- rare general/site-wide list's optional per-item tag — both are
+    -- checked here, exactly like every other plot-scoped snag query in
+    -- this app (see getPlotSnags()/getProjectPlotReadiness() in
+    -- tracker/js/app.js).
+    select exists (
+      select 1 from public.snag_items si
+      left join public.snag_lists sl on sl.id = si.snag_list_id
+      where coalesce(si.plot_id, sl.plot_id) = new.id
+        and si.status = 'open' and si.priority = 'high'
+        and si.due_date is not null and si.due_date < current_date
+    ) into v_snag_blocking;
+
+    select exists (
+      select 1 from public.actions
+      where plot_id = new.id
+        and status not in ('completed', 'cancelled')
+        and (status = 'blocked' or (due_date is not null and due_date < current_date and priority in ('high', 'critical')))
+    ) into v_action_blocking;
+
+    select exists (
+      select 1 from public.inspection_findings
+      where plot_id = new.id
+        and status not in ('resolved', 'accepted', 'cancelled')
+        and severity = 'critical'
+    ) into v_finding_blocking;
+
+    if coalesce(v_gate_outstanding, false) then
+      raise exception 'Cannot record handover: outstanding Quality Gate(s) for this plot';
+    end if;
+    if coalesce(v_doc_outstanding, false) then
+      raise exception 'Cannot record handover: outstanding Handover Document(s) for this plot';
+    end if;
+    if v_snag_blocking then
+      raise exception 'Cannot record handover: open high-priority overdue Snag(s) for this plot';
+    end if;
+    if v_action_blocking then
+      raise exception 'Cannot record handover: blocked or overdue high/critical-priority Action(s) for this plot';
+    end if;
+    if v_finding_blocking then
+      raise exception 'Cannot record handover: unresolved critical Inspection Finding(s) for this plot';
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_plots_before_write on public.plots;
+create trigger trg_plots_before_write
+  before update on public.plots
+  for each row execute function public.plots_before_write();
