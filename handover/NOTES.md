@@ -608,3 +608,23 @@ Still `site-photos` bucket, still client-side pdf.js rendering each page to canv
 Posting this now; starting the build straight after — migration, rollback script, dry run against a local Postgres, database tests, the screens above, full suite, then a draft PR. Merging and applying to live both still need Aled's separate yes, as ever.
 
 — Claude
+
+---
+
+**19 Oct 2026, 23:24 BST — Claude**
+
+Drawing pins built — draft **PR #60**: https://github.com/aledmog-afk/thesiteoffice/pull/60. Followed the revised plan above; two things genuinely changed while building, both forced by real findings rather than convenience, and both worth knowing about:
+
+**pdf.js: vendored, not esm.sh.** Did the smoke test Adam asked for properly before relying on anything — a real local server replicating this app's exact `_headers` CSP, a genuine 2-page PDF, Playwright confirming pdf.js actually renders both pages to canvas with real non-blank pixel output (not just "no console error"). Two things fell out of that: (1) esm.sh itself is unreachable from the build environment (same restriction I'd already hit elsewhere in this session), so it could never be verified end-to-end before shipping — pdf.js is vendored same-origin instead (`tracker/js/vendor/pdfjs/`), which is also just a safer choice regardless (no third-party CDN in the critical path for a worker script). Only needed `worker-src 'self'` in `_headers`, not an esm.sh addition. (2) The *latest* pdfjs-dist (6.4.299) genuinely failed the smoke test — needs `Map.prototype.getOrInsertComputed`, not yet supported even by a fairly current Chromium build. Pinned to 4.10.38 instead, confirmed working.
+
+**A real bug caught by the mandatory 3x dry run, not shipped.** The first draft of the "retire the old `drawings` table" DDL used an unconditional `drop table if exists public.drawings` — fine the first time schema.sql applies, but on a second re-application it would have matched and destroyed the *new* `drawings` table instead of the old one (same name, new shape). The dry run exists exactly to catch this class of mistake, and it did — fixed with a guard that only drops the old shape (detected via its `drawing_url` column, which the new table doesn't have).
+
+**Known, flagged gap, not a silent omission**: Quality Gate pinning only works from plot drawings in this first cut, not block drawings (a gate can belong to a block, but the new-pin UI only looks gates up via `drawing.plot_id`) — a scoping simplification, explicitly called out rather than quietly shipped half-working.
+
+**Testing**: 38 new database tests (schema constraints, the revision-survives-a-new-page-assignment flow, cross-project IDOR rejection on all six new tables, all four pin-owner RLS rules, audit trail, rollback), a genuine 3x dry run against real local Postgres, a rollback script that refuses rather than silently discarding data if any of the six new tables hold rows. Six pre-existing tests updated for the old table's retirement (old-shape fixtures, an audit-trigger count, a CSP snapshot, a now-permanently-moot legacy-backfill scenario) — all legitimate updates for v74's own approved changes, not suppressions. **Full suite: 1887/1887 passing.**
+
+Posted the same "Workers Builds: thesiteoffice" explanation on this PR as on #58/#59 (same pre-existing, unrelated, structural failure — confirmed again it fails identically regardless of diff). Cloudflare Pages preview succeeded; waiting on the Automated test suite's own CI run to finish, though it already passed identically locally.
+
+**Not merged, not applied to any live database** — both need Aled's separate yes, as ever. Will also need the schema reviewed (the actual DDL is in `sql/schema.sql`'s v74 block, and the diff in #60) before that yes, given how much this one restructures compared to v71-73's purely additive migrations.
+
+— Claude
