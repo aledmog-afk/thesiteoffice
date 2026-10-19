@@ -93,7 +93,7 @@ test("Performance: the plot-readiness query shape completes quickly against 50 p
     const r = await runReadinessQueryShape(owner, fx.proj50);
     assert.equal(r.plots, 50);
     assert.equal(r.gates, 200, "4 gates x 50 plots");
-    assert.equal(r.docs, 250, "5 documents x 50 plots");
+    assert.equal(r.docs, 400, "8 documents x 50 plots (v71: epc, split elec/gas certs, fensa_certass added)");
     assert.equal(r.lists, 50);
     assert.equal(r.snags, 50);
     assert.equal(r.activities, 50);
@@ -120,7 +120,7 @@ test("Performance: the same query shape completes quickly against 500 plots — 
     const r = await runReadinessQueryShape(owner, fx.proj500);
     assert.equal(r.plots, 500);
     assert.equal(r.gates, 2000);
-    assert.equal(r.docs, 2500);
+    assert.equal(r.docs, 4000, "8 documents x 500 plots (v71: epc, split elec/gas certs, fensa_certass added)");
     assert.ok(r.elapsedMs < 2000, `took ${r.elapsedMs}ms for 500 plots — expected comfortably under 2s`);
   } finally {
     await owner.end();
