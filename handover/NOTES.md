@@ -108,3 +108,51 @@ Not applied to live Supabase, not merged — needs Aled's explicit yes for both,
 Starting Job 2 (handover flow review, planning only) now.
 
 — Claude
+
+---
+
+**19 Oct 2026, 13:40 BST — Claude**
+
+Job 2 (Adam's bug report, item 2): plot handover review. Planning only, nothing built — this is for Aled to decide on, per the brief.
+
+## Current flow, as actually implemented (verified against the live code, not assumed)
+
+**Seeding.** A standalone plot auto-seeds, on creation: 4 Quality Gates (Substructure & Drainage, Frame & Wind/Watertight, Pre-Plaster/First Fix, Pre-Handover/PC — each with a 4-item checklist) and 5 Handover Documents (Building Control Sign-off, Air Permeability/Acoustic Test, Electrical & Gas Safety Certificates, NHBC/Structural Warranty Cover Note, Draft O&M Manuals). A flat inside a block seeds a different 4 gates / 5 docs set (its own fit-out stages, plus `flat_epc`, which houses don't get — see Gap 1 below). A block itself separately seeds 4 block-level gates and 5 block-level docs for communal items (lifts, fire strategy, communal M&E, buildings insurance).
+
+**Quality Gates.** Each gate has a status (`not_started` / `in_progress` / `under_review` / `approved`) set manually via a dropdown, and a 4-item checklist (each item tickable independently). Ticking every checklist item does **not** auto-flip the gate's status — a human sets both separately.
+
+**Handover Documents.** Each is a single row: one status (`missing` / `draft_received` / `approved_final`, set manually) and at most one uploaded file (`file_url`/`file_name`). Uploading a file auto-advances `missing` → `draft_received` but never to `approved_final` — a human has to confirm that. No validation that the uploaded file matches the document type, no versioning (unlike the separate Documents module, which has full revision history — handover docs don't), no expiry tracking.
+
+**"System Handover Readiness"** (plot-detail.html) aggregates Quality Gates, Handover Documents, Snags, Actions, Findings and Programme into one status: `not_ready` / `at_risk` / `ready` / `restricted` (snagging-only viewer) / `handed_over`. Only outstanding Gates, outstanding Documents, and open high-priority-and-overdue Snags/Actions/critical Findings are hard **blockers**; Programme slippage and lower-severity Snags/Actions/Findings are **warnings** that don't block.
+
+**Handover itself is implicit, not an event.** The moment a plot's readiness has zero blockers (status `ready` or `at_risk`), `checkAndMarkPlotHandedOver()` — called automatically after any gate/document change — stamps `plots.handed_over_at = now()`, once only, immutable (enforced both client-side and by a DB trigger). There is no explicit "Mark as Handed Over" action, no confirmation step, no signature, and nothing is generated at that moment — the timestamp is the entire record of the event. Its only consumer anywhere in the app is monthly-reports.html, which lists "plots handed over this month."
+
+**No handover pack export exists.** Plot-handovers.html's "Export Trackers" button is unrelated — it exports progress-percentage spreadsheets (Overall Progress + Internal Works milestone %), not documents. There is no feature anywhere that bundles a plot's quality gates, documents and sign-off into one deliverable — for the client, the purchaser, or for the record.
+
+## Gaps
+
+1. **EPC is modelled for flats but not houses.** `flat_epc` exists as a doc key; there's no equivalent for standalone plots. An Energy Performance Certificate is required before marketing/selling any new dwelling, house or flat — this looks like an oversight rather than a deliberate scoping choice.
+2. **Gas and electrical certificates are one combined document (`elec_gas_certs`).** In practice these are usually separate certificates (Gas Safe for gas, an NICEIC/NAPIT Electrical Installation Certificate under Part P for electrical), often from different contractors on different dates. Bundling them as one row means one can't be marked approved while the other is still outstanding without a workaround.
+3. **No FENSA/CERTASS certificate** for new windows and doors — a standard Building Regs self-certification document, not currently in any doc set.
+4. **No formal snagging/defects record at handover.** Snags are tracked, but only as a readiness *warning* unless high-priority and overdue — never a blocker, and never captured as part of what's handed to the client. NHBC's Consumer Code expects a documented defects position (and the contractor's commitment to remedy) to accompany handover; right now that's nowhere in the record.
+5. **No generated handover certificate or document pack.** Nothing comparable to the Commercial module's client-facing signed PDF (`commercial-approval.html` + `buildCommercialEventPdfDocument`) exists for handover — no signature, no client-facing link, no single PDF or archive a purchaser/their solicitor could be given, and no tamper-evident record of what was true at the moment of handover (the underlying rows can still be edited afterward; `handed_over_at` itself is immutable, but nothing else is).
+6. **No meter readings or key-handover log** — standard practice for utility transfer and a basic record of what was physically handed over.
+7. **EWS1 (External Wall System form)** isn't modelled for blocks. Only applicable to certain buildings (height/cladding-dependent, not universal), but worth a conscious decision rather than silence, given mortgage lenders increasingly expect it for affected blocks.
+8. **Lift commissioning (LOLER) has no document row.** It's mentioned as checklist *text* inside a block quality gate ("Lift(s) commissioned and certified") but there's no corresponding Handover Document to actually file the certificate against.
+9. **Document approval has no verification.** A file upload and a status dropdown are independent — nothing stops someone marking a document "Approved / Final" with no file attached, or a file attached that's nothing to do with the document type.
+
+## Proposed design (for discussion, not a commitment)
+
+I'd frame this as two separable pieces of work, since they solve different problems:
+
+**A. Close the document-set gaps (small, low-risk):** add the missing doc keys (house EPC, FENSA/CERTASS, split gas/electrical into two rows), add a block-level EWS1 row gated behind a simple "does this block need one?" flag Aled or the site team sets (rather than seeding it unconditionally for every block), and add a lift-commissioning document row for blocks with a lift. This is a `seed_plot_defaults()`/`seed_block_defaults()` change plus a one-off backfill for existing plots/blocks — contained, and matches the existing data model exactly, no new tables.
+
+**B. A real handover event (bigger, needs a decision first):** turn "handover" from an implicit timestamp into an actual generated record — reusing the pattern already proven in Commercial: a signed-off snapshot (who confirmed it, when, what the snag position was at that moment, which documents were attached) rendered as a PDF via the same `jsPDF`-via-`esm.sh` approach already used for Toolbox Talks and Commercial events, optionally with a client-facing link the purchaser or their solicitor can be sent (mirroring `commercial-approval.html`'s token-based external link, no login required). This would also be the natural place to add the formal snagging/defects position and meter readings/key log, since they'd be captured once, at the moment of handover, rather than needing new always-on tracking.
+
+I'd suggest doing A regardless of what's decided about B — it's small and clearly correct. B is the one worth Aled's actual input on: whether a generated, client-facing handover certificate is something he wants for this app at all, since it's a meaningfully bigger piece of work than A and touches client communication, not just internal record-keeping.
+
+Sources I checked rather than relying purely on general knowledge (no 2026-dated official gov.uk/NHBC guidance turned up; these are the usual secondary/practitioner sources, worth treating as directional, not authoritative): [Handover pack guide](https://www.trade2base.com/blog/handover-pack-construction-uk), [a real pre-completion documentation pack example, incl. NHBC and EWS1](https://democracy.croydon.gov.uk/documents/s46366/Appendix B - Pre-completion Documentation Trellis Mews.pdf).
+
+Nothing built, nothing changed in the app for this item — for Aled to read and say which of A/B (or neither, or something else) he wants me to take further.
+
+— Claude
