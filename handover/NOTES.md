@@ -188,3 +188,43 @@ Not applied to live, not merged — both need Aled's separate yes.
 Starting Handover Part B now (the handover event itself) — will post screens and the client-facing PDF/link wording here before merging anything, per the brief.
 
 — Claude
+
+---
+
+**19 Oct 2026, 18:10 BST — Claude**
+
+Handover Part B built — draft PR #55: https://github.com/aledmog-afk/thesiteoffice/pull/55 (base `feature/handover-docs-v71`, since v72 numerically follows v71 in `sql/schema.sql` — Part A isn't merged yet, so this PR stacks on Part A's branch rather than the tracker branch directly).
+
+**What changed:**
+
+- `handed_over_at` was previously stamped automatically and silently the instant Quality Gates + Handover Documents turned ready, with no explicit decision and nothing recorded about the plot's state at that moment. That auto-stamp is now gone, replaced by an explicit **"Mark as Handed Over"** button on the plot page. `handed_over_at` itself is exactly as immutable as before (the existing server-side trigger from Job 1/v53's era) — this only changes how it gets set, not what happens once it's set.
+- Confirming captures, in one action: meter readings (utility/reading/unit, free rows), a key log (item/qty/held by, free rows), and a signature — drawn or typed name. It then permanently records a snapshot of the plot's Quality Gates, Handover Documents and open Snags **at that exact moment**, generates a signed handover PDF, and only then sets `handed_over_at`.
+- A **read-only** share link can optionally be created afterward for a buyer or solicitor — a page with no login, showing the same snapshot (gates, documents, snags, meters, keys, signature, confirmed-by/when), with a Download PDF button. Links expire (default 14 days, editable 1–90), can be revoked, and only one can be active per plot at a time.
+- **Nothing is ever sent automatically.** Exactly like the Commercial module's client approval link: the app only ever generates the link plus a pre-filled `mailto:` draft — a person has to actually click send from their own email client. Screens attached to this message show the "Draft Email" button and the share-link panel.
+
+**The exact client-facing wording** (the `mailto:` draft the internal user gets handed, pre-filled, editable before sending):
+
+> Subject: `Handover record: {plot number}`
+>
+> Hi,
+>
+> Here is the handover record for {plot number}. No account is needed to view it.
+>
+> {the link}
+>
+> This link expires {expiry date}.
+>
+> Regards,
+
+And the one line of copy on the external page itself, above the recipient fields when creating the link: *"Creates a read-only link to this plot's handover record for a buyer or solicitor — no account needed on their end. Nothing is sent automatically; you copy the link or use the email draft yourself."*
+
+**Screens** (sent separately in this session, 8 images): the plot page with handover not yet ready (button disabled, blockers listed), ready (button enabled), the Mark as Handed Over modal (meter readings/key log/signature), the Handed Over summary once confirmed, the Share Handover Pack modal, a live share link shown with its status, and the external buyer/solicitor page itself in both its active and expired states.
+
+**Testing:** new v72 migration with a DDL-only rollback script (never un-stamps an already-confirmed plot), 15 new database tests (confirm flow, immutability, permission boundaries, share-link lifecycle including lazy expiry and revoke, content-hash tamper defence, RLS isolation, audit trail, rollback), 5 new external-page tests, plus the existing plot-detail.html test file extended for the new section. Full suite: 1812/1812.
+
+**Not merged, not applied to live.** Waiting on:
+1. Your read of the screens and the wording above.
+2. A separate yes to merge PR #55.
+3. A separate yes to apply v72 to live Supabase.
+
+— Claude
