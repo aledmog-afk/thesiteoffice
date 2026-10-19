@@ -447,3 +447,164 @@ Client-side, no new server component: load `pdf.js` from esm.sh (same pinned-ver
 Not building anything until these are answered and Aled's approved the shape of it. Will revise this plan rather than guess if any answer changes the schema meaningfully.
 
 — Claude
+
+---
+
+**19 Oct 2026, Adam:**
+
+Aled's answers on the drawing pins plan:
+1. General queries: a new, lighter query type with its own table (quick on-site questions, separate from formal RFIs). Add query_id to drawing_pins and the exactly-one-owner check.
+2. Quality gates: yes, include them as a fourth pin owner.
+3. Multi-page PDFs: yes, sometimes one PDF covers every drawing, so build the page switcher in v1. Let the user assign each page to the site drawing or to a plot/block and storey, so one upload can feed several drawings.
+4. Blocks: yes, per-storey drawings for blocks too.
+5. Deleting: archive-only, no delete, following the documents convention.
+Also confirm the pdf.js worker against the CSP before relying on it. Revise the plan with these answers, post it in the notes file, then build on a branch off main with a migration, a rollback script and a dry run, and open a draft PR. Merging and applying to live each need Aled's yes.
+
+---
+
+**19 Oct 2026, 23:15 BST — Claude**
+
+Revised plan below, answers folded in. One of them — "let the user assign each page to the site drawing or to a plot/block and storey, so one upload can feed several drawings" — changes the schema's shape more than a small edit: it means a page's content and a drawing's *identity* can no longer be the same lifecycle (one upload, many drawings fed from its pages), so the previous `drawings → drawing_versions → drawing_version_pages` chain is replaced below with uploads/pages as their own independent thing, and drawings pointing AT a page rather than owning one.
+
+## pdf.js worker vs this app's CSP — researched, not assumed
+
+Checked this properly before relying on it, per Adam's instruction. The common pdf.js failure under a CSP is the worker trying to start from a `blob:` URL, which isn't in `script-src` or `worker-src` here (`_headers`, `/tracker/*`: `script-src 'self' 'unsafe-inline' https://esm.sh`, no `worker-src` at all, so `worker-src` currently falls back to `script-src`'s own value per the CSP spec's fallback chain). The documented, reliable fix (pdfjs-dist's own config docs, corroborated by how other CSP-conscious PDF viewers set themselves up): set `GlobalWorkerOptions.workerSrc` explicitly to a real network URL rather than letting the library auto-detect and fall back to a `blob:` worker — e.g. `https://esm.sh/pdfjs-dist@<pinned version>/build/pdf.worker.mjs`, the same esm.sh-pinned-version convention `supabase-js` already uses in `supabase-client.js`. Since `https://esm.sh` is already an allowed `script-src` origin and there's currently no separate `worker-src` to fall back from, this should work via the fallback — but I'm adding an explicit `worker-src 'self' https://esm.sh` to `/tracker/*`'s CSP block anyway rather than relying on fallback behaviour implicitly, since that's the documented, deliberate fix and costs nothing. I can't fully confirm this from this sandbox (no network egress to esm.sh here to load a real PDF end-to-end), so the real proof is the dry run itself — building a throwaway test page that loads a multi-page PDF through this exact CSP and watching it actually render, before this goes anywhere near the real feature. If that fails, the fallback is a same-origin copy of `pdf.worker.mjs` served from `/tracker/js/` instead of esm.sh, which sidesteps the question entirely (`'self'` already covers it) at the cost of one more vendored file to keep in sync by version.
+
+## Revised schema
+
+Uploads and pages are now independent of any particular drawing — a page gets *assigned* to a drawing (site, or a plot/block's storey), and that assignment is what pins ultimately hang off, which is what makes "one upload feeds several drawings" and "old pins stay on the drawing they were placed on" both true at once.
+
+```sql
+-- One row per upload action (one PDF or one image file). Never
+-- directly shown or pinned — purely the source record.
+create table drawing_uploads (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references organisations(id),
+  project_id uuid not null references projects(id) on delete cascade,
+  source_file_url text not null,
+  source_file_name text not null,
+  source_mime_type text,
+  uploaded_by uuid references auth.users(id) on delete set null,
+  uploaded_at timestamptz not null default now()
+);
+
+-- One row per rendered page from an upload (a plain image upload
+-- produces exactly one). THIS is what pins attach to and what a
+-- drawing's "current content" points at — never the upload directly.
+create table drawing_pages (
+  id uuid primary key default gen_random_uuid(),
+  drawing_upload_id uuid not null references drawing_uploads(id) on delete cascade,
+  page_number integer not null default 1,
+  image_url text not null,
+  width_px integer,
+  height_px integer,
+  unique (drawing_upload_id, page_number)
+);
+
+-- A stable drawing IDENTITY: the site layout, or one plot/block's
+-- storey. current_page_id is just "whichever page is assigned to this
+-- identity right now" — reassigning it (a revision, or correcting a
+-- misassigned page) never changes this row's own id, so anything that
+-- referenced this drawing by id keeps working.
+create table drawings (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references organisations(id),
+  project_id uuid not null references projects(id) on delete cascade,
+  scope text not null check (scope in ('site', 'plot_storey', 'block_storey')),
+  plot_id uuid references plots(id) on delete set null,
+  block_id uuid references blocks(id) on delete set null,
+  storey text check (storey in ('GF', 'FF', 'SF')),
+  title text not null,
+  status text not null default 'current' check (status in ('current', 'archived')),  -- archive-only, no delete (point 5)
+  current_page_id uuid references drawing_pages(id) on delete set null,
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint drawings_scope_consistent check (
+    (scope = 'site' and plot_id is null and block_id is null and storey is null) or
+    (scope = 'plot_storey' and plot_id is not null and block_id is null and storey is not null) or
+    (scope = 'block_storey' and block_id is not null and plot_id is null and storey is not null)
+  )
+);
+create unique index drawings_one_site_per_project on drawings (project_id) where scope = 'site' and status = 'current';
+create unique index drawings_one_per_plot_storey on drawings (plot_id, storey) where scope = 'plot_storey' and status = 'current';
+create unique index drawings_one_per_block_storey on drawings (block_id, storey) where scope = 'block_storey' and status = 'current';
+
+-- History of every page a drawing identity has ever pointed at — this
+-- IS the revision history now (current_page_id above is just a
+-- denormalised pointer at whichever row here has superseded_at null,
+-- same convention documents.current_revision_id already uses).
+create table drawing_page_assignments (
+  id uuid primary key default gen_random_uuid(),
+  drawing_id uuid not null references drawings(id) on delete cascade,
+  drawing_page_id uuid not null references drawing_pages(id) on delete cascade,
+  assigned_by uuid references auth.users(id) on delete set null,
+  assigned_at timestamptz not null default now(),
+  superseded_at timestamptz
+);
+
+-- A new, lightweight query type (point 1) — deliberately simpler than
+-- rfis: no formal reference numbering (RFI-001 etc.), no due_date, no
+-- priority, no party/assignment workflow. Just a question and an
+-- answer. Open to Aled saying this is too sparse once he sees it.
+create table general_queries (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references organisations(id),
+  project_id uuid not null references projects(id) on delete cascade,
+  plot_id uuid references plots(id) on delete set null,
+  block_id uuid references blocks(id) on delete set null,
+  question text not null,
+  status text not null default 'open' check (status in ('open', 'answered', 'closed')),
+  raised_by uuid references auth.users(id) on delete set null,
+  raised_at timestamptz not null default now(),
+  response text,
+  answered_by uuid references auth.users(id) on delete set null,
+  answered_at timestamptz,
+  closed_at timestamptz
+);
+
+-- A pin on one specific page. Exactly one of four real, enforceable
+-- FKs (point 2 adds quality_gate_id as the fourth owner).
+create table drawing_pins (
+  id uuid primary key default gen_random_uuid(),
+  drawing_page_id uuid not null references drawing_pages(id) on delete cascade,
+  x_pct numeric not null check (x_pct >= 0 and x_pct <= 100),
+  y_pct numeric not null check (y_pct >= 0 and y_pct <= 100),
+  snag_item_id uuid references snag_items(id) on delete cascade,
+  rfi_id uuid references rfis(id) on delete cascade,
+  quality_gate_id uuid references quality_gates(id) on delete cascade,
+  query_id uuid references general_queries(id) on delete cascade,
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  constraint drawing_pins_exactly_one_owner check (
+    (snag_item_id is not null)::int + (rfi_id is not null)::int +
+    (quality_gate_id is not null)::int + (query_id is not null)::int = 1
+  )
+);
+```
+
+Why this still satisfies "old pins stay on the drawing they were placed on" even with pages now decoupled from drawings: a pin references `drawing_page_id` directly, never `drawing_id`. Reassigning a drawing's `current_page_id` to a different page (a new upload, or picking a different page from the same multi-page upload) never moves or deletes any existing `drawing_pins` row — it's still attached to the exact page image it was placed on, and `drawing_page_assignments` keeps the full history of which page served which drawing identity when, so an old pin can still be shown in context ("this was pinned on Plot 4 GF's drawing as it stood from 3 Sep to 20 Oct").
+
+## RLS (point 5's archive-only, and matching each pin owner's own write rule)
+
+- `drawing_uploads`, `drawing_pages`: insert = `is_project_editor(project_id)` (uploading/rasterising is an editor action); select = `is_project_member(project_id)` (everyone who can see drawings needs to see the pages).
+- `drawings`: select = `is_project_member`; insert/update (including the archive-only "delete") = `is_project_editor`. No delete policy at all, matching `documents`.
+- `drawing_page_assignments`: select = `is_project_member`; insert = `is_project_editor` (assigning a page to a drawing is the same editor action as uploading).
+- `general_queries`: select = `is_project_member`; insert = `is_project_member` (matches `snag_items`' own "members insert" rule exactly — checked it directly, `snag_items`' insert policy is member-level, not editor-level, and queries are framed as the same kind of quick, anyone-on-site action); update (answering/closing) = `is_project_editor`.
+- `drawing_pins`: select = `is_project_member`. Insert needs four separate policies, each checking the pin's actual owner row against ITS OWN existing write rule rather than one blanket rule (mirrors how `rfi_evidence_links` already checks against its parent `rfis` row) — a pin on a snag only requires `is_project_member` (checked directly: `snag_items`' own insert policy is member-level), a pin on an RFI or a Quality Gate requires `is_project_editor` (both of those are editor-level inserts today), a pin on a query requires `is_project_member` (matching the new table's own rule above). This means a snagging-only member can pin their own snag or query but not an RFI or a gate — exactly mirroring who can create each of those four things in the first place, nothing new invented.
+
+## Storage, PDF→image: unchanged from the first draft
+
+Still `site-photos` bucket, still client-side pdf.js rendering each page to canvas then through the existing `compressDrawing()` resize/re-encode step. Path convention updated for the new table names: `drawings/{project_id}/uploads/{drawing_upload_id}/source.{ext}` for the original file, `drawings/{project_id}/uploads/{drawing_upload_id}/page-{n}.webp` for each rendered page.
+
+## Screens (revised for the page-assignment step)
+
+- **Upload flow** (new, shared by site/plot/block drawings): pick a file → if PDF, render every page client-side and show a thumbnail grid; if image, one thumbnail. For each page, assign it to a destination — "Site drawing" or "Plot/Block + storey" (a dropdown, reusing the plot/block pickers already on the project) — before anything is saved. This is the same "review before committing" shape `drawings.html`'s existing bulk-upload already uses for filename-guessed plots, just per-page instead of per-file. Saving creates the `drawing_uploads` + `drawing_pages` rows, then one `drawings`+`drawing_page_assignments` row (or a reassignment of an existing drawing identity, if that site/plot-storey/block-storey already has one) per page the user assigned.
+- **Site drawing**: same as the first draft — tapping a plot/block's pin on it opens that plot/block's storey drawings. Still leaning toward a plot/block-level `site_pin_x_pct`/`site_pin_y_pct` pair (a fixed "this plot lives here on the master plan" fact) rather than a `drawing_pins` row, since it's not an evolving list of issues the way snag/RFI/gate/query pins are — will confirm this while building rather than guess further here.
+- **`drawing-view.html`**: page switcher when a drawing's upload had more than one page assigned elsewhere (i.e. showing which OTHER drawings came from the same upload, for context) is out of scope for v1 display — the page switcher Adam asked for is really at upload-assignment time (point 3), not needed when just viewing a single already-assigned drawing, which only ever shows its own one current page. Revision history list (point 5: archive, never delete) shows past `drawing_page_assignments` rows, each viewable read-only with its own pins.
+- **Snag/RFI/Quality Gate/Query forms**: tap-to-pin extended to all four types, plus "Add pin" after the fact on each one's detail view.
+- **New `general-queries.html`-style list + detail pages**, mirroring RFIs' own list/detail shape but without the heavier workflow fields.
+
+Posting this now; starting the build straight after — migration, rollback script, dry run against a local Postgres, database tests, the screens above, full suite, then a draft PR. Merging and applying to live both still need Aled's separate yes, as ever.
+
+— Claude
