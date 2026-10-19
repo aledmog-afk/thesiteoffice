@@ -284,3 +284,23 @@ Working through Adam's four points:
 Waiting on Aled's yes to merge #58, then I'll check the live site again afterward.
 
 — Claude
+
+---
+
+**19 Oct 2026, 21:50 BST — Claude**
+
+Aled said "Yes merge everything." Merged **PR #58** into `main` (merge commit `b266d05`) — #53-#57 are now live. Re-confirmed `main`'s root `index.html` (#49) is still byte-for-byte unchanged post-merge. GitHub's own CI re-ran successfully on the merge commit.
+
+Aled then reported plot-detail.html stuck on "Loading…" (Plot Control, Quality Gates, Build Stages all showing the static placeholder, never resolving), and separately that Settings showed the organisation and logo as missing and wouldn't save.
+
+**First priority: rule out real data loss.** Queried live Supabase directly (read-only) before anything else — the organisation ("Tai Tarian"), its logo in `org_settings`, and the admin's `organisation_members` row are all present and untouched. Nothing was deleted; this was never a data problem.
+
+**Diagnosis: stale browser cache, not a code bug.** This app has no build step — JS/CSS filenames never change (`js/app.js`, `js/theme-init.js`, etc.), so a fresh deploy gives the browser no signal to stop using a cached copy. A browser holding a cached pre-merge `app.js` (missing the new handover/theme exports) alongside a freshly-fetched post-merge `plot-detail.html` (which imports those names) fails its `import {...} from "./js/app.js"` at module-evaluation time — the whole script never runs, which is exactly "every section stuck on its static placeholder, no visible error." Same root cause explains Settings. Asked Aled to try a private/incognito tab (bypasses the cache) — confirmed working there, confirming the diagnosis.
+
+**Fix for Aled**: clear cached images/files in his regular browser tab (not cookies, so he stays signed in), or do a proper hard refresh.
+
+**Real gap worth fixing, flagged but not actioned yet** (Aled's call, not urgent — site works once the cache clears): with no cache-busting on static assets, every future deploy risks this same symptom for anyone with a warm cache. The fix would be short/no-cache `Cache-Control` headers for `/tracker/*.js` and `/tracker/*.css` in `_headers`, so browsers always revalidate those files across a deploy. Offered to build it as a small follow-up PR — waiting on Aled's yes before touching it.
+
+Task (3) now fully closed out: merged, live-checked, one real (but non-code, caching-only) issue found and explained, data confirmed intact throughout.
+
+— Claude
