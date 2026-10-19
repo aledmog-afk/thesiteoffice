@@ -14355,3 +14355,95 @@ $v69t$;
 -- End of the v69 transaction. Future sections go below this line,
 -- outside the block (or in their own begin;/commit;).
 commit;
+
+-- v70 ADDITIONS: fixes "deleting a project fails with a foreign key
+-- error on audit_log_project_id_fkey" (reported against the pre-v69
+-- pages, confirmed still present after v69 — this bug predates v69 and
+-- is unrelated to it).
+--
+-- Root cause: write_audit_log() is an AFTER INSERT OR DELETE OR UPDATE
+-- trigger on every audited table, including projects itself and every
+-- table that cascade-deletes when a project is deleted (quality_gates,
+-- handover_documents, project_members, and others). On a DELETE, it
+-- tries to INSERT a new audit_log row whose project_id is the row's
+-- own project (or, for the projects table itself, the deleted
+-- project's own id) — but by the time that AFTER DELETE trigger's
+-- INSERT runs, the referenced projects row is already gone (it's
+-- being deleted in the same statement, possibly the very row this
+-- trigger fired from). audit_log_project_id_fkey (REFERENCES
+-- projects(id)) rejects inserting a row that points at a project that
+-- no longer exists, so the delete fails. This is NOT specific to
+-- projects that have plots: an empty project with zero plots fails
+-- identically, because seed_project_owner() unconditionally seeds one
+-- project_members row (the project's owner) for every project
+-- regardless of plots, and project_members is independently audited
+-- (trg_audit_project_members) the same way quality_gates and
+-- handover_documents are once a plot exists (seed_plot_defaults()).
+-- Confirmed locally: deleting a bare project and deleting one with
+-- plots and prior audit history both fail with the exact same error
+-- before this fix, and both succeed after it.
+--
+-- Fix: when this DELETE is happening as part of that same cascade (the
+-- referenced project is no longer there), set project_id (and the
+-- org_id looked up through it) to null on the new audit row instead of
+-- trying to insert a value that can never satisfy the FK. This is the
+-- same "nulled, not deleted" behaviour the column's own comment and
+-- its "on delete set null" already document for every other row that
+-- ends up pointing at a project once it's gone — this fix just avoids
+-- hitting the FK violation on insert rather than relying on an
+-- after-the-fact UPDATE that can never run because the insert itself
+-- was rejected. No audit history is lost: table_name, record_id and
+-- old_data still fully identify what was deleted and its complete
+-- prior state, including the child's own project_id value inside
+-- old_data. A normal single-row delete, where the project is still
+-- alive, is unaffected — the lookup finds the project and project_id
+-- is left exactly as it was.
+create or replace function public.write_audit_log()
+ returns trigger
+ language plpgsql
+ security definer
+ set search_path to 'public'
+as $function$
+declare
+  v_record jsonb := to_jsonb(coalesce(new, old));
+  v_record_id uuid;
+  v_project_id uuid;
+  v_org_id uuid;
+begin
+  if TG_TABLE_NAME = 'projects' then
+    v_record_id := (v_record->>'id')::uuid;
+    v_project_id := case when TG_OP = 'DELETE' then null else v_record_id end;
+    v_org_id := (v_record->>'org_id')::uuid;
+  elsif TG_TABLE_NAME = 'org_settings' then
+    v_project_id := null;
+    v_org_id := (v_record->>'org_id')::uuid;
+    v_record_id := v_org_id;
+  elsif TG_TABLE_NAME = 'toolbox_talk_templates' then
+    v_record_id := (v_record->>'id')::uuid;
+    v_project_id := null;
+    v_org_id := (v_record->>'org_id')::uuid;
+  else
+    v_record_id := (v_record->>'id')::uuid;
+    v_project_id := (v_record->>'project_id')::uuid;
+    select org_id into v_org_id from public.projects where id = v_project_id;
+    if not found then
+      v_project_id := null;
+      v_org_id := null;
+    end if;
+  end if;
+
+  insert into public.audit_log (org_id, project_id, user_id, action, table_name, record_id, old_data, new_data)
+  values (
+    v_org_id,
+    v_project_id,
+    auth.uid(),
+    TG_OP,
+    TG_TABLE_NAME,
+    v_record_id,
+    case when TG_OP = 'INSERT' then null else to_jsonb(old) end,
+    case when TG_OP = 'DELETE' then null else to_jsonb(new) end
+  );
+
+  return coalesce(new, old);
+end;
+$function$;
