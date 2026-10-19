@@ -214,10 +214,11 @@
       supabase.from("snag_items").select("id", { count: "exact", head: true }).eq("project_id", projectId).gte("closed_date", monthStart).lte("closed_date", monthEnd),
     ]);
 
-    // Achievement-based, not a full-site snapshot: only plots that
-    // actually reached full handover (see checkAndMarkPlotHandedOver in
-    // app.js) THIS calendar month are listed — an empty array here means
-    // the section is left out of the report entirely, rather than a long
+    // Achievement-based, not a full-site snapshot: only plots whose
+    // plots.handed_over_at (set once, explicitly, via
+    // confirmPlotHandover() — Handover Part B) falls THIS calendar
+    // month are listed — an empty array here means the section is left
+    // out of the report entirely, rather than a long
     // table repeating every already-complete plot's status every month.
     const { data: handedOverThisMonth } = await supabase
       .from("plots")

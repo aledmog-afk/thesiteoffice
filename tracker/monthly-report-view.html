@@ -150,10 +150,11 @@
     </div>`;
   }
 
-  // Achievement-based: only plots that actually reached full handover
-  // during this month appear here (see checkAndMarkPlotHandedOver in
-  // app.js) — a month with none renders nothing at all, rather than a
-  // full-site table repeating every already-complete plot's status.
+  // Achievement-based: only plots whose plots.handed_over_at (set once,
+  // explicitly, via confirmPlotHandover() — Handover Part B) falls
+  // during this month appear here — a month with none renders nothing
+  // at all, rather than a full-site table repeating every already-
+  // complete plot's status.
   // Filtering on handed_over_at (rather than trusting the array to
   // already be scoped correctly) also means an older report generated
   // before this section existed — whose plot_handovers array holds the

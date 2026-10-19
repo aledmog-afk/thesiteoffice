@@ -66,7 +66,6 @@ async function run(supabase) {
     uploadImage: async () => "",
     suggestPlotProgress: async () => 0,
     recalculateActualProgress: async () => {},
-    checkAndMarkPlotHandedOver: async () => {},
     alert: () => {},
   });
 }
@@ -102,7 +101,6 @@ test("plot-detail.html: a FAILED gate status write reverts the dropdown instead 
     uploadImage: async () => "",
     suggestPlotProgress: async () => 0,
     recalculateActualProgress: async () => {},
-    checkAndMarkPlotHandedOver: async () => {},
     alert: (msg) => { alertMessage = msg; },
   });
   await wait(30);

@@ -89,8 +89,9 @@ async function runPlotPage(plot, { rpc = {} } = {}) {
     confirm: () => true,
     supabase: sb, getParam: () => "plot1", requireAuth: async () => ({ id: "u-owner" }), renderHeader: () => {},
     escapeHtml, showError, clearError, formatDate,
-    uploadImage: async () => "", checkAndMarkPlotHandedOver: async () => false,
+    uploadImage: async () => "",
     getPlotHandoverReadiness: async () => ({ plot, readiness: null }),
+    getPlotHandoverConfirmation: async () => null,
     PLOT_READINESS_LABEL: {}, PLOT_READINESS_BADGE: {}, RFI_STATUS_BADGE: {}, SNAG_STATUS_LABEL: {}, SNAG_STATUS_BADGE: {},
   };
   const r = await runPage(page("plot-detail.html"), extractScript(page("plot-detail.html")), ctx);
