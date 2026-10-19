@@ -20,3 +20,27 @@
   Permissions-Policy: geolocation=(), camera=(), microphone=(), payment=()
   Strict-Transport-Security: max-age=31536000
   Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://esm.sh; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://*.supabase.co; connect-src 'self' https://*.supabase.co https://api.postcodes.io https://api.open-meteo.com https://esm.sh; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+
+# /demo-uae-hv/* — isolated sales-demo environment, entirely separate
+# from both the root and /tracker/*. No Supabase, no live data: it runs
+# off an in-memory + sessionStorage mock state, so its CSP has no
+# Supabase/postcodes/open-meteo origins at all. esm.sh is needed only
+# for the same dynamic jsPDF/JSZip imports /tracker/* already allows
+# (reused verbatim, not a new dependency). frame-src blob: is the one
+# addition versus /tracker/*'s policy, for the in-page PDF-preview
+# modal (an <iframe> pointed at a jsPDF-generated blob: URL) — nothing
+# else in this demo creates or needs a frame.
+# X-Robots-Tag backs up the noindex/nofollow <meta> already on every
+# page here and the Disallow rule in robots.txt — three independent
+# layers against this route being indexed. None of this is real access
+# control: that's the passcode gate in index.html (and, if asked for,
+# a Cloudflare Access policy on this path — neither a static _headers
+# rule nor a client-side passcode can actually enforce authentication).
+/demo-uae-hv/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: geolocation=(), camera=(), microphone=(), payment=()
+  Strict-Transport-Security: max-age=31536000
+  X-Robots-Tag: noindex, nofollow
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://esm.sh; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://esm.sh; frame-src blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'

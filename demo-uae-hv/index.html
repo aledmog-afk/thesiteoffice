@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>Access — The Site Office UAE HV Demo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/demo.css">
+</head>
+<body>
+<div class="demo-gate-wrap">
+  <div class="demo-gate-card">
+    <div class="demo-gate-brand">THE SITE <span>OFFICE</span></div>
+    <p class="demo-gate-sub">UAE HV Infrastructure &amp; QA Demo — Al Marjan Island, RAK</p>
+    <form id="gateForm">
+      <input id="codeInput" class="demo-gate-input" type="text" autocomplete="off" autocapitalize="characters" placeholder="Access code" aria-label="Access code">
+      <div id="gateError" class="demo-gate-error"></div>
+      <button type="submit" class="demo-btn demo-btn-amber" style="width:100%; justify-content:center;">Enter Demo</button>
+    </form>
+    <p class="demo-hint" style="margin-top:1rem;">This is an isolated demonstration environment with synthetic data only. It is not linked from the main site and is not indexed by search engines.</p>
+  </div>
+</div>
+<script type="module">
+  import { DEMO_ACCESS_CODE_FALLBACK, grantAccess } from "./js/demo-data.js";
+
+  const form = document.getElementById("gateForm");
+  const input = document.getElementById("codeInput");
+  const errorEl = document.getElementById("gateError");
+  input.focus();
+
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const entered = input.value.trim().toUpperCase();
+    if (entered === DEMO_ACCESS_CODE_FALLBACK) {
+      grantAccess();
+      window.location.href = "project.html";
+    } else {
+      errorEl.textContent = "Incorrect code. Please try again.";
+      input.select();
+    }
+  });
+</script>
+</body>
+</html>
