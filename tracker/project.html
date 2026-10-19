@@ -134,6 +134,11 @@
       <div class="tile-name">RFIs</div>
       <div class="tile-stats"><div><strong id="rfisOpenCount">–</strong>open</div></div>
     </a>
+    <a class="tile" href="general-queries.html?project=" id="queriesTile">
+      <div class="tile-icon">💬</div>
+      <div class="tile-name">Queries</div>
+      <div class="tile-stats"><div><strong id="queriesOpenCount">–</strong>open</div></div>
+    </a>
     <a class="tile" href="companies.html?project=" id="companiesTile" style="display:none;">
       <div class="tile-icon">🏢</div>
       <div class="tile-name">Companies</div>
@@ -329,6 +334,7 @@
   document.getElementById("actionsTile").href = `actions.html?project=${projectId}`;
   document.getElementById("inspectionsTile").href = `inspections.html?project=${projectId}`;
   document.getElementById("rfisTile").href = `rfis.html?project=${projectId}`;
+  document.getElementById("queriesTile").href = `general-queries.html?project=${projectId}`;
   document.getElementById("companiesTile").href = `companies.html?project=${projectId}`;
 
   let project = null;
@@ -999,7 +1005,7 @@
     document.getElementById("controlCard").style.display = "none";
     document.getElementById("detailsCard").style.display = "none";
     document.getElementById("collaboratorsCard").style.display = "none";
-    ["reportsTile", "monthlyReportsTile", "plotHandoversTile", "hsAuditsTile", "commercialsTile", "commercialModuleTile", "toolboxTalksTile", "drawingsTile", "actionsTile", "inspectionsTile", "rfisTile", "programmeTile", "companiesTile"].forEach((id) => {
+    ["reportsTile", "monthlyReportsTile", "plotHandoversTile", "hsAuditsTile", "commercialsTile", "commercialModuleTile", "toolboxTalksTile", "drawingsTile", "actionsTile", "inspectionsTile", "rfisTile", "queriesTile", "programmeTile", "companiesTile"].forEach((id) => {
       document.getElementById(id).style.display = "none";
     });
   }
@@ -1073,18 +1079,19 @@
     loadCommercialModuleTile();
     loadToolboxTalksTile();
 
-    const [{ count: reportCount }, { count: monthlyReportCount }, { data: snags }, { count: fetchedPlotsCount }, { data: gates }, { data: commercials }, { count: drawingsCount }, { data: hsAudits }, { data: actions }, { data: findings }, { data: rfis }, { count: documentsCount }, { count: programmeActivitiesCount }] = await Promise.all([
+    const [{ count: reportCount }, { count: monthlyReportCount }, { data: snags }, { count: fetchedPlotsCount }, { data: gates }, { data: commercials }, { count: drawingsCount }, { data: hsAudits }, { data: actions }, { data: findings }, { data: rfis }, { data: queries }, { count: documentsCount }, { count: programmeActivitiesCount }] = await Promise.all([
       supabase.from("weekly_reports").select("id", { count: "exact", head: true }).eq("project_id", projectId),
       supabase.from("monthly_reports").select("id", { count: "exact", head: true }).eq("project_id", projectId),
       supabase.from("snag_items").select("status, due_date, priority").eq("project_id", projectId),
       supabase.from("plots").select("id", { count: "exact", head: true }).eq("project_id", projectId),
       supabase.from("quality_gates").select("status").eq("project_id", projectId),
       supabase.from("commercial_items").select("status").eq("project_id", projectId),
-      supabase.from("drawings").select("id", { count: "exact", head: true }).eq("project_id", projectId),
+      supabase.from("drawings").select("id", { count: "exact", head: true }).eq("project_id", projectId).eq("status", "current"),
       supabase.from("hs_audits").select("month").eq("project_id", projectId),
       supabase.from("actions").select("status").eq("project_id", projectId),
       supabase.from("inspection_findings").select("status").eq("project_id", projectId),
       supabase.from("rfis").select("status").eq("project_id", projectId),
+      supabase.from("general_queries").select("status").eq("project_id", projectId),
       supabase.from("documents").select("id", { count: "exact", head: true }).eq("project_id", projectId),
       supabase.from("programme_activities").select("id", { count: "exact", head: true }).eq("project_id", projectId),
     ]);
@@ -1104,6 +1111,7 @@
     document.getElementById("actionsOpenCount").textContent = (actions || []).filter(a => ["open", "in_progress", "blocked"].includes(a.status)).length;
     document.getElementById("findingsOpenCount").textContent = (findings || []).filter(isFindingOutstanding).length;
     document.getElementById("rfisOpenCount").textContent = (rfis || []).filter(r => ["open", "answered"].includes(r.status)).length;
+    document.getElementById("queriesOpenCount").textContent = (queries || []).filter(q => q.status !== "closed").length;
     document.getElementById("documentsCount").textContent = documentsCount ?? 0;
     document.getElementById("programmeActivitiesCount").textContent = programmeActivitiesCount ?? 0;
     updateGeneratePlotsButton();

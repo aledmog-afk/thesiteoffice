@@ -6937,3 +6937,231 @@ export async function attachReportCommercialNotes(kind, reports) {
   if (hidden) for (const r of list) r.commercial_items = [];
   return !hidden;
 }
+
+// ─── Drawing pins (Priority: drawing-pins, v74) ─────────────────────
+// Site/plot/block storey drawings, PDF page rasterisation, pins on
+// Snags/RFIs/Quality Gates/general Queries. See handover/NOTES.md
+// (19 Oct 2026) for the full plan this implements.
+
+export const DRAWING_STOREYS = [
+  { value: "GF", label: "Ground Floor" },
+  { value: "FF", label: "First Floor" },
+  { value: "SF", label: "Second Floor" },
+];
+
+// ─── pdf.js loading (vendored same-origin — see js/vendor/pdfjs/) ───
+// Loaded from a same-origin file, not esm.sh: confirmed this sandbox's
+// own egress and the live environment's cannot reach esm.sh, so an
+// esm.sh-hosted worker can never be verified end-to-end before
+// shipping. Vendoring sidesteps the question entirely — 'self' already
+// covers it in the CSP (_headers), no new external origin needed.
+// pdfjs-dist is deliberately pinned to 4.10.38, NOT the newest release
+// (6.4.299 at the time this was built) — the latest major version uses
+// a very new JS engine method (Map.prototype.getOrInsertComputed) that
+// a real smoke test under this exact CSP showed isn't yet supported
+// even by a fairly recent Chromium build; 4.10.38 is the newest
+// version confirmed, by an actual rendering test (not just read from
+// docs), to work.
+let pdfjsLibPromise = null;
+export async function loadPdfJs() {
+  if (!pdfjsLibPromise) {
+    pdfjsLibPromise = import("./vendor/pdfjs/pdf.min.mjs").then((lib) => {
+      lib.GlobalWorkerOptions.workerSrc = new URL("./vendor/pdfjs/pdf.worker.min.mjs", import.meta.url).href;
+      return lib;
+    });
+  }
+  return pdfjsLibPromise;
+}
+
+// Renders every page of a PDF File to its own compressed image Blob,
+// via the same canvas resize/re-encode step compressDrawing() already
+// uses for plain images — so a rasterised PDF page and a plain
+// uploaded image end up through an identical compression path. A
+// non-PDF file short-circuits to a single-page "render" (just the
+// compressed file itself), so callers never need to branch on file
+// type themselves.
+export async function rasterizePdfPages(file) {
+  if (file.type !== "application/pdf") {
+    const compressed = await compressDrawing(file);
+    return [compressed];
+  }
+  const pdfjsLib = await loadPdfJs();
+  const buffer = await file.arrayBuffer();
+  const doc = await pdfjsLib.getDocument({ data: buffer }).promise;
+  const pages = [];
+  for (let i = 1; i <= doc.numPages; i++) {
+    const page = await doc.getPage(i);
+    const viewport = page.getViewport({ scale: 2 });
+    const canvas = document.createElement("canvas");
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    const ctx = canvas.getContext("2d");
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/webp", 0.85));
+    const pageFile = new File([blob], `page-${i}.webp`, { type: "image/webp" });
+    pages.push(await compressDrawing(pageFile));
+  }
+  return pages;
+}
+
+// ─── Upload + pages ──────────────────────────────────────────────────
+
+export async function createDrawingUpload(projectId, file) {
+  const url = await uploadDrawing(file, `${projectId}/uploads`);
+  const { data, error } = await supabase.from("drawing_uploads").insert({
+    project_id: projectId, source_file_url: url, source_file_name: file.name, source_mime_type: file.type,
+  }).select("id").single();
+  if (error) throw error;
+  return data.id;
+}
+
+export async function createDrawingPage(drawingUploadId, pageNumber, pageFile, projectId) {
+  const url = await uploadDrawing(pageFile, `${projectId}/uploads/${drawingUploadId}`);
+  const dims = await new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
+    img.onerror = () => resolve({ w: null, h: null });
+    img.src = URL.createObjectURL(pageFile);
+  });
+  const { data, error } = await supabase.from("drawing_pages").insert({
+    drawing_upload_id: drawingUploadId, page_number: pageNumber, image_url: url, width_px: dims.w, height_px: dims.h,
+  }).select("id").single();
+  if (error) throw error;
+  return data.id;
+}
+
+// Uploads a file (PDF or image), rasterises every page, and uploads
+// each page as its own drawing_pages row — the shared first half of
+// the "upload and assign" flow every drawing-owning screen uses.
+// Returns [{ pageId, pageNumber, previewUrl }], left entirely
+// unassigned to any drawing — the caller decides where each page goes.
+export async function uploadAndRasterizeDrawing(projectId, file) {
+  const uploadId = await createDrawingUpload(projectId, file);
+  const pageFiles = await rasterizePdfPages(file);
+  const pages = [];
+  for (let i = 0; i < pageFiles.length; i++) {
+    const pageId = await createDrawingPage(uploadId, i + 1, pageFiles[i], projectId);
+    pages.push({ pageId, pageNumber: i + 1, previewUrl: URL.createObjectURL(pageFiles[i]) });
+  }
+  return { uploadId, pages };
+}
+
+// ─── Drawings (site / plot storey / block storey) ───────────────────
+
+export async function getProjectDrawings(projectId) {
+  const { data, error } = await supabase
+    .from("drawings")
+    .select("*, current_page:drawing_pages!drawings_current_page_id_fkey(id, image_url, width_px, height_px)")
+    .eq("project_id", projectId)
+    .eq("status", "current")
+    .order("scope", { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function getDrawing(drawingId) {
+  const { data, error } = await supabase
+    .from("drawings")
+    .select("*, current_page:drawing_pages!drawings_current_page_id_fkey(id, image_url, width_px, height_px)")
+    .eq("id", drawingId)
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function getDrawingRevisionHistory(drawingId) {
+  const { data, error } = await supabase
+    .from("drawing_page_assignments")
+    .select("id, assigned_at, superseded_at, drawing_page:drawing_pages(id, image_url, page_number)")
+    .eq("drawing_id", drawingId)
+    .order("assigned_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+// Finds (or returns null for) the existing current drawing identity
+// matching this destination, so the upload-and-assign UI can offer
+// "replace the existing one" vs. "this is new" without a separate query.
+export async function findExistingDrawing(projectId, { scope, plotId = null, blockId = null, storey = null }) {
+  let q = supabase.from("drawings").select("id, title").eq("project_id", projectId).eq("scope", scope).eq("status", "current");
+  q = scope === "site" ? q : scope === "plot_storey" ? q.eq("plot_id", plotId).eq("storey", storey) : q.eq("block_id", blockId).eq("storey", storey);
+  const { data, error } = await q.maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+// Assigns one rasterised page to a drawing destination — creates the
+// drawing identity the first time, or reassigns (a revision) an
+// existing one every time after. This is the one place
+// drawing_page_assignments is ever inserted from the client.
+export async function assignDrawingPage(projectId, pageId, { scope, plotId = null, blockId = null, storey = null, title }) {
+  const existing = await findExistingDrawing(projectId, { scope, plotId, blockId, storey });
+  let drawingId = existing?.id;
+  if (!drawingId) {
+    const { data, error } = await supabase.from("drawings").insert({
+      project_id: projectId, scope, plot_id: plotId, block_id: blockId, storey, title,
+    }).select("id").single();
+    if (error) throw error;
+    drawingId = data.id;
+  }
+  const { error: assignError } = await supabase.from("drawing_page_assignments").insert({ drawing_id: drawingId, drawing_page_id: pageId });
+  if (assignError) throw assignError;
+  return drawingId;
+}
+
+export async function archiveDrawing(drawingId) {
+  const { error } = await supabase.from("drawings").update({ status: "archived" }).eq("id", drawingId);
+  if (error) throw error;
+}
+
+// ─── Pins ────────────────────────────────────────────────────────────
+
+export async function getDrawingPagePins(drawingPageId) {
+  const { data, error } = await supabase
+    .from("drawing_pins")
+    .select("id, x_pct, y_pct, snag_item_id, rfi_id, quality_gate_id, query_id")
+    .eq("drawing_page_id", drawingPageId);
+  if (error) throw error;
+  return data || [];
+}
+
+// owner is exactly one of { snagItemId, rfiId, qualityGateId, queryId }.
+export async function createDrawingPin(drawingPageId, xPct, yPct, owner) {
+  const row = { drawing_page_id: drawingPageId, x_pct: xPct, y_pct: yPct };
+  if (owner.snagItemId) row.snag_item_id = owner.snagItemId;
+  else if (owner.rfiId) row.rfi_id = owner.rfiId;
+  else if (owner.qualityGateId) row.quality_gate_id = owner.qualityGateId;
+  else if (owner.queryId) row.query_id = owner.queryId;
+  const { data, error } = await supabase.from("drawing_pins").insert(row).select("id").single();
+  if (error) throw error;
+  return data.id;
+}
+
+// ─── General Queries (a new, lighter query type than RFIs) ─────────
+
+export const QUERY_STATUS_LABEL = { open: "Open", answered: "Answered", closed: "Closed" };
+export const QUERY_STATUS_BADGE = { open: "badge-red", answered: "badge-amber", closed: "badge-green" };
+
+export async function getProjectQueries(projectId) {
+  const { data, error } = await supabase.from("general_queries").select("*").eq("project_id", projectId).order("raised_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function createQuery(projectId, question, { plotId = null, blockId = null } = {}) {
+  const { data, error } = await supabase.from("general_queries").insert({
+    project_id: projectId, question, plot_id: plotId, block_id: blockId,
+  }).select("id").single();
+  if (error) throw error;
+  return data.id;
+}
+
+export async function answerQuery(queryId, response) {
+  const { error } = await supabase.from("general_queries").update({ status: "answered", response }).eq("id", queryId);
+  if (error) throw error;
+}
+
+export async function closeQuery(queryId) {
+  const { error } = await supabase.from("general_queries").update({ status: "closed" }).eq("id", queryId);
+  if (error) throw error;
+}

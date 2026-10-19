@@ -19,9 +19,15 @@
       <div class="page-title" id="drawingTitle">Loading…</div>
       <div class="page-sub" id="projectSub"></div>
     </div>
+    <div class="btn-row">
+      <button class="btn btn-outline btn-sm" id="historyBtn">Revision History</button>
+      <button class="btn btn-outline btn-sm" id="newRevisionBtn">Upload New Revision</button>
+    </div>
   </div>
 
-  <p class="hint" style="margin-bottom:1rem;">Click/tap anywhere on the drawing to drop a pin and raise a snag at that exact spot. Click an existing pin to see what's already been raised there.</p>
+  <div id="errorBox" class="error-box"></div>
+
+  <p class="hint" style="margin-bottom:1rem;">Tap anywhere on the drawing to drop a pin. Tap an existing pin to see what's already been raised there.</p>
 
   <div class="drawing-canvas-wrap">
     <div class="drawing-canvas" id="canvas">
@@ -30,38 +36,59 @@
   </div>
 </div>
 
-<!-- New pin action panel -->
+<!-- New pin: choose type, then the matching form -->
 <div class="card no-print" id="newPinPanel" style="display:none; max-width:500px; margin:1.2rem auto 0;">
   <div id="pinErrorBox" class="error-box"></div>
-  <h3 class="card-heading" style="margin-bottom:0.8rem;">New Snag at This Location</h3>
-  <form id="pinForm">
-    <div class="field">
-      <label for="pinSnagList">Snag list *</label>
-      <select id="pinSnagList" required></select>
-    </div>
-    <div class="field"><label for="pinLocation">Location / Plot *</label><input type="text" id="pinLocation" required></div>
-    <div class="field"><label for="pinDescription">Description *</label><textarea id="pinDescription" rows="2" required placeholder="What's wrong, exactly here"></textarea></div>
-    <div class="form-grid">
-      <div class="field"><label for="pinTrade">Trade responsible</label><input type="text" id="pinTrade"></div>
-      <div class="field">
-        <label for="pinPriority">Priority</label>
-        <select id="pinPriority">
-          <option value="low">Low</option>
-          <option value="medium" selected>Medium</option>
-          <option value="high">High</option>
-        </select>
+  <h3 class="card-heading" style="margin-bottom:0.8rem;">New Pin</h3>
+  <div class="field">
+    <label for="pinType">What is this?</label>
+    <select id="pinType">
+      <option value="snag">Snag</option>
+      <option value="rfi">RFI</option>
+      <option value="gate">Quality Gate</option>
+      <option value="query">Query</option>
+    </select>
+  </div>
+
+  <form id="pinFormSnag" class="pin-form">
+    <div class="field"><label for="snagExisting">Snag</label><select id="snagExisting"><option value="">+ Raise a new snag</option></select></div>
+    <div id="snagNewFields">
+      <div class="field"><label for="snagList">Snag list *</label><select id="snagList" required></select></div>
+      <div class="field"><label for="snagLocation">Location *</label><input type="text" id="snagLocation" required></div>
+      <div class="field"><label for="snagDescription">Description *</label><textarea id="snagDescription" rows="2" required></textarea></div>
+      <div class="form-grid">
+        <div class="field"><label for="snagTrade">Trade responsible</label><input type="text" id="snagTrade"></div>
+        <div class="field"><label for="snagPriority">Priority</label>
+          <select id="snagPriority"><option value="low">Low</option><option value="medium" selected>Medium</option><option value="high">High</option></select>
+        </div>
       </div>
     </div>
-    <div class="field">
-      <label>Photo</label>
-      <input type="file" id="pinPhotoInput" accept="image/*">
-      <div class="photo-grid" id="pinPhotoGrid"></div>
-    </div>
-    <div class="btn-row">
-      <button type="submit" class="btn btn-amber">Save Snag</button>
-      <button type="button" class="btn btn-outline" id="cancelPinBtn">Cancel</button>
+  </form>
+
+  <form id="pinFormRfi" class="pin-form" style="display:none;">
+    <div class="field"><label for="rfiExisting">RFI</label><select id="rfiExisting"><option value="">+ Raise a new RFI</option></select></div>
+    <div id="rfiNewFields">
+      <div class="field"><label for="rfiTitle">Title *</label><input type="text" id="rfiTitle" required></div>
+      <div class="field"><label for="rfiQuestion">Question *</label><textarea id="rfiQuestion" rows="2" required></textarea></div>
     </div>
   </form>
+
+  <form id="pinFormGate" class="pin-form" style="display:none;">
+    <div class="field"><label for="gateSelect">Quality Gate *</label><select id="gateSelect" required></select></div>
+    <p class="hint" id="gateNoPlotHint" style="display:none;">Quality Gate pins are only available on a plot floor plan.</p>
+  </form>
+
+  <form id="pinFormQuery" class="pin-form" style="display:none;">
+    <div class="field"><label for="queryExisting">Query</label><select id="queryExisting"><option value="">+ Raise a new query</option></select></div>
+    <div id="queryNewFields">
+      <div class="field"><label for="queryQuestion">Question *</label><textarea id="queryQuestion" rows="2" required placeholder="A quick on-site question"></textarea></div>
+    </div>
+  </form>
+
+  <div class="btn-row" style="margin-top:0.8rem;">
+    <button type="button" class="btn btn-amber" id="savePinBtn">Save Pin</button>
+    <button type="button" class="btn btn-outline" id="cancelPinBtn">Cancel</button>
+  </div>
 </div>
 
 <!-- Existing pin detail modal -->
@@ -69,9 +96,33 @@
   <div class="modal-box" id="pinModalBody"></div>
 </div>
 
+<!-- Revision history modal -->
+<div class="modal-backdrop no-print" id="historyModal" style="display:none;">
+  <div class="modal-box" id="historyModalBody"></div>
+</div>
+
+<!-- Upload new revision modal -->
+<div class="modal-backdrop no-print" id="revisionModal" style="display:none;">
+  <div class="modal-box">
+    <h3 class="card-heading" style="margin-bottom:0.8rem;">Upload New Revision</h3>
+    <div id="revisionErrorBox" class="error-box"></div>
+    <div class="field"><label for="revisionFile">File (PDF or image) *</label><input type="file" id="revisionFile" accept="image/*,application/pdf"></div>
+    <p class="hint" id="revisionMultiPageHint" style="display:none;">This file has more than one page — pick which page is this drawing's new content below.</p>
+    <div id="revisionPageGrid" class="grid"></div>
+    <div class="btn-row" style="margin-top:0.8rem;">
+      <button type="button" class="btn btn-outline" id="cancelRevisionBtn">Cancel</button>
+    </div>
+  </div>
+</div>
+
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, uploadImage, todayISO, SNAG_PRIORITY_LABEL, SNAG_PRIORITY_BADGE, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE } from "./js/app.js";
+  import {
+    requireAuth, renderHeader, getParam, escapeHtml, formatDate, formatDateTime, showError, clearError, uploadImage, todayISO,
+    SNAG_PRIORITY_LABEL, SNAG_PRIORITY_BADGE, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE,
+    getDrawing, getDrawingRevisionHistory, getDrawingPagePins, createDrawingPin,
+    uploadAndRasterizeDrawing, assignDrawingPage, DRAWING_STOREYS,
+  } from "./js/app.js";
 
   await requireAuth();
   const drawingId = getParam("id");
@@ -80,7 +131,6 @@
   let drawing = null;
   let pins = [];
   let pendingCoords = null;
-  let pinPhotoUrl = null;
 
   const canvas = document.getElementById("canvas");
   const drawingImg = document.getElementById("drawingImg");
@@ -88,14 +138,20 @@
   const pinErrorBox = document.getElementById("pinErrorBox");
   const pinModal = document.getElementById("pinModal");
 
+  function pinOwnerLabel(p) {
+    if (p.snag_item_id) return "snag";
+    if (p.rfi_id) return "rfi";
+    if (p.quality_gate_id) return "gate";
+    return "query";
+  }
+
   function renderPins() {
     canvas.querySelectorAll(".pin").forEach((el) => el.remove());
     pins.forEach((p) => {
       const dot = document.createElement("div");
-      dot.className = "pin";
-      dot.style.left = p.x_coordinate + "%";
-      dot.style.top = p.y_coordinate + "%";
-      dot.title = p.location || p.description;
+      dot.className = "pin pin-" + pinOwnerLabel(p);
+      dot.style.left = p.x_pct + "%";
+      dot.style.top = p.y_pct + "%";
       dot.addEventListener("click", (e) => { e.stopPropagation(); openPinModal(p); });
       canvas.appendChild(dot);
     });
@@ -126,16 +182,60 @@
     pendingCoords = null;
   }
 
+  function showPinForm(type) {
+    document.querySelectorAll(".pin-form").forEach((f) => f.style.display = "none");
+    document.getElementById("pinForm" + type[0].toUpperCase() + type.slice(1)).style.display = "block";
+  }
+  document.getElementById("pinType").addEventListener("change", (e) => showPinForm(e.target.value));
+
+  // Each of Snag/RFI/Query can pin a brand-new item (the form below) or
+  // an already-existing one (per the brief: "set either when the item
+  // is raised or added afterwards") — picking one hides the "new" form.
+  function wireExistingToggle(selectId, newFieldsId) {
+    document.getElementById(selectId).addEventListener("change", (e) => {
+      document.getElementById(newFieldsId).style.display = e.target.value ? "none" : "block";
+    });
+  }
+  wireExistingToggle("snagExisting", "snagNewFields");
+  wireExistingToggle("rfiExisting", "rfiNewFields");
+  wireExistingToggle("queryExisting", "queryNewFields");
+
   async function openNewPinPanel() {
     clearError(pinErrorBox);
-    document.getElementById("pinForm").reset();
-    document.getElementById("pinLocation").value = drawing.plot_number || drawing.drawing_name;
-    pinPhotoUrl = null;
-    document.getElementById("pinPhotoGrid").innerHTML = "";
+    document.getElementById("pinType").value = "snag";
+    showPinForm("snag");
 
-    const select = document.getElementById("pinSnagList");
     const { data: lists } = await supabase.from("snag_lists").select("id, title").eq("project_id", drawing.project_id).order("created_at", { ascending: false });
-    select.innerHTML = (lists || []).map(l => `<option value="${l.id}">${escapeHtml(l.title)}</option>`).join("") + `<option value="__new__">+ New snag list…</option>`;
+    document.getElementById("snagList").innerHTML = (lists || []).map((l) => `<option value="${l.id}">${escapeHtml(l.title)}</option>`).join("") + `<option value="__new__">+ New snag list…</option>`;
+    document.getElementById("snagLocation").value = drawing.title || "";
+
+    const { data: openSnags } = await supabase.from("snag_items").select("id, location, description").eq("project_id", drawing.project_id).eq("status", "open").order("raised_date", { ascending: false }).limit(50);
+    document.getElementById("snagExisting").innerHTML = `<option value="">+ Raise a new snag</option>` +
+      (openSnags || []).map((s) => `<option value="${s.id}">${escapeHtml(s.location || s.description.slice(0, 40))}</option>`).join("");
+    document.getElementById("snagNewFields").style.display = "block";
+
+    const { data: openRfis } = await supabase.from("rfis").select("id, reference, title").eq("project_id", drawing.project_id).in("status", ["open", "answered"]).limit(50);
+    document.getElementById("rfiExisting").innerHTML = `<option value="">+ Raise a new RFI</option>` +
+      (openRfis || []).map((r) => `<option value="${r.id}">${escapeHtml(r.reference)} — ${escapeHtml(r.title)}</option>`).join("");
+    document.getElementById("rfiNewFields").style.display = "block";
+
+    const { data: openQueries } = await supabase.from("general_queries").select("id, question").eq("project_id", drawing.project_id).neq("status", "closed").limit(50);
+    document.getElementById("queryExisting").innerHTML = `<option value="">+ Raise a new query</option>` +
+      (openQueries || []).map((q) => `<option value="${q.id}">${escapeHtml(q.question.slice(0, 50))}</option>`).join("");
+    document.getElementById("queryNewFields").style.display = "block";
+
+    const gateSelect = document.getElementById("gateSelect");
+    const gateNoPlotHint = document.getElementById("gateNoPlotHint");
+    if (drawing.plot_id) {
+      const { data: gates } = await supabase.from("quality_gates").select("id, title").eq("plot_id", drawing.plot_id);
+      gateSelect.innerHTML = (gates || []).map((g) => `<option value="${g.id}">${escapeHtml(g.title)}</option>`).join("");
+      gateSelect.disabled = false;
+      gateNoPlotHint.style.display = "none";
+    } else {
+      gateSelect.innerHTML = "";
+      gateSelect.disabled = true;
+      gateNoPlotHint.style.display = "block";
+    }
 
     newPinPanel.style.display = "block";
     newPinPanel.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -146,53 +246,70 @@
     clearTempPin();
   });
 
-  document.getElementById("pinPhotoInput").addEventListener("change", async () => {
-    const file = document.getElementById("pinPhotoInput").files[0];
-    if (!file) return;
-    document.getElementById("pinPhotoInput").disabled = true;
-    try {
-      pinPhotoUrl = await uploadImage(file, `${drawing.project_id}/snags`);
-      document.getElementById("pinPhotoGrid").innerHTML = `<div class="photo-thumb"><img src="${pinPhotoUrl}"></div>`;
-    } catch (err) {
-      showError(pinErrorBox, err);
-    } finally {
-      document.getElementById("pinPhotoInput").disabled = false;
-    }
-  });
-
-  document.getElementById("pinForm").addEventListener("submit", async (e) => {
-    e.preventDefault();
+  document.getElementById("savePinBtn").addEventListener("click", async () => {
     clearError(pinErrorBox);
     if (!pendingCoords) return;
-
+    const type = document.getElementById("pinType").value;
+    const pageId = drawing.current_page.id;
     try {
-      let snagListId = document.getElementById("pinSnagList").value;
       const { data: { user } } = await supabase.auth.getUser();
 
-      if (snagListId === "__new__") {
-        const title = prompt("Name this snag list:", `Snag List – ${formatDate(todayISO())}`);
-        if (!title) return;
-        const { data: newList, error: listErr } = await supabase.from("snag_lists").insert({ project_id: drawing.project_id, title: title.trim(), created_by: user.id }).select().single();
-        if (listErr) throw listErr;
-        snagListId = newList.id;
+      if (type === "snag") {
+        const existingId = document.getElementById("snagExisting").value;
+        if (existingId) {
+          await createDrawingPin(pageId, pendingCoords.x, pendingCoords.y, { snagItemId: existingId });
+          newPinPanel.style.display = "none"; clearTempPin(); loadPins(); return;
+        }
+        const location = document.getElementById("snagLocation").value.trim();
+        const description = document.getElementById("snagDescription").value.trim();
+        if (!location || !description) { showError(pinErrorBox, { message: "Location and description are required." }); return; }
+        let snagListId = document.getElementById("snagList").value;
+        if (snagListId === "__new__") {
+          const title = prompt("Name this snag list:", `Snag List – ${formatDate(todayISO())}`);
+          if (!title) return;
+          const { data: newList, error: listErr } = await supabase.from("snag_lists").insert({ project_id: drawing.project_id, title: title.trim(), created_by: user.id }).select().single();
+          if (listErr) throw listErr;
+          snagListId = newList.id;
+        }
+        const { data: snag, error } = await supabase.from("snag_items").insert({
+          project_id: drawing.project_id, snag_list_id: snagListId, location, description,
+          trade: document.getElementById("snagTrade").value.trim() || null,
+          priority: document.getElementById("snagPriority").value, raised_date: todayISO(), created_by: user.id,
+        }).select("id").single();
+        if (error) throw error;
+        await createDrawingPin(pageId, pendingCoords.x, pendingCoords.y, { snagItemId: snag.id });
+      } else if (type === "rfi") {
+        const existingId = document.getElementById("rfiExisting").value;
+        if (existingId) {
+          await createDrawingPin(pageId, pendingCoords.x, pendingCoords.y, { rfiId: existingId });
+          newPinPanel.style.display = "none"; clearTempPin(); loadPins(); return;
+        }
+        const title = document.getElementById("rfiTitle").value.trim();
+        const question = document.getElementById("rfiQuestion").value.trim();
+        if (!title || !question) { showError(pinErrorBox, { message: "Title and question are required." }); return; }
+        const { data: rfi, error } = await supabase.from("rfis").insert({
+          project_id: drawing.project_id, plot_id: drawing.plot_id, title, question,
+        }).select("id").single();
+        if (error) throw error;
+        await createDrawingPin(pageId, pendingCoords.x, pendingCoords.y, { rfiId: rfi.id });
+      } else if (type === "gate") {
+        const gateId = document.getElementById("gateSelect").value;
+        if (!gateId) { showError(pinErrorBox, { message: "Choose a Quality Gate." }); return; }
+        await createDrawingPin(pageId, pendingCoords.x, pendingCoords.y, { qualityGateId: gateId });
+      } else {
+        const existingId = document.getElementById("queryExisting").value;
+        if (existingId) {
+          await createDrawingPin(pageId, pendingCoords.x, pendingCoords.y, { queryId: existingId });
+          newPinPanel.style.display = "none"; clearTempPin(); loadPins(); return;
+        }
+        const question = document.getElementById("queryQuestion").value.trim();
+        if (!question) { showError(pinErrorBox, { message: "Question is required." }); return; }
+        const { data: query, error } = await supabase.from("general_queries").insert({
+          project_id: drawing.project_id, plot_id: drawing.plot_id, block_id: drawing.block_id, question,
+        }).select("id").single();
+        if (error) throw error;
+        await createDrawingPin(pageId, pendingCoords.x, pendingCoords.y, { queryId: query.id });
       }
-
-      const payload = {
-        project_id: drawing.project_id,
-        snag_list_id: snagListId,
-        drawing_id: drawing.id,
-        x_coordinate: pendingCoords.x,
-        y_coordinate: pendingCoords.y,
-        location: document.getElementById("pinLocation").value.trim(),
-        description: document.getElementById("pinDescription").value.trim(),
-        trade: document.getElementById("pinTrade").value.trim() || null,
-        priority: document.getElementById("pinPriority").value,
-        photo_url: pinPhotoUrl,
-        raised_date: todayISO(),
-        created_by: user.id,
-      };
-      const { error } = await supabase.from("snag_items").insert(payload);
-      if (error) throw error;
 
       newPinPanel.style.display = "none";
       clearTempPin();
@@ -202,58 +319,136 @@
     }
   });
 
-  function openPinModal(pin) {
-    document.getElementById("pinModalBody").innerHTML = `
-      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:1rem; margin-bottom:1rem;">
-        <div>
-          <div class="display-font" style="font-weight:700; font-size:1.1rem;">${escapeHtml(pin.location) || "Untitled"}</div>
-          <div style="color:var(--ink-soft); font-size:0.8rem;">Raised ${formatDate(pin.raised_date)}${pin.trade ? " · " + escapeHtml(pin.trade) : ""}</div>
+  async function openPinModal(pin) {
+    const kind = pinOwnerLabel(pin);
+    let body = "";
+    if (kind === "snag") {
+      const { data: s } = await supabase.from("snag_items").select("*").eq("id", pin.snag_item_id).single();
+      body = `
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:1rem; margin-bottom:1rem;">
+          <div><div class="display-font" style="font-weight:700; font-size:1.1rem;">${escapeHtml(s.location) || "Untitled"}</div>
+          <div style="color:var(--ink-soft); font-size:0.8rem;">Raised ${formatDate(s.raised_date)}${s.trade ? " · " + escapeHtml(s.trade) : ""}</div></div>
+          <div class="btn-row"><span class="badge ${SNAG_PRIORITY_BADGE[s.priority] || "badge-grey"}">${SNAG_PRIORITY_LABEL[s.priority] || s.priority}</span>
+          <span class="badge ${SNAG_STATUS_BADGE[s.status] || "badge-grey"}">${SNAG_STATUS_LABEL[s.status] || s.status}</span></div>
         </div>
-        <div class="btn-row">
-          <span class="badge ${SNAG_PRIORITY_BADGE[pin.priority] || "badge-grey"}">${SNAG_PRIORITY_LABEL[pin.priority] || pin.priority}</span>
-          <span class="badge ${SNAG_STATUS_BADGE[pin.status] || "badge-grey"}">${SNAG_STATUS_LABEL[pin.status] || pin.status}</span>
-        </div>
-      </div>
-      <p style="font-size:0.92rem; margin-bottom:1rem;">${escapeHtml(pin.description)}</p>
-      ${pin.photo_url ? `<div class="photo-grid" style="margin-bottom:1rem;"><div class="photo-thumb"><img src="${pin.photo_url}"></div></div>` : ""}
-      <div class="btn-row">
-        <a class="btn btn-amber btn-sm" href="snag-list-edit.html?id=${pin.snag_list_id}">View / Edit in Snag List</a>
-        <button type="button" class="btn btn-outline btn-sm" id="closePinModalBtn">Close</button>
-      </div>
-    `;
+        <p style="font-size:0.92rem; margin-bottom:1rem;">${escapeHtml(s.description)}</p>
+        <div class="btn-row"><a class="btn btn-amber btn-sm" href="snag-list-edit.html?id=${s.snag_list_id}">View / Edit in Snag List</a></div>`;
+    } else if (kind === "rfi") {
+      const { data: r } = await supabase.from("rfis").select("*").eq("id", pin.rfi_id).single();
+      body = `
+        <div class="display-font" style="font-weight:700; font-size:1.1rem; margin-bottom:0.4rem;">${escapeHtml(r.reference)} — ${escapeHtml(r.title)}</div>
+        <p style="font-size:0.92rem; margin-bottom:1rem;">${escapeHtml(r.question)}</p>
+        <div class="btn-row"><a class="btn btn-amber btn-sm" href="rfi-detail.html?id=${r.id}">View RFI</a></div>`;
+    } else if (kind === "gate") {
+      const { data: g } = await supabase.from("quality_gates").select("*").eq("id", pin.quality_gate_id).single();
+      body = `<div class="display-font" style="font-weight:700; font-size:1.1rem; margin-bottom:0.4rem;">${escapeHtml(g.title)}</div>
+        <p style="font-size:0.92rem;">Status: ${escapeHtml(g.status)}</p>`;
+    } else {
+      const { data: q } = await supabase.from("general_queries").select("*").eq("id", pin.query_id).single();
+      body = `<div class="display-font" style="font-weight:700; font-size:1.1rem; margin-bottom:0.4rem;">Query</div>
+        <p style="font-size:0.92rem; margin-bottom:0.6rem;">${escapeHtml(q.question)}</p>
+        <div class="btn-row"><a class="btn btn-amber btn-sm" href="general-queries.html?project=${drawing.project_id}">View in Queries</a></div>`;
+    }
+    document.getElementById("pinModalBody").innerHTML = body + `<div class="btn-row" style="margin-top:1rem;"><button type="button" class="btn btn-outline btn-sm" id="closePinModalBtn">Close</button></div>`;
     document.getElementById("closePinModalBtn").addEventListener("click", () => pinModal.style.display = "none");
     pinModal.style.display = "flex";
   }
   pinModal.addEventListener("click", (e) => { if (e.target === pinModal) pinModal.style.display = "none"; });
 
   async function loadPins() {
-    const { data } = await supabase
-      .from("snag_items")
-      .select("*")
-      .eq("drawing_id", drawingId)
-      .not("x_coordinate", "is", null)
-      .not("y_coordinate", "is", null);
-    pins = data || [];
+    if (!drawing.current_page) { pins = []; renderPins(); return; }
+    pins = await getDrawingPagePins(drawing.current_page.id);
     renderPins();
   }
 
-  async function init() {
-    const { data, error } = await supabase.from("drawings").select("*, projects(*)").eq("id", drawingId).single();
-    if (error) { document.getElementById("drawingTitle").textContent = "Drawing not found"; return; }
-    drawing = data;
-    const project = drawing.projects;
+  // ─── Revision history ─────────────────────────────────────────────
+  document.getElementById("historyBtn").addEventListener("click", async () => {
+    const history = await getDrawingRevisionHistory(drawing.id);
+    document.getElementById("historyModalBody").innerHTML = `
+      <h3 class="card-heading" style="margin-bottom:0.8rem;">Revision History</h3>
+      ${history.length ? history.map((h, i) => `
+        <div class="card" style="margin-bottom:0.6rem;">
+          <div style="display:flex; justify-content:space-between; align-items:center;">
+            <strong>${i === 0 ? "Current" : "Superseded"}</strong>
+            <span class="hint">${formatDateTime(h.assigned_at)}${h.superseded_at ? " – " + formatDateTime(h.superseded_at) : ""}</span>
+          </div>
+          <img src="${h.drawing_page.image_url}" style="max-width:100%; max-height:160px; margin-top:0.5rem; border-radius:6px; border:1px solid var(--rule);">
+        </div>
+      `).join("") : `<p class="hint">No revisions recorded yet.</p>`}
+      <div class="btn-row"><button type="button" class="btn btn-outline btn-sm" id="closeHistoryBtn">Close</button></div>
+    `;
+    document.getElementById("closeHistoryBtn").addEventListener("click", () => document.getElementById("historyModal").style.display = "none");
+    document.getElementById("historyModal").style.display = "flex";
+  });
+  document.getElementById("historyModal").addEventListener("click", (e) => { if (e.target.id === "historyModal") e.target.style.display = "none"; });
 
-    document.getElementById("drawingTitle").textContent = drawing.drawing_name;
-    document.getElementById("projectSub").textContent = drawing.plot_number ? `${project.name} · ${drawing.plot_number}` : project.name;
+  // ─── Upload a new revision ────────────────────────────────────────
+  document.getElementById("newRevisionBtn").addEventListener("click", () => {
+    document.getElementById("revisionModal").style.display = "flex";
+  });
+  document.getElementById("cancelRevisionBtn").addEventListener("click", () => {
+    document.getElementById("revisionModal").style.display = "none";
+    document.getElementById("revisionFile").value = "";
+    document.getElementById("revisionPageGrid").innerHTML = "";
+  });
+  document.getElementById("revisionFile").addEventListener("change", async () => {
+    const file = document.getElementById("revisionFile").files[0];
+    if (!file) return;
+    clearError(document.getElementById("revisionErrorBox"));
+    const grid = document.getElementById("revisionPageGrid");
+    grid.innerHTML = "<p class='hint'>Processing…</p>";
+    try {
+      const { pages } = await uploadAndRasterizeDrawing(drawing.project_id, file);
+      document.getElementById("revisionMultiPageHint").style.display = pages.length > 1 ? "block" : "none";
+      grid.innerHTML = pages.map((p) => `
+        <div class="tile">
+          <img src="${p.previewUrl}" style="width:100%; height:120px; object-fit:cover; border-radius:6px;">
+          <button type="button" class="btn btn-amber btn-sm" style="margin-top:0.5rem; width:100%;" data-page-id="${p.pageId}">Use as new revision</button>
+        </div>
+      `).join("");
+      grid.querySelectorAll("[data-page-id]").forEach((btn) => btn.addEventListener("click", async () => {
+        try {
+          await assignDrawingPage(drawing.project_id, btn.dataset.pageId, {
+            scope: drawing.scope, plotId: drawing.plot_id, blockId: drawing.block_id, storey: drawing.storey, title: drawing.title,
+          });
+          document.getElementById("revisionModal").style.display = "none";
+          window.location.reload();
+        } catch (err) {
+          showError(document.getElementById("revisionErrorBox"), err);
+        }
+      }));
+    } catch (err) {
+      showError(document.getElementById("revisionErrorBox"), err);
+      grid.innerHTML = "";
+    }
+  });
+
+  async function init() {
+    try {
+      drawing = await getDrawing(drawingId);
+    } catch (err) {
+      document.getElementById("drawingTitle").textContent = "Drawing not found";
+      return;
+    }
+    const { data: project } = await supabase.from("projects").select("*").eq("id", drawing.project_id).single();
+
+    document.getElementById("drawingTitle").textContent = drawing.title;
+    const storeyLabel = (DRAWING_STOREYS.find((s) => s.value === drawing.storey) || {}).label;
+    document.getElementById("projectSub").textContent = [project.name, storeyLabel].filter(Boolean).join(" · ");
     renderHeader([
       { label: "Dashboard", href: "dashboard.html" },
       { label: project.name, href: `project.html?id=${project.id}` },
       { label: "Drawings & Layouts", href: `drawings.html?project=${project.id}` },
-      { label: drawing.drawing_name },
+      { label: drawing.title },
     ]);
 
+    if (!drawing.current_page) {
+      document.getElementById("errorBox").textContent = "This drawing has no page assigned yet.";
+      document.getElementById("errorBox").style.display = "block";
+      return;
+    }
     drawingImg.addEventListener("load", loadPins);
-    drawingImg.src = drawing.drawing_url;
+    drawingImg.src = drawing.current_page.image_url;
     if (drawingImg.complete) loadPins();
   }
 

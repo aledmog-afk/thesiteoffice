@@ -123,10 +123,10 @@ test("_headers: every root page, the 404 page at any unknown path, and the app g
   for (const p of rootPaths) assert.match(resolveHeaders(rules, p)["Content-Security-Policy"], /script-src 'self';/, `${p}: root pages allow no inline script`);
 });
 
-test("_headers: the app's own CSP is unchanged (inline module scripts, esm.sh, Supabase)", () => {
+test("_headers: the app's own CSP (inline module scripts, esm.sh, Supabase, and worker-src 'self' for the v74 drawing-pins PDF rasteriser)", () => {
   const rules = parseHeaders(readRootFile("_headers"));
   const csp = resolveHeaders(rules, "/tracker/login.html")["Content-Security-Policy"];
-  assert.equal(csp, "default-src 'self'; script-src 'self' 'unsafe-inline' https://esm.sh; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://*.supabase.co; connect-src 'self' https://*.supabase.co https://api.postcodes.io https://api.open-meteo.com https://esm.sh; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
+  assert.equal(csp, "default-src 'self'; script-src 'self' 'unsafe-inline' https://esm.sh; worker-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://*.supabase.co; connect-src 'self' https://*.supabase.co https://api.postcodes.io https://api.open-meteo.com https://esm.sh; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'");
 });
 
 test("_headers: /contents-inventory is left exactly as before (Aled's decision) - no headers from this file", () => {

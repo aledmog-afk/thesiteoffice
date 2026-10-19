@@ -222,7 +222,7 @@ test("Audit trail: the v28 migration block (table, triggers, policies) is idempo
     const triggers = await client.query(`
       select count(*)::int as n from pg_trigger where tgname like 'trg_audit_%'
     `);
-    assert.equal(triggers.rows[0].n, 32, "exactly 32 audit triggers (29 before v61, plus project_parties, plus plot_handover_confirmations + plot_handover_shares from v72) must exist after repeated re-application (the original 8 from Priority 4, actions from Priority 5, inspections + inspection_findings from Priority 7, documents + document_revisions from Priority 10, programmes + programme_activities from Priority 11, project_module_roles + commercial_events + variations + dayworks + commercial_line_items + variation_dayworks + commercial_evidence_links + commercial_signatures from the Commercial Module Phase 0, toolbox_talks + toolbox_talk_attendees + toolbox_talk_templates from Toolbox Talks, commercial_approval_requests from P18b's External Client Approval workflow, rfis + rfi_evidence_links from RFI-1, and plot_handover_confirmations + plot_handover_shares from Handover Part B (v72)), never duplicated");
+    assert.equal(triggers.rows[0].n, 38, "exactly 38 audit triggers (32 before v74, plus drawing_uploads + drawing_pages + drawings + drawing_page_assignments + general_queries + drawing_pins from v74) must exist after repeated re-application (the original 8 from Priority 4, actions from Priority 5, inspections + inspection_findings from Priority 7, documents + document_revisions from Priority 10, programmes + programme_activities from Priority 11, project_module_roles + commercial_events + variations + dayworks + commercial_line_items + variation_dayworks + commercial_evidence_links + commercial_signatures from the Commercial Module Phase 0, toolbox_talks + toolbox_talk_attendees + toolbox_talk_templates from Toolbox Talks, commercial_approval_requests from P18b's External Client Approval workflow, rfis + rfi_evidence_links from RFI-1, plot_handover_confirmations + plot_handover_shares from Handover Part B (v72), project_parties, and drawing_uploads + drawing_pages + drawings + drawing_page_assignments + general_queries + drawing_pins from v74's drawing pins), never duplicated");
     await client.end();
   } finally {
     await dropTestDatabase(db);
@@ -576,14 +576,23 @@ test("Weekly Reporting: new columns, indexes, trigger, and inspection_findings.r
 // drawing_id foreign keys (snag_items, quality_gates) keep working
 // afterwards.
 
-test("Document Management: pre-existing drawings/specifications rows are backfilled into documents/document_revisions correctly", async () => {
+test("Document Management: pre-existing specifications rows are backfilled into documents/document_revisions correctly", async () => {
+  // Originally also covered a legacy `drawings` row's backfill — v74
+  // (drawing pins, 19 Oct 2026) retired that v1-era table outright
+  // (confirmed zero live rows before doing so; see handover/NOTES.md)
+  // and replaced it with a genuinely different, versioned schema, so a
+  // "pre-existing legacy drawings row" in the old shape can no longer
+  // exist on a database running this schema at all — there is nothing
+  // left for this test to simulate on that side. The specifications
+  // backfill this test also covers is completely untouched by v74 and
+  // still proven here exactly as before.
   const db = "tracker_test_documents_backfill";
   await createTestDatabase(db);
   try {
     const client = adminClient(db);
     await client.connect();
     await runSqlFile(client, MOCK_SETUP);
-    await runSqlFile(client, CURRENT_SCHEMA); // creates drawings/specifications/documents tables; backfill no-ops (nothing to migrate yet)
+    await runSqlFile(client, CURRENT_SCHEMA); // creates specifications/documents tables; backfill no-ops (nothing to migrate yet)
 
     const orgId = (await client.query("insert into public.organisations (name) values ('Backfill Org') returning id")).rows[0].id;
     const userId = "11111111-1111-1111-1111-111111111111";
@@ -593,12 +602,6 @@ test("Document Management: pre-existing drawings/specifications rows are backfil
       [orgId, userId]
     )).rows[0].id;
 
-    const drawingId = (await client.query(
-      `insert into public.drawings (project_id, plot_number, drawing_name, drawing_url, created_by, created_at)
-       values ($1, 'Plot 4', 'Plot 4 Ground Floor', 'https://example.com/storage/v1/object/public/site-photos/drawings/plot4.pdf', $2, '2025-06-01')
-       returning id`,
-      [projectId, userId]
-    )).rows[0].id;
     const specId = (await client.query(
       `insert into public.specifications (project_id, spec_name, spec_url, created_by, created_at)
        values ($1, 'House Type A Spec', 'https://example.com/storage/v1/object/public/site-photos/specifications/typea.pdf', $2, '2025-06-02')
@@ -614,42 +617,23 @@ test("Document Management: pre-existing drawings/specifications rows are backfil
     }
 
     const docs = await client.query("select * from public.documents where project_id = $1 order by document_type", [projectId]);
-    assert.equal(docs.rowCount, 2, "exactly one document per legacy row, never duplicated across 3 re-applications");
-
-    const drawingDoc = docs.rows.find((d) => d.document_type === "drawing");
-    assert.equal(drawingDoc.title, "Plot 4 Ground Floor");
-    assert.equal(drawingDoc.doc_number, "Plot 4", "the drawing's plot_number is carried over as the backfilled document's doc_number");
-    assert.equal(drawingDoc.status, "current");
-    assert.ok(drawingDoc.current_revision_id, "the backfilled document must have a current revision set");
+    assert.equal(docs.rowCount, 1, "exactly one document for the legacy specification row, never duplicated across 3 re-applications");
 
     const specDoc = docs.rows.find((d) => d.document_type === "specification");
     assert.equal(specDoc.title, "House Type A Spec");
     assert.equal(specDoc.doc_number, null);
+    assert.equal(specDoc.status, "current");
+    assert.ok(specDoc.current_revision_id, "the backfilled document must have a current revision set");
 
-    const drawingRev = (await client.query("select * from public.document_revisions where id = $1", [drawingDoc.current_revision_id])).rows[0];
-    assert.equal(drawingRev.storage_bucket, "site-photos", "a migrated legacy file must keep pointing at its real, already-public site-photos object, never be silently re-hosted");
-    assert.equal(drawingRev.file_url, "https://example.com/storage/v1/object/public/site-photos/drawings/plot4.pdf", "the original drawing_url must be preserved byte-for-byte, unchanged");
-    assert.equal(drawingRev.revision_number, 1);
+    const specRev = (await client.query("select * from public.document_revisions where id = $1", [specDoc.current_revision_id])).rows[0];
+    assert.equal(specRev.storage_bucket, "site-photos", "a migrated legacy file must keep pointing at its real, already-public site-photos object, never be silently re-hosted");
+    assert.equal(specRev.file_url, "https://example.com/storage/v1/object/public/site-photos/specifications/typea.pdf", "the original spec_url must be preserved byte-for-byte, unchanged");
+    assert.equal(specRev.revision_number, 1);
 
-    // The legacy tables themselves must be completely untouched —
-    // this is an additive backfill, not a cutover.
-    const drawingsCount = await client.query("select count(*)::int as n from public.drawings where project_id = $1", [projectId]);
-    assert.equal(drawingsCount.rows[0].n, 1, "the original drawings row must still exist, untouched");
+    // The legacy table itself must be completely untouched — this is
+    // an additive backfill, not a cutover.
     const specsCount = await client.query("select count(*)::int as n from public.specifications where project_id = $1", [projectId]);
     assert.equal(specsCount.rows[0].n, 1, "the original specifications row must still exist, untouched");
-
-    // The old drawing_id foreign keys (pinpoint snagging) must still
-    // work exactly as before — this priority must not have broken them.
-    const plotId = (await client.query("insert into public.plots (project_id, plot_number) values ($1, 'Plot 4') returning id", [projectId])).rows[0].id;
-    const listId = (await client.query("select id from public.snag_lists where plot_id = $1", [plotId])).rows[0].id;
-    await assert.doesNotReject(
-      client.query("insert into public.snag_items (project_id, snag_list_id, location, description, drawing_id) values ($1,$2,'Loc','Issue',$3)", [projectId, listId, drawingId]),
-      "snag_items.drawing_id must still accept the legacy drawings.id after this migration"
-    );
-    await assert.doesNotReject(
-      client.query("update public.quality_gates set drawing_id = $1 where plot_id = $2", [drawingId, plotId]),
-      "quality_gates.drawing_id must still accept the legacy drawings.id after this migration"
-    );
 
     await client.end();
   } finally {
