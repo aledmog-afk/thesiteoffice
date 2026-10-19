@@ -245,9 +245,16 @@ test("settings.html: a malicious organisation name is set via .value (never inte
     getPrimaryOrganisation: async () => "org1",
     showError: () => {}, clearError: () => {},
     uploadPhoto: async () => "",
+    THEME_OPTIONS: [], getTheme: () => "default", setTheme: () => {},
   });
   await wait(30);
   const input = document.getElementById("orgName");
   assert.equal(input.value, SCRIPT_PAYLOAD, "the raw name should be readable back from .value");
-  assert.equal(document.querySelector("script"), null, "setting .value must never create a live <script> element");
+  // The page's own static <script src="js/theme-init.js"> (loaded in
+  // every page's <head> for the colour-scheme picker) is expected here
+  // — the real security property is that the malicious payload itself
+  // never becomes a live script's content, not that zero <script>
+  // elements exist on the page at all.
+  const scripts = [...document.querySelectorAll("script")];
+  assert.ok(scripts.every((s) => !s.textContent.includes("alert(1)")), "setting .value must never create a live <script> element containing the payload");
 });

@@ -14355,3 +14355,978 @@ $v69t$;
 -- End of the v69 transaction. Future sections go below this line,
 -- outside the block (or in their own begin;/commit;).
 commit;
+
+-- v70 ADDITIONS: fixes "deleting a project fails with a foreign key
+-- error on audit_log_project_id_fkey" (reported against the pre-v69
+-- pages, confirmed still present after v69 — this bug predates v69 and
+-- is unrelated to it).
+--
+-- Root cause: write_audit_log() is an AFTER INSERT OR DELETE OR UPDATE
+-- trigger on every audited table, including projects itself and every
+-- table that cascade-deletes when a project is deleted (quality_gates,
+-- handover_documents, project_members, and others). On a DELETE, it
+-- tries to INSERT a new audit_log row whose project_id is the row's
+-- own project (or, for the projects table itself, the deleted
+-- project's own id) — but by the time that AFTER DELETE trigger's
+-- INSERT runs, the referenced projects row is already gone (it's
+-- being deleted in the same statement, possibly the very row this
+-- trigger fired from). audit_log_project_id_fkey (REFERENCES
+-- projects(id)) rejects inserting a row that points at a project that
+-- no longer exists, so the delete fails. This is NOT specific to
+-- projects that have plots: an empty project with zero plots fails
+-- identically, because seed_project_owner() unconditionally seeds one
+-- project_members row (the project's owner) for every project
+-- regardless of plots, and project_members is independently audited
+-- (trg_audit_project_members) the same way quality_gates and
+-- handover_documents are once a plot exists (seed_plot_defaults()).
+-- Confirmed locally: deleting a bare project and deleting one with
+-- plots and prior audit history both fail with the exact same error
+-- before this fix, and both succeed after it.
+--
+-- Fix: when this DELETE is happening as part of that same cascade (the
+-- referenced project is no longer there), set project_id (and the
+-- org_id looked up through it) to null on the new audit row instead of
+-- trying to insert a value that can never satisfy the FK. This is the
+-- same "nulled, not deleted" behaviour the column's own comment and
+-- its "on delete set null" already document for every other row that
+-- ends up pointing at a project once it's gone — this fix just avoids
+-- hitting the FK violation on insert rather than relying on an
+-- after-the-fact UPDATE that can never run because the insert itself
+-- was rejected. No audit history is lost: table_name, record_id and
+-- old_data still fully identify what was deleted and its complete
+-- prior state, including the child's own project_id value inside
+-- old_data. A normal single-row delete, where the project is still
+-- alive, is unaffected — the lookup finds the project and project_id
+-- is left exactly as it was.
+create or replace function public.write_audit_log()
+ returns trigger
+ language plpgsql
+ security definer
+ set search_path to 'public'
+as $function$
+declare
+  v_record jsonb := to_jsonb(coalesce(new, old));
+  v_record_id uuid;
+  v_project_id uuid;
+  v_org_id uuid;
+begin
+  if TG_TABLE_NAME = 'projects' then
+    v_record_id := (v_record->>'id')::uuid;
+    v_project_id := case when TG_OP = 'DELETE' then null else v_record_id end;
+    v_org_id := (v_record->>'org_id')::uuid;
+  elsif TG_TABLE_NAME = 'org_settings' then
+    v_project_id := null;
+    v_org_id := (v_record->>'org_id')::uuid;
+    v_record_id := v_org_id;
+  elsif TG_TABLE_NAME = 'toolbox_talk_templates' then
+    v_record_id := (v_record->>'id')::uuid;
+    v_project_id := null;
+    v_org_id := (v_record->>'org_id')::uuid;
+  else
+    v_record_id := (v_record->>'id')::uuid;
+    v_project_id := (v_record->>'project_id')::uuid;
+    select org_id into v_org_id from public.projects where id = v_project_id;
+    if not found then
+      v_project_id := null;
+      v_org_id := null;
+    end if;
+  end if;
+
+  insert into public.audit_log (org_id, project_id, user_id, action, table_name, record_id, old_data, new_data)
+  values (
+    v_org_id,
+    v_project_id,
+    auth.uid(),
+    TG_OP,
+    TG_TABLE_NAME,
+    v_record_id,
+    case when TG_OP = 'INSERT' then null else to_jsonb(old) end,
+    case when TG_OP = 'DELETE' then null else to_jsonb(new) end
+  );
+
+  return coalesce(new, old);
+end;
+$function$;
+
+-- v71 ADDITIONS: Handover document-set fixes (Handover Part A, planning
+-- doc posted to the handover notes 19 Oct 2026). Closes gaps found when
+-- reviewing the handover flow against standard UK new-build practice:
+--   1. A house plot never got an EPC document row — only flats did
+--      (flat_epc existed; no house equivalent). Genuine oversight, not a
+--      deliberate scoping choice: an EPC is required before marketing
+--      or selling ANY new dwelling, house or flat.
+--   2. Gas and electrical were one combined document (elec_gas_certs /
+--      flat_elec_gas_certs). In practice these are separate
+--      certificates (Gas Safe for gas; an NICEIC/NAPIT Electrical
+--      Installation Certificate under Part P for electrical), usually
+--      from different contractors on different dates — bundled as one
+--      row, one can't be marked approved while the other is still
+--      outstanding.
+--   3. No FENSA/CERTASS certificate for new windows and doors — a
+--      standard Building Regs self-certification document, not
+--      previously tracked at all.
+--   4. No document row for lift commissioning (LOLER) on blocks that
+--      have one — it was only ever checklist *text* inside a block
+--      quality gate, with nothing to actually file a certificate
+--      against.
+--   5. No EWS1 (External Wall System) form for blocks. Only applicable
+--      to certain buildings (height/cladding-dependent, not every
+--      block), so this is seeded conditionally on a new
+--      blocks.needs_ews1 flag — set per block by whoever reviews it —
+--      rather than unconditionally like the other new documents.
+--
+-- Going forward (seed_plot_defaults()/seed_block_defaults(), both
+-- CREATE OR REPLACE below): every new plot/block gets the corrected
+-- set from the moment it's created. For plots/blocks that already
+-- exist, the backfill below adds the new document rows — nothing
+-- existing is deleted or overwritten. The two legacy combined
+-- elec_gas_certs rows are left completely untouched (same status,
+-- same file, same doc_key — still there, still working) and only have
+-- their *title* updated to say they're superseded, so nothing already
+-- uploaded or approved is lost or silently hidden; the new split
+-- elec_cert/gas_cert rows start alongside them as fresh, empty
+-- documents for whoever reviews that plot to fill in properly.
+
+alter table public.blocks add column if not exists needs_ews1 boolean not null default false;
+
+-- Seeds the block-level EWS1 handover document the moment a block is
+-- known to need one — at creation (if needs_ews1 was set true up
+-- front) or later, whenever an admin flips the flag on block-detail.html
+-- (AFTER UPDATE OF needs_ews1). Never removes the document if the flag
+-- is later turned back off — once asked for, the record stays, the
+-- same "nothing already created gets deleted" rule every other seed
+-- function in this file already follows.
+create or replace function public.seed_block_ews1_document()
+returns trigger as $$
+begin
+  if new.needs_ews1 then
+    insert into public.handover_documents (project_id, block_id, doc_key, title)
+    values (new.project_id, new.id, 'block_ews1', 'EWS1 (External Wall System) Form')
+    on conflict (block_id, doc_key) do nothing;
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+revoke all on function public.seed_block_ews1_document() from public, anon, authenticated;
+
+drop trigger if exists trg_seed_block_ews1_insert on public.blocks;
+create trigger trg_seed_block_ews1_insert
+after insert on public.blocks
+for each row execute function public.seed_block_ews1_document();
+
+drop trigger if exists trg_seed_block_ews1_update on public.blocks;
+create trigger trg_seed_block_ews1_update
+after update of needs_ews1 on public.blocks
+for each row execute function public.seed_block_ews1_document();
+
+-- seed_block_defaults(): adds the lift commissioning (LOLER) document,
+-- unconditionally, alongside the other four block-level documents —
+-- otherwise unchanged from its v59 shape.
+create or replace function public.seed_block_defaults()
+returns trigger as $$
+begin
+  insert into public.quality_gates (project_id, block_id, gate_key, title, sort_order, checklist) values
+    (new.project_id, new.id, 'block_substructure_drainage', 'Substructure & Drainage (Block)', 1, '[
+       {"text": "Foundation excavation inspected by Building Control", "checked": false, "checked_at": null},
+       {"text": "Drainage test (air/water) passed and recorded", "checked": false, "checked_at": null},
+       {"text": "DPC level verified across the block", "checked": false, "checked_at": null},
+       {"text": "Building Control sign-off for substructure received", "checked": false, "checked_at": null}
+     ]'::jsonb),
+    (new.project_id, new.id, 'block_frame_superstructure', 'Frame & Superstructure (Block)', 2, '[
+       {"text": "Structural frame inspected at each floor", "checked": false, "checked_at": null},
+       {"text": "Structural engineer sign-off uploaded", "checked": false, "checked_at": null},
+       {"text": "Fire-stopping / compartmentation between floors installed", "checked": false, "checked_at": null},
+       {"text": "Superstructure Building Control inspection passed", "checked": false, "checked_at": null}
+     ]'::jsonb),
+    (new.project_id, new.id, 'block_envelope_watertight', 'Roof & Building Envelope (Wind/Watertight)', 3, '[
+       {"text": "Roof covering complete and inspected", "checked": false, "checked_at": null},
+       {"text": "Moisture readings recorded", "checked": false, "checked_at": null},
+       {"text": "Cladding / render system signed off", "checked": false, "checked_at": null},
+       {"text": "Building confirmed wind and watertight", "checked": false, "checked_at": null}
+     ]'::jsonb),
+    (new.project_id, new.id, 'block_communal_fire', 'Communal Areas, M&E & Fire Strategy', 4, '[
+       {"text": "Lift(s) commissioned and certified", "checked": false, "checked_at": null},
+       {"text": "Communal M&E systems (AOV, sprinklers, fire alarm) commissioned", "checked": false, "checked_at": null},
+       {"text": "Fire strategy walk-through completed with Building Control / Fire Officer", "checked": false, "checked_at": null},
+       {"text": "Communal areas snagging closed out", "checked": false, "checked_at": null}
+     ]'::jsonb)
+  on conflict (block_id, gate_key) do nothing;
+
+  insert into public.handover_documents (project_id, block_id, doc_key, title) values
+    (new.project_id, new.id, 'block_building_control', 'Building Control Sign-off (Block)'),
+    (new.project_id, new.id, 'block_warranty', 'NHBC/Structural Warranty Cover Note (Block)'),
+    (new.project_id, new.id, 'block_fire_strategy', 'Fire Strategy & Compartmentation Report'),
+    (new.project_id, new.id, 'block_communal_me', 'Communal M&E Handover Pack (Lifts, AOV, Sprinklers)'),
+    (new.project_id, new.id, 'block_insurance', 'Building Insurance / Buildings Warranty'),
+    (new.project_id, new.id, 'block_lift_cert', 'Lift(s) Commissioning / Thorough Examination Certificate (LOLER)')
+  on conflict (block_id, doc_key) do nothing;
+
+  return new;
+end;
+$$ language plpgsql;
+revoke all on function public.seed_block_defaults() from public, anon, authenticated;
+
+-- seed_plot_defaults(): adds EPC for houses (flats already had it),
+-- splits elec_gas_certs into separate elec_cert/gas_cert documents for
+-- both houses and flats, and adds a FENSA/CERTASS document for both.
+-- Otherwise unchanged from its v69 shape (see the version just above
+-- this one for the pre-v71 comparison).
+create or replace function public.seed_plot_defaults()
+returns trigger as $$
+declare
+  v_prev text := coalesce(current_setting('app.progress_internal', true), '');
+begin
+  if new.block_id is null then
+    insert into public.quality_gates (project_id, plot_id, gate_key, title, sort_order, checklist) values
+      (new.project_id, new.id, 'substructure_drainage', 'Substructure & Drainage', 1, '[
+         {"text": "Foundation excavation inspected by Building Control", "checked": false, "checked_at": null},
+         {"text": "Drainage test (air/water) passed and recorded", "checked": false, "checked_at": null},
+         {"text": "DPC level verified", "checked": false, "checked_at": null},
+         {"text": "Building Control sign-off for substructure received", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      (new.project_id, new.id, 'frame_watertight', 'Frame & Wind/Watertight', 2, '[
+         {"text": "Moisture readings recorded", "checked": false, "checked_at": null},
+         {"text": "Cavity barriers inspected", "checked": false, "checked_at": null},
+         {"text": "Structural engineer sign-off uploaded", "checked": false, "checked_at": null},
+         {"text": "Roof confirmed watertight", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      (new.project_id, new.id, 'pre_plaster_first_fix', 'Pre-Plaster / First Fix', 3, '[
+         {"text": "First fix electrical inspected", "checked": false, "checked_at": null},
+         {"text": "First fix plumbing & heating inspected", "checked": false, "checked_at": null},
+         {"text": "Insulation installed and inspected", "checked": false, "checked_at": null},
+         {"text": "Pre-plaster inspection sign-off received", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      (new.project_id, new.id, 'pre_handover_pc', 'Pre-Handover / PC', 4, '[
+         {"text": "Snagging list closed out", "checked": false, "checked_at": null},
+         {"text": "O&M manuals received", "checked": false, "checked_at": null},
+         {"text": "All statutory certificates received", "checked": false, "checked_at": null},
+         {"text": "Final client walkthrough completed", "checked": false, "checked_at": null}
+       ]'::jsonb)
+    on conflict (plot_id, gate_key) do nothing;
+
+    insert into public.handover_documents (project_id, plot_id, doc_key, title) values
+      (new.project_id, new.id, 'building_control', 'Building Control Sign-off (Initial/Final)'),
+      (new.project_id, new.id, 'air_acoustic_test', 'Air Permeability / Acoustic Test Certificates'),
+      (new.project_id, new.id, 'elec_cert', 'Electrical Installation Certificate'),
+      (new.project_id, new.id, 'gas_cert', 'Gas Safety Certificate'),
+      (new.project_id, new.id, 'fensa_certass', 'FENSA/CERTASS Certificate (Windows & Doors)'),
+      (new.project_id, new.id, 'epc', 'EPC (Energy Performance Certificate)'),
+      (new.project_id, new.id, 'warranty_cover_note', 'NHBC/Structural Warranty Cover Note'),
+      (new.project_id, new.id, 'om_manuals', 'Draft O&M Manuals')
+    on conflict (plot_id, doc_key) do nothing;
+
+  else
+    insert into public.quality_gates (project_id, plot_id, gate_key, title, sort_order, checklist) values
+      (new.project_id, new.id, 'flat_first_fix', '1st Fix (All Trades)', 1, '[
+         {"text": "First fix electrical inspected", "checked": false, "checked_at": null},
+         {"text": "First fix plumbing & heating inspected", "checked": false, "checked_at": null},
+         {"text": "Insulation installed and inspected", "checked": false, "checked_at": null},
+         {"text": "Pre-plaster inspection sign-off received", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      (new.project_id, new.id, 'flat_second_fix', '2nd Fix (All Trades)', 2, '[
+         {"text": "Second fix electrical complete and tested", "checked": false, "checked_at": null},
+         {"text": "Second fix plumbing & heating complete and tested", "checked": false, "checked_at": null},
+         {"text": "Sockets, switches and fittings installed", "checked": false, "checked_at": null},
+         {"text": "Heating system commissioned", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      (new.project_id, new.id, 'flat_kitchen_bathroom', 'Kitchen & Bathroom Fit', 3, '[
+         {"text": "Kitchen units, worktops and appliances installed", "checked": false, "checked_at": null},
+         {"text": "Bathroom / en-suite sanitaryware and tiling complete", "checked": false, "checked_at": null},
+         {"text": "Water pressure and drainage tested", "checked": false, "checked_at": null},
+         {"text": "Extractor fans tested", "checked": false, "checked_at": null}
+       ]'::jsonb),
+      (new.project_id, new.id, 'flat_pre_handover', 'Decoration, Flooring & Pre-Handover Snagging', 4, '[
+         {"text": "Decoration (walls, ceilings, woodwork) complete", "checked": false, "checked_at": null},
+         {"text": "Flooring / carpets fitted", "checked": false, "checked_at": null},
+         {"text": "Unit snagging list closed out", "checked": false, "checked_at": null},
+         {"text": "Final clean completed", "checked": false, "checked_at": null}
+       ]'::jsonb)
+    on conflict (plot_id, gate_key) do nothing;
+
+    insert into public.handover_documents (project_id, plot_id, doc_key, title) values
+      (new.project_id, new.id, 'flat_air_acoustic_test', 'Air Permeability / Acoustic Test Certificate'),
+      (new.project_id, new.id, 'flat_elec_cert', 'Electrical Installation Certificate'),
+      (new.project_id, new.id, 'flat_gas_cert', 'Gas Safety Certificate'),
+      (new.project_id, new.id, 'flat_fensa_certass', 'FENSA/CERTASS Certificate (Windows & Doors)'),
+      (new.project_id, new.id, 'flat_epc', 'EPC (Energy Performance Certificate)'),
+      (new.project_id, new.id, 'flat_warranty', 'Unit Warranty Cover Note'),
+      (new.project_id, new.id, 'flat_om_manuals', 'O&M Manuals (Unit)')
+    on conflict (plot_id, doc_key) do nothing;
+
+  end if;
+
+  -- v69: the 33 canonical stages (one shared list with weekly reports),
+  -- with house/flat N/A defaults from public.progress_stages.
+  -- Build-stage rows may only be created by the database itself.
+  perform set_config('app.progress_internal', 'on', true);
+  insert into public.internal_milestones (project_id, plot_id, milestone_key, stage_key, title, sort_order, applicable)
+  select new.project_id, new.id, s.stage_key, s.stage_key, s.name, s.sort_order,
+         case when new.block_id is null then s.house_default_applicable else s.flat_default_applicable end
+  from public.progress_stages s
+  on conflict (plot_id, milestone_key) do nothing;
+  perform set_config('app.progress_internal', v_prev, true);
+
+  insert into public.snag_lists (project_id, plot_id, title)
+  values (new.project_id, new.id, new.plot_number)
+  on conflict (plot_id) do nothing;
+
+  return new;
+end;
+$$ language plpgsql set search_path = public;
+revoke all on function public.seed_plot_defaults() from public, anon, authenticated;
+
+-- Backfill for plots/blocks that already existed before v71. Purely
+-- additive: ON CONFLICT DO NOTHING throughout, so running this twice
+-- (or against a database some plots/blocks were already created on
+-- after v71 went live) changes nothing the second time. The two
+-- legacy combined-certificate rows are relabelled, never touched
+-- otherwise — see the comment at the top of this section.
+--
+-- Bookkeeping only (not a user change), so — same as every other
+-- backfill in this file — it's kept out of audit_log: disabling
+-- trg_audit_handover_documents for just these statements, exactly the
+-- pattern the v69 go-live step already uses for
+-- trg_audit_projects/stage_progress_since.
+alter table public.handover_documents disable trigger trg_audit_handover_documents;
+
+update public.handover_documents
+set title = 'Electrical & Gas Safety Certificates (legacy combined — see the separate Electrical and Gas certificates below)'
+where doc_key in ('elec_gas_certs', 'flat_elec_gas_certs')
+  and title not like '%legacy combined%';
+
+insert into public.handover_documents (project_id, plot_id, doc_key, title)
+select p.project_id, p.id, v.doc_key, v.title
+from public.plots p
+cross join (values
+  ('elec_cert', 'Electrical Installation Certificate'),
+  ('gas_cert', 'Gas Safety Certificate'),
+  ('fensa_certass', 'FENSA/CERTASS Certificate (Windows & Doors)'),
+  ('epc', 'EPC (Energy Performance Certificate)')
+) as v(doc_key, title)
+where p.block_id is null
+on conflict (plot_id, doc_key) do nothing;
+
+insert into public.handover_documents (project_id, plot_id, doc_key, title)
+select p.project_id, p.id, v.doc_key, v.title
+from public.plots p
+cross join (values
+  ('flat_elec_cert', 'Electrical Installation Certificate'),
+  ('flat_gas_cert', 'Gas Safety Certificate'),
+  ('flat_fensa_certass', 'FENSA/CERTASS Certificate (Windows & Doors)')
+) as v(doc_key, title)
+where p.block_id is not null
+on conflict (plot_id, doc_key) do nothing;
+
+insert into public.handover_documents (project_id, block_id, doc_key, title)
+select b.project_id, b.id, 'block_lift_cert', 'Lift(s) Commissioning / Thorough Examination Certificate (LOLER)'
+from public.blocks b
+on conflict (block_id, doc_key) do nothing;
+
+alter table public.handover_documents enable trigger trg_audit_handover_documents;
+
+-- v72 ADDITIONS: Handover Part B — an explicit handover confirmation
+-- event (planning doc + Part A posted to the handover notes 19 Oct
+-- 2026). Closes the gap Job 2's review flagged: handed_over_at was
+-- only ever auto-stamped the instant readiness turned ready/at_risk
+-- (checkAndMarkPlotHandedOver(), called after every gate/document
+-- status change on plot-detail.html) — no one ever explicitly decided
+-- "this plot is handed over", and nothing recorded the state of
+-- gates/documents/snags, meter readings or a key log AT that moment.
+-- handed_over_at itself stays exactly as immutable as it already was
+-- (plots_before_write(), v53) — this migration adds a deliberate,
+-- auditable event on top of it, it does not change the immutability
+-- rule at all.
+--
+-- Architecture mirrors the Commercial module's external-approval
+-- pattern (v50/v62, commercial_approval_requests) deliberately, rather
+-- than inventing a new one:
+--   - plot_handover_confirmations: one immutable row per plot, written
+--     exactly once by confirm_plot_handover() (SECURITY DEFINER). No
+--     insert/update/delete policy exists for any client role — the
+--     RPC is the only write path, identical to how
+--     commercial_approval_requests/commercial_signatures are insert-
+--     only-via-RPC. A sha256 content_hash over the snapshot (gates +
+--     documents + snags + meter readings + key log) gives the same
+--     tamper-evidence the Commercial module already relies on.
+--   - plot_handover_shares: the optional external (buyer/solicitor)
+--     link. A 256-bit random token, generated server-side and
+--     returned ONCE to the internal caller; only its sha256 hash is
+--     ever stored (plot_handover_share_token_hash(), the one place
+--     that algorithm lives). anon has zero RLS grants on either new
+--     table — every anon-facing read goes through
+--     get_plot_handover_share(p_token), a SECURITY DEFINER RPC that
+--     re-derives the hash itself and returns a curated jsonb blob
+--     only, never raw rows. bound_content_hash is captured at link-
+--     creation time and re-verified (not merely trusted) against the
+--     confirmation's own content_hash on every read — defense in
+--     depth, even though a confirmation can never itself change after
+--     the fact.
+--   - Unlike Commercial's approval link, there is no external
+--     "approve/reject" action here at all: the buyer/solicitor link is
+--     read-only (view/print/download the handover pack). Nothing is
+--     ever sent automatically to any recipient — exactly like
+--     requestCommercialApproval() in tracker/js/app.js, the app only
+--     ever generates the link and a mailto: draft for a human to send
+--     from their own email client; see tracker/plot-handover-share.html
+--     and the app.js changes alongside this migration.
+--   - confirm_plot_handover() does not duplicate the readiness-blocker
+--     checks — it issues a plain `update plots set handed_over_at =
+--     now()`, which plots_before_write() (v53) already validates and
+--     enforces exactly as it does for any other caller. If that
+--     update raises, the whole function raises with it and no
+--     confirmation row is ever written for a plot that was not
+--     actually ready.
+
+-- Single place the token-hashing algorithm lives (external share
+-- links only — confirmations themselves have no token).
+create or replace function public.plot_handover_share_token_hash(p_token text)
+returns text
+language sql
+immutable
+set search_path = public, extensions
+as $$
+  select encode(digest(p_token, 'sha256'), 'hex');
+$$;
+-- Not SECURITY DEFINER, but still subject to the same default-ACL
+-- auto-grant as every other new function in this project — see the
+-- identical revoke pair beside commercial_approval_token_hash() (v63's
+-- anon lockdown pass). No caller ever needs to hash a token directly
+-- except the RPCs below, and they call this as their own definer
+-- (table owner), which always has EXECUTE on its own functions
+-- regardless of these grants.
+revoke all on function public.plot_handover_share_token_hash(text) from public;
+revoke execute on function public.plot_handover_share_token_hash(text) from anon;
+
+create table if not exists public.plot_handover_confirmations (
+  id uuid primary key default gen_random_uuid(),
+  plot_id uuid not null references public.plots(id) on delete cascade,
+  -- Denormalized, trigger-independent — set directly by the RPC, never
+  -- client-writable (there is no client insert path at all), same
+  -- reasoning write_audit_log()'s generic branch and every other
+  -- commercial table in this schema already relies on.
+  project_id uuid not null references public.projects(id) on delete cascade,
+  org_id uuid references public.organisations(id),
+  confirmed_by uuid references auth.users(id) on delete set null,
+  confirmed_at timestamptz not null default now(),
+  -- Mirrors commercial_signatures' own shape: a typed name is always
+  -- required (the same already-required confirming user's name doubles
+  -- as the typed attestation when no drawing is supplied — see
+  -- commercial_approval_requests' signer fields for the identical
+  -- reasoning), signature_data holds a drawn signature image (data
+  -- URL) when one was captured, null otherwise. Stored here (not left
+  -- ephemeral in the browser) so the handover PDF can be faithfully
+  -- regenerated later — e.g. for the buyer/solicitor share link — not
+  -- just downloaded once at confirmation time.
+  signed_by_name text not null,
+  signature_data text,
+  gates_snapshot jsonb not null default '[]'::jsonb,
+  documents_snapshot jsonb not null default '[]'::jsonb,
+  snags_snapshot jsonb not null default '[]'::jsonb,
+  meter_readings jsonb not null default '[]'::jsonb,
+  key_log jsonb not null default '[]'::jsonb,
+  content_hash text not null
+);
+
+-- One confirmation per plot, ever — handed_over_at is a one-time event
+-- (plots_before_write()) and this is its permanent record.
+create unique index if not exists plot_handover_confirmations_plot_idx on public.plot_handover_confirmations (plot_id);
+create index if not exists plot_handover_confirmations_project_idx on public.plot_handover_confirmations (project_id);
+
+alter table public.plot_handover_confirmations enable row level security;
+drop policy if exists "members read plot_handover_confirmations" on public.plot_handover_confirmations;
+create policy "members read plot_handover_confirmations" on public.plot_handover_confirmations for select to authenticated using (
+  public.is_project_member(project_id)
+);
+-- Deliberately NO insert/update/delete policy for any client role —
+-- the only write path is confirm_plot_handover() below (SECURITY
+-- DEFINER, bypasses RLS), so a client can never fabricate, backdate or
+-- edit a handover confirmation via a raw insert/update.
+
+drop trigger if exists trg_audit_plot_handover_confirmations on public.plot_handover_confirmations;
+create trigger trg_audit_plot_handover_confirmations
+  after insert or update or delete on public.plot_handover_confirmations
+  for each row execute function public.write_audit_log();
+
+create table if not exists public.plot_handover_shares (
+  id uuid primary key default gen_random_uuid(),
+  confirmation_id uuid not null references public.plot_handover_confirmations(id) on delete cascade,
+  plot_id uuid not null references public.plots(id) on delete cascade,
+  project_id uuid not null references public.projects(id) on delete cascade,
+  org_id uuid references public.organisations(id),
+  recipient_name text,
+  recipient_email text,
+  token_hash text not null unique,
+  status text not null default 'pending' check (status in ('pending', 'viewed', 'expired', 'revoked')),
+  -- The exact confirmation content being shared, bound at link-creation
+  -- time and re-verified (never re-derived and silently accepted) at
+  -- read time — see get_plot_handover_share() below.
+  bound_content_hash text not null,
+  expires_at timestamptz not null,
+  viewed_at timestamptz,
+  revoked_at timestamptz,
+  revoked_by uuid references auth.users(id) on delete set null,
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- At most one ACTIVE (pending/viewed) share link per confirmation — a
+-- second concurrent "create link" attempt hits this constraint rather
+-- than silently producing two live links for the same plot.
+create unique index if not exists plot_handover_shares_one_active_idx
+  on public.plot_handover_shares (confirmation_id)
+  where status in ('pending', 'viewed');
+create index if not exists plot_handover_shares_confirmation_idx on public.plot_handover_shares (confirmation_id);
+create index if not exists plot_handover_shares_project_idx on public.plot_handover_shares (project_id);
+create index if not exists plot_handover_shares_token_hash_idx on public.plot_handover_shares (token_hash);
+
+alter table public.plot_handover_shares enable row level security;
+drop policy if exists "members read plot_handover_shares" on public.plot_handover_shares;
+create policy "members read plot_handover_shares" on public.plot_handover_shares for select to authenticated using (
+  public.is_project_member(project_id)
+);
+-- Same insert-only-via-RPC shape as plot_handover_confirmations above
+-- (and commercial_approval_requests before it) — no insert/update/
+-- delete policy for any client role; anon gets no policy at all.
+
+drop trigger if exists trg_audit_plot_handover_shares on public.plot_handover_shares;
+create trigger trg_audit_plot_handover_shares
+  after insert or update or delete on public.plot_handover_shares
+  for each row execute function public.write_audit_log();
+
+-- ─── Internal (authenticated-only) RPCs ────────────────────────────────
+
+-- The ONLY path that may ever set plots.handed_over_at or write a
+-- plot_handover_confirmations row. Takes the meter readings and key
+-- log captured on the "Mark as Handed Over" screen as plain jsonb
+-- arrays (shape is validated client-side; this function trusts its
+-- caller's own project-editor permission check, not the shape, since
+-- malformed jsonb here can corrupt nothing it doesn't already own).
+create or replace function public.confirm_plot_handover(
+  p_plot_id uuid,
+  p_signer_name text,
+  p_meter_readings jsonb default '[]'::jsonb,
+  p_key_log jsonb default '[]'::jsonb,
+  p_signature_data text default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_plot public.plots%rowtype;
+  v_org_id uuid;
+  v_gates jsonb;
+  v_docs jsonb;
+  v_snags jsonb;
+  v_content_hash text;
+  v_confirmation_id uuid;
+  v_confirmed_at timestamptz;
+begin
+  select * into v_plot from public.plots where plots.id = p_plot_id;
+  if v_plot.id is null then
+    raise exception 'Plot not found';
+  end if;
+
+  -- "is not true", not a bare "not ..." — see the identical reasoning
+  -- on can_edit_commercial() throughout the Commercial module: this
+  -- SECURITY DEFINER function's own SELECT above already bypassed RLS
+  -- to read the plot at all, so this is the only real gate, and a bare
+  -- "not" would treat is_project_editor()'s NULL (no grant, not false)
+  -- as "condition false", silently skipping the raise.
+  if public.is_project_editor(v_plot.project_id) is not true then
+    raise exception 'You do not have permission to confirm handover on this plot';
+  end if;
+
+  if v_plot.handed_over_at is not null then
+    raise exception 'This plot was already handed over on %', v_plot.handed_over_at;
+  end if;
+
+  if exists (select 1 from public.plot_handover_confirmations where plot_id = p_plot_id) then
+    raise exception 'A handover confirmation already exists for this plot';
+  end if;
+
+  if p_signer_name is null or trim(p_signer_name) = '' then
+    raise exception 'The confirming user''s name is required';
+  end if;
+  if p_meter_readings is not null and jsonb_typeof(p_meter_readings) <> 'array' then
+    raise exception 'Meter readings must be a list';
+  end if;
+  if p_key_log is not null and jsonb_typeof(p_key_log) <> 'array' then
+    raise exception 'Key log must be a list';
+  end if;
+
+  -- The actual readiness enforcement (outstanding gates/documents,
+  -- open high-priority overdue snags, blocked/overdue actions,
+  -- unresolved critical findings) lives entirely in
+  -- plots_before_write() (v53) and fires on this UPDATE — no duplicate
+  -- logic here. If the plot isn't genuinely ready, this raises and the
+  -- whole function aborts before any confirmation row is written.
+  update public.plots set handed_over_at = now() where id = p_plot_id
+    returning handed_over_at into v_confirmed_at;
+
+  select org_id into v_org_id from public.projects where id = v_plot.project_id;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+    'gate_key', gate_key, 'title', title, 'status', status, 'checklist', checklist
+  ) order by sort_order), '[]'::jsonb) into v_gates
+  from public.quality_gates where plot_id = p_plot_id;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+    'doc_key', doc_key, 'title', title, 'status', status, 'file_name', file_name, 'updated_at', updated_at
+  ) order by doc_key), '[]'::jsonb) into v_docs
+  from public.handover_documents where plot_id = p_plot_id;
+
+  -- Same snag_lists indirection as plots_before_write()'s own blocker
+  -- check above (coalesce(si.plot_id, sl.plot_id)) — a plot's own
+  -- auto-seeded list is the normal path; snag_items.plot_id itself is
+  -- only populated for the rarer general/site-wide list's per-item tag.
+  select coalesce(jsonb_agg(jsonb_build_object(
+    'description', si.description, 'location', si.location, 'priority', si.priority,
+    'status', si.status, 'due_date', si.due_date
+  ) order by si.item_no), '[]'::jsonb) into v_snags
+  from public.snag_items si
+  left join public.snag_lists sl on sl.id = si.snag_list_id
+  where coalesce(si.plot_id, sl.plot_id) = p_plot_id;
+
+  v_content_hash := encode(digest(
+    coalesce(v_gates::text, '') || coalesce(v_docs::text, '') || coalesce(v_snags::text, '') ||
+    coalesce(p_meter_readings::text, '[]') || coalesce(p_key_log::text, '[]'),
+    'sha256'
+  ), 'hex');
+
+  insert into public.plot_handover_confirmations (
+    plot_id, project_id, org_id, confirmed_by, confirmed_at, signed_by_name, signature_data,
+    gates_snapshot, documents_snapshot, snags_snapshot, meter_readings, key_log, content_hash
+  ) values (
+    p_plot_id, v_plot.project_id, v_org_id, auth.uid(), v_confirmed_at, trim(p_signer_name), p_signature_data,
+    v_gates, v_docs, v_snags, coalesce(p_meter_readings, '[]'::jsonb), coalesce(p_key_log, '[]'::jsonb), v_content_hash
+  ) returning id into v_confirmation_id;
+
+  return jsonb_build_object(
+    'id', v_confirmation_id,
+    'confirmed_at', v_confirmed_at,
+    'signed_by_name', trim(p_signer_name),
+    'signature_data', p_signature_data,
+    'content_hash', v_content_hash,
+    'gates_snapshot', v_gates,
+    'documents_snapshot', v_docs,
+    'snags_snapshot', v_snags,
+    'meter_readings', coalesce(p_meter_readings, '[]'::jsonb),
+    'key_log', coalesce(p_key_log, '[]'::jsonb)
+  );
+end;
+$$;
+-- This project's ALTER DEFAULT PRIVILEGES entry auto-grants EXECUTE to
+-- anon AND authenticated on every newly created function regardless of
+-- a later `revoke all ... from public` — see the identical comment
+-- beside request_commercial_approval() (v50). Both REVOKE lines below
+-- are required; this RPC is internal/authenticated-only by design.
+revoke all on function public.confirm_plot_handover(uuid, text, jsonb, jsonb, text) from public;
+revoke execute on function public.confirm_plot_handover(uuid, text, jsonb, jsonb, text) from anon;
+grant execute on function public.confirm_plot_handover(uuid, text, jsonb, jsonb, text) to authenticated;
+
+create or replace function public.request_plot_handover_share(
+  p_plot_id uuid,
+  p_recipient_name text default null,
+  p_recipient_email text default null,
+  p_expiry_hours integer default 336
+)
+returns table (id uuid, token text, expires_at timestamptz)
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_plot public.plots%rowtype;
+  v_confirmation public.plot_handover_confirmations%rowtype;
+  v_token text;
+  v_share_id uuid;
+begin
+  select * into v_plot from public.plots where plots.id = p_plot_id;
+  if v_plot.id is null then
+    raise exception 'Plot not found';
+  end if;
+
+  if public.is_project_editor(v_plot.project_id) is not true then
+    raise exception 'You do not have permission to share this plot''s handover pack';
+  end if;
+
+  select * into v_confirmation from public.plot_handover_confirmations where plot_id = p_plot_id;
+  if v_confirmation.id is null then
+    raise exception 'This plot has not been handed over yet — confirm handover before creating a share link';
+  end if;
+
+  if p_expiry_hours is null or p_expiry_hours <= 0 or p_expiry_hours > 2160 then
+    raise exception 'Expiry must be between 1 hour and 90 days';
+  end if;
+
+  if exists (
+    select 1 from public.plot_handover_shares
+    where confirmation_id = v_confirmation.id and status in ('pending', 'viewed')
+  ) then
+    raise exception 'There is already an active share link for this plot — revoke it first, or wait for it to expire';
+  end if;
+
+  v_token := encode(gen_random_bytes(32), 'base64');
+
+  insert into public.plot_handover_shares (
+    confirmation_id, plot_id, project_id, org_id, recipient_name, recipient_email,
+    token_hash, bound_content_hash, expires_at, created_by
+  ) values (
+    v_confirmation.id, p_plot_id, v_plot.project_id,
+    -- "projects.id" is qualified here (and nowhere else in this
+    -- function needs it) because this function's own `returns table
+    -- (id uuid, ...)` implicitly declares an OUT parameter also named
+    -- "id", which would otherwise make a bare `id` ambiguous against
+    -- projects.id — see the identical, more detailed comment on
+    -- request_commercial_approval() (v50).
+    (select org_id from public.projects where projects.id = v_plot.project_id),
+    nullif(trim(coalesce(p_recipient_name, '')), ''), nullif(trim(coalesce(p_recipient_email, '')), ''),
+    public.plot_handover_share_token_hash(v_token), v_confirmation.content_hash,
+    now() + (p_expiry_hours || ' hours')::interval, auth.uid()
+  ) returning plot_handover_shares.id into v_share_id;
+
+  return query select v_share_id, v_token, (now() + (p_expiry_hours || ' hours')::interval);
+end;
+$$;
+revoke all on function public.request_plot_handover_share(uuid, text, text, integer) from public;
+revoke execute on function public.request_plot_handover_share(uuid, text, text, integer) from anon;
+grant execute on function public.request_plot_handover_share(uuid, text, text, integer) to authenticated;
+
+create or replace function public.revoke_plot_handover_share(p_share_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_project_id uuid;
+begin
+  select project_id into v_project_id from public.plot_handover_shares where id = p_share_id;
+  if v_project_id is null then
+    raise exception 'Share link not found';
+  end if;
+  if public.is_project_editor(v_project_id) is not true then
+    raise exception 'You do not have permission to revoke share links on this project';
+  end if;
+  update public.plot_handover_shares
+    set status = 'revoked', revoked_at = now(), revoked_by = auth.uid(), updated_at = now()
+    where id = p_share_id and status in ('pending', 'viewed');
+  if not found then
+    raise exception 'Only a pending or viewed share link can be revoked';
+  end if;
+end;
+$$;
+revoke all on function public.revoke_plot_handover_share(uuid) from public;
+revoke execute on function public.revoke_plot_handover_share(uuid) from anon;
+grant execute on function public.revoke_plot_handover_share(uuid) to authenticated;
+
+-- ─── External (anon-callable) RPC ──────────────────────────────────────
+-- Read-only: returns a curated jsonb blob only — never raw table rows.
+-- Unlike the Commercial approval link, there is nothing for an external
+-- recipient to approve/sign here, so this is the only anon-facing RPC
+-- this feature needs. Marks the link 'viewed' (from 'pending') as a
+-- side effect of the first genuine read, and lazily flips an overdue
+-- 'pending'/'viewed' link to 'expired'.
+create or replace function public.get_plot_handover_share(p_token text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  v_share public.plot_handover_shares%rowtype;
+  v_confirmation public.plot_handover_confirmations%rowtype;
+  v_plot public.plots%rowtype;
+  v_project_name text;
+  v_effective_status text;
+begin
+  if p_token is null or trim(p_token) = '' then
+    raise exception 'Invalid handover link';
+  end if;
+
+  select * into v_share from public.plot_handover_shares
+    where token_hash = public.plot_handover_share_token_hash(p_token);
+  if v_share.id is null then
+    raise exception 'Invalid handover link';
+  end if;
+
+  v_effective_status := v_share.status;
+  if v_effective_status in ('pending', 'viewed') and v_share.expires_at <= now() then
+    update public.plot_handover_shares set status = 'expired', updated_at = now()
+      where id = v_share.id and status in ('pending', 'viewed');
+    v_effective_status := 'expired';
+  elsif v_effective_status = 'pending' then
+    update public.plot_handover_shares set status = 'viewed', viewed_at = now(), updated_at = now()
+      where id = v_share.id and status = 'pending';
+    v_effective_status := 'viewed';
+  end if;
+
+  if v_effective_status in ('expired', 'revoked') then
+    -- No content for an expired/revoked link — just enough for the
+    -- page to show the right message.
+    return jsonb_build_object('status', v_effective_status);
+  end if;
+
+  select * into v_confirmation from public.plot_handover_confirmations where id = v_share.confirmation_id;
+
+  -- Defense in depth, matching get_commercial_approval_request(): a
+  -- confirmation can never actually change after the fact (no update/
+  -- delete policy or RPC exists for plot_handover_confirmations at
+  -- all), so this can never genuinely disagree — but re-derive and
+  -- compare rather than silently trust the stored bound hash.
+  if v_confirmation.content_hash is distinct from v_share.bound_content_hash then
+    raise exception 'Internal error: the handover record has changed since this link was created — refusing to display it';
+  end if;
+
+  select * into v_plot from public.plots where id = v_share.plot_id;
+  select name into v_project_name from public.projects where id = v_share.project_id;
+
+  return jsonb_build_object(
+    'status', v_effective_status,
+    'plot_number', v_plot.plot_number,
+    'project_name', v_project_name,
+    'confirmed_at', v_confirmation.confirmed_at,
+    'signed_by_name', v_confirmation.signed_by_name,
+    'signature_data', v_confirmation.signature_data,
+    'content_hash', v_confirmation.content_hash,
+    'gates_snapshot', v_confirmation.gates_snapshot,
+    'documents_snapshot', v_confirmation.documents_snapshot,
+    'snags_snapshot', v_confirmation.snags_snapshot,
+    'meter_readings', v_confirmation.meter_readings,
+    'key_log', v_confirmation.key_log,
+    'recipient_name', v_share.recipient_name
+  );
+end;
+$$;
+revoke all on function public.get_plot_handover_share(text) from public;
+grant execute on function public.get_plot_handover_share(text) to anon, authenticated;
+
+-- v73 ADDITIONS: Handover document flexibility — "not all certs are
+-- always needed." Two changes, both scoped to handover_documents only
+-- (quality_gates already has an identical not_applicable option, added
+-- earlier — see quality_gates_status_check above):
+--   1. A 'not_applicable' status, exactly mirroring quality_gates'
+--      existing option. The row stays (full audit trail intact,
+--      nothing fabricated or destroyed), is excluded from the
+--      handover readiness/blocker check below, and is visibly greyed
+--      out on the plot/block page. There is still no literal delete
+--      path offered in the UI for a standard seeded document — N/A is
+--      the reversible, audited way to say "this plot doesn't need
+--      this one."
+--   2. is_custom: lets a user add a one-off extra document specific to
+--      a plot/block (e.g. something not in the standard set) via a
+--      plain insert — RLS already permits project editors to insert/
+--      delete handover_documents rows directly (no new RPC needed),
+--      this column only exists so the UI can tell a standard seeded
+--      row from a custom one apart and offer "Remove" only for the
+--      latter. Defaults false; every seed_*_defaults()/seed_block_
+--      ews1_document() insert leaves it at that default, unchanged by
+--      this migration.
+alter table public.handover_documents drop constraint if exists handover_documents_status_check;
+alter table public.handover_documents add constraint handover_documents_status_check
+  check (status in ('missing', 'draft_received', 'approved_final', 'not_applicable'));
+
+alter table public.handover_documents add column if not exists is_custom boolean not null default false;
+
+-- Full replacement of plots_before_write() (v53) — identical body,
+-- with exactly one change: the document blocker check now treats
+-- not_applicable the same as approved_final, matching the gate
+-- blocker check immediately above it (status not in ('approved',
+-- 'not_applicable')), which this mirrors exactly for documents.
+create or replace function public.plots_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_gate_outstanding boolean;
+  v_doc_outstanding boolean;
+  v_snag_blocking boolean;
+  v_action_blocking boolean;
+  v_finding_blocking boolean;
+begin
+  if TG_OP = 'UPDATE' and new.handed_over_at is distinct from old.handed_over_at then
+    -- A historical handover record must never be silently rewritten or
+    -- cleared — handed_over_at is a one-time, permanent event, not a
+    -- continuously recalculated field (see computePlotHandoverReadiness's
+    -- own status precedence: "handed_over" always wins, regardless of
+    -- current readiness). There is no "un-handover" feature in this
+    -- application, and this is not the phase to add one.
+    if old.handed_over_at is not null then
+      raise exception 'plots.handed_over_at is a historical record and cannot be changed once set';
+    end if;
+
+    -- old.handed_over_at is null here, new.handed_over_at is being set
+    -- for the first time — validate against the same blocker rules
+    -- computePlotHandoverReadiness() already uses. Warnings (Programme
+    -- variance, non-blocking Snags/Actions/Findings) are deliberately
+    -- NOT checked here — they make a plot AT RISK, not NOT READY, and
+    -- must not prevent the historical handover event.
+
+    select count(*) > 0 and bool_or(status not in ('approved', 'not_applicable'))
+      into v_gate_outstanding
+      from public.quality_gates where plot_id = new.id;
+
+    -- v73: not_applicable now excuses a document from this check
+    -- exactly like it already excuses a quality gate above.
+    select count(*) > 0 and bool_or(status not in ('approved_final', 'not_applicable'))
+      into v_doc_outstanding
+      from public.handover_documents where plot_id = new.id;
+
+    -- Snags: a plot's own auto-seeded list (snag_lists.plot_id) is the
+    -- normal path; snag_items.plot_id itself is only populated for the
+    -- rare general/site-wide list's optional per-item tag — both are
+    -- checked here, exactly like every other plot-scoped snag query in
+    -- this app (see getPlotSnags()/getProjectPlotReadiness() in
+    -- tracker/js/app.js).
+    select exists (
+      select 1 from public.snag_items si
+      left join public.snag_lists sl on sl.id = si.snag_list_id
+      where coalesce(si.plot_id, sl.plot_id) = new.id
+        and si.status = 'open' and si.priority = 'high'
+        and si.due_date is not null and si.due_date < current_date
+    ) into v_snag_blocking;
+
+    select exists (
+      select 1 from public.actions
+      where plot_id = new.id
+        and status not in ('completed', 'cancelled')
+        and (status = 'blocked' or (due_date is not null and due_date < current_date and priority in ('high', 'critical')))
+    ) into v_action_blocking;
+
+    select exists (
+      select 1 from public.inspection_findings
+      where plot_id = new.id
+        and status not in ('resolved', 'accepted', 'cancelled')
+        and severity = 'critical'
+    ) into v_finding_blocking;
+
+    if coalesce(v_gate_outstanding, false) then
+      raise exception 'Cannot record handover: outstanding Quality Gate(s) for this plot';
+    end if;
+    if coalesce(v_doc_outstanding, false) then
+      raise exception 'Cannot record handover: outstanding Handover Document(s) for this plot';
+    end if;
+    if v_snag_blocking then
+      raise exception 'Cannot record handover: open high-priority overdue Snag(s) for this plot';
+    end if;
+    if v_action_blocking then
+      raise exception 'Cannot record handover: blocked or overdue high/critical-priority Action(s) for this plot';
+    end if;
+    if v_finding_blocking then
+      raise exception 'Cannot record handover: unresolved critical Inspection Finding(s) for this plot';
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_plots_before_write on public.plots;
+create trigger trg_plots_before_write
+  before update on public.plots
+  for each row execute function public.plots_before_write();

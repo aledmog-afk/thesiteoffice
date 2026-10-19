@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="js/theme-init.js"></script>
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 <title>Plot Handovers – The Site Office</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -318,6 +319,11 @@
     });
     const docsByScope = {};
     (docs || []).forEach((d) => {
+      // v73: not_applicable excluded from the count entirely here,
+      // matching the gates block immediately above — "N/A" is not a
+      // document that's either outstanding or done, it's not part of
+      // this plot/block's set at all.
+      if (d.status === "not_applicable") return;
       const key = d.plot_id || `block:${d.block_id}`;
       docsByScope[key] = docsByScope[key] || { ready: 0, total: 0 };
       docsByScope[key].total++;

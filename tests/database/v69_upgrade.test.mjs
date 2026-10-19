@@ -350,7 +350,28 @@ test("v69 rollback script: after go-live and later use, every figure and the old
   }
 });
 
-const V69_ONLY = FULL.slice(FULL.indexOf("-- ─── v69 ADDITIONS"));
+// Bounded at the START of whatever migration comes after v69 in the
+// file (v70 at the time of writing) — NOT sliced to end-of-file. This
+// matters: v69's own block ends with a literal `commit;`, and in
+// Postgres issuing COMMIT while the current transaction is already
+// aborted is treated as ROLLBACK and succeeds silently (no error) —
+// so in the "statement by statement" sub-test below, that `commit;`
+// quietly clears the abort state, and anything AFTER it in the slice
+// would then execute for real as fresh, individually-committed
+// statements, regardless of whether it has anything to do with v69.
+// Before anything was ever appended after v69 in schema.sql this slice
+// going to EOF was harmless by accident; it stopped being harmless the
+// moment the next migration landed. Un-sliced, this test would quietly
+// start asserting against whatever the LATEST migration happens to
+// leave live, not against v69's own isolated abort behaviour — which
+// is the one thing this file exists to test.
+const V69_START = FULL.indexOf("-- ─── v69 ADDITIONS");
+// Search from just after v69's own marker, so this correctly finds the
+// NEXT migration's marker (v70 today, whatever comes after that
+// tomorrow), never v69's own.
+const AFTER_V69_MARKER = V69_START + "-- ─── v69 ADDITIONS".length;
+const NEXT_MIGRATION_OFFSET = FULL.slice(AFTER_V69_MARKER).search(/\n-- v\d+ ADDITIONS/);
+const V69_ONLY = NEXT_MIGRATION_OFFSET === -1 ? FULL.slice(V69_START) : FULL.slice(V69_START, AFTER_V69_MARKER + NEXT_MIGRATION_OFFSET + 1);
 
 test("v69 abort path: inside an outer transaction (as apply_migration runs it) and when run statement by statement in one session, a STOP at the data step leaves nothing behind", async () => {
   const db = "tracker_test_v69_abort";

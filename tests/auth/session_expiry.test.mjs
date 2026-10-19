@@ -90,7 +90,7 @@ test("commercialErrorMessage(): 'permission denied for function' becomes a sessi
 test("every protected page awaits requireAuth() before its own queries (so requireAuth()'s never-resolving no-session path really halts the page)", () => {
   const dir = new URL("../../tracker/", import.meta.url);
   const pages = fs.readdirSync(dir).filter((f) => f.endsWith(".html"));
-  const PUBLIC_PAGES = new Set(["index.html", "login.html", "join.html", "reset-password.html", "commercial-approval.html"]);
+  const PUBLIC_PAGES = new Set(["index.html", "login.html", "join.html", "reset-password.html", "commercial-approval.html", "plot-handover-share.html"]);
   for (const page of pages) {
     if (PUBLIC_PAGES.has(page)) continue;
     const html = fs.readFileSync(new URL(page, dir), "utf8");

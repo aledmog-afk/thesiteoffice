@@ -3,11 +3,30 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="js/theme-init.js"></script>
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 <title>Plot – The Site Office</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/app.css">
+<style>
+  /* Same P18c mobile-stability fix as commercial-approval.html's own
+     #sigCanvas — see the comment above sigStartDraw() below for why
+     touch-action: none is what actually matters here. */
+  #handoverSigCanvas {
+    display: block;
+    width: 100%;
+    max-width: 480px;
+    height: 160px;
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    background: #fff;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+    cursor: crosshair;
+  }
+</style>
 </head>
 <body>
 <div id="site-header"></div>
@@ -74,12 +93,16 @@
     </div>
   </div>
 
-  <h3 class="display-font" id="documentsSection" style="font-size:1.1rem; margin-bottom:1rem;">Handover Documents</h3>
+  <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem;">
+    <h3 class="display-font" id="documentsSection" style="font-size:1.1rem; margin:0;">Handover Documents</h3>
+    <button type="button" class="btn btn-outline btn-sm" id="addDocBtn">+ Add Document</button>
+  </div>
   <div class="card" style="margin-bottom:2.5rem;">
+    <p class="hint" style="margin-bottom:0.6rem;">Not every plot needs every document — set one to N/A if it genuinely doesn't apply (e.g. no gas supply). N/A counts the same as Approved / Final for handover readiness. Documents you add yourself can be removed again; the standard set can only be marked N/A, not deleted.</p>
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>Document</th><th>Status</th><th>File</th></tr>
+          <tr><th>Document</th><th>Status</th><th>File</th><th></th></tr>
         </thead>
         <tbody id="docRows"></tbody>
       </table>
@@ -87,15 +110,87 @@
   </div>
 
   <h3 class="display-font" style="font-size:1.1rem; margin-bottom:1rem;">Linked Items</h3>
-  <div class="card">
+  <div class="card" style="margin-bottom:2.5rem;">
     <div class="hint" style="margin-bottom:0.6rem;">Actions, Inspection Findings and Snags already tied to this plot — nothing to search for separately.</div>
     <div id="linkedItemsWrap">Loading…</div>
+  </div>
+
+  <h3 class="display-font" style="font-size:1.1rem; margin-bottom:1rem;">Handover</h3>
+  <div id="handoverWrap">Loading…</div>
+</div>
+
+<!-- "Mark as Handed Over" modal — meter readings, key log, and the
+     internal confirming user's signature, then confirm_plot_handover().
+     Nothing here is sent anywhere; it only writes the confirmation
+     record and generates a local PDF the user downloads themselves. -->
+<div class="modal-backdrop" id="handoverModal" style="display:none;">
+  <div class="modal-box modal-520">
+    <h3 class="card-heading" style="margin-bottom:0.6rem;">Mark as Handed Over</h3>
+    <p class="hint" style="margin-bottom:0.8rem;">This is a one-time, permanent record — it cannot be changed or undone once confirmed. It captures the current Quality Gates, Handover Documents and Snag position, plus the meter readings and key log below, and generates a signed handover PDF.</p>
+
+    <div style="margin-bottom:1rem;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.4rem;">
+        <strong style="font-size:0.9rem;">Meter Readings</strong>
+        <button type="button" class="btn btn-outline btn-sm" id="addMeterRowBtn">+ Add reading</button>
+      </div>
+      <div id="meterRows"></div>
+    </div>
+
+    <div style="margin-bottom:1rem;">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:0.4rem;">
+        <strong style="font-size:0.9rem;">Key Log</strong>
+        <button type="button" class="btn btn-outline btn-sm" id="addKeyRowBtn">+ Add item</button>
+      </div>
+      <div id="keyRows"></div>
+    </div>
+
+    <div class="field"><label for="handoverSignerName">Your name *</label><input type="text" id="handoverSignerName"></div>
+    <label style="display:block; margin-bottom:0.4rem; font-weight:600; font-size:0.9rem;">Signature (optional — leave blank and your typed name above will be used instead)</label>
+    <canvas id="handoverSigCanvas"></canvas>
+    <div class="btn-row" style="margin-top:0.6rem;">
+      <button type="button" class="btn btn-outline btn-sm" id="clearHandoverSigBtn">Clear</button>
+    </div>
+
+    <div id="handoverModalError" class="error-box" style="margin-top:0.8rem;"></div>
+    <div class="btn-row" style="margin-top:1rem;">
+      <button type="button" class="btn btn-amber" id="confirmHandoverBtn">Confirm Handover</button>
+      <button type="button" class="btn btn-outline" id="cancelHandoverBtn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- "Share with buyer/solicitor" modal — mirrors the Commercial
+     "Request Client Approval" modal exactly. The app never sends this
+     itself: it only generates a link and a mailto: draft for the user
+     to send from their own email client. -->
+<div class="modal-backdrop" id="handoverShareModal" style="display:none;">
+  <div class="modal-box modal-520">
+    <h3 class="card-heading" style="margin-bottom:0.6rem;">Share Handover Pack</h3>
+    <p class="hint" style="margin-bottom:0.8rem;">Creates a read-only link to this plot's handover record for a buyer or solicitor — no account needed on their end. Nothing is sent automatically; you copy the link or use the email draft yourself.</p>
+    <div class="form-grid">
+      <div class="field"><label for="shareRecipientName">Recipient name</label><input type="text" id="shareRecipientName"></div>
+      <div class="field"><label for="shareRecipientEmail">Recipient email</label><input type="email" id="shareRecipientEmail"></div>
+      <div class="field"><label for="shareExpiry">Link expires after (days)</label><input type="number" id="shareExpiry" value="14" min="1" max="90"></div>
+    </div>
+    <div id="handoverShareModalError" class="error-box" style="margin-top:0.6rem;"></div>
+    <div class="btn-row" style="margin-top:1rem;">
+      <button type="button" class="btn btn-amber" id="submitHandoverShareBtn">Create Link</button>
+      <button type="button" class="btn btn-outline" id="cancelHandoverShareBtn">Cancel</button>
+    </div>
+    <div id="handoverShareLinkBox" style="display:none; margin-top:1rem; padding-top:1rem; border-top:1px solid var(--rule);">
+      <label for="handoverShareLinkValue" style="font-weight:600; font-size:0.9rem;">Link (shown once)</label>
+      <div style="display:flex; gap:0.4rem; margin-top:0.3rem;">
+        <input type="text" id="handoverShareLinkValue" readonly style="flex:1;">
+        <button type="button" class="btn btn-outline btn-sm" id="copyHandoverShareLinkBtn">Copy</button>
+      </div>
+      <a id="emailHandoverShareLinkBtn" class="btn btn-outline btn-sm" style="margin-top:0.6rem; display:inline-block;" href="#">Draft Email</a>
+    </div>
   </div>
 </div>
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, uploadImage, plotProgressMode, PLOT_STAGE_SOURCE_LABEL, formatDate, formatDateTime, historyActorName, checkAndMarkPlotHandedOver, getPlotHandoverReadiness, PLOT_READINESS_LABEL, PLOT_READINESS_BADGE, RFI_STATUS_BADGE, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, uploadImage, plotProgressMode, PLOT_STAGE_SOURCE_LABEL, formatDate, formatDateTime, historyActorName, getPlotHandoverReadiness, PLOT_READINESS_LABEL, PLOT_READINESS_BADGE, RFI_STATUS_BADGE, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE, confirmPlotHandover, getPlotHandoverConfirmation, requestPlotHandoverShare, revokePlotHandoverShare, getPlotHandoverShares, buildPlotHandoverShareUrl, PLOT_HANDOVER_SHARE_STATUS_LABEL, PLOT_HANDOVER_SHARE_STATUS_BADGE, generatePlotHandoverPdfBlob, saveFileToDevice, deviceSaveStatusLabel } from "./js/app.js";
 
   await requireAuth();
   const plotId = getParam("id");
@@ -303,9 +398,9 @@
       const { error } = await supabase.from("quality_gates").update({ status: newStatus }).eq("id", gate.id);
       if (error) { alert("Couldn't save that status change: " + error.message); select.value = gate.status; return; }
       gate.status = newStatus;
-      await checkAndMarkPlotHandedOver(plotId);
       rerenderGateCard(gate);
       loadPlotControl();
+      loadHandover();
     });
 
     document.querySelectorAll(`input[type="checkbox"][data-gate-id="${gate.id}"]`).forEach((cb) => {
@@ -424,24 +519,30 @@
   }
 
   // ─── Handover Documents ─────────────────────────────────────────
-  const docStatusBadge = { missing: "badge-red", draft_received: "badge-amber", approved_final: "badge-green" };
-  const docStatusLabel = { missing: "Missing", draft_received: "Draft Received", approved_final: "Approved / Final" };
+  // v73: not_applicable added (mirrors quality_gates' existing N/A
+  // option), and is_custom marks a one-off document the user added
+  // themselves — those get a Remove action; the standard seeded set
+  // can only be marked N/A, never hard-deleted, from this page.
+  const docStatusBadge = { missing: "badge-red", draft_received: "badge-amber", approved_final: "badge-green", not_applicable: "badge-grey" };
+  const docStatusLabel = { missing: "Missing", draft_received: "Draft Received", approved_final: "Approved / Final", not_applicable: "N/A" };
 
   function docRowHtml(doc) {
     return `
       <tr data-doc-id="${doc.id}">
-        <td><strong>${escapeHtml(doc.title)}</strong></td>
+        <td><strong>${escapeHtml(doc.title)}</strong>${doc.is_custom ? ` <span class="hint">(added)</span>` : ""}</td>
         <td>
           <select class="status-select" data-doc-id="${doc.id}" style="width:auto;">
             <option value="missing">Missing</option>
             <option value="draft_received">Draft Received</option>
             <option value="approved_final">Approved / Final</option>
+            <option value="not_applicable">N/A</option>
           </select>
         </td>
         <td class="file-row">
           ${doc.file_url ? `<a class="file-link" href="${doc.file_url}" target="_blank">📄 ${escapeHtml(doc.file_name || "View file")}</a><br>` : ""}
           <input type="file" data-doc-id="${doc.id}" accept="application/pdf,image/*">
         </td>
+        <td>${doc.is_custom ? `<button type="button" class="btn btn-outline btn-sm" data-remove-doc="${doc.id}">Remove</button>` : ""}</td>
       </tr>
     `;
   }
@@ -454,8 +555,8 @@
       const { error } = await supabase.from("handover_documents").update({ status: newStatus, updated_at: new Date().toISOString() }).eq("id", doc.id);
       if (error) { alert("Couldn't save that status change: " + error.message); select.value = doc.status; return; }
       doc.status = newStatus;
-      await checkAndMarkPlotHandedOver(plotId);
       loadPlotControl();
+      loadHandover();
     });
 
     const fileInput = document.querySelector(`input[type="file"][data-doc-id="${doc.id}"]`);
@@ -478,6 +579,18 @@
         fileInput.disabled = false;
       }
     });
+
+    const removeBtn = document.querySelector(`[data-remove-doc="${doc.id}"]`);
+    if (removeBtn) {
+      removeBtn.addEventListener("click", async () => {
+        if (!confirm(`Remove "${doc.title}"? This cannot be undone.`)) return;
+        const { error } = await supabase.from("handover_documents").delete().eq("id", doc.id);
+        if (error) { alert("Couldn't remove that document: " + error.message); return; }
+        await loadDocs();
+        loadPlotControl();
+        loadHandover();
+      });
+    }
   }
 
   function rerenderDocRow(doc) {
@@ -494,12 +607,25 @@
       .order("doc_key", { ascending: true });
 
     if (error || !data || !data.length) {
-      document.getElementById("docRows").innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--ink-soft);">No handover documents found for this plot.</td></tr>`;
+      document.getElementById("docRows").innerHTML = `<tr><td colspan="4" style="text-align:center; color:var(--ink-soft);">No handover documents found for this plot.</td></tr>`;
       return;
     }
     document.getElementById("docRows").innerHTML = data.map(docRowHtml).join("");
     data.forEach(wireDocRow);
   }
+
+  document.getElementById("addDocBtn").addEventListener("click", async () => {
+    const title = prompt("Document title:", "");
+    if (!title || !title.trim()) return;
+    const docKey = `custom_${crypto.randomUUID()}`;
+    const { error } = await supabase.from("handover_documents").insert({
+      project_id: plot.project_id, plot_id: plotId, doc_key: docKey, title: title.trim(), is_custom: true,
+    });
+    if (error) { alert("Couldn't add that document: " + error.message); return; }
+    await loadDocs();
+    loadPlotControl();
+    loadHandover();
+  });
 
   // ─── Plot progress (v69: worked out by the database) ────────────
   // progress_pct = the higher of the manual figure (if any) and the
@@ -618,6 +744,332 @@
       : `plot-handovers.html?project=${plot.project_id}`;
   });
 
+  // ─── Handover Part B: explicit "Mark as Handed Over" confirmation ──
+  // Replaces the old automatic stamp (which fired after every gate/
+  // document status change — see the two removed
+  // checkAndMarkPlotHandedOver() calls above) with a deliberate action:
+  // the user reviews readiness, enters meter readings and a key log,
+  // signs, and only then does confirm_plot_handover() run. Nothing here
+  // is sent anywhere — see the Share panel below for the one place a
+  // link can be generated, and it is never auto-sent either.
+  const handoverWrap = document.getElementById("handoverWrap");
+  let handoverShares = [];
+
+  function meterRowHtml(i, row = {}) {
+    return `<div class="form-grid" data-meter-row="${i}" style="margin-bottom:0.4rem; align-items:end;">
+      <div class="field"><label>Utility</label><input type="text" class="meter-utility" value="${escapeHtml(row.utility || "")}" placeholder="Electricity"></div>
+      <div class="field"><label>Reading</label><input type="text" class="meter-reading" value="${escapeHtml(row.reading || "")}"></div>
+      <div class="field"><label>Unit</label><input type="text" class="meter-unit" value="${escapeHtml(row.unit || "")}" placeholder="kWh"></div>
+      <button type="button" class="btn btn-outline btn-sm" data-remove-meter="${i}">Remove</button>
+    </div>`;
+  }
+  function keyRowHtml(i, row = {}) {
+    return `<div class="form-grid" data-key-row="${i}" style="margin-bottom:0.4rem; align-items:end;">
+      <div class="field"><label>Item</label><input type="text" class="key-item" value="${escapeHtml(row.item || "")}" placeholder="Front door keys"></div>
+      <div class="field"><label>Qty</label><input type="number" class="key-qty" min="0" value="${row.quantity ?? ""}"></div>
+      <div class="field"><label>Held by</label><input type="text" class="key-held-by" value="${escapeHtml(row.held_by || "")}"></div>
+      <button type="button" class="btn btn-outline btn-sm" data-remove-key="${i}">Remove</button>
+    </div>`;
+  }
+  let meterRowCount = 0;
+  let keyRowCount = 0;
+  function addMeterRow() {
+    document.getElementById("meterRows").insertAdjacentHTML("beforeend", meterRowHtml(meterRowCount++));
+    wireRemoveRowButtons();
+  }
+  function addKeyRow() {
+    document.getElementById("keyRows").insertAdjacentHTML("beforeend", keyRowHtml(keyRowCount++));
+    wireRemoveRowButtons();
+  }
+  function wireRemoveRowButtons() {
+    document.querySelectorAll("[data-remove-meter]").forEach((btn) => {
+      btn.onclick = () => btn.closest("[data-meter-row]").remove();
+    });
+    document.querySelectorAll("[data-remove-key]").forEach((btn) => {
+      btn.onclick = () => btn.closest("[data-key-row]").remove();
+    });
+  }
+  document.getElementById("addMeterRowBtn").addEventListener("click", addMeterRow);
+  document.getElementById("addKeyRowBtn").addEventListener("click", addKeyRow);
+
+  function collectMeterReadings() {
+    return [...document.querySelectorAll("[data-meter-row]")].map((row) => ({
+      utility: row.querySelector(".meter-utility").value.trim(),
+      reading: row.querySelector(".meter-reading").value.trim(),
+      unit: row.querySelector(".meter-unit").value.trim(),
+    })).filter((r) => r.utility || r.reading);
+  }
+  function collectKeyLog() {
+    return [...document.querySelectorAll("[data-key-row]")].map((row) => ({
+      item: row.querySelector(".key-item").value.trim(),
+      quantity: row.querySelector(".key-qty").value === "" ? null : Number(row.querySelector(".key-qty").value),
+      held_by: row.querySelector(".key-held-by").value.trim(),
+    })).filter((r) => r.item);
+  }
+
+  // ─── Signature canvas (same P18c mobile-stability pattern as
+  // commercial-approval.html's #sigCanvas — touch-action: none,
+  // setPointerCapture/releasePointerCapture, dpr-aware sizing) ───────
+  const handoverSigCanvas = document.getElementById("handoverSigCanvas");
+  const handoverSigCtx = handoverSigCanvas.getContext("2d");
+  let handoverSigDrawing = false;
+  let handoverSigHasStroke = false;
+  let handoverSigActivePointerId = null;
+  let handoverSigCanvasCssWidth = 0;
+  const HANDOVER_SIG_CANVAS_CSS_HEIGHT = 160;
+  function resizeHandoverSigCanvasIfNeeded() {
+    if (!handoverSigCtx) return;
+    const cssWidth = Math.round(handoverSigCanvas.getBoundingClientRect().width);
+    if (!cssWidth || cssWidth === handoverSigCanvasCssWidth) return;
+    handoverSigCanvasCssWidth = cssWidth;
+    const dpr = window.devicePixelRatio || 1;
+    handoverSigCanvas.width = Math.round(cssWidth * dpr);
+    handoverSigCanvas.height = Math.round(HANDOVER_SIG_CANVAS_CSS_HEIGHT * dpr);
+    handoverSigCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    handoverSigHasStroke = false;
+  }
+  window.addEventListener("resize", resizeHandoverSigCanvasIfNeeded);
+  function handoverSigPoint(e) {
+    const rect = handoverSigCanvas.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  }
+  function handoverSigStartDraw(e) {
+    if (!handoverSigCtx || handoverSigDrawing) return;
+    handoverSigDrawing = true;
+    handoverSigActivePointerId = e.pointerId;
+    handoverSigCanvas.setPointerCapture(e.pointerId);
+    const p = handoverSigPoint(e);
+    handoverSigCtx.beginPath();
+    handoverSigCtx.arc(p.x, p.y, 1, 0, Math.PI * 2);
+    handoverSigCtx.fillStyle = "#0f1117";
+    handoverSigCtx.fill();
+    handoverSigCtx.beginPath();
+    handoverSigCtx.moveTo(p.x, p.y);
+    handoverSigHasStroke = true;
+    e.preventDefault();
+  }
+  function handoverSigMoveDraw(e) {
+    if (!handoverSigDrawing || e.pointerId !== handoverSigActivePointerId) return;
+    const p = handoverSigPoint(e);
+    handoverSigCtx.lineTo(p.x, p.y);
+    handoverSigCtx.strokeStyle = "#0f1117";
+    handoverSigCtx.lineWidth = 2;
+    handoverSigCtx.lineCap = "round";
+    handoverSigCtx.lineJoin = "round";
+    handoverSigCtx.stroke();
+    e.preventDefault();
+  }
+  function handoverSigEndDraw(e) {
+    if (e && e.pointerId !== handoverSigActivePointerId) return;
+    if (handoverSigActivePointerId !== null) {
+      try { handoverSigCanvas.releasePointerCapture(handoverSigActivePointerId); } catch { /* already released */ }
+    }
+    handoverSigDrawing = false;
+    handoverSigActivePointerId = null;
+  }
+  handoverSigCanvas.addEventListener("pointerdown", handoverSigStartDraw);
+  handoverSigCanvas.addEventListener("pointermove", handoverSigMoveDraw);
+  handoverSigCanvas.addEventListener("pointerup", handoverSigEndDraw);
+  handoverSigCanvas.addEventListener("pointercancel", handoverSigEndDraw);
+  handoverSigCanvas.addEventListener("lostpointercapture", handoverSigEndDraw);
+  document.getElementById("clearHandoverSigBtn").addEventListener("click", () => {
+    if (!handoverSigCtx) return;
+    handoverSigCtx.save();
+    handoverSigCtx.setTransform(1, 0, 0, 1, 0, 0);
+    handoverSigCtx.clearRect(0, 0, handoverSigCanvas.width, handoverSigCanvas.height);
+    handoverSigCtx.restore();
+    handoverSigHasStroke = false;
+  });
+
+  function openHandoverModal() {
+    clearError(document.getElementById("handoverModalError"));
+    document.getElementById("meterRows").innerHTML = "";
+    document.getElementById("keyRows").innerHTML = "";
+    meterRowCount = 0; keyRowCount = 0;
+    addMeterRow();
+    addKeyRow();
+    document.getElementById("handoverSignerName").value = "";
+    document.getElementById("clearHandoverSigBtn").click();
+    document.getElementById("handoverModal").style.display = "flex";
+    resizeHandoverSigCanvasIfNeeded();
+  }
+  document.getElementById("cancelHandoverBtn").addEventListener("click", () => {
+    document.getElementById("handoverModal").style.display = "none";
+  });
+  document.getElementById("handoverModal").addEventListener("click", (e) => {
+    if (e.target === document.getElementById("handoverModal")) document.getElementById("handoverModal").style.display = "none";
+  });
+
+  document.getElementById("confirmHandoverBtn").addEventListener("click", async () => {
+    const errBox = document.getElementById("handoverModalError");
+    clearError(errBox);
+    const signerName = document.getElementById("handoverSignerName").value.trim();
+    if (!signerName) { showError(errBox, "Your name is required."); return; }
+    if (!confirm("Confirm this plot as handed over? This is a permanent record and cannot be changed or undone.")) return;
+    const btn = document.getElementById("confirmHandoverBtn");
+    btn.disabled = true;
+    try {
+      await confirmPlotHandover(plotId, {
+        signerName,
+        signatureData: handoverSigHasStroke ? handoverSigCanvas.toDataURL("image/png") : null,
+        meterReadings: collectMeterReadings(),
+        keyLog: collectKeyLog(),
+      });
+      document.getElementById("handoverModal").style.display = "none";
+      await loadHandover();
+      await loadPlotControl();
+      try {
+        const { blob, filename } = await generatePlotHandoverPdfBlob(plotId);
+        await saveFileToDevice(blob, filename);
+      } catch {
+        // Confirmation itself already succeeded and is permanent; a PDF
+        // generation hiccup here is not fatal — "Download PDF" below
+        // regenerates it from the stored record at any time.
+      }
+    } catch (err) {
+      showError(errBox, err);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  // ─── Share with buyer/solicitor ───────────────────────────────────
+  // Mirrors the Commercial "Request Client Approval" modal exactly —
+  // see requestCommercialApproval() in app.js for the identical
+  // pattern. The app never sends anything itself: this only ever
+  // generates a link and a mailto: draft for the user to send from
+  // their own email client.
+  function shareRowHtml(share) {
+    const label = PLOT_HANDOVER_SHARE_STATUS_LABEL[share.status] || share.status;
+    const badge = PLOT_HANDOVER_SHARE_STATUS_BADGE[share.status] || "badge-grey";
+    return `<div class="item-row" data-share-id="${share.id}">
+      <span style="flex:1 1 auto;">${escapeHtml(share.recipient_name || share.recipient_email || "Share link")} <span class="hint">· created ${escapeHtml(formatDateTime(share.created_at))} · expires ${escapeHtml(formatDateTime(share.expires_at))}</span></span>
+      <span class="badge ${badge}">${escapeHtml(label)}</span>
+      ${["pending", "viewed"].includes(share.status) ? `<button type="button" class="btn btn-outline btn-sm" data-revoke-share="${share.id}">Revoke</button>` : ""}
+    </div>`;
+  }
+
+  async function loadHandoverShares() {
+    handoverShares = await getPlotHandoverShares(plotId);
+    const wrap = document.getElementById("handoverSharesWrap");
+    if (!wrap) return;
+    wrap.innerHTML = handoverShares.length
+      ? handoverShares.map(shareRowHtml).join("")
+      : `<div class="hint" style="padding:0.3rem 0;">No share links created yet.</div>`;
+    wrap.querySelectorAll("[data-revoke-share]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        if (!confirm("Revoke this share link? It will stop working immediately.")) return;
+        try {
+          await revokePlotHandoverShare(btn.dataset.revokeShare);
+          await loadHandoverShares();
+        } catch (err) {
+          alert("Couldn't revoke that link: " + (err.message || err));
+        }
+      });
+    });
+  }
+
+  function openHandoverShareModal() {
+    clearError(document.getElementById("handoverShareModalError"));
+    document.getElementById("shareRecipientName").value = "";
+    document.getElementById("shareRecipientEmail").value = "";
+    document.getElementById("shareExpiry").value = "14";
+    document.getElementById("handoverShareLinkBox").style.display = "none";
+    document.getElementById("handoverShareModal").style.display = "flex";
+  }
+  document.getElementById("cancelHandoverShareBtn").addEventListener("click", () => {
+    document.getElementById("handoverShareModal").style.display = "none";
+    loadHandoverShares();
+  });
+  document.getElementById("handoverShareModal").addEventListener("click", (e) => {
+    if (e.target === document.getElementById("handoverShareModal")) {
+      document.getElementById("handoverShareModal").style.display = "none";
+      loadHandoverShares();
+    }
+  });
+  document.getElementById("submitHandoverShareBtn").addEventListener("click", async () => {
+    const errBox = document.getElementById("handoverShareModalError");
+    clearError(errBox);
+    const btn = document.getElementById("submitHandoverShareBtn");
+    btn.disabled = true;
+    try {
+      const recipientName = document.getElementById("shareRecipientName").value.trim() || null;
+      const recipientEmail = document.getElementById("shareRecipientEmail").value.trim() || null;
+      const days = Number(document.getElementById("shareExpiry").value) || 14;
+      const result = await requestPlotHandoverShare(plotId, { recipientName, recipientEmail, expiryHours: days * 24 });
+      const link = buildPlotHandoverShareUrl(result.token);
+      document.getElementById("handoverShareLinkValue").value = link;
+      const subject = encodeURIComponent(`Handover record: ${plot.plot_number}`);
+      const body = encodeURIComponent(`Hi,\n\nHere is the handover record for ${plot.plot_number}. No account is needed to view it.\n\n${link}\n\nThis link expires ${formatDate(result.expires_at?.slice(0, 10))}.\n\nRegards,`);
+      document.getElementById("emailHandoverShareLinkBtn").href = recipientEmail ? `mailto:${recipientEmail}?subject=${subject}&body=${body}` : `mailto:?subject=${subject}&body=${body}`;
+      document.getElementById("handoverShareLinkBox").style.display = "block";
+    } catch (err) {
+      showError(errBox, err);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+  document.getElementById("copyHandoverShareLinkBtn").addEventListener("click", async () => {
+    const input = document.getElementById("handoverShareLinkValue");
+    try { await navigator.clipboard.writeText(input.value); } catch { input.select(); document.execCommand("copy"); }
+  });
+
+  function handoverSummaryHtml(confirmation) {
+    const openSnags = (confirmation.snags_snapshot || []).filter((s) => s.status === "open").length;
+    return `
+      <div class="card" style="margin-bottom:1rem;">
+        <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:0.6rem;">
+          <strong>Handed Over</strong>
+          <span class="badge badge-green">Handed Over</span>
+        </div>
+        <p class="hint" style="margin-top:0.4rem;">Confirmed ${escapeHtml(formatDateTime(confirmation.confirmed_at))} by ${escapeHtml(confirmation.signed_by_name || "")}. ${confirmation.gates_snapshot.length} Quality Gate(s), ${confirmation.documents_snapshot.length} Handover Document(s), ${openSnags} open Snag(s) at that moment. This record is permanent and cannot be changed.</p>
+        <div class="btn-row" style="margin-top:0.8rem;">
+          <button type="button" class="btn btn-outline btn-sm" id="downloadHandoverPdfBtn">Download PDF</button>
+          <button type="button" class="btn btn-outline btn-sm" id="openHandoverShareBtn">Share with Buyer/Solicitor</button>
+        </div>
+        <p class="hint" id="handoverPdfStatus" style="margin-top:0.4rem;"></p>
+      </div>
+      <h4 style="font-size:0.95rem; margin-bottom:0.5rem;">Share Links</h4>
+      <div id="handoverSharesWrap">Loading…</div>
+    `;
+  }
+
+  async function loadHandover() {
+    try {
+      const confirmation = await getPlotHandoverConfirmation(plotId);
+      if (confirmation) {
+        handoverWrap.innerHTML = handoverSummaryHtml(confirmation);
+        document.getElementById("downloadHandoverPdfBtn").addEventListener("click", async () => {
+          const statusEl = document.getElementById("handoverPdfStatus");
+          statusEl.textContent = "Generating PDF…";
+          try {
+            const { blob, filename } = await generatePlotHandoverPdfBlob(plotId);
+            const result = await saveFileToDevice(blob, filename);
+            statusEl.textContent = deviceSaveStatusLabel(result.status);
+          } catch (err) {
+            statusEl.textContent = "Couldn't generate the PDF: " + (err.message || err);
+          }
+        });
+        document.getElementById("openHandoverShareBtn").addEventListener("click", openHandoverShareModal);
+        await loadHandoverShares();
+      } else {
+        const { readiness } = await getPlotHandoverReadiness(plotId).catch(() => ({ readiness: { status: "not_ready" } }));
+        const eligible = readiness.status === "ready" || readiness.status === "at_risk";
+        handoverWrap.innerHTML = `
+          <div class="card">
+            <p class="hint" style="margin-bottom:0.6rem;">${eligible
+              ? "This plot is ready to be marked as handed over."
+              : "This plot is not yet ready to be marked as handed over — see System Handover Readiness above for outstanding blockers."}</p>
+            <button type="button" class="btn btn-amber" id="openHandoverModalBtn" ${eligible ? "" : "disabled"}>Mark as Handed Over</button>
+          </div>
+        `;
+        document.getElementById("openHandoverModalBtn").addEventListener("click", openHandoverModal);
+      }
+    } catch (err) {
+      handoverWrap.innerHTML = `<div class="error-box" style="display:block;">Couldn't load handover status: ${escapeHtml(err.message || String(err))}</div>`;
+    }
+  }
+
   // ─── Init ───────────────────────────────────────────────────────
   async function init() {
     const { data, error } = await supabase.from("plots").select("*, projects(*), blocks(*)").eq("id", plotId).single();
@@ -649,6 +1101,7 @@
     loadDocs();
     loadPlotControl();
     loadLinkedItems();
+    loadHandover();
   }
 
   init();

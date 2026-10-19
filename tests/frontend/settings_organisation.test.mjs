@@ -43,6 +43,9 @@ function makeContext({ members, requests, currentUserId = "admin-1" } = {}) {
     getOrganisationMembershipRequests: async () => { calls.push({ fn: "getOrganisationMembershipRequests" }); return requests; },
     approveOrganisationMembership: async (id) => { calls.push({ fn: "approveOrganisationMembership", id }); },
     rejectOrganisationMembership: async (id, reason) => { calls.push({ fn: "rejectOrganisationMembership", id, reason }); },
+    THEME_OPTIONS: [{ value: "default", label: "Site Office", swatch: "#e8a020" }],
+    getTheme: () => "default",
+    setTheme: () => {},
     __calls: calls,
   };
   return ctx;

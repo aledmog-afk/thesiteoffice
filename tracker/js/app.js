@@ -164,6 +164,55 @@ export function clearError(el) {
   el.style.display = "none";
 }
 
+// ─── Colour scheme (Settings → Appearance) ──────────────────────
+// A per-browser preference, stored in localStorage only — this app has
+// no existing per-user preference table/column anywhere, and a theme
+// pick is conventionally a local, per-device thing (it doesn't follow
+// you to a different browser any more than, say, your OS's own dark-
+// mode setting does). Applied via a data-theme attribute on <html>:
+// no attribute (or "default") means the default scheme in
+// tracker/css/app.css; any other value selects that scheme's
+// :root[data-theme="..."] override block there.
+//
+// The actual anti-flash application on page LOAD happens in
+// tracker/js/theme-init.js — a separate, deliberately non-module
+// script loaded first in every page's <head>, which can't import these
+// (a module's execution is deferred, which is exactly the flash that
+// file exists to avoid). setTheme()/getTheme() here are for once the
+// page is already interactive — right now, only the Settings picker
+// itself, which needs to re-apply the scheme live as soon as someone
+// clicks a different swatch. The localStorage key name ("theme") and
+// the "no value or 'default' means the default scheme" rule are the
+// one piece of contract shared between the two files.
+export const THEME_OPTIONS = [
+  { value: "default", label: "Site Office", swatch: "#e8a020" },
+  { value: "dark", label: "Dark", swatch: "#1c1f27" },
+  { value: "ocean", label: "Ocean", swatch: "#1a4fa0" },
+  { value: "forest", label: "Forest", swatch: "#1e6b3c" },
+];
+
+export function getTheme() {
+  try {
+    return localStorage.getItem("theme") || "default";
+  } catch {
+    return "default";
+  }
+}
+
+export function setTheme(value) {
+  try {
+    localStorage.setItem("theme", value);
+  } catch {
+    // Storage blocked — the scheme still applies for this page view via
+    // the attribute set below, it just won't be remembered next visit.
+  }
+  if (value && value !== "default") {
+    document.documentElement.setAttribute("data-theme", value);
+  } else {
+    document.documentElement.removeAttribute("data-theme");
+  }
+}
+
 // ─── Photo upload helper ────────────────────────────────────────
 // Mirrors the "site-photos" bucket's real limits (sql/schema.sql, v27) —
 // this is a fast client-side check for a friendly error before spending
@@ -1795,60 +1844,287 @@ export async function getMemberEmailMap(projectIds) {
 // plus external works counted as one plot's worth. With a share set:
 // share x external works + (1 - share) x the plots/blocks part.
 
-// Stamps a plot as fully handed over the moment System Handover
-// Readiness has ZERO blockers — reusing computePlotHandoverReadiness()
-// (via getPlotHandoverReadiness() below) as the single source of truth
-// for what counts as a blocker, rather than a second, narrower
-// definition of "ready" duplicated here.
+// ─── Handover Part B: explicit "Mark as Handed Over" confirmation ──
+// (Handover Part B, v72) Before this, handed_over_at was stamped
+// automatically and silently the instant readiness turned ready/at_risk
+// (the old checkAndMarkPlotHandedOver(), called after every gate/
+// document status change) — no one ever explicitly decided "this plot
+// is handed over", and nothing recorded the state of gates/documents/
+// snags, meter readings or a key log at that moment. This replaces
+// that auto-stamp with a deliberate, user-initiated action: the caller
+// (plot-detail.html's "Mark as Handed Over" button) collects meter
+// readings and a key log first, then calls confirmPlotHandover() below.
 //
-// (Priority 15, Phase 1) Before this, the function only ever checked
-// Quality Gates and Handover Documents, so a plot could be silently
-// stamped "handed over" while readiness simultaneously reported it NOT
-// READY — the one genuine correctness bug Priority 14's operational
-// stress test found. Warnings (Programme variance, and any
-// non-blocking Snag/Action/Finding) deliberately do NOT prevent this —
-// only a hard blocker does, matching computePlotHandoverReadiness's own
-// BLOCKER vs WARNING distinction and its "at_risk plots can still be
-// handed over" semantics exactly. A plot is only eligible while
-// readiness is "ready" or "at_risk" — "restricted" (snagging-only
-// caller) and "not_ready" are both refused here, on top of (not
-// instead of) the RLS/trigger enforcement below.
+// handed_over_at itself is exactly as immutable as it always was — the
+// v39/v53 `plots_before_write` database trigger (sql/schema.sql) is the
+// real enforcement boundary (any project editor's RLS lets them update
+// handed_over_at directly, bypassing this function entirely) and is
+// untouched by this change. confirm_plot_handover() (the RPC this
+// calls) does not duplicate that trigger's readiness-blocker checks —
+// it issues the same plain `update plots set handed_over_at = now()`
+// any other caller could, and relies on the trigger to refuse it if the
+// plot genuinely isn't ready.
 //
-// The REAL enforcement boundary is the v39 `trg_plots_before_write`
-// database trigger (sql/schema.sql) — it independently re-validates the
-// same blocker rules server-side against the live data at write time,
-// because plots' own RLS lets any project editor update handed_over_at
-// directly, entirely bypassing this function. This client-side check
-// only avoids attempting a write that would predictably be rejected,
-// giving a fast, silent no-op in the common case; it is not itself the
-// security boundary.
+// Returns { id, confirmed_at, signed_by_name, signature_data,
+// content_hash, gates_snapshot, documents_snapshot, snags_snapshot,
+// meter_readings, key_log } — the exact snapshot just recorded, for
+// the caller to render immediately (e.g. before generating the
+// handover PDF) without a second read. signerName is required —
+// mirrors the internal Sign & Approve pattern, where a typed name
+// doubles as the attestation when no drawn signatureData is supplied.
+export async function confirmPlotHandover(plotId, { signerName, signatureData = null, meterReadings = [], keyLog = [] } = {}) {
+  const { data, error } = await supabase.rpc("confirm_plot_handover", {
+    p_plot_id: plotId,
+    p_signer_name: signerName,
+    p_meter_readings: meterReadings,
+    p_key_log: keyLog,
+    p_signature_data: signatureData,
+  });
+  if (error) throw error;
+  return data;
+}
+
+export async function getPlotHandoverConfirmation(plotId) {
+  const { data, error } = await supabase.from("plot_handover_confirmations").select("*").eq("plot_id", plotId).maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
+// ─── Handover Part B: optional buyer/solicitor share link ──────────
+// Mirrors the Commercial module's external-approval link architecture
+// (requestCommercialApproval()/buildCommercialApprovalUrl() above)
+// exactly, including the one thing that pattern enforces everywhere in
+// this app: the application NEVER sends anything itself. This only
+// ever generates a link and (on the calling page) a mailto: draft for
+// a human to send from their own email client — see
+// tracker/plot-handover-share.html, the page this link opens.
 //
-// Called after any gate/document change on plot-detail.html. Only ever
-// sets handed_over_at once — it's a permanent historical record, not a
-// live status, so it is never reset or rewritten once set (also now
-// enforced server-side — see the trigger's own immutability check).
-// Returns true if this call is what just completed the plot (false
-// otherwise, including "already complete" or "not currently eligible").
-export async function checkAndMarkPlotHandedOver(plotId) {
-  let readiness;
-  try {
-    ({ readiness } = await getPlotHandoverReadiness(plotId));
-  } catch {
-    return false;
+// Returns { id, token, expires_at }. The raw token is returned ONCE,
+// here, and never again — only its hash is ever stored (see
+// plot_handover_share_token_hash() in the schema).
+export async function requestPlotHandoverShare(plotId, { recipientName = null, recipientEmail = null, expiryHours = 336 } = {}) {
+  const { data, error } = await supabase.rpc("request_plot_handover_share", {
+    p_plot_id: plotId,
+    p_recipient_name: recipientName || null,
+    p_recipient_email: recipientEmail || null,
+    p_expiry_hours: expiryHours,
+  });
+  if (error) throw error;
+  return (data && data[0]) || null;
+}
+
+export async function revokePlotHandoverShare(shareId) {
+  const { error } = await supabase.rpc("revoke_plot_handover_share", { p_share_id: shareId });
+  if (error) throw error;
+}
+
+export async function getPlotHandoverShares(plotId) {
+  const { data, error } = await supabase.from("plot_handover_shares").select("*").eq("plot_id", plotId).order("created_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+// Same-origin URL builder as buildCommercialApprovalUrl() above — works
+// identically in any deployment without a hardcoded domain.
+export function buildPlotHandoverShareUrl(token) {
+  return `${window.location.origin}${window.location.pathname.replace(/[^/]*$/, "")}plot-handover-share.html?token=${encodeURIComponent(token)}`;
+}
+
+export const PLOT_HANDOVER_SHARE_STATUS_LABEL = {
+  pending: "Pending", viewed: "Viewed", expired: "Expired", revoked: "Revoked",
+};
+export const PLOT_HANDOVER_SHARE_STATUS_BADGE = {
+  pending: "badge-amber", viewed: "badge-amber", expired: "badge-grey", revoked: "badge-grey",
+};
+
+// ─── Handover Part B: signed handover PDF ──────────────────────────
+// Same split as buildCommercialEventPdfDocument()/
+// generateCommercialEventPdfBlob() below: a pure, testable builder
+// given a jsPDF constructor and already-resolved plain data, plus an
+// async orchestrator that reads the record and dynamically imports
+// jsPDF. Reuses the same A4-point page geometry constants (CE_PDF_*) —
+// they're generic page layout, not Commercial-specific.
+function handoverPdfTableSection(doc, state, title, rows, cols) {
+  handoverPdfHeading(doc, state, title);
+  if (!rows.length) {
+    doc.setFont("helvetica", "italic");
+    doc.setFontSize(9.5);
+    doc.setTextColor(140, 140, 140);
+    handoverPdfEnsureSpace(doc, state, 14);
+    doc.text("None recorded.", CE_PDF_MARGIN, state.y);
+    state.y += 18;
+    return;
   }
-  if (readiness.status !== "ready" && readiness.status !== "at_risk") return false;
-  try {
-    const { error } = await supabase.from("plots").update({ handed_over_at: new Date().toISOString() }).eq("id", plotId);
-    if (error) throw error;
-  } catch {
-    // The database trigger is the real authority — if it rejects this
-    // (e.g. a genuine race where a new blocker appeared between the
-    // read above and this write), there is nothing further to do here;
-    // the caller's own loadPlotControl() refresh already shows the
-    // plot's current, correct readiness and blockers.
-    return false;
+  handoverPdfEnsureSpace(doc, state, 18);
+  doc.setFillColor(240, 240, 240);
+  doc.rect(CE_PDF_MARGIN, state.y - 12, CE_PDF_CONTENT_WIDTH, 18, "F");
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8);
+  doc.setTextColor(70, 70, 70);
+  cols.forEach((c) => doc.text(c.label, CE_PDF_MARGIN + c.x + 4, state.y));
+  state.y += 16;
+  for (const row of rows) {
+    handoverPdfEnsureSpace(doc, state, 15);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(40, 40, 40);
+    cols.forEach((c) => {
+      const value = c.value(row);
+      doc.text(String(value === null || value === undefined || value === "" ? "—" : value), CE_PDF_MARGIN + c.x + 4, state.y);
+    });
+    state.y += 15;
   }
-  return true;
+  state.y += 8;
+}
+function handoverPdfEnsureSpace(doc, state, needed) {
+  if (state.y + needed > CE_PDF_PAGE.height - CE_PDF_MARGIN - CE_PDF_FOOTER_RESERVE) {
+    doc.addPage();
+    state.y = CE_PDF_MARGIN;
+  }
+}
+function handoverPdfHeading(doc, state, text, size = 11.5) {
+  handoverPdfEnsureSpace(doc, state, size + 12);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(size);
+  doc.setTextColor(20, 20, 20);
+  doc.text(text, CE_PDF_MARGIN, state.y);
+  state.y += size + 8;
+}
+
+export function buildPlotHandoverPdfDocument({ jsPDFCtor, plot, projectName, orgName, confirmation }) {
+  if (!confirmation) throw new Error("A handover confirmation is required to generate this PDF.");
+
+  const doc = new jsPDFCtor({ unit: "pt", format: "a4" });
+  const state = { y: CE_PDF_MARGIN };
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.5);
+  doc.setTextColor(130, 130, 130);
+  doc.text("HANDOVER RECORD", CE_PDF_MARGIN, state.y);
+  state.y += 16;
+  doc.setFontSize(18);
+  doc.setTextColor(15, 17, 23);
+  doc.text(String(plot.plot_number), CE_PDF_MARGIN, state.y);
+  state.y += 21;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  doc.setTextColor(100, 100, 100);
+  const subLine = [projectName, orgName].filter(Boolean).join("   ·   ");
+  if (subLine) { doc.text(subLine, CE_PDF_MARGIN, state.y); state.y += 18; }
+  state.y += 4;
+  doc.setDrawColor(210, 210, 210);
+  doc.line(CE_PDF_MARGIN, state.y, CE_PDF_MARGIN + CE_PDF_CONTENT_WIDTH, state.y);
+  state.y += 22;
+
+  handoverPdfEnsureSpace(doc, state, 34);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7.5);
+  doc.setTextColor(140, 140, 140);
+  doc.text("HANDED OVER", CE_PDF_MARGIN, state.y);
+  doc.setFontSize(10.5);
+  doc.setTextColor(20, 20, 20);
+  doc.text(formatDateTime(confirmation.confirmed_at), CE_PDF_MARGIN, state.y + 14);
+  state.y += 34;
+
+  handoverPdfTableSection(doc, state, "Quality Gates", confirmation.gates_snapshot || [], [
+    { label: "GATE", x: 0, value: (r) => r.title },
+    { label: "STATUS", x: CE_PDF_CONTENT_WIDTH - 110, value: (r) => (r.status || "").replace(/_/g, " ") },
+  ]);
+  handoverPdfTableSection(doc, state, "Handover Documents", confirmation.documents_snapshot || [], [
+    { label: "DOCUMENT", x: 0, value: (r) => r.title },
+    { label: "STATUS", x: CE_PDF_CONTENT_WIDTH - 110, value: (r) => (r.status || "").replace(/_/g, " ") },
+  ]);
+  const openSnags = (confirmation.snags_snapshot || []).filter((s) => s.status === "open");
+  handoverPdfTableSection(doc, state, `Snags at Handover (${openSnags.length} open of ${(confirmation.snags_snapshot || []).length})`, openSnags, [
+    { label: "LOCATION", x: 0, value: (r) => r.location },
+    { label: "DESCRIPTION", x: 90, value: (r) => r.description },
+    { label: "PRIORITY", x: CE_PDF_CONTENT_WIDTH - 60, value: (r) => r.priority },
+  ]);
+  handoverPdfTableSection(doc, state, "Meter Readings", confirmation.meter_readings || [], [
+    { label: "UTILITY", x: 0, value: (r) => r.utility },
+    { label: "READING", x: 150, value: (r) => r.reading },
+    { label: "UNIT", x: CE_PDF_CONTENT_WIDTH - 60, value: (r) => r.unit },
+  ]);
+  handoverPdfTableSection(doc, state, "Key Log", confirmation.key_log || [], [
+    { label: "ITEM", x: 0, value: (r) => r.item },
+    { label: "QTY", x: 220, value: (r) => r.quantity },
+    { label: "HELD BY", x: CE_PDF_CONTENT_WIDTH - 110, value: (r) => r.held_by },
+  ]);
+
+  handoverPdfHeading(doc, state, "Confirmed By", 13);
+  handoverPdfEnsureSpace(doc, state, 60);
+  const sigTop = state.y;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10);
+  doc.setTextColor(20, 20, 20);
+  doc.text(confirmation.signed_by_name || "", CE_PDF_MARGIN, sigTop);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  doc.setTextColor(110, 110, 110);
+  doc.text(formatDateTime(confirmation.confirmed_at), CE_PDF_MARGIN, sigTop + 13);
+  const sigX = CE_PDF_MARGIN + 260;
+  if (confirmation.signature_data) {
+    const fmt = detectImageFormat(confirmation.signature_data);
+    try {
+      doc.addImage(confirmation.signature_data, fmt, sigX, sigTop - 6, 120, 32);
+    } catch {
+      doc.setFont("helvetica", "italic");
+      doc.setFontSize(8.5);
+      doc.setTextColor(180, 60, 60);
+      doc.text("(signature image could not be rendered)", sigX, sigTop + 10);
+    }
+  } else {
+    doc.setFont("helvetica", "italic");
+    doc.setFontSize(11);
+    doc.setTextColor(20, 20, 20);
+    doc.text(String(confirmation.signed_by_name || ""), sigX, sigTop + 4);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7);
+    doc.setTextColor(150, 150, 150);
+    doc.text("typed-name attestation", sigX, sigTop + 16);
+  }
+  state.y = sigTop + 46;
+
+  handoverPdfEnsureSpace(doc, state, 30);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(7);
+  doc.setTextColor(150, 150, 150);
+  doc.text(`Content hash (sha256): ${confirmation.content_hash}`, CE_PDF_MARGIN, state.y);
+  state.y += 12;
+
+  const totalPages = doc.internal.getNumberOfPages();
+  for (let i = 1; i <= totalPages; i++) {
+    doc.setPage(i);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    doc.setTextColor(150, 150, 150);
+    doc.text("Handover record — The Site Office.", CE_PDF_MARGIN, CE_PDF_PAGE.height - 20);
+    doc.text(`Page ${i} of ${totalPages}`, CE_PDF_PAGE.width - CE_PDF_MARGIN, CE_PDF_PAGE.height - 20, { align: "right" });
+  }
+
+  return doc;
+}
+
+export function plotHandoverPdfFilename(plot) {
+  return `${sanitizeExportFilename(`Handover - ${plot.plot_number}`)}.pdf`;
+}
+
+export async function generatePlotHandoverPdfBlob(plotId) {
+  const [{ data: plot, error }, confirmation] = await Promise.all([
+    supabase.from("plots").select("*, projects(name, org_id)").eq("id", plotId).single(),
+    getPlotHandoverConfirmation(plotId),
+  ]);
+  if (error) throw error;
+  if (!confirmation) throw new Error("This plot has not been handed over yet.");
+  const orgName = await getOrganisationName(plot.projects?.org_id);
+  // Same CDN-import approach the Commercial/Toolbox Talk PDFs above
+  // already use — a pinned exact version, dynamically imported, zero
+  // build step.
+  const { jsPDF } = await import("https://esm.sh/jspdf@2.5.2");
+  const doc = buildPlotHandoverPdfDocument({
+    jsPDFCtor: jsPDF, plot, projectName: plot.projects?.name || null, orgName, confirmation,
+  });
+  return { blob: doc.output("blob"), filename: plotHandoverPdfFilename(plot) };
 }
 
 // ─── Plot Control / Handover Readiness (Priority 12, Phase 1) ─────
@@ -1891,29 +2167,29 @@ async function getPlotSnags(plotId) {
   return [...byId.values()];
 }
 
-// Quality Gates: "ready" mirrors checkAndMarkPlotHandedOver()'s own,
-// already-established definition exactly (approved OR not_applicable)
-// — not a new rule. A plot with zero gate rows recorded is neither
-// ready nor outstanding; it's simply excluded from the gate
-// consideration (see computePlotHandoverReadiness's zero-guard below),
-// the same non-alarming posture checkAndMarkPlotHandedOver() already
-// takes for a plot with nothing recorded yet. There is no "required vs
-// not required" flag in this data model beyond not_applicable itself
-// — every gate/document row that exists for a plot is implicitly
-// required, exactly as the existing handover check already assumes.
+// Quality Gates: "ready" mirrors the server-side plots_before_write()
+// blocker rule exactly (approved OR not_applicable) — not a new rule.
+// A plot with zero gate rows recorded is neither ready nor outstanding;
+// it's simply excluded from the gate consideration (see
+// computePlotHandoverReadiness's zero-guard below), the same
+// non-alarming posture that server-side rule already takes for a plot
+// with nothing recorded yet. There is no "required vs not required"
+// flag in this data model beyond not_applicable itself — every gate/
+// document row that exists for a plot is implicitly required, exactly
+// as the existing handover check already assumes.
 export function summarisePlotGates(gates) {
   const total = gates.length;
   const approved = gates.filter((g) => g.status === "approved" || g.status === "not_applicable").length;
   return { total, approved, outstanding: total - approved };
 }
 
-// Handover Documents: "ready" mirrors checkAndMarkPlotHandedOver()'s
-// own definition exactly (approved_final). No not_applicable-equivalent
-// exists for documents in this data model — every row is implicitly
-// required, same as gates.
+// Handover Documents: "ready" mirrors the server-side rule exactly
+// (approved_final OR not_applicable — v73 gave documents the same N/A
+// option gates already had; see plots_before_write()'s doc blocker
+// check).
 export function summarisePlotDocuments(docs) {
   const total = docs.length;
-  const approved = docs.filter((d) => d.status === "approved_final").length;
+  const approved = docs.filter((d) => d.status === "approved_final" || d.status === "not_applicable").length;
   return { total, approved, outstanding: total - approved };
 }
 

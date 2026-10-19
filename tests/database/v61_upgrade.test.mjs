@@ -82,7 +82,7 @@ test("v61: applying the full schema twice leaves exactly one of each v61 object"
     assert.equal(await q("select count(*)::int n from pg_policies where tablename = 'snag_items'"), 4);
     assert.equal(await q("select count(*)::int n from pg_trigger where tgname in ('trg_snag_items_party_guard','trg_organisation_members_party_handover','trg_audit_project_parties')"), 3);
     assert.equal(await q("select count(*)::int n from information_schema.columns where table_name='snag_items' and column_name='party_id'"), 1);
-    assert.equal(await q("select count(*)::int n from pg_proc p join pg_namespace s on s.oid=p.pronamespace where s.nspname='public' and p.prosecdef and has_function_privilege('anon', p.oid, 'EXECUTE')"), 4, "still only the 4 allowlisted functions for anon");
+    assert.equal(await q("select count(*)::int n from pg_proc p join pg_namespace s on s.oid=p.pronamespace where s.nspname='public' and p.prosecdef and has_function_privilege('anon', p.oid, 'EXECUTE')"), 5, "still only the 5 allowlisted functions for anon (v72 added get_plot_handover_share)");
     assert.equal(await q("select count(*)::int n from information_schema.column_privileges where table_name='project_party_invites' and column_name='token_hash' and grantee in ('anon','authenticated')"), 0, "token_hash never readable by clients");
   } finally {
     await admin.end().catch(() => {});

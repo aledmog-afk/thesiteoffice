@@ -118,7 +118,14 @@ const AUTH_ALLOWLIST = [
   "retire_external_works_package(uuid,text)",
   "save_external_works_package(uuid,uuid,text,numeric,numeric,text[],text)",
   "set_external_works(uuid,numeric,numeric,text)",
-  "set_plot_override(uuid,numeric,text)"
+  "set_plot_override(uuid,numeric,text)",
+  // v72 (Handover Part B): explicit handover confirmation + optional
+  // buyer/solicitor share link, mirroring the Commercial approval-link
+  // RPCs above exactly.
+  "confirm_plot_handover(uuid,text,jsonb,jsonb,text)",
+  "get_plot_handover_share(text)",
+  "request_plot_handover_share(uuid,text,text,integer)",
+  "revoke_plot_handover_share(uuid)"
 ].sort();
 
 const PRIV_SQL = `
@@ -197,9 +204,9 @@ for (const [sig, q] of V68_CLOSED) {
   });
 }
 
-test("ALLOWLIST CI GUARD: the SECURITY DEFINER functions authenticated can execute are EXACTLY the 67 kept after v68, plus the 5 v69 progress RPCs", async () => {
+test("ALLOWLIST CI GUARD: the SECURITY DEFINER functions authenticated can execute are EXACTLY the 67 kept after v68, plus the 5 v69 progress RPCs and the 4 v72 handover-confirmation RPCs", async () => {
   const got = (await sql(AUTH_EXECUTABLE_DEFINER_SQL)).rows.map((r) => r.sig).sort();
-  assert.equal(AUTH_ALLOWLIST.length, 72);
+  assert.equal(AUTH_ALLOWLIST.length, 76);
   assert.deepEqual(got, AUTH_ALLOWLIST,
     "authenticated must reach only the reviewed set. Internal-only SECURITY DEFINER helpers: revoke execute from public, anon, authenticated. " +
     "Needed by a page or an RLS policy: add to AUTH_ALLOWLIST on purpose.");

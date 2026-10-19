@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="js/theme-init.js"></script>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Handover Record – The Site Office</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<!--
+  Deliberately no #site-header / nav — this page is opened by a buyer
+  or solicitor with no The Site Office account at all (Handover Part B,
+  mirroring the Commercial module's P18b external-approval page
+  exactly). It never imports requireAuth(); the Supabase client it uses
+  carries only the public anon key, and every request is scoped
+  entirely by the single-use token in the URL, verified fresh
+  server-side on every call. This page is READ-ONLY — unlike the
+  Commercial approval link, there is nothing here for an external
+  recipient to approve, reject or sign; it only displays the record
+  and offers a PDF download.
+-->
+<div class="page" style="max-width:760px;">
+  <div class="page-head">
+    <div>
+      <div class="page-title">Handover Record</div>
+      <div class="page-sub" id="projectSub"></div>
+    </div>
+    <span class="badge" id="statusBadge" style="display:none;"></span>
+  </div>
+
+  <div id="pageErrorBox" class="error-box"></div>
+  <div id="loadingNotice" class="hint">Loading…</div>
+
+  <div id="content" style="display:none;">
+    <div id="activeDetails">
+      <div class="card">
+        <h3 class="card-heading" style="margin-bottom:0.6rem;" id="plotHeading"></h3>
+        <dl class="doc-facts" id="plotFacts"></dl>
+      </div>
+
+      <div class="card">
+        <h3 class="card-heading" style="margin-bottom:0.8rem;">Quality Gates</h3>
+        <table><tbody id="gatesRows"></tbody></table>
+      </div>
+
+      <div class="card">
+        <h3 class="card-heading" style="margin-bottom:0.8rem;">Handover Documents</h3>
+        <table><tbody id="docsRows"></tbody></table>
+      </div>
+
+      <div class="card" id="snagsCard">
+        <h3 class="card-heading" style="margin-bottom:0.8rem;">Snags at Handover</h3>
+        <div id="snagsList"></div>
+        <div id="snagsEmpty" class="hint" style="display:none;">No open snags recorded at the time of handover.</div>
+      </div>
+
+      <div class="card" id="metersCard" style="display:none;">
+        <h3 class="card-heading" style="margin-bottom:0.8rem;">Meter Readings</h3>
+        <table><tbody id="metersRows"></tbody></table>
+      </div>
+
+      <div class="card" id="keysCard" style="display:none;">
+        <h3 class="card-heading" style="margin-bottom:0.8rem;">Key Log</h3>
+        <table><tbody id="keysRows"></tbody></table>
+      </div>
+
+      <div class="card">
+        <h3 class="card-heading" style="margin-bottom:0.6rem;">Confirmed By</h3>
+        <p id="signedByLine"></p>
+        <img id="signatureImg" style="display:none; max-width:200px; border:1px solid var(--rule); border-radius:4px;" alt="Signature">
+        <p class="hint" style="margin-top:0.6rem; word-break:break-all;" id="contentHashLine"></p>
+      </div>
+
+      <div class="btn-row">
+        <button type="button" class="btn btn-amber" id="downloadPdfBtn">Download PDF</button>
+      </div>
+      <p class="hint" id="pdfStatusText" style="margin-top:0.4rem;"></p>
+    </div>
+
+    <div class="card" id="doneCard" style="display:none;">
+      <p id="doneMessage"></p>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { escapeHtml, formatDateTime, buildPlotHandoverPdfDocument, plotHandoverPdfFilename, saveFileToDevice, deviceSaveStatusLabel } from "./js/app.js";
+
+  const STATUS_LABEL = { viewed: "Handover Record", expired: "Link expired", revoked: "Link revoked" };
+  const STATUS_BADGE = { viewed: "badge-green", expired: "badge-grey", revoked: "badge-grey" };
+
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get("token") || "";
+
+  const pageErrorBox = document.getElementById("pageErrorBox");
+  const loadingNotice = document.getElementById("loadingNotice");
+  const content = document.getElementById("content");
+
+  function showFatalError(message) {
+    loadingNotice.style.display = "none";
+    pageErrorBox.textContent = message;
+    pageErrorBox.style.display = "block";
+  }
+
+  function renderInactive(pack) {
+    document.getElementById("activeDetails").style.display = "none";
+    document.getElementById("doneCard").style.display = "block";
+    document.getElementById("doneMessage").textContent = pack.status === "revoked"
+      ? "This handover link has been revoked. Contact the site contractor for a new one."
+      : "This handover link has expired. Contact the site contractor for a new one.";
+  }
+
+  let lastPack = null;
+
+  function renderPack(pack) {
+    lastPack = pack;
+    const badge = document.getElementById("statusBadge");
+    badge.style.display = "inline-block";
+    badge.className = `badge ${STATUS_BADGE[pack.status] || "badge-grey"}`;
+    badge.textContent = STATUS_LABEL[pack.status] || pack.status;
+
+    if (pack.status === "expired" || pack.status === "revoked") {
+      renderInactive(pack);
+      return;
+    }
+    document.getElementById("activeDetails").style.display = "block";
+    document.getElementById("projectSub").textContent = pack.project_name || "";
+    document.getElementById("plotHeading").textContent = pack.plot_number || "";
+    document.getElementById("plotFacts").innerHTML = `<div><dt>Handed Over</dt><dd>${escapeHtml(formatDateTime(pack.confirmed_at))}</dd></div>`;
+
+    document.getElementById("gatesRows").innerHTML = (pack.gates_snapshot || []).map((g) => `
+      <tr><td>${escapeHtml(g.title)}</td><td><span class="badge ${g.status === "approved" || g.status === "not_applicable" ? "badge-green" : "badge-grey"}">${escapeHtml((g.status || "").replace(/_/g, " "))}</span></td></tr>
+    `).join("") || `<tr><td class="hint">None recorded.</td></tr>`;
+
+    document.getElementById("docsRows").innerHTML = (pack.documents_snapshot || []).map((d) => `
+      <tr><td>${escapeHtml(d.title)}</td><td><span class="badge ${d.status === "approved_final" || d.status === "not_applicable" ? "badge-green" : "badge-grey"}">${escapeHtml((d.status || "").replace(/_/g, " "))}</span></td></tr>
+    `).join("") || `<tr><td class="hint">None recorded.</td></tr>`;
+
+    const openSnags = (pack.snags_snapshot || []).filter((s) => s.status === "open");
+    const snagsList = document.getElementById("snagsList");
+    const snagsEmpty = document.getElementById("snagsEmpty");
+    if (openSnags.length) {
+      snagsEmpty.style.display = "none";
+      snagsList.innerHTML = openSnags.map((s) => `
+        <div class="item-row"><span>${escapeHtml(s.location || "")} — ${escapeHtml(s.description)}</span><span class="badge badge-amber">${escapeHtml(s.priority)}</span></div>
+      `).join("");
+    } else {
+      snagsList.innerHTML = "";
+      snagsEmpty.style.display = "block";
+    }
+
+    const meters = pack.meter_readings || [];
+    document.getElementById("metersCard").style.display = meters.length ? "block" : "none";
+    document.getElementById("metersRows").innerHTML = meters.map((m) => `
+      <tr><td>${escapeHtml(m.utility)}</td><td>${escapeHtml(m.reading)}</td><td>${escapeHtml(m.unit)}</td></tr>
+    `).join("");
+
+    const keys = pack.key_log || [];
+    document.getElementById("keysCard").style.display = keys.length ? "block" : "none";
+    document.getElementById("keysRows").innerHTML = keys.map((k) => `
+      <tr><td>${escapeHtml(k.item)}</td><td>${k.quantity ?? ""}</td><td>${escapeHtml(k.held_by)}</td></tr>
+    `).join("");
+
+    document.getElementById("signedByLine").textContent = `${pack.signed_by_name || ""} — ${formatDateTime(pack.confirmed_at)}`;
+    const sigImg = document.getElementById("signatureImg");
+    if (pack.signature_data) { sigImg.src = pack.signature_data; sigImg.style.display = "block"; } else { sigImg.style.display = "none"; }
+    document.getElementById("contentHashLine").textContent = `Content hash (sha256): ${pack.content_hash || ""}`;
+  }
+
+  document.getElementById("downloadPdfBtn").addEventListener("click", async () => {
+    if (!lastPack) return;
+    const statusEl = document.getElementById("pdfStatusText");
+    statusEl.textContent = "Generating PDF…";
+    try {
+      const plot = { plot_number: lastPack.plot_number };
+      const { jsPDF } = await import("https://esm.sh/jspdf@2.5.2");
+      const doc = buildPlotHandoverPdfDocument({ jsPDFCtor: jsPDF, plot, projectName: lastPack.project_name, orgName: null, confirmation: lastPack });
+      const result = await saveFileToDevice(doc.output("blob"), plotHandoverPdfFilename(plot));
+      statusEl.textContent = deviceSaveStatusLabel(result.status);
+    } catch (err) {
+      statusEl.textContent = "Couldn't generate the PDF: " + (err.message || err);
+    }
+  });
+
+  async function loadAndRender() {
+    const { data, error } = await supabase.rpc("get_plot_handover_share", { p_token: token });
+    if (error) throw error;
+    loadingNotice.style.display = "none";
+    content.style.display = "block";
+    renderPack(data);
+  }
+
+  if (!token) {
+    showFatalError("This link is missing its handover token. Please use the exact link you were sent.");
+  } else {
+    loadAndRender().catch((err) => {
+      showFatalError((err && err.message) || "This handover link could not be opened. It may be invalid, expired, or revoked.");
+    });
+  }
+</script>
+</body>
+</html>

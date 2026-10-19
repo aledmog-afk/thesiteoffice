@@ -7,14 +7,67 @@
   --white: #ffffff;
   --amber: #e8a020;
   --amber-light: #fef3dc;
+  --amber-text: #8a5500;
+  --amber-hover: #f5b840;
   --blue: #1a4fa0;
   --blue-light: #dce8ff;
   --green: #1e6b3c;
   --green-light: #dff0e8;
   --red: #c0392b;
   --red-light: #fce8e6;
+  --red-hover: #f8d3ce;
+  --baseline-fill: #c7cbd3;
   --font-display: 'Barlow Condensed', sans-serif;
   --font-body: 'Barlow', -apple-system, sans-serif;
+}
+
+/* ─── COLOUR SCHEMES (Settings → Appearance) ────────────────────────
+   --amber/--amber-light/--amber-text/--amber-hover is this design
+   system's single PRIMARY-ACCENT slot — it drives buttons, the header
+   border, focus rings, tile hover and more (~120 call sites across
+   this file). Rather than rename it to something scheme-neutral like
+   --primary everywhere, each named scheme below just gives that same
+   slot a different colour, so "Ocean"/"Forest" recolour the whole app
+   (including the header's amber trim) by overriding four variables,
+   not by duplicating every rule that currently says var(--amber...).
+   #site-header itself (dark ink background, white text) deliberately
+   stays a constant dark bar in every scheme — only its accent
+   border/logo follow the active scheme, the same way the header
+   doesn't turn white in a light scheme either.
+   Applied via a data-theme attribute on <html>, set before first
+   paint by the inline bootstrap script at the top of every page's
+   <head> (see tracker/js/theme-init.js) and changed live by the
+   picker on tracker/settings.html (setTheme() in tracker/js/app.js).
+   No value: the default scheme above. */
+:root[data-theme="dark"] {
+  --ink: #e9ebf0;
+  --ink-mid: #c7cbd3;
+  --ink-soft: #9aa0ad;
+  --rule: #2e323c;
+  --off: #14161c;
+  --white: #1c1f27;
+  --amber-light: #4a3a16;
+  --amber-text: #f0b659;
+  --blue: #6fa3ea;
+  --blue-light: #17263f;
+  --green: #5bc488;
+  --green-light: #163a26;
+  --red: #ef8579;
+  --red-light: #3f1e1a;
+  --red-hover: #552622;
+  --baseline-fill: #3a3f4a;
+}
+:root[data-theme="ocean"] {
+  --amber: #1a4fa0;
+  --amber-light: #dce8ff;
+  --amber-text: #1a4fa0;
+  --amber-hover: #2a62c0;
+}
+:root[data-theme="forest"] {
+  --amber: #1e6b3c;
+  --amber-light: #dff0e8;
+  --amber-text: #1e6b3c;
+  --amber-hover: #2a8050;
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -75,7 +128,7 @@ a { color: var(--blue); }
   cursor: pointer; text-decoration: none; transition: all 0.15s;
 }
 .btn-amber { background: var(--amber); color: var(--ink); }
-.btn-amber:hover { background: #f5b840; }
+.btn-amber:hover { background: var(--amber-hover); }
 .btn-ink { background: var(--ink); color: var(--white); }
 .btn-ink:hover { background: var(--ink-mid); }
 .btn-outline { background: var(--white); color: var(--ink); border-color: var(--rule); }
@@ -83,7 +136,7 @@ a { color: var(--blue); }
 .btn-ghost { background: transparent; color: #aab0bc; border-color: rgba(255,255,255,0.15); }
 .btn-ghost:hover { color: var(--white); border-color: rgba(255,255,255,0.4); }
 .btn-danger { background: var(--red-light); color: var(--red); }
-.btn-danger:hover { background: #f8d3ce; }
+.btn-danger:hover { background: var(--red-hover); }
 .btn-sm { padding: 0.4rem 0.8rem; font-size: 0.8rem; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-row { display: flex; gap: 0.7rem; flex-wrap: wrap; }
@@ -127,7 +180,7 @@ textarea { resize: vertical; min-height: 5em; }
 }
 .badge-green { background: var(--green-light); color: var(--green); }
 .badge-red { background: var(--red-light); color: var(--red); }
-.badge-amber { background: var(--amber-light); color: #8a5500; }
+.badge-amber { background: var(--amber-light); color: var(--amber-text); }
 .badge-blue { background: var(--blue-light); color: var(--blue); }
 .badge-grey { background: var(--rule); color: var(--ink-soft); }
 
@@ -252,6 +305,21 @@ tr:hover td { background: var(--off); }
 /* ─── LOGO SETTINGS ──────────────────────────────── */
 .logo-preview { max-width: 260px; max-height: 120px; object-fit: contain; border: 1px solid var(--rule); border-radius: 6px; padding: 0.8rem; background: var(--white); }
 
+/* ─── COLOUR SCHEME PICKER (Settings → Appearance) ─ */
+.theme-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 0.8rem; }
+.theme-swatch {
+  display: flex; flex-direction: column; align-items: center; gap: 0.5rem;
+  background: var(--white); border: 2px solid var(--rule); border-radius: 8px;
+  padding: 1rem 0.6rem; cursor: pointer; font-family: var(--font-body);
+  transition: border-color 0.15s;
+}
+.theme-swatch:hover { border-color: var(--ink-soft); }
+.theme-swatch.active { border-color: var(--amber); }
+.theme-swatch-dot { width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--rule); }
+.theme-swatch-label { font-size: 0.85rem; font-weight: 600; color: var(--ink); }
+.theme-swatch-check { font-size: 0.72rem; color: var(--amber-text); font-weight: 700; visibility: hidden; }
+.theme-swatch.active .theme-swatch-check { visibility: visible; }
+
 /* ─── RAG STATUS ─────────────────────────────────── */
 .rag-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 .rag-red { background: var(--red); }
@@ -262,7 +330,7 @@ tr:hover td { background: var(--off); }
 /* ─── DUAL PROGRESS BAR ──────────────────────────── */
 .progress-block { margin: 0.9rem 0; }
 .progress-track { position: relative; height: 8px; background: var(--rule); border-radius: 4px; overflow: visible; margin-bottom: 0.4rem; }
-.progress-fill-baseline { position: absolute; top: 0; left: 0; height: 100%; background: #c7cbd3; border-radius: 4px; }
+.progress-fill-baseline { position: absolute; top: 0; left: 0; height: 100%; background: var(--baseline-fill); border-radius: 4px; }
 .progress-fill-actual { position: absolute; top: -3px; left: 0; height: 14px; border-radius: 7px; background: var(--ink); }
 .progress-fill-actual.rag-red { background: var(--red); }
 .progress-fill-actual.rag-amber { background: var(--amber); }
