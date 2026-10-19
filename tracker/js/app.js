@@ -164,6 +164,55 @@ export function clearError(el) {
   el.style.display = "none";
 }
 
+// ─── Colour scheme (Settings → Appearance) ──────────────────────
+// A per-browser preference, stored in localStorage only — this app has
+// no existing per-user preference table/column anywhere, and a theme
+// pick is conventionally a local, per-device thing (it doesn't follow
+// you to a different browser any more than, say, your OS's own dark-
+// mode setting does). Applied via a data-theme attribute on <html>:
+// no attribute (or "default") means the default scheme in
+// tracker/css/app.css; any other value selects that scheme's
+// :root[data-theme="..."] override block there.
+//
+// The actual anti-flash application on page LOAD happens in
+// tracker/js/theme-init.js — a separate, deliberately non-module
+// script loaded first in every page's <head>, which can't import these
+// (a module's execution is deferred, which is exactly the flash that
+// file exists to avoid). setTheme()/getTheme() here are for once the
+// page is already interactive — right now, only the Settings picker
+// itself, which needs to re-apply the scheme live as soon as someone
+// clicks a different swatch. The localStorage key name ("theme") and
+// the "no value or 'default' means the default scheme" rule are the
+// one piece of contract shared between the two files.
+export const THEME_OPTIONS = [
+  { value: "default", label: "Site Office", swatch: "#e8a020" },
+  { value: "dark", label: "Dark", swatch: "#1c1f27" },
+  { value: "ocean", label: "Ocean", swatch: "#1a4fa0" },
+  { value: "forest", label: "Forest", swatch: "#1e6b3c" },
+];
+
+export function getTheme() {
+  try {
+    return localStorage.getItem("theme") || "default";
+  } catch {
+    return "default";
+  }
+}
+
+export function setTheme(value) {
+  try {
+    localStorage.setItem("theme", value);
+  } catch {
+    // Storage blocked — the scheme still applies for this page view via
+    // the attribute set below, it just won't be remembered next visit.
+  }
+  if (value && value !== "default") {
+    document.documentElement.setAttribute("data-theme", value);
+  } else {
+    document.documentElement.removeAttribute("data-theme");
+  }
+}
+
 // ─── Photo upload helper ────────────────────────────────────────
 // Mirrors the "site-photos" bucket's real limits (sql/schema.sql, v27) —
 // this is a fast client-side check for a friendly error before spending
