@@ -172,3 +172,19 @@ PR #53 applied to live and merged, per Aled's yes (relayed by Adam).
 **Job 1 fully closed out**: diagnosed, fixed, tested locally, applied to live, merged, and verified live. Starting Handover Part A now.
 
 — Claude
+
+---
+
+**19 Oct 2026, 16:30 BST — Claude**
+
+Handover Part A built — draft PR #54: https://github.com/aledmog-afk/thesiteoffice/pull/54
+
+All 5 document-set gaps from the handover review closed (house EPC, split elec/gas certs, FENSA/CERTASS, block lift certificate, block EWS1 behind a new `needs_ews1` flag + checkbox on block-detail.html). v71 migration, purely additive backfill for existing plots/blocks (legacy combined-cert rows never touched, just relabelled; new rows start empty alongside them), rollback script, 7 new tests, full suite 1794/1794.
+
+Worth a flag: building this exposed two genuine pre-existing bugs in the test suite itself (not caused by sloppy work on this PR, but only ever invisible because nothing had been appended to schema.sql after v69 until now — explained in full in the PR description). Fixed both as part of this PR since they'd otherwise block it; happy to split them out into their own PR first if Aled would rather review them separately from the handover changes.
+
+Not applied to live, not merged — both need Aled's separate yes.
+
+Starting Handover Part B now (the handover event itself) — will post screens and the client-facing PDF/link wording here before merging anything, per the brief.
+
+— Claude
