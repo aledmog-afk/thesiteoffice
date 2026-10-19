@@ -2135,12 +2135,12 @@ export function summarisePlotGates(gates) {
 }
 
 // Handover Documents: "ready" mirrors the server-side rule exactly
-// (approved_final). No not_applicable-equivalent exists for documents
-// in this data model — every row is implicitly required, same as
-// gates.
+// (approved_final OR not_applicable — v73 gave documents the same N/A
+// option gates already had; see plots_before_write()'s doc blocker
+// check).
 export function summarisePlotDocuments(docs) {
   const total = docs.length;
-  const approved = docs.filter((d) => d.status === "approved_final").length;
+  const approved = docs.filter((d) => d.status === "approved_final" || d.status === "not_applicable").length;
   return { total, approved, outstanding: total - approved };
 }
 

@@ -41,16 +41,20 @@
   <h3 class="display-font" style="font-size:1.1rem; margin-bottom:1rem;">Quality Gates (Block)</h3>
   <div id="gatesWrap" style="margin-bottom:2.5rem;">Loading…</div>
 
-  <h3 class="display-font" style="font-size:1.1rem; margin-bottom:1rem;">Handover Documents (Block)</h3>
+  <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem;">
+    <h3 class="display-font" style="font-size:1.1rem; margin:0;">Handover Documents (Block)</h3>
+    <button type="button" class="btn btn-outline btn-sm" id="addDocBtn">+ Add Document</button>
+  </div>
   <div class="card" style="margin-bottom:2.5rem;">
     <label style="display:flex; align-items:center; gap:0.5rem; margin-bottom:1rem; font-size:0.9rem;">
       <input type="checkbox" id="needsEws1Input">
       This block needs an EWS1 (External Wall System) form
     </label>
+    <p class="hint" style="margin-bottom:0.6rem;">Not every block needs every document — set one to N/A if it genuinely doesn't apply. N/A counts the same as Approved / Final for handover readiness. Documents you add yourself can be removed again; the standard set can only be marked N/A, not deleted.</p>
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>Document</th><th>Status</th><th>File</th></tr>
+          <tr><th>Document</th><th>Status</th><th>File</th><th></th></tr>
         </thead>
         <tbody id="docRows"></tbody>
       </table>
@@ -170,24 +174,30 @@
   }
 
   // ─── Handover Documents (block-scoped) ───────────────────────────
-  const docStatusBadge = { missing: "badge-red", draft_received: "badge-amber", approved_final: "badge-green" };
-  const docStatusLabel = { missing: "Missing", draft_received: "Draft Received", approved_final: "Approved / Final" };
+  // v73: not_applicable added (mirrors quality_gates' existing N/A
+  // option), and is_custom marks a one-off document the user added
+  // themselves — those get a Remove action; the standard seeded set
+  // can only be marked N/A, never hard-deleted, from this page.
+  const docStatusBadge = { missing: "badge-red", draft_received: "badge-amber", approved_final: "badge-green", not_applicable: "badge-grey" };
+  const docStatusLabel = { missing: "Missing", draft_received: "Draft Received", approved_final: "Approved / Final", not_applicable: "N/A" };
 
   function docRowHtml(doc) {
     return `
       <tr data-doc-id="${doc.id}">
-        <td><strong>${escapeHtml(doc.title)}</strong></td>
+        <td><strong>${escapeHtml(doc.title)}</strong>${doc.is_custom ? ` <span class="hint">(added)</span>` : ""}</td>
         <td>
           <select class="status-select" data-doc-id="${doc.id}" style="width:auto;">
             <option value="missing">Missing</option>
             <option value="draft_received">Draft Received</option>
             <option value="approved_final">Approved / Final</option>
+            <option value="not_applicable">N/A</option>
           </select>
         </td>
         <td class="file-row">
           ${doc.file_url ? `<a class="file-link" href="${doc.file_url}" target="_blank">📄 ${escapeHtml(doc.file_name || "View file")}</a><br>` : ""}
           <input type="file" data-doc-id="${doc.id}" accept="application/pdf,image/*">
         </td>
+        <td>${doc.is_custom ? `<button type="button" class="btn btn-outline btn-sm" data-remove-doc="${doc.id}">Remove</button>` : ""}</td>
       </tr>
     `;
   }
@@ -222,6 +232,16 @@
         fileInput.disabled = false;
       }
     });
+
+    const removeBtn = document.querySelector(`[data-remove-doc="${doc.id}"]`);
+    if (removeBtn) {
+      removeBtn.addEventListener("click", async () => {
+        if (!confirm(`Remove "${doc.title}"? This cannot be undone.`)) return;
+        const { error } = await supabase.from("handover_documents").delete().eq("id", doc.id);
+        if (error) { alert("Couldn't remove that document: " + error.message); return; }
+        await loadDocs();
+      });
+    }
   }
 
   function rerenderDocRow(doc) {
@@ -238,12 +258,23 @@
       .order("doc_key", { ascending: true });
 
     if (error || !data || !data.length) {
-      document.getElementById("docRows").innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--ink-soft);">No handover documents found for this block.</td></tr>`;
+      document.getElementById("docRows").innerHTML = `<tr><td colspan="4" style="text-align:center; color:var(--ink-soft);">No handover documents found for this block.</td></tr>`;
       return;
     }
     document.getElementById("docRows").innerHTML = data.map(docRowHtml).join("");
     data.forEach(wireDocRow);
   }
+
+  document.getElementById("addDocBtn").addEventListener("click", async () => {
+    const title = prompt("Document title:", "");
+    if (!title || !title.trim()) return;
+    const docKey = `custom_${crypto.randomUUID()}`;
+    const { error } = await supabase.from("handover_documents").insert({
+      project_id: block.project_id, block_id: blockId, doc_key: docKey, title: title.trim(), is_custom: true,
+    });
+    if (error) { alert("Couldn't add that document: " + error.message); return; }
+    await loadDocs();
+  });
 
   // ─── Block progress ───────────────────────────────────────────────
   // The block's own % (shared structure/envelope for every flat in it)
