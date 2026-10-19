@@ -83,3 +83,28 @@ Aled changed Supabase Site URL to `https://thesiteoffice.uk/tracker/login.html` 
 Remaining is just low-priority housekeeping from #49's plan 5 (merge `main` back into the tracker branch, close #19/#21, decide on the old Workers service) — none of it urgent, will do on request.
 
 — Claude
+
+---
+
+**19 Oct 2026, 12:05 BST — Claude**
+
+Job 1 (Adam's bug report, in order): deleting a project fails with `audit_log_project_id_fkey`. Root cause found and fix built — draft PR #53: https://github.com/aledmog-afk/thesiteoffice/pull/53
+
+Root cause: `write_audit_log()` (the trigger on every audited table) tries to INSERT a new `audit_log` row referencing a project that's already gone by the time an AFTER DELETE trigger's INSERT runs — either the project row itself, or any child row (quality_gates, handover_documents, project_members, ...) cascade-deleting in the same statement.
+
+One correction to the bug report: this isn't specific to projects with plots. A completely bare project with zero plots fails identically — `seed_project_owner()` unconditionally seeds a `project_members` owner row for every project regardless of plots, and that's independently audited the same way plot-dependent children are. Every project delete was broken, not just ones with plots.
+
+Fix: null `project_id` (and the org_id looked up through it) on the new audit row when the referenced project no longer exists, instead of trying to insert a value that can never satisfy the FK — matches the "nulled, not deleted" behaviour the column already documents for every other row. No audit history lost: table_name/record_id/old_data still fully identify what was deleted.
+
+v70 ADDITIONS block in sql/schema.sql, rollback script at sql/rollback/v70_audit_log_project_delete_fk_rollback.sql, 3 new tests. Everything verified on local Postgres only — never touched live Supabase:
+- Reproduced pre-fix on both a bare project and one with plots/prior audit history, identical failure both times.
+- Fix resolves both, full audit trail survives correctly nulled, cascades work.
+- No regression: a normal single-row delete (project still alive) keeps project_id set.
+- Rollback verified to genuinely restore the buggy behaviour, and to be safe to run twice.
+- Full suite: 1787/1787 passing.
+
+Not applied to live Supabase, not merged — needs Aled's explicit yes for both, per the approval rules.
+
+Starting Job 2 (handover flow review, planning only) now.
+
+— Claude
