@@ -304,3 +304,146 @@ Aled then reported plot-detail.html stuck on "Loading…" (Plot Control, Quality
 Task (3) now fully closed out: merged, live-checked, one real (but non-code, caching-only) issue found and explained, data confirmed intact throughout.
 
 — Claude
+
+---
+
+**19 Oct 2026, 22:05 BST — Claude**
+
+Aled said "Yes build the cache-header fix." Built it — draft **PR #59**: https://github.com/aledmog-afk/thesiteoffice/pull/59. `_headers` gets two new rules, `/tracker/js/*` and `/tracker/css/*`, both `Cache-Control: no-cache` (always revalidate with the server before using a cached copy — not "don't cache"; an unchanged file still gets a fast 304). Scoped to JS/CSS only, not HTML, since that's what was actually stale in the incident. 2 new tests, full suite 1860/1860. "Workers Builds: thesiteoffice" failed on this push too, same as it did on #58's merge commit — confirmed it's unrelated (this repo has no `wrangler.toml`/Workers code anywhere in its history, the legacy service predates this app per the 18 Oct housekeeping note, and it fails identically on every push regardless of diff) and posted that explanation on the PR rather than treating it as this PR's problem. The real relevant checks (Cloudflare Pages preview, Automated test suite) are both green. Not merged — Aled's separate yes.
+
+---
+
+**19 Oct 2026, Adam:**
+
+The next feature, after handover Parts A and B are finished: drawing pins. Aled uploads one whole-site drawing per site, plus drawings for each plot per storey (GF, FF, SF). Uploads can be PDFs or images. Turn each PDF page into an image on upload so pin positions stay fixed. Tapping a plot on the site drawing opens its storey drawings. Snags, RFIs and general queries can carry an optional pin, set either when the item is raised or added afterwards. Store pin positions as relative x/y coordinates on a specific drawing version, so they survive zooming and screen sizes. Handle drawing revisions so old pins stay on the drawing they were placed on. Plan it first, including the schema, the storage bucket permissions and the screens, and post the plan in the notes file for Aled to approve before building.
+
+---
+
+**19 Oct 2026, 22:40 BST — Claude**
+
+Drawing pins — plan only, nothing built, per Adam's instruction. Read the real code before designing anything, not just the brief, and that surfaced something that changes the shape of this plan:
+
+## What already exists (important — this isn't a greenfield feature)
+
+There are **two separate, parallel "drawings" systems already live** in this app, and the plan has to pick one to build on rather than inventing a third:
+
+1. **The old pinning system** (`drawings` table, plus `drawing_id`/`x_coordinate`/`y_coordinate` columns bolted directly onto `snag_items` and `quality_gates`, dating from very early in the schema — RLS still on the old "any authenticated user" rule, not the `is_project_member()`/`is_project_editor()` pattern everything else now uses). This is what `tracker/drawings.html` (upload/list) and `tracker/drawing-view.html` (tap-to-pin-a-snag) actually run on today. No revisions, no storeys, `plot_number` is free text (not a real FK to `plots`), and PDFs are explicitly stored as-is with pinning disabled for them ("they can't be compressed or pinned in the browser" — drawings.html's own copy).
+2. **The newer Documents module** (`documents` + `document_revisions`, proper `revision_number`/`superseded_at` versioning, `document_type` already includes `'drawing'` as an option) — built later, and a one-time backfill (`sql/schema.sql`, the "Migrate existing Drawings / Specifications into Documents" block) already copied every legacy `drawings`/`specifications` row into it. But that migration's own comment is explicit: *"drawings/specifications are NOT dropped... this is an additive backfill, not a cutover... drawings.id is load-bearing for the existing pinpoint-snagging feature... moving or deleting it would break real, working functionality."* So `documents` has a parallel copy for the general-purpose controlled-documents UI, but the pinning feature was deliberately left on the old table.
+
+Checked live Supabase directly: `drawings` has **0 rows**, and neither `snag_items.drawing_id` nor `quality_gates.drawing_id` has ever been set. Aled hasn't actually used this feature yet — so there's no live data to migrate, which makes this the right moment to replace the old system properly rather than build a third one alongside it or awkwardly extend something with no revisioning concept at all.
+
+**Recommendation: retire the old ad hoc `drawings`/pin-columns system and build the new one in its place** (not on top of `documents` — that module is for formal controlled documents with party-scoping, a different access model to what a snagging-only member needs for pinning; and not as a third parallel table either). `drawings.html`/`drawing-view.html` get rebuilt against the new schema below; `document_type = 'drawing'` on the Documents module stays untouched (it's a different, legitimate use — e.g. a final archived drawing set as a formal controlled document — this plan doesn't touch that).
+
+## Proposed schema
+
+Mirrors the `documents`/`document_revisions` parent-plus-versions pattern already proven in this codebase, since it already solves "a version is immutable once superseded" and "editors can write, members can read" cleanly:
+
+```sql
+-- Parent: one row per logical drawing (the site layout, or one plot's
+-- Ground Floor, etc.) — stable identity across revisions.
+create table drawings (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references organisations(id),
+  project_id uuid not null references projects(id) on delete cascade,
+  scope text not null check (scope in ('site', 'plot_storey')),
+  plot_id uuid references plots(id) on delete set null,   -- null when scope='site'; required when 'plot_storey'
+  storey text check (storey in ('GF', 'FF', 'SF')),        -- null when scope='site'
+  title text not null,
+  current_version_id uuid,  -- FK added after drawing_versions exists, same two-step as documents/current_revision_id
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  -- exactly one drawing per (plot, storey), and exactly one site drawing per project
+  constraint drawings_plot_storey_unique unique (plot_id, storey),
+  constraint drawings_site_scope_consistent check (
+    (scope = 'site' and plot_id is null and storey is null) or
+    (scope = 'plot_storey' and plot_id is not null and storey is not null)
+  )
+);
+
+-- One row per uploaded revision of a drawing. The ORIGINAL file as
+-- uploaded (PDF or image) — never shown directly for pinning.
+create table drawing_versions (
+  id uuid primary key default gen_random_uuid(),
+  drawing_id uuid not null references drawings(id) on delete cascade,
+  project_id uuid not null references projects(id) on delete cascade,  -- denormalised, same reasoning as document_revisions.project_id
+  version_number integer not null,
+  source_file_url text not null,   -- the original upload, PDF or image, as-is
+  source_file_name text not null,
+  source_mime_type text,
+  uploaded_by uuid references auth.users(id) on delete set null,
+  uploaded_at timestamptz not null default now(),
+  superseded_at timestamptz,   -- set once a later version is uploaded; never cleared — identical convention to document_revisions
+  unique (drawing_id, version_number)
+);
+
+-- One row per PAGE of a version's RENDERED, pinnable image. A plain
+-- image upload gets exactly one row (the image itself, page_number=1).
+-- A PDF gets one row per page, each one rasterised client-side on
+-- upload (see "PDF → image" below) — this is the thing pins actually
+-- attach to, never the source file.
+create table drawing_version_pages (
+  id uuid primary key default gen_random_uuid(),
+  drawing_version_id uuid not null references drawing_versions(id) on delete cascade,
+  page_number integer not null default 1,
+  image_url text not null,       -- the rendered/compressed image pins are placed on
+  width_px integer,
+  height_px integer,
+  unique (drawing_version_id, page_number)
+);
+
+-- A pin on one specific rendered page. Belongs to exactly one of a
+-- snag, an RFI, or a "general query" (see Open Questions below) — three
+-- real nullable FKs with a check constraint, not a polymorphic
+-- owner_id, so the foreign keys stay real and enforceable.
+create table drawing_pins (
+  id uuid primary key default gen_random_uuid(),
+  drawing_version_page_id uuid not null references drawing_version_pages(id) on delete cascade,
+  x_pct numeric not null check (x_pct >= 0 and x_pct <= 100),
+  y_pct numeric not null check (y_pct >= 0 and y_pct <= 100),
+  snag_item_id uuid references snag_items(id) on delete cascade,
+  rfi_id uuid references rfis(id) on delete cascade,
+  -- query_id uuid references <general_queries table, if it ends up existing> (id) on delete cascade,
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  constraint drawing_pins_exactly_one_owner check (
+    (snag_item_id is not null)::int + (rfi_id is not null)::int = 1  -- extend to include query_id once that's resolved
+  )
+);
+```
+
+Why pins reference `drawing_version_pages` (not `drawings` or `drawing_versions` directly): that's what makes "old pins stay on the drawing they were placed on" true by construction. Uploading a new revision creates a new `drawing_version` + its own `drawing_version_pages`, sets `superseded_at` on the old version, and repoints `drawings.current_version_id` — every existing `drawing_pins` row keeps its original `drawing_version_page_id` forever, so it's still shown against the exact image it was placed on, not silently reprojected onto a differently-scaled new drawing.
+
+RLS: read mirrors `documents`' own rule — `is_project_member(project_id)` on all four tables (a snagging-only member needs to see drawings and pins to work at all, same reasoning already written down for Documents). Write (`drawings`/`drawing_versions`/`drawing_version_pages` insert/update) is `is_project_editor(project_id)`, matching every other controlled table. `drawing_pins` insert follows whoever can already create the thing it's pinning — a snagging-only member can already raise a snag, so they can also pin one; same idea for RFIs once that's checked against the real RFI write policy. No delete policy on `drawings`/`drawing_versions`/`drawing_version_pages`, same deliberate choice `documents` already made (retire via a status, not a DELETE) — open question below on whether that's wanted here too, since the old `drawings` table did allow deleting a drawing outright.
+
+## Storage bucket
+
+Reusing the existing **`site-photos`** bucket rather than introducing a third one — it already has project-scoped read (`site_photos_read_authorized()`) and editor-scoped write policies that fit this exactly, and it's what the old `drawings` table already used (`uploadDrawing()` in `app.js` already compresses-and-uploads into `site-photos` under a `drawings/` prefix). Proposed path convention:
+
+- Source file: `drawings/{project_id}/{drawing_id}/v{version_number}/source.{ext}`
+- Rendered page image(s): `drawings/{project_id}/{drawing_id}/v{version_number}/page-{n}.webp`
+
+No bucket/RLS changes needed beyond what's already live — this is purely a path-naming convention within the existing bucket and its existing policies.
+
+## PDF → image, on upload
+
+Client-side, no new server component: load `pdf.js` from esm.sh (same pinned-version convention already used for `supabase-js`), render each page to a `<canvas>`, then feed that canvas through the same resize-and-re-encode step `compressDrawing()` already uses for plain images (`app.js`) — one `drawing_version_pages` row per rendered page, each uploaded as its own compressed WebP. A plain image upload skips the PDF step entirely and becomes a single page. One thing to verify before building, not assumed: `pdf.js` typically needs a worker script, and this app's CSP (`_headers`, `/tracker/*`) is `script-src 'self' 'unsafe-inline' https://esm.sh` with no `worker-src` — need to confirm an esm.sh-served pdf.js build can run its worker as a same-origin-compatible blob under this CSP, or whether `worker-src` needs an explicit addition. Will confirm this concretely while building, not guess now.
+
+## Screens
+
+- **Site drawing**: `drawings.html`'s existing "Site Layout" card gets rebuilt onto the new schema (currently just `projects.site_layout_url`, a single plain image with no pins at all) — one `drawings` row per project with `scope='site'`, supporting PDF, revisions, and pins.
+- **Tap a plot pin → its storey drawings**: a pin's "owner" on the site drawing is a plot (not a snag/RFI) — simplest modelled as `drawing_pins.plot_id` for this one specific case, or just a client-side convention where the site drawing's pins are rendered from `plots` directly (each plot could carry its own optional `site_pin_x_pct`/`site_pin_y_pct`, placed once, separate from the generic `drawing_pins` table since it's a many-to-one "this plot lives here on the master plan" fact, not an evolving list of issues). Leaning toward the latter — flagged as a design choice to confirm before building, not decided yet.
+- **Plot storey drawings**: `drawings.html`'s "Plot Floor Plans" section gets a real plot picker (replacing the free-text `plotNumber` field with an actual `plots` dropdown) plus a storey selector (GF/FF/SF) instead of a plain drawing name.
+- **`drawing-view.html`**: extended to (a) page-switch when a drawing has more than one rendered page, (b) show a "Revisions" list with the ability to view an older version (and its own, now-historical pins) read-only, (c) upload a new revision from here, (d) the existing tap-to-pin flow extended with a type choice — Snag (as today) / RFI / general query (pending the open question below) — instead of always creating a snag.
+- **Snag/RFI/query detail pages**: an "Add pin" action for setting a pin after the fact (not just at creation), per Adam's "set either when the item is raised or added afterwards."
+
+## Open questions for Aled — need an answer before building, not guessing
+
+1. **"General queries"** — nothing in the schema or the app currently models this as its own thing (RFIs already exist as the formal query/request-for-information type). Is this (a) just another name for RFIs, (b) a genuinely new, lighter-weight ad hoc query type that needs its own new table, or (c) something else? This changes the shape of `drawing_pins` directly (a third FK column, or not).
+2. **Quality Gates** — the *old* pinning system already had pin columns on `quality_gates` too (also 0 live rows). Adam's brief names Snags, RFIs and general queries, not Quality Gates — leave gates out of the new pin system entirely, or fold them in too for consistency (one gate, one pin, e.g. marking which zone a hold-point covers)?
+3. **Multi-page PDFs** — will an uploaded drawing file ever genuinely have more than one relevant page (e.g. one PDF export containing GF+FF+SF together), or is every real-world upload always a single page/sheet, making the PDF→image step purely a technical necessity (rasterise the one page) rather than something that needs a page-switcher UI at all in v1?
+4. **Blocks** — Adam's brief says "each plot per storey." Blocks (multi-unit buildings containing flats, a separate structure from standalone plots elsewhere in this schema) presumably need the same per-storey drawings for their communal areas/flats — in scope for this feature too, or plots only for now?
+5. **Deleting a drawing/revision** — the old `drawings` table allowed outright deletion (with a warning that pinned snags would lose their pin). The newer `documents` convention deliberately has no delete at all (retire via status instead). Which model for this feature — allow delete, or archive-only?
+
+Not building anything until these are answered and Aled's approved the shape of it. Will revise this plan rather than guess if any answer changes the schema meaningfully.
+
+— Claude
