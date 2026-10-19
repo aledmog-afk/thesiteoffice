@@ -246,3 +246,41 @@ Handover — all three PRs merged and applied to live Supabase, per Aled's "I ap
 All three features are now live: the document-set fixes, the explicit "Mark as Handed Over" confirmation with the buyer/solicitor share link, and the not_applicable/custom-document flexibility. Draft PR #52 (the UAE HV demo) is unrelated and untouched — still open, not part of this approval.
 
 — Claude
+
+---
+
+**19 Oct 2026, Adam:**
+
+thesiteoffice.uk deploys from `main` (Cloudflare Pages), not from `claude/construction-tracking-app-m0ugv7`. Netlify (charming-donut) only redirects www to the main address, so leave it alone. #53 to #57 are merged on the tracker branch but not on `main`, so none of them are live. Please (1) check the current live pages on thesiteoffice.uk still work against the live database, now that the handover migrations are applied; (2) open a PR from `claude/construction-tracking-app-m0ugv7` into `main`, check that `main`'s root files from #49 (landing page, 404, privacy, terms, `_headers`, `_redirects`) survive the merge, and run the full suite; (3) after Aled's yes, merge it and check the live site; (4) from then on, use `main` as the base branch for all work, and update the brief and the notes file to say so.
+
+---
+
+**19 Oct 2026, 21:35 BST — Claude**
+
+Correction, and an overdue one: I'd been treating `claude/construction-tracking-app-m0ugv7` as if merging into it meant going live — I said as much after merging #57 (the colour-scheme switcher). It doesn't, and never has. `main` is what Cloudflare Pages actually deploys to thesiteoffice.uk; the tracker branch is a development/integration branch only. Aled noticed #57 wasn't showing on the live site, which is what surfaced this. Confirmed Netlify (charming-donut) is exactly what Adam says — a harmless www-redirect shim — and left it alone.
+
+Working through Adam's four points:
+
+**(1) Is the live site (pre-#53 frontend, on `main`) still safe against the live database (now on v70-v73)?** Checked properly, not just assumed from the migrations being additive:
+- Queried live Supabase directly: `handover_documents` has 0 rows with `status = 'not_applicable'` or `is_custom = true`; `plot_handover_confirmations` and `plot_handover_shares` are both empty; no plot has been handed over yet. None of v71/v72/v73's new capabilities have actually been exercised, because `main`'s current frontend has no UI path to reach any of them.
+- Read `main`'s actual frontend code to check it wouldn't choke even if it had to cope with the new document rows from v71's backfill: its handover-document rendering is fully generic (renders by each row's own `title`, ordered by `doc_key`, no hardcoded doc_key logic anywhere in `app.js` or `plot-detail.html`) — the extra EPC/split-cert/FENSA/lift-cert rows display fine as plain new rows.
+- v73's one behaviour change (`plots_before_write()`) only widens an existing check (treats `not_applicable` documents as satisfying the handover block, same as it already did for gates) — it can't newly reject anything the old trigger used to accept.
+- The old client-side auto-stamp path (`checkAndMarkPlotHandedOver()`, still live on `main`, direct `UPDATE plots SET handed_over_at`) is untouched by v72/v73 — no RLS/grant change restricts it, confirmed by reading both migrations' own text.
+- **Conclusion: the live site is safe as-is.** Nothing on `main` can currently write any of the new states, and everything it reads continues to behave exactly as before.
+
+**(2) PR from the tracker branch into `main`:**
+- Tested the merge locally first (not just opened it blind): `git merge origin/claude/construction-tracking-app-m0ugv7` onto `main` — clean, zero conflicts, 76 files changed (+4161/−268), 10 commits (the #53-#57 range).
+- `main`'s #49 root files — `index.html`, `404.html`, `privacy.html`, `terms.html`, `_headers`, `_redirects` — are byte-for-byte unchanged by the merge. Checked by diff, not by eye.
+- Ran the full suite against the merged tree, including the database tests (needed to start the sandbox's local Postgres first — it wasn't running by default): **1858/1858 passing, 0 failures.**
+- One test file is removed by the merge, `tests/frontend/handover_consistency.test.mjs` — it tested the old auto-stamp behaviour #55 deliberately replaced; its replacement coverage already shipped in #55/#56.
+- Opened as a draft: **PR #58** — https://github.com/aledmog-afk/thesiteoffice/pull/58. Subscribed to its activity so I'll pick up CI results and any review comments without being asked again.
+
+**(3) Not merged.** Per the standing rule, that's Aled's separate yes — flagging it here rather than assuming "open the PR" extended to "merge it."
+
+**(4) Base branch and documentation, going forward:**
+- From now on, `main` is the base branch for all new work — not the tracker branch. Noting this here so it's written down somewhere I can point back to.
+- I also owe an update to **"HANDOVER - brief for Claude"** (the brief doc in Drive) to say the same thing, but I can't do that directly — Drive access is read-only for me, as Adam already established on 18 Oct ("Post all updates here from now on, since your Drive access is read-only"). That's still true; there's no Google Docs edit connector available in this session, only read access. If someone wants to carry this over into the brief by hand, the line to add is: *"Base branch for all new work is now `main` (Cloudflare Pages → thesiteoffice.uk), not `claude/construction-tracking-app-m0ugv7` — confirmed by Adam, 19 Oct 2026."* Otherwise this note here is the record of it.
+
+Waiting on Aled's yes to merge #58, then I'll check the live site again afterward.
+
+— Claude
