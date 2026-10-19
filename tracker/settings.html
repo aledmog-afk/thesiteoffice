@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="js/theme-init.js"></script>
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 <title>Settings – The Site Office</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -18,6 +19,12 @@
       <div class="page-title">Settings</div>
       <div class="page-sub">Your organisation and company logo — the logo appears on every printed weekly report and snagging sheet.</div>
     </div>
+  </div>
+
+  <div class="card" style="margin-bottom:1.5rem;">
+    <h3 class="card-heading">Appearance</h3>
+    <p class="hint" style="margin-bottom:1rem;">Choose a colour scheme for this browser. This is a personal preference — it doesn't change what anyone else sees, and it's remembered on this device only.</p>
+    <div class="theme-grid" id="themeGrid"></div>
   </div>
 
   <div class="card" style="margin-bottom:1.5rem;">
@@ -75,10 +82,29 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, showError, clearError, escapeHtml, formatDate, uploadPhoto, getPrimaryOrganisation, getOrganisationMembers, getOrganisationMembershipRequests, approveOrganisationMembership, rejectOrganisationMembership } from "./js/app.js";
+  import { requireAuth, renderHeader, showError, clearError, escapeHtml, formatDate, uploadPhoto, getPrimaryOrganisation, getOrganisationMembers, getOrganisationMembershipRequests, approveOrganisationMembership, rejectOrganisationMembership, THEME_OPTIONS, getTheme, setTheme } from "./js/app.js";
 
   const currentUser = await requireAuth();
   renderHeader([{ label: "Settings" }]);
+
+  // ─── Appearance (colour scheme) ──────────────────────────────────
+  function renderThemeGrid() {
+    const active = getTheme();
+    document.getElementById("themeGrid").innerHTML = THEME_OPTIONS.map((t) => `
+      <button type="button" class="theme-swatch${t.value === active ? " active" : ""}" data-theme-value="${t.value}">
+        <span class="theme-swatch-dot" style="background:${t.swatch};"></span>
+        <span class="theme-swatch-label">${escapeHtml(t.label)}</span>
+        <span class="theme-swatch-check">✓ Active</span>
+      </button>
+    `).join("");
+    document.querySelectorAll(".theme-swatch").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        setTheme(btn.dataset.themeValue);
+        renderThemeGrid();
+      });
+    });
+  }
+  renderThemeGrid();
 
   // Settings manages the caller's "primary" organisation only — the same
   // one ensureOrganisation() already resolves everywhere else in this
