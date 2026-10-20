@@ -29,9 +29,12 @@
     </div>
     <div class="btn-row">
       <span class="badge" id="statusBadge"></span>
+      <button class="btn btn-outline btn-sm" id="generatePdfBtn" style="display:none;">Generate PDF</button>
       <button class="btn btn-danger btn-sm" id="deleteBtn">Delete Inspection</button>
     </div>
   </div>
+
+  <div class="hint" id="pdfStatusText" style="text-align:right; margin-top:-0.6rem; margin-bottom:0.6rem;"></div>
 
   <div id="errorBox" class="error-box"></div>
 
@@ -94,7 +97,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, getInspection, updateInspection, deleteInspection, getFindings, createFinding, updateFinding, resolveFinding, deleteFinding, createActionFromFinding, createSnagFromFinding, getFindingPhotos, addFindingPhoto, deleteFindingPhoto, comparePlotNumbers, INSPECTION_TYPES, INSPECTION_TYPE_LABEL, INSPECTION_STATUSES, INSPECTION_STATUS_LABEL, INSPECTION_STATUS_BADGE, FINDING_SEVERITIES, FINDING_SEVERITY_LABEL, FINDING_SEVERITY_BADGE, FINDING_STATUSES, FINDING_STATUS_LABEL, FINDING_STATUS_BADGE, isFindingOutstanding, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, getInspection, updateInspection, deleteInspection, getFindings, createFinding, updateFinding, resolveFinding, deleteFinding, createActionFromFinding, createSnagFromFinding, getFindingPhotos, addFindingPhoto, deleteFindingPhoto, comparePlotNumbers, INSPECTION_TYPES, INSPECTION_TYPE_LABEL, INSPECTION_STATUSES, INSPECTION_STATUS_LABEL, INSPECTION_STATUS_BADGE, FINDING_SEVERITIES, FINDING_SEVERITY_LABEL, FINDING_SEVERITY_BADGE, FINDING_STATUSES, FINDING_STATUS_LABEL, FINDING_STATUS_BADGE, isFindingOutstanding, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel, generateInspectionPdfBlob } from "./js/app.js";
 
   await requireAuth();
   const inspectionId = getParam("id");
@@ -118,7 +121,33 @@
     const badge = document.getElementById("statusBadge");
     badge.className = `badge ${INSPECTION_STATUS_BADGE[inspection.status]}`;
     badge.textContent = INSPECTION_STATUS_LABEL[inspection.status];
+    document.getElementById("generatePdfBtn").style.display = inspection.status === "completed" ? "inline-flex" : "none";
+    document.getElementById("pdfStatusText").textContent = "";
   }
+
+  // ─── PDF export ─────────────────────────────────────────────────
+  // Generates entirely client-side from this same, already-loaded
+  // completed inspection — no server round trip and no separate access
+  // check to keep in sync with the page's own (see
+  // generateInspectionPdfBlob() in app.js). Sharing/saving reuses the
+  // exact Save to Device infrastructure already used for finding photos.
+  document.getElementById("generatePdfBtn").addEventListener("click", async () => {
+    const btn = document.getElementById("generatePdfBtn");
+    const statusEl = document.getElementById("pdfStatusText");
+    clearError(errorBox);
+    btn.disabled = true;
+    statusEl.textContent = "Generating PDF…";
+    try {
+      const { blob, filename } = await generateInspectionPdfBlob(inspectionId);
+      const result = await saveFileToDevice(blob, filename);
+      statusEl.textContent = deviceSaveStatusLabel(result.status);
+    } catch (err) {
+      statusEl.textContent = "";
+      showError(errorBox, err);
+    } finally {
+      btn.disabled = false;
+    }
+  });
 
   function fillDetailsForm() {
     document.getElementById("title").value = inspection.title;
