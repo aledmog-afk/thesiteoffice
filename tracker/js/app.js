@@ -975,6 +975,25 @@ export const FINDING_STATUSES = ["open", "action_required", "resolved", "accepte
 export const FINDING_STATUS_LABEL = { open: "Open", action_required: "Action Required", resolved: "Resolved", accepted: "Accepted", cancelled: "Cancelled" };
 export const FINDING_STATUS_BADGE = { open: "badge-red", action_required: "badge-amber", resolved: "badge-green", accepted: "badge-blue", cancelled: "badge-grey" };
 
+// The same badge colours as the ones above, as PDF-usable RGB triples
+// (taken straight from app.css's --red/--red-light etc. light-theme
+// tokens — a PDF is always rendered on a plain white page, so there's
+// no dark-theme variant to pick between) — used by the inspection PDF
+// export to colour-code severity/status instead of plain grey text.
+const FINDING_SEVERITY_PDF_COLOR = {
+  low: { bg: [226, 228, 233], text: [74, 77, 88] },
+  medium: { bg: [220, 232, 255], text: [26, 79, 160] },
+  high: { bg: [254, 243, 220], text: [138, 85, 0] },
+  critical: { bg: [252, 232, 230], text: [192, 57, 43] },
+};
+const FINDING_STATUS_PDF_COLOR = {
+  open: { bg: [252, 232, 230], text: [192, 57, 43] },
+  action_required: { bg: [254, 243, 220], text: [138, 85, 0] },
+  resolved: { bg: [223, 240, 232], text: [30, 107, 60] },
+  accepted: { bg: [220, 232, 255], text: [26, 79, 160] },
+  cancelled: { bg: [226, 228, 233], text: [74, 77, 88] },
+};
+
 // A finding still counts as outstanding work until it's explicitly
 // resolved, accepted, or cancelled — used both for UI and for the
 // dashboard-integration counts below.
@@ -7027,6 +7046,12 @@ export function buildInspectionPdfDocument({ jsPDFCtor, inspection, findings, fi
     ["Overall Result", INSPECTION_OVERALL_RESULT_LABEL[inspection.overall_result]],
   ].filter(([, value]) => value);
   if (details.length) {
+    ensureSpace(14);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8.5);
+    doc.setTextColor(130, 130, 130);
+    doc.text("REPORT DETAILS", INSP_PDF_MARGIN, y);
+    y += 16;
     const colW = INSP_PDF_CONTENT_WIDTH / 2;
     const rows = Math.ceil(details.length / 2);
     ensureSpace(rows * 34 + 10);
@@ -7104,22 +7129,60 @@ export function buildInspectionPdfDocument({ jsPDFCtor, inspection, findings, fi
     doc.text("No findings recorded.", INSP_PDF_MARGIN, y);
     y += 16;
   }
-  for (const finding of findings) {
-    ensureSpace(40);
+  findings.forEach((finding, findingIndex) => {
+    // A shaded header band per finding (same visual language as
+    // Commercial's table header bars), with a real colour-coded badge
+    // for severity and status — not plain grey caption text — so each
+    // finding reads as a distinct, structured block rather than
+    // free-running prose. Pill labels are drawn in their normal
+    // case (not upper-cased) to match FINDING_SEVERITY_LABEL /
+    // FINDING_STATUS_LABEL exactly, same text either way.
+    const bandHeight = 20;
+    ensureSpace(bandHeight + 40);
+    const bandTop = y;
+    doc.setFillColor(242, 243, 245);
+    doc.rect(INSP_PDF_MARGIN, bandTop, INSP_PDF_CONTENT_WIDTH, bandHeight, "F");
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8);
+    doc.setTextColor(90, 90, 90);
+    doc.text(`FINDING ${findingIndex + 1}`, INSP_PDF_MARGIN + 8, bandTop + bandHeight / 2 + 3);
+
+    let cursorX = INSP_PDF_MARGIN + INSP_PDF_CONTENT_WIDTH - 8;
+    function pillRightAligned(label, color) {
+      if (!label || !color) return;
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(7.5);
+      const padX = 6;
+      const pillW = doc.getTextWidth(label) + padX * 2;
+      const pillH = 14;
+      const pillX = cursorX - pillW;
+      const pillY = bandTop + (bandHeight - pillH) / 2;
+      doc.setFillColor(color.bg[0], color.bg[1], color.bg[2]);
+      doc.rect(pillX, pillY, pillW, pillH, "F");
+      doc.setTextColor(color.text[0], color.text[1], color.text[2]);
+      doc.text(label, pillX + padX, pillY + pillH - 4.2);
+      cursorX = pillX - 6;
+    }
+    pillRightAligned(FINDING_STATUS_LABEL[finding.status], FINDING_STATUS_PDF_COLOR[finding.status]);
+    pillRightAligned(FINDING_SEVERITY_LABEL[finding.severity], FINDING_SEVERITY_PDF_COLOR[finding.severity]);
+
+    const plot = plotLabel(finding.plot_id);
+    if (plot) {
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+      doc.setTextColor(110, 110, 110);
+      const plotW = doc.getTextWidth(plot);
+      doc.text(plot, cursorX - plotW, bandTop + bandHeight / 2 + 3);
+    }
+    y = bandTop + bandHeight + 10;
+
     doc.setFont("helvetica", "bold");
     doc.setFontSize(11);
     doc.setTextColor(20, 20, 20);
     const findingTitleLines = doc.splitTextToSize(finding.title, INSP_PDF_CONTENT_WIDTH);
     findingTitleLines.forEach((line) => { ensureSpace(14); doc.text(line, INSP_PDF_MARGIN, y); y += 14; });
-
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(9);
-    doc.setTextColor(100, 100, 100);
-    const plot = plotLabel(finding.plot_id);
-    const metaLine = [FINDING_SEVERITY_LABEL[finding.severity], FINDING_STATUS_LABEL[finding.status], plot].filter(Boolean).join("   ·   ");
-    ensureSpace(14);
-    doc.text(metaLine, INSP_PDF_MARGIN, y);
-    y += 16;
+    y += 2;
 
     if (finding.description && finding.description.trim()) {
       paragraph(finding.description.trim(), 9.5);
@@ -7155,11 +7218,8 @@ export function buildInspectionPdfDocument({ jsPDFCtor, inspection, findings, fi
       y = gridTop + rows * (thumb + gap) + 6;
     }
 
-    ensureSpace(14);
-    doc.setDrawColor(230, 230, 230);
-    doc.line(INSP_PDF_MARGIN, y, INSP_PDF_MARGIN + INSP_PDF_CONTENT_WIDTH, y);
-    y += 16;
-  }
+    y += 14;
+  });
 
   // ─── FOOTER (every page, drawn last since it needs the final page count) ──
   const totalPages = doc.internal.getNumberOfPages();
