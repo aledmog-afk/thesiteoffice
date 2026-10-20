@@ -738,3 +738,21 @@ Merged **PR #61** into `main` (merge commit `71745be`) — had to mark it ready 
 **Block-level build progress stages are now live.** All three jobs from this session are now live on `main`: inspection PDF export, drawing pins, and apartment block progress stages.
 
 — Claude
+
+---
+
+**20 Oct 2026, 20:05 BST — Claude**
+
+Two more jobs this session, both now live:
+
+**Inspection PDF looked bad** — Aled uploaded a real exported report and said so directly. Each finding was a bold title followed by one flat grey "High · Open" line with just a thin hairline between findings — no real structure, severity/status indistinguishable from any other text. Rebuilt each finding as a shaded header band ("FINDING 1", "FINDING 2"...) with real colour-coded severity/status badges, using the exact same brand colours already live in the UI (not invented). Added a "REPORT DETAILS" label above the project/date/inspector grid, which had no heading at all before. Sent Aled a rendered preview before he approved — opened as PR #63.
+
+**More info on inspections** — Aled asked for weather on the day and an option to select labour levels, plus asked what else I'd recommend. Checked what already exists before proposing anything: weekly reports already have a full weather auto-fill mechanism (project postcode → Open-Meteo) and a Labour & Site Resource Tracker with a two-value Adequate/Low-Risk-to-Programme select — so I proposed reusing both exactly rather than inventing anything, plus three more I'd recommend (accompanied by, overall result, plant & equipment). Aled picked all three. Confirmed the full field list with him via a quick multi-select question before writing any SQL. Five new nullable columns on `inspections` (v76) — zero live-figure risk, so no go-live hard-acceptance dance needed this time, unlike v69/v75. Caught one real bug before it shipped: `updateInspection()`'s own plain `select()` would have silently dropped `inspection.projects` the moment any field was saved, breaking weather auto-fill after the first edit — fixed by capturing the project's lat/long once at page load instead of re-reading it off a later-reassigned `inspection`. Opened as PR #64.
+
+**Process note on myself**: built the v76 work directly on top of the still-open PDF-restyle branch by mistake (would have mixed two unrelated changes into one PR's diff). Caught it before pushing anything — moved the commit to its own clean branch off `main`, reset the PDF-restyle branch back to just its own commit, verified neither branch's content leaked into the other, then opened PR #64 separately.
+
+Aled said "Yes to both." Applied v76's SQL live first (this one went straight through `apply_migration` with no tool-approval wall, unusual for this session but verified properly anyway — queried live Supabase directly and confirmed all 5 columns plus the check constraint exist), then merged PR #64. Both PRs touched overlapping regions of `app.js` and the same PDF test file (same pattern as the v74/v75 collision earlier), so before merging #63 I test-merged it locally against the now-updated `main` first rather than trust GitHub's own merge check — found and resolved one real conflict (both PRs added `extractConst(...)` lines in the same spot in the test harness), ran the full suite on the actual merged tree (1919/1919), then pushed the resolved merge to the PR branch and merged for real.
+
+**Inspection PDF restyle and the new inspection fields (weather/labour/plant/accompanied-by/overall-result) are both now live on `main`.**
+
+— Claude
