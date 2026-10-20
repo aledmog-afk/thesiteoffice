@@ -15330,3 +15330,623 @@ drop trigger if exists trg_plots_before_write on public.plots;
 create trigger trg_plots_before_write
   before update on public.plots
   for each row execute function public.plots_before_write();
+
+-- v74 ADDITIONS: Drawing pins — site/plot/block storey drawings, PDF
+-- page rasterisation, pins on Snags/RFIs/Quality Gates/general
+-- Queries (plan posted to the handover notes 19 Oct 2026, revised
+-- after Aled's five answers: a new lightweight general_queries type,
+-- Quality Gates as a fourth pin owner, a page-assignment upload flow
+-- so one PDF can feed several drawings, blocks getting per-storey
+-- drawings too, and archive-only — no delete, matching documents).
+--
+-- Retires the old, never-actually-used pinning system from v1 of this
+-- schema (confirmed via a live read before writing this: the old
+-- `drawings` table and both `snag_items.drawing_id`/
+-- `quality_gates.drawing_id` have zero live rows — nothing to
+-- migrate). That old table predates is_project_member()/
+-- is_project_editor() entirely (RLS was "any authenticated user") and
+-- had no revisioning concept at all — not extended, replaced outright.
+-- The newer `documents`/`document_revisions` module (which already
+-- has `document_type = 'drawing'` as an option, from an earlier
+-- additive backfill of the old drawings table) is left completely
+-- untouched — that's a separate, legitimate feature for formal
+-- controlled documents, not this one.
+--
+-- Shape: an upload (one PDF or image) produces one or more rendered
+-- PAGES (drawing_pages) — a PDF's pages are rasterised to images
+-- client-side via pdf.js before upload, so every page this schema
+-- ever sees is already a plain image, pinnable the same way regardless
+-- of source format. A page is then ASSIGNED to a drawing IDENTITY
+-- (drawings — the site layout, or one plot/block's storey);
+-- decoupling pages from drawings this way is what lets one multi-page
+-- upload feed several different drawings in one go, and
+-- drawing_page_assignments is what makes a drawing's revision history
+-- real (current_page_id is just a denormalised pointer at whichever
+-- assignment row has superseded_at null — same convention
+-- documents.current_revision_id already uses for document_revisions).
+-- Pins reference a drawing_page directly, never a drawing — so
+-- reassigning a drawing's current page (a revision) never moves or
+-- orphans an existing pin; it stays exactly where it was placed,
+-- against the exact image it was placed on, forever.
+--
+-- project_id is denormalised onto drawing_pages, drawing_page_assignments
+-- and drawing_pins (each is really only reachable from its project via
+-- a multi-hop join otherwise) — same reasoning document_revisions.project_id
+-- already established in this schema: simpler RLS, and it's what lets
+-- every one of these tables fall into write_audit_log()'s existing
+-- generic project_id-based branch with zero code changes. Every one of
+-- these denormalised columns is trigger-derived, never client-trusted.
+
+-- ─── Retire the old pinning system ──────────────────────────────────
+-- Guarded by a check for the OLD table's own distinguishing column
+-- (drawing_url — the new drawings table below never has one) rather
+-- than a bare `drop table if exists`, because re-applying this file
+-- (the idempotency check every migration in this schema is tested
+-- against) would otherwise match and destroy the brand-new drawings
+-- table this same migration creates below, the moment it exists.
+alter table public.snag_items drop column if exists drawing_id;
+alter table public.snag_items drop column if exists x_coordinate;
+alter table public.snag_items drop column if exists y_coordinate;
+alter table public.quality_gates drop column if exists drawing_id;
+alter table public.quality_gates drop column if exists x_coordinate;
+alter table public.quality_gates drop column if exists y_coordinate;
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'drawings' and column_name = 'drawing_url'
+  ) then
+    drop policy if exists "authenticated read drawings" on public.drawings;
+    drop policy if exists "authenticated insert drawings" on public.drawings;
+    drop policy if exists "authenticated update drawings" on public.drawings;
+    drop policy if exists "authenticated delete drawings" on public.drawings;
+    drop table public.drawings;
+  end if;
+end $$;
+
+-- ─── drawing_uploads: the raw upload event ──────────────────────────
+create table if not exists public.drawing_uploads (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.organisations(id),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  source_file_url text not null,
+  source_file_name text not null,
+  source_mime_type text,
+  uploaded_by uuid references auth.users(id) on delete set null,
+  uploaded_at timestamptz not null default now()
+);
+create index if not exists drawing_uploads_project_idx on public.drawing_uploads (project_id);
+
+create or replace function public.drawing_uploads_before_insert()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_org_id uuid;
+begin
+  select org_id into v_org_id from public.projects where id = new.project_id;
+  if v_org_id is null then
+    raise exception 'drawing_uploads.project_id must reference an existing project with an organisation';
+  end if;
+  new.org_id := v_org_id;
+  new.uploaded_by := auth.uid();
+  new.uploaded_at := now();
+  return new;
+end;
+$$;
+drop trigger if exists trg_drawing_uploads_before_insert on public.drawing_uploads;
+create trigger trg_drawing_uploads_before_insert
+  before insert on public.drawing_uploads
+  for each row execute function public.drawing_uploads_before_insert();
+-- No update/delete policy for any client — an upload is an immutable
+-- source record, same idiom document_revisions already uses.
+
+alter table public.drawing_uploads enable row level security;
+drop policy if exists "members read drawing_uploads" on public.drawing_uploads;
+create policy "members read drawing_uploads" on public.drawing_uploads for select to authenticated using (public.is_project_member(project_id));
+drop policy if exists "editors insert drawing_uploads" on public.drawing_uploads;
+create policy "editors insert drawing_uploads" on public.drawing_uploads for insert to authenticated with check (public.is_project_editor(project_id));
+
+-- ─── drawing_pages: one rendered, pinnable image per page ───────────
+create table if not exists public.drawing_pages (
+  id uuid primary key default gen_random_uuid(),
+  drawing_upload_id uuid not null references public.drawing_uploads(id) on delete cascade,
+  project_id uuid not null references public.projects(id) on delete cascade,
+  page_number integer not null default 1 check (page_number >= 1),
+  image_url text not null,
+  width_px integer,
+  height_px integer,
+  created_at timestamptz not null default now(),
+  unique (drawing_upload_id, page_number)
+);
+create index if not exists drawing_pages_project_idx on public.drawing_pages (project_id);
+
+create or replace function public.drawing_pages_before_insert()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_project_id uuid;
+begin
+  select project_id into v_project_id from public.drawing_uploads where id = new.drawing_upload_id;
+  if v_project_id is null then
+    raise exception 'drawing_pages.drawing_upload_id must reference an existing drawing_uploads row';
+  end if;
+  new.project_id := v_project_id;
+  return new;
+end;
+$$;
+drop trigger if exists trg_drawing_pages_before_insert on public.drawing_pages;
+create trigger trg_drawing_pages_before_insert
+  before insert on public.drawing_pages
+  for each row execute function public.drawing_pages_before_insert();
+
+alter table public.drawing_pages enable row level security;
+drop policy if exists "members read drawing_pages" on public.drawing_pages;
+create policy "members read drawing_pages" on public.drawing_pages for select to authenticated using (public.is_project_member(project_id));
+drop policy if exists "editors insert drawing_pages" on public.drawing_pages;
+create policy "editors insert drawing_pages" on public.drawing_pages for insert to authenticated with check (public.is_project_editor(project_id));
+
+-- ─── drawings: a stable identity (site, or one plot/block's storey) ─
+create table if not exists public.drawings (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.organisations(id),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  scope text not null check (scope in ('site', 'plot_storey', 'block_storey')),
+  plot_id uuid references public.plots(id) on delete set null,
+  block_id uuid references public.blocks(id) on delete set null,
+  storey text check (storey in ('GF', 'FF', 'SF')),
+  title text not null,
+  status text not null default 'current' check (status in ('current', 'archived')),
+  current_page_id uuid references public.drawing_pages(id) on delete set null,
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint drawings_scope_consistent check (
+    (scope = 'site' and plot_id is null and block_id is null and storey is null) or
+    (scope = 'plot_storey' and plot_id is not null and block_id is null and storey is not null) or
+    (scope = 'block_storey' and block_id is not null and plot_id is null and storey is not null)
+  )
+);
+create index if not exists drawings_project_idx on public.drawings (project_id);
+create unique index if not exists drawings_one_site_per_project on public.drawings (project_id) where scope = 'site' and status = 'current';
+create unique index if not exists drawings_one_per_plot_storey on public.drawings (plot_id, storey) where scope = 'plot_storey' and status = 'current';
+create unique index if not exists drawings_one_per_block_storey on public.drawings (block_id, storey) where scope = 'block_storey' and status = 'current';
+
+-- Mirrors documents_before_write(): server-derived org_id,
+-- created_by/created_at immutability, and current_page_id can never
+-- be set by an ordinary client write — only drawing_page_assignments'
+-- own internal promotion (below) via the same session-local-flag
+-- exception documents/document_revisions already established.
+create or replace function public.drawings_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_org_id uuid;
+begin
+  select org_id into v_org_id from public.projects where id = new.project_id;
+  if v_org_id is null then
+    raise exception 'drawings.project_id must reference an existing project with an organisation';
+  end if;
+  new.org_id := v_org_id;
+
+  if new.scope = 'plot_storey' and new.plot_id is not null then
+    if not exists (select 1 from public.plots where id = new.plot_id and project_id = new.project_id) then
+      raise exception 'drawings.plot_id must reference a plot in the same project';
+    end if;
+  end if;
+  if new.scope = 'block_storey' and new.block_id is not null then
+    if not exists (select 1 from public.blocks where id = new.block_id and project_id = new.project_id) then
+      raise exception 'drawings.block_id must reference a block in the same project';
+    end if;
+  end if;
+
+  if TG_OP = 'INSERT' then
+    new.created_by := auth.uid();
+    new.created_at := now();
+    new.updated_at := now();
+    new.current_page_id := null; -- always starts empty; set by the first page assignment's own insert
+    return new;
+  end if;
+
+  new.created_by := old.created_by;
+  new.created_at := old.created_at;
+  new.updated_at := now();
+  if coalesce(current_setting('app.allow_current_page_change', true), '') <> 'on' then
+    new.current_page_id := old.current_page_id;
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists trg_drawings_before_write on public.drawings;
+create trigger trg_drawings_before_write
+  before insert or update on public.drawings
+  for each row execute function public.drawings_before_write();
+
+alter table public.drawings enable row level security;
+drop policy if exists "members read drawings" on public.drawings;
+create policy "members read drawings" on public.drawings for select to authenticated using (public.is_project_member(project_id));
+drop policy if exists "editors insert drawings" on public.drawings;
+create policy "editors insert drawings" on public.drawings for insert to authenticated with check (public.is_project_editor(project_id));
+drop policy if exists "editors update drawings" on public.drawings;
+create policy "editors update drawings" on public.drawings for update to authenticated using (public.is_project_editor(project_id)) with check (public.is_project_editor(project_id));
+-- Deliberately NO delete policy — archive-only (status='archived'),
+-- matching documents' own established convention exactly, by Aled's
+-- own choice (point 5 of the plan).
+
+-- ─── drawing_page_assignments: a drawing's real revision history ───
+create table if not exists public.drawing_page_assignments (
+  id uuid primary key default gen_random_uuid(),
+  drawing_id uuid not null references public.drawings(id) on delete cascade,
+  drawing_page_id uuid not null references public.drawing_pages(id) on delete cascade,
+  project_id uuid not null references public.projects(id) on delete cascade,
+  assigned_by uuid references auth.users(id) on delete set null,
+  assigned_at timestamptz not null default now(),
+  superseded_at timestamptz
+);
+create index if not exists drawing_page_assignments_drawing_idx on public.drawing_page_assignments (drawing_id, assigned_at);
+create index if not exists drawing_page_assignments_project_idx on public.drawing_page_assignments (project_id);
+
+-- Mirrors document_revisions_before_insert(): derives project_id from
+-- the parent drawing (never client-trusted — closes the same
+-- "assign a page to a drawing in another project" IDOR class
+-- documents/document_revisions already closed).
+create or replace function public.drawing_page_assignments_before_insert()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_drawing_project_id uuid;
+  v_page_project_id uuid;
+begin
+  select project_id into v_drawing_project_id from public.drawings where id = new.drawing_id;
+  if v_drawing_project_id is null then
+    raise exception 'drawing_page_assignments.drawing_id must reference an existing drawing';
+  end if;
+  select project_id into v_page_project_id from public.drawing_pages where id = new.drawing_page_id;
+  if v_page_project_id is null or v_page_project_id <> v_drawing_project_id then
+    raise exception 'drawing_page_assignments.drawing_page_id must belong to the same project as its drawing';
+  end if;
+  new.project_id := v_drawing_project_id;
+  new.assigned_by := auth.uid();
+  new.assigned_at := now();
+  new.superseded_at := null;
+  return new;
+end;
+$$;
+drop trigger if exists trg_drawing_page_assignments_before_insert on public.drawing_page_assignments;
+create trigger trg_drawing_page_assignments_before_insert
+  before insert on public.drawing_page_assignments
+  for each row execute function public.drawing_page_assignments_before_insert();
+
+-- The only code path that ever sets drawing_page_assignments.superseded_at
+-- or drawings.current_page_id — mirrors document_revisions_after_insert()
+-- exactly, including the set_config flag trick to bypass
+-- drawings_before_write()'s own "force back to OLD" protection for
+-- just this one internal write.
+create or replace function public.drawing_page_assignments_after_insert()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_old_current_id uuid;
+begin
+  select current_page_id into v_old_current_id from public.drawings where id = new.drawing_id;
+
+  if v_old_current_id is not null then
+    update public.drawing_page_assignments set superseded_at = now()
+      where drawing_id = new.drawing_id and drawing_page_id = v_old_current_id and superseded_at is null;
+  end if;
+
+  perform set_config('app.allow_current_page_change', 'on', true);
+  update public.drawings set current_page_id = new.drawing_page_id where id = new.drawing_id;
+  perform set_config('app.allow_current_page_change', 'off', true);
+
+  return new;
+end;
+$$;
+drop trigger if exists trg_drawing_page_assignments_after_insert on public.drawing_page_assignments;
+create trigger trg_drawing_page_assignments_after_insert
+  after insert on public.drawing_page_assignments
+  for each row execute function public.drawing_page_assignments_after_insert();
+
+alter table public.drawing_page_assignments enable row level security;
+drop policy if exists "members read drawing_page_assignments" on public.drawing_page_assignments;
+create policy "members read drawing_page_assignments" on public.drawing_page_assignments for select to authenticated using (public.is_project_member(project_id));
+drop policy if exists "editors insert drawing_page_assignments" on public.drawing_page_assignments;
+create policy "editors insert drawing_page_assignments" on public.drawing_page_assignments for insert to authenticated with check (public.is_project_editor(project_id));
+-- No update/delete policy — superseded_at is only ever set by the
+-- internal promotion above, same idiom document_revisions uses.
+
+-- ─── general_queries: a new, lighter query type (plan point 1) ─────
+-- Deliberately simpler than rfis: no formal reference numbering, no
+-- due_date, no priority, no party/assignment workflow — just a
+-- question and an answer, for quick on-site questions.
+create table if not exists public.general_queries (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.organisations(id),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  plot_id uuid references public.plots(id) on delete set null,
+  block_id uuid references public.blocks(id) on delete set null,
+  question text not null,
+  status text not null default 'open' check (status in ('open', 'answered', 'closed')),
+  raised_by uuid references auth.users(id) on delete set null,
+  raised_at timestamptz not null default now(),
+  response text,
+  answered_by uuid references auth.users(id) on delete set null,
+  answered_at timestamptz,
+  closed_at timestamptz
+);
+create index if not exists general_queries_project_status_idx on public.general_queries (project_id, status);
+
+-- Mirrors rfis_before_write()'s own plot/org derivation and validation
+-- shape, simplified for this table's smaller status machine (no
+-- formal transition-matrix function — just answered_at/closed_at
+-- stamped once, the first time status reaches that state, never
+-- re-stamped or clearable, same "a historical timestamp is permanent"
+-- idiom plots.handed_over_at and document_revisions.uploaded_at use).
+create or replace function public.general_queries_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_org_id uuid;
+begin
+  select org_id into v_org_id from public.projects where id = new.project_id;
+  if v_org_id is null then
+    raise exception 'general_queries.project_id must reference an existing project with an organisation';
+  end if;
+  new.org_id := v_org_id;
+
+  if new.plot_id is not null and not exists (select 1 from public.plots where id = new.plot_id and project_id = new.project_id) then
+    raise exception 'general_queries.plot_id must reference a plot in the same project';
+  end if;
+  if new.block_id is not null and not exists (select 1 from public.blocks where id = new.block_id and project_id = new.project_id) then
+    raise exception 'general_queries.block_id must reference a block in the same project';
+  end if;
+
+  if TG_OP = 'INSERT' then
+    new.raised_by := auth.uid();
+    new.raised_at := now();
+    new.answered_by := null;
+    new.answered_at := null;
+    new.closed_at := null;
+    return new;
+  end if;
+
+  new.raised_by := old.raised_by;
+  new.raised_at := old.raised_at;
+
+  if new.status = 'answered' and old.answered_at is null then
+    new.answered_at := now();
+    new.answered_by := auth.uid();
+  elsif new.status <> 'answered' then
+    new.answered_at := old.answered_at;
+    new.answered_by := old.answered_by;
+  end if;
+
+  if new.status = 'closed' and old.closed_at is null then
+    new.closed_at := now();
+  elsif new.status <> 'closed' then
+    new.closed_at := old.closed_at;
+  end if;
+
+  return new;
+end;
+$$;
+drop trigger if exists trg_general_queries_before_write on public.general_queries;
+create trigger trg_general_queries_before_write
+  before insert or update on public.general_queries
+  for each row execute function public.general_queries_before_write();
+
+alter table public.general_queries enable row level security;
+drop policy if exists "members read general_queries" on public.general_queries;
+create policy "members read general_queries" on public.general_queries for select to authenticated using (public.is_project_member(project_id));
+-- Member-level insert (not editor-level): matches snag_items' own
+-- insert policy exactly — a quick on-site question is the same kind
+-- of anyone-on-site action as raising a snag, by Aled's own framing.
+drop policy if exists "members insert general_queries" on public.general_queries;
+create policy "members insert general_queries" on public.general_queries for insert to authenticated with check (public.is_project_member(project_id));
+drop policy if exists "editors update general_queries" on public.general_queries;
+create policy "editors update general_queries" on public.general_queries for update to authenticated using (public.is_project_editor(project_id)) with check (public.is_project_editor(project_id));
+
+-- ─── drawing_pins: a pin on one specific page, one of four owners ──
+create table if not exists public.drawing_pins (
+  id uuid primary key default gen_random_uuid(),
+  drawing_page_id uuid not null references public.drawing_pages(id) on delete cascade,
+  project_id uuid not null references public.projects(id) on delete cascade,
+  x_pct numeric not null check (x_pct >= 0 and x_pct <= 100),
+  y_pct numeric not null check (y_pct >= 0 and y_pct <= 100),
+  snag_item_id uuid references public.snag_items(id) on delete cascade,
+  rfi_id uuid references public.rfis(id) on delete cascade,
+  quality_gate_id uuid references public.quality_gates(id) on delete cascade,
+  query_id uuid references public.general_queries(id) on delete cascade,
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  constraint drawing_pins_exactly_one_owner check (
+    (snag_item_id is not null)::int + (rfi_id is not null)::int +
+    (quality_gate_id is not null)::int + (query_id is not null)::int = 1
+  )
+);
+create index if not exists drawing_pins_page_idx on public.drawing_pins (drawing_page_id);
+create index if not exists drawing_pins_project_idx on public.drawing_pins (project_id);
+create index if not exists drawing_pins_snag_idx on public.drawing_pins (snag_item_id) where snag_item_id is not null;
+create index if not exists drawing_pins_rfi_idx on public.drawing_pins (rfi_id) where rfi_id is not null;
+create index if not exists drawing_pins_gate_idx on public.drawing_pins (quality_gate_id) where quality_gate_id is not null;
+create index if not exists drawing_pins_query_idx on public.drawing_pins (query_id) where query_id is not null;
+
+-- Derives project_id from the pinned page (never client-trusted), and
+-- — the part that actually enforces the "pin on a snag only needs
+-- member-level, pin on an RFI/gate needs editor-level" rule from the
+-- plan without four fragile duplicate RLS checks — validates whichever
+-- single owner is set actually belongs to this same project, closing
+-- the same cross-project IDOR class documents/rfis already close for
+-- their own child tables.
+create or replace function public.drawing_pins_before_insert()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_page_project_id uuid;
+  v_owner_project_id uuid;
+  v_owner_count int;
+begin
+  -- Checked explicitly here too (not just left to the
+  -- drawing_pins_exactly_one_owner CHECK constraint, which still runs
+  -- as the real backstop) so a zero/multiple-owner insert gets a clear
+  -- error naming the actual problem, rather than this trigger's own
+  -- cross-project lookup below failing first with a confusing message.
+  v_owner_count := (new.snag_item_id is not null)::int + (new.rfi_id is not null)::int +
+                    (new.quality_gate_id is not null)::int + (new.query_id is not null)::int;
+  if v_owner_count <> 1 then
+    raise exception 'drawing_pins: exactly one of snag_item_id/rfi_id/quality_gate_id/query_id must be set, got %', v_owner_count;
+  end if;
+
+  select project_id into v_page_project_id from public.drawing_pages where id = new.drawing_page_id;
+  if v_page_project_id is null then
+    raise exception 'drawing_pins.drawing_page_id must reference an existing drawing_pages row';
+  end if;
+  new.project_id := v_page_project_id;
+
+  if new.snag_item_id is not null then
+    select project_id into v_owner_project_id from public.snag_items where id = new.snag_item_id;
+  elsif new.rfi_id is not null then
+    select project_id into v_owner_project_id from public.rfis where id = new.rfi_id;
+  elsif new.quality_gate_id is not null then
+    select project_id into v_owner_project_id from public.quality_gates where id = new.quality_gate_id;
+  elsif new.query_id is not null then
+    select project_id into v_owner_project_id from public.general_queries where id = new.query_id;
+  end if;
+  if v_owner_project_id is null or v_owner_project_id <> v_page_project_id then
+    raise exception 'drawing_pins: the pinned item must exist in the same project as the drawing page';
+  end if;
+
+  new.created_by := auth.uid();
+  new.created_at := now();
+  return new;
+end;
+$$;
+drop trigger if exists trg_drawing_pins_before_insert on public.drawing_pins;
+create trigger trg_drawing_pins_before_insert
+  before insert on public.drawing_pins
+  for each row execute function public.drawing_pins_before_insert();
+-- No update/delete policy — a pin is a one-time placement record. If
+-- the thing it's pinned to is deleted, the pin cascades with it
+-- (on delete cascade on all four owner FKs above); there is otherwise
+-- no "unpin" feature in this phase.
+
+alter table public.drawing_pins enable row level security;
+drop policy if exists "members read drawing_pins" on public.drawing_pins;
+create policy "members read drawing_pins" on public.drawing_pins for select to authenticated using (public.is_project_member(project_id));
+-- Four separate insert policies, each gated on the matching owner's
+-- own real write rule (checked directly against this schema's actual
+-- current policies, not assumed): a pin on a snag or a query only
+-- needs member-level (snag_items/general_queries are both member-level
+-- insert); a pin on an RFI or a Quality Gate needs editor-level
+-- (both of those are editor-level insert today). A snagging-only
+-- member can therefore pin their own snag or query but not an RFI or
+-- a gate — exactly mirroring who can create each of those four things
+-- in the first place.
+drop policy if exists "members insert drawing_pins on snags" on public.drawing_pins;
+create policy "members insert drawing_pins on snags" on public.drawing_pins for insert to authenticated
+  with check (snag_item_id is not null and public.is_project_member(project_id));
+drop policy if exists "members insert drawing_pins on queries" on public.drawing_pins;
+create policy "members insert drawing_pins on queries" on public.drawing_pins for insert to authenticated
+  with check (query_id is not null and public.is_project_member(project_id));
+drop policy if exists "editors insert drawing_pins on rfis" on public.drawing_pins;
+create policy "editors insert drawing_pins on rfis" on public.drawing_pins for insert to authenticated
+  with check (rfi_id is not null and public.is_project_editor(project_id));
+drop policy if exists "editors insert drawing_pins on quality_gates" on public.drawing_pins;
+create policy "editors insert drawing_pins on quality_gates" on public.drawing_pins for insert to authenticated
+  with check (quality_gate_id is not null and public.is_project_editor(project_id));
+
+-- ─── Audit trail wiring: all six tables fall into write_audit_log()'s
+-- existing generic project_id-based branch with zero code changes
+-- (every one has a plain id + project_id, several of them only because
+-- project_id was deliberately denormalised onto them above for exactly
+-- this reason). Added to can_read_audit_row()'s member-level bucket —
+-- editor-level (the function's default) would incorrectly hide this
+-- history from a snagging-only member who can read the rows themselves.
+drop trigger if exists trg_audit_drawing_uploads on public.drawing_uploads;
+create trigger trg_audit_drawing_uploads after insert or update or delete on public.drawing_uploads for each row execute function public.write_audit_log();
+drop trigger if exists trg_audit_drawing_pages on public.drawing_pages;
+create trigger trg_audit_drawing_pages after insert or update or delete on public.drawing_pages for each row execute function public.write_audit_log();
+drop trigger if exists trg_audit_drawings on public.drawings;
+create trigger trg_audit_drawings after insert or update or delete on public.drawings for each row execute function public.write_audit_log();
+drop trigger if exists trg_audit_drawing_page_assignments on public.drawing_page_assignments;
+create trigger trg_audit_drawing_page_assignments after insert or update or delete on public.drawing_page_assignments for each row execute function public.write_audit_log();
+drop trigger if exists trg_audit_general_queries on public.general_queries;
+create trigger trg_audit_general_queries after insert or update or delete on public.general_queries for each row execute function public.write_audit_log();
+drop trigger if exists trg_audit_drawing_pins on public.drawing_pins;
+create trigger trg_audit_drawing_pins after insert or update or delete on public.drawing_pins for each row execute function public.write_audit_log();
+
+create or replace function public.can_read_audit_row(p_table_name text, p_project_id uuid, p_org_id uuid)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+begin
+  if p_table_name = 'org_settings' then
+    return p_org_id is not null and public.is_org_member(p_org_id);
+  end if;
+
+  if p_table_name = 'toolbox_talk_templates' then
+    return p_org_id is not null and public.is_org_member(p_org_id);
+  end if;
+
+  if p_project_id is null then
+    return false;
+  end if;
+
+  if p_table_name in ('commercial_events', 'commercial_line_items', 'variations', 'dayworks', 'variation_dayworks',
+                      'commercial_evidence_links', 'commercial_signatures', 'commercial_approval_requests', 'commercial_items') then
+    return public.can_see_commercial_prices(p_project_id);
+  end if;
+
+  if p_table_name in ('projects', 'snag_items', 'documents', 'document_revisions', 'toolbox_talks', 'toolbox_talk_attendees',
+                      'drawing_uploads', 'drawing_pages', 'drawings', 'drawing_page_assignments', 'general_queries', 'drawing_pins') then
+    return public.is_project_member(p_project_id);
+  end if;
+
+  return public.is_project_editor(p_project_id);
+end;
+$$;
+
+-- These are all trigger functions, never called directly by any page
+-- or RPC — a trigger fires regardless of EXECUTE grants on its own
+-- function, so (matching documents_before_write()/
+-- document_revisions_before_insert()'s own exact established pattern)
+-- they're fully locked down, not granted back to authenticated like
+-- an actually-callable RPC would be.
+do $$
+declare f text;
+begin
+  foreach f in array array[
+    'public.drawing_uploads_before_insert()',
+    'public.drawing_pages_before_insert()',
+    'public.drawings_before_write()',
+    'public.drawing_page_assignments_before_insert()',
+    'public.drawing_page_assignments_after_insert()',
+    'public.general_queries_before_write()',
+    'public.drawing_pins_before_insert()'
+  ] loop
+    execute format('revoke execute on function %s from public, anon, authenticated', f);
+  end loop;
+end $$;

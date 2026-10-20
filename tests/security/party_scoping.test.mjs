@@ -46,7 +46,7 @@ before(async () => {
   const A = fx.party[SUBA], B = fx.party[SUBB];
   await sql(`insert into public.documents (org_id, project_id, title, party_id) values ($1,$2,'Doc Almo',$3),($1,$2,'Doc Bolt',$4),($1,$2,'Doc general',null)`, [fx.ownerOrg, fx.job, A, B]);
   await sql(`insert into public.specifications (project_id, spec_name, spec_url, party_id) values ($1,'Spec Almo','x',$2),($1,'Spec Bolt','x',$3),($1,'Spec general','x',null)`, [fx.job, A, B]);
-  await sql(`insert into public.drawings (project_id, drawing_name, drawing_url) values ($1,'GA plan','x')`, [fx.job]);
+  await sql(`insert into public.drawings (project_id, scope, title) values ($1,'site','GA plan')`, [fx.job]);
   const lists = await sql(`insert into public.snag_lists (project_id, title, party_id) values ($1,'List Almo',$2),($1,'List Bolt',$3),($1,'List mixed',null) returning id, title`, [fx.job, A, B]);
   fx.lists = Object.fromEntries(lists.rows.map((r) => [r.title, r.id]));
   await sql(`insert into public.snag_items (project_id, snag_list_id, description, party_id) values ($1,$2,'Almo in mixed',$3),($1,$2,'Nobody yet',null),($1,$2,'Nobody yet 2',null)`, [fx.job, fx.lists["List mixed"], A]);
@@ -84,9 +84,9 @@ test("owner side and main contractor see everything; drawings visible to all and
   }
   for (const u of [SUBA, SUBB]) {
     await as(u, async (c) => {
-      assert.deepEqual(await col(c, "select drawing_name from public.drawings"), ["GA plan"]);
-      assert.equal((await c.query("update public.drawings set drawing_name='x'")).rowCount, 0);
-      await assert.rejects(c.query("insert into public.drawings (project_id, drawing_name, drawing_url) values ($1,'n','x')", [fx.job]), (e) => isRlsError(e));
+      assert.deepEqual(await col(c, "select title from public.drawings"), ["GA plan"]);
+      assert.equal((await c.query("update public.drawings set title='x'")).rowCount, 0);
+      await assert.rejects(c.query("insert into public.drawings (project_id, scope, title) values ($1,'site','n')", [fx.job]), (e) => isRlsError(e));
     });
   }
 });

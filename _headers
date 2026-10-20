@@ -27,9 +27,17 @@
 # (an attacker-injected <script src="..."> from an unlisted origin is
 # still blocked, and connect-src/img-src still block exfiltration to an
 # unlisted origin even from an inline-script context).
+#
+# worker-src 'self': the drawing-pins feature's PDF rasterisation
+# (js/vendor/pdfjs/) runs pdf.js's worker from a same-origin vendored
+# file, never a CDN — verified end-to-end (a real multi-page PDF
+# genuinely rendering to canvas, not just assumed from docs) under this
+# exact CSP before shipping. Without worker-src, the browser falls back
+# to script-src for workers too, which 'self' already satisfies here —
+# this is added explicitly rather than relied on implicitly.
 /tracker/*
   ! Content-Security-Policy
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://esm.sh; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://*.supabase.co; connect-src 'self' https://*.supabase.co https://api.postcodes.io https://api.open-meteo.com https://esm.sh; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://esm.sh; worker-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://*.supabase.co; connect-src 'self' https://*.supabase.co https://api.postcodes.io https://api.open-meteo.com https://esm.sh; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
 
 # This app has no build step, so js/app.js, css/app.css etc. keep the
 # exact same filename across every deploy — nothing tells a browser a

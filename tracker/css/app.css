@@ -386,6 +386,12 @@ tr:hover td { background: var(--off); }
 }
 .pin:hover { transform: translate(-50%, -50%) scale(1.2); }
 .pin.temp { background: var(--amber); animation: pin-pulse 1s ease-in-out infinite; }
+/* Drawing pins (v74): colour by owner type so a mixed drawing (snags,
+   RFIs, Quality Gates and queries pinned together) stays readable at a
+   glance — .pin's own red stays the default/snag colour, unchanged. */
+.pin-rfi { background: var(--blue, #2f6fb0); }
+.pin-gate { background: var(--green, #2f8f4f); }
+.pin-query { background: var(--ink-soft, #6b7280); }
 @keyframes pin-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
 
 /* ─── MODAL ──────────────────────────────────────── */

@@ -17,17 +17,31 @@
   <div class="page-head">
     <div>
       <div class="page-title">Drawings &amp; Layouts</div>
-      <div class="page-sub" id="projectSub">Site layout for reference, plus plot floor plans for pinpointing snags.</div>
+      <div class="page-sub" id="projectSub">Site layout, plus plot and block floor plans per storey, for pinning snags, RFIs, Quality Gates and queries.</div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-amber" id="uploadBtn">+ Upload Drawing</button>
     </div>
   </div>
 
+  <div id="errorBox" class="error-box"></div>
+
   <div class="card" style="margin-bottom:1.5rem;">
     <h3 class="card-heading" style="margin-bottom:0.8rem;">Site Layout</h3>
-    <div id="errorBox" class="error-box"></div>
-    <div id="siteLayoutWrap"></div>
-    <input type="file" id="siteLayoutInput" accept="image/*" style="margin-top:0.8rem;">
-    <p class="hint">The overall site master plan — for reference. Individual plot floor plans below support pinning snags.</p>
+    <div id="siteWrap"></div>
   </div>
+
+  <div class="page-head" style="margin-bottom:1.2rem;">
+    <div class="page-sub display-font" style="font-size:1.1rem; font-weight:700; color:var(--ink);">Plot Floor Plans</div>
+  </div>
+  <div class="grid" id="plotGrid" style="margin-bottom:2rem;"></div>
+  <div id="plotEmptyState" class="empty" style="display:none;"><p>No plot floor plans uploaded yet.</p></div>
+
+  <div class="page-head" style="margin-bottom:1.2rem;">
+    <div class="page-sub display-font" style="font-size:1.1rem; font-weight:700; color:var(--ink);">Block Floor Plans</div>
+  </div>
+  <div class="grid" id="blockGrid" style="margin-bottom:2rem;"></div>
+  <div id="blockEmptyState" class="empty" style="display:none;"><p>No block floor plans uploaded yet.</p></div>
 
   <div class="page-head" style="margin-bottom:1.2rem;">
     <div class="page-sub display-font" style="font-size:1.1rem; font-weight:700; color:var(--ink);">Specification</div>
@@ -56,102 +70,99 @@
       </table>
     </div>
   </div>
+</div>
 
-  <div class="page-head" style="margin-bottom:1.2rem;">
-    <div class="page-sub display-font" style="font-size:1.1rem; font-weight:700; color:var(--ink);">Plot Floor Plans</div>
-    <div class="btn-row">
-      <button class="btn btn-outline" id="bulkUploadBtn">📁 Bulk Upload</button>
-      <button class="btn btn-amber" id="newDrawingBtn">+ Upload Drawing</button>
+<!-- Upload + assign modal -->
+<div class="modal-backdrop no-print" id="uploadModal" style="display:none;">
+  <div class="modal-box">
+    <h3 class="card-heading" style="margin-bottom:0.8rem;">Upload Drawing</h3>
+    <div id="uploadErrorBox" class="error-box"></div>
+    <div class="field"><label for="uploadFile">File (PDF or image) *</label><input type="file" id="uploadFile" accept="image/*,application/pdf"></div>
+    <p class="hint" id="uploadStatus"></p>
+    <p class="hint" id="multiPageHint" style="display:none;">This file has more than one page — assign each page to where it belongs below. One upload can feed several drawings.</p>
+    <div id="pageAssignList"></div>
+    <div class="btn-row" style="margin-top:0.8rem;">
+      <button type="button" class="btn btn-outline" id="cancelUploadBtn">Close</button>
     </div>
-  </div>
-
-  <div class="card" id="newDrawingCard" style="display:none;">
-    <div id="drawingErrorBox" class="error-box"></div>
-    <form id="drawingForm">
-      <div class="form-grid">
-        <div class="field"><label for="drawingName">Drawing name *</label><input type="text" id="drawingName" required placeholder="e.g. Plot 4 Ground Floor Layout"></div>
-        <div class="field"><label for="plotNumber">Plot number (optional)</label><input type="text" id="plotNumber" placeholder="e.g. Plot 4" list="plotSuggestions"></div>
-      </div>
-      <div class="field"><label for="drawingFile">File *</label><input type="file" id="drawingFile" accept="image/*,application/pdf" required></div>
-      <p class="hint" id="pdfHint" style="display:none;">PDFs are stored as-is (they can't be compressed or pinned in the browser) — a PNG, JPG, or exported image will be resized and compressed automatically, and supports pinning.</p>
-      <div class="btn-row">
-        <button type="submit" class="btn btn-amber" id="saveDrawingBtn">Upload</button>
-        <button type="button" class="btn btn-outline" id="cancelDrawingBtn">Cancel</button>
-      </div>
-    </form>
-  </div>
-
-  <div class="card" id="bulkUploadCard" style="display:none;">
-    <div id="bulkErrorBox" class="error-box"></div>
-    <div class="field">
-      <label for="bulkDrawingInput">Select all the drawings to upload</label>
-      <input type="file" id="bulkDrawingInput" accept="image/*,application/pdf" multiple>
-      <p class="hint">Each file's plot is guessed from its filename (e.g. "Plot 5 - Ground Floor.pdf" → Plot 5) — check the guesses below and fix any before uploading. A blank plot is fine too; you can set it later.</p>
-    </div>
-    <div id="bulkReviewWrap" style="display:none;">
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>File</th><th>Drawing name</th><th>Plot</th><th></th></tr></thead>
-          <tbody id="bulkReviewRows"></tbody>
-        </table>
-      </div>
-      <p class="hint" id="bulkStatus"></p>
-      <div class="btn-row" style="margin-top:1rem;">
-        <button type="button" class="btn btn-amber" id="bulkUploadAllBtn">Upload All</button>
-        <button type="button" class="btn btn-outline" id="bulkCancelBtn">Cancel</button>
-      </div>
-    </div>
-  </div>
-
-  <datalist id="plotSuggestions"></datalist>
-
-  <div class="grid" id="drawingsGrid"></div>
-  <div id="emptyState" class="empty" style="display:none;">
-    <p>No drawings uploaded yet. Upload a floor plan to start pinpointing snags.</p>
   </div>
 </div>
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, uploadDrawing, normalisePlotToken, formatDate } from "./js/app.js";
+  import {
+    requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, uploadDrawing, formatDate, todayISO,
+    getProjectDrawings, uploadAndRasterizeDrawing, assignDrawingPage, DRAWING_STOREYS,
+  } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
   if (!projectId) window.location.href = "dashboard.html";
 
   const errorBox = document.getElementById("errorBox");
-  const drawingErrorBox = document.getElementById("drawingErrorBox");
   let project = null;
-  let plotNumbers = [];
+  let plots = [];
+  let blocks = [];
+  let drawings = [];
 
-  // ─── Site layout ────────────────────────────────────────────────
-  function renderSiteLayout() {
-    const wrap = document.getElementById("siteLayoutWrap");
-    wrap.innerHTML = project.site_layout_url
-      ? `<img src="${project.site_layout_url}" style="max-width:100%; max-height:420px; border-radius:6px; border:1px solid var(--rule);">`
+  function drawingFor(scope, plotId, blockId, storey) {
+    return drawings.find((d) => d.scope === scope &&
+      (scope === "plot_storey" ? d.plot_id === plotId && d.storey === storey :
+       scope === "block_storey" ? d.block_id === blockId && d.storey === storey : true));
+  }
+
+  function tile(d, label) {
+    if (!d || !d.current_page) {
+      return `<div class="tile" style="opacity:0.6;"><div style="height:100px; display:flex; align-items:center; justify-content:center; background:var(--off); border-radius:6px; color:var(--ink-soft); font-size:0.85rem;">Not uploaded</div><div class="tile-name">${escapeHtml(label)}</div></div>`;
+    }
+    return `<a class="tile" href="drawing-view.html?id=${d.id}" style="text-decoration:none; color:inherit; display:block;">
+      <img src="${d.current_page.image_url}" style="width:100%; height:100px; object-fit:cover; border-radius:6px;">
+      <div class="tile-name">${escapeHtml(label)}</div>
+    </a>`;
+  }
+
+  function renderSite() {
+    const d = drawingFor("site");
+    document.getElementById("siteWrap").innerHTML = d && d.current_page
+      ? `<a href="drawing-view.html?id=${d.id}"><img src="${d.current_page.image_url}" style="max-width:100%; max-height:420px; border-radius:6px; border:1px solid var(--rule);"></a>`
       : `<p style="color:var(--ink-soft); font-size:0.9rem;">No site layout uploaded yet.</p>`;
   }
 
-  document.getElementById("siteLayoutInput").addEventListener("change", async () => {
-    const file = document.getElementById("siteLayoutInput").files[0];
-    if (!file) return;
-    clearError(errorBox);
-    document.getElementById("siteLayoutInput").disabled = true;
-    try {
-      const url = await uploadDrawing(file, `${projectId}/site-layout`);
-      const { error } = await supabase.from("projects").update({ site_layout_url: url }).eq("id", projectId);
-      if (error) throw error;
-      project.site_layout_url = url;
-      renderSiteLayout();
-    } catch (err) {
-      showError(errorBox, err);
-    } finally {
-      document.getElementById("siteLayoutInput").value = "";
-      document.getElementById("siteLayoutInput").disabled = false;
-    }
-  });
+  function renderPlots() {
+    const grid = document.getElementById("plotGrid");
+    if (!plots.length) { grid.innerHTML = ""; document.getElementById("plotEmptyState").style.display = "block"; return; }
+    document.getElementById("plotEmptyState").style.display = "none";
+    grid.innerHTML = plots.map((p) => `
+      <div class="card">
+        <strong>${escapeHtml(p.plot_number)}</strong>
+        <div class="grid" style="grid-template-columns:repeat(3, 1fr); gap:0.5rem; margin-top:0.6rem;">
+          ${DRAWING_STOREYS.map((s) => tile(drawingFor("plot_storey", p.id, null, s.value), s.value)).join("")}
+        </div>
+      </div>
+    `).join("");
+  }
 
-  // ─── Specification ──────────────────────────────────────────────
+  function renderBlocks() {
+    const grid = document.getElementById("blockGrid");
+    if (!blocks.length) { grid.innerHTML = ""; document.getElementById("blockEmptyState").style.display = "block"; return; }
+    document.getElementById("blockEmptyState").style.display = "none";
+    grid.innerHTML = blocks.map((b) => `
+      <div class="card">
+        <strong>${escapeHtml(b.block_name)}</strong>
+        <div class="grid" style="grid-template-columns:repeat(3, 1fr); gap:0.5rem; margin-top:0.6rem;">
+          ${DRAWING_STOREYS.map((s) => tile(drawingFor("block_storey", null, b.id, s.value), s.value)).join("")}
+        </div>
+      </div>
+    `).join("");
+  }
+
+  async function loadDrawings() {
+    drawings = await getProjectDrawings(projectId);
+    renderSite();
+    renderPlots();
+    renderBlocks();
+  }
+
+  // ─── Specification (unchanged from before this feature) ──────────
   const specErrorBox = document.getElementById("specErrorBox");
   const newSpecCard = document.getElementById("newSpecCard");
   document.getElementById("newSpecBtn").addEventListener("click", () => newSpecCard.style.display = "block");
@@ -159,7 +170,6 @@
     newSpecCard.style.display = "none";
     document.getElementById("specForm").reset();
   });
-
   document.getElementById("specForm").addEventListener("submit", async (e) => {
     e.preventDefault();
     clearError(specErrorBox);
@@ -170,10 +180,7 @@
       const url = await uploadDrawing(file, `${projectId}/specifications`);
       const { data: { user } } = await supabase.auth.getUser();
       const { error } = await supabase.from("specifications").insert({
-        project_id: projectId,
-        spec_name: document.getElementById("specName").value.trim(),
-        spec_url: url,
-        created_by: user.id,
+        project_id: projectId, spec_name: document.getElementById("specName").value.trim(), spec_url: url, created_by: user.id,
       });
       if (error) throw error;
       document.getElementById("cancelSpecBtn").click();
@@ -184,21 +191,14 @@
       document.getElementById("saveSpecBtn").disabled = false;
     }
   });
-
   async function deleteSpecification(id, name) {
     if (!confirm(`Delete "${name}"?`)) return;
     await supabase.from("specifications").delete().eq("id", id);
     loadSpecifications();
   }
   window.deleteSpecification = deleteSpecification;
-
   async function loadSpecifications() {
-    const { data: specs, error } = await supabase
-      .from("specifications")
-      .select("*")
-      .eq("project_id", projectId)
-      .order("created_at", { ascending: false });
-
+    const { data: specs, error } = await supabase.from("specifications").select("*").eq("project_id", projectId).order("created_at", { ascending: false });
     const rows = document.getElementById("specRows");
     if (error || !specs || !specs.length) {
       rows.innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--ink-soft);">No specification documents uploaded yet.</td></tr>`;
@@ -213,183 +213,75 @@
     `).join("");
   }
 
-  // ─── Plot floor plans ───────────────────────────────────────────
-  const newDrawingCard = document.getElementById("newDrawingCard");
-  document.getElementById("newDrawingBtn").addEventListener("click", () => newDrawingCard.style.display = "block");
-  document.getElementById("cancelDrawingBtn").addEventListener("click", () => {
-    newDrawingCard.style.display = "none";
-    document.getElementById("drawingForm").reset();
-    document.getElementById("pdfHint").style.display = "none";
+  // ─── Upload + assign ───────────────────────────────────────────────
+  document.getElementById("uploadBtn").addEventListener("click", () => {
+    document.getElementById("uploadModal").style.display = "flex";
+  });
+  document.getElementById("cancelUploadBtn").addEventListener("click", () => {
+    document.getElementById("uploadModal").style.display = "none";
+    document.getElementById("uploadFile").value = "";
+    document.getElementById("pageAssignList").innerHTML = "";
+    document.getElementById("uploadStatus").textContent = "";
+    loadDrawings();
   });
 
-  document.getElementById("drawingFile").addEventListener("change", () => {
-    const file = document.getElementById("drawingFile").files[0];
-    document.getElementById("pdfHint").style.display = (file && file.type === "application/pdf") ? "block" : "none";
-  });
+  function destinationSelectHtml(i) {
+    const plotOptions = plots.map((p) => DRAWING_STOREYS.map((s) => `<option value="plot|${p.id}||${s.value}">Plot ${escapeHtml(p.plot_number)} – ${s.label}</option>`).join("")).join("");
+    const blockOptions = blocks.map((b) => DRAWING_STOREYS.map((s) => `<option value="block||${b.id}|${s.value}">Block ${escapeHtml(b.block_name)} – ${s.label}</option>`).join("")).join("");
+    return `<select data-dest="${i}">
+      <option value="site|||">Site drawing</option>
+      ${plotOptions}
+      ${blockOptions}
+    </select>`;
+  }
 
-  document.getElementById("drawingForm").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    clearError(drawingErrorBox);
-    const file = document.getElementById("drawingFile").files[0];
+  document.getElementById("uploadFile").addEventListener("change", async () => {
+    const file = document.getElementById("uploadFile").files[0];
     if (!file) return;
-    document.getElementById("saveDrawingBtn").disabled = true;
+    clearError(document.getElementById("uploadErrorBox"));
+    const list = document.getElementById("pageAssignList");
+    const status = document.getElementById("uploadStatus");
+    status.textContent = "Processing…";
+    list.innerHTML = "";
     try {
-      const url = await uploadDrawing(file, `${projectId}/drawings`);
-      const { data: { user } } = await supabase.auth.getUser();
-      const { error } = await supabase.from("drawings").insert({
-        project_id: projectId,
-        drawing_name: document.getElementById("drawingName").value.trim(),
-        plot_number: document.getElementById("plotNumber").value.trim() || null,
-        drawing_url: url,
-        created_by: user.id,
-      });
-      if (error) throw error;
-      document.getElementById("cancelDrawingBtn").click();
-      loadDrawings();
+      const { pages } = await uploadAndRasterizeDrawing(projectId, file);
+      status.textContent = "";
+      document.getElementById("multiPageHint").style.display = pages.length > 1 ? "block" : "none";
+      list.innerHTML = pages.map((p, i) => `
+        <div class="card" style="margin-bottom:0.6rem;">
+          <div style="display:flex; gap:0.8rem; align-items:center;">
+            <img src="${p.previewUrl}" style="width:80px; height:80px; object-fit:cover; border-radius:6px; flex-shrink:0;">
+            <div style="flex:1;">
+              <div class="hint">Page ${p.pageNumber}</div>
+              ${destinationSelectHtml(i)}
+            </div>
+            <button type="button" class="btn btn-amber btn-sm" data-assign="${i}" data-page-id="${p.pageId}">Assign</button>
+          </div>
+        </div>
+      `).join("");
+      list.querySelectorAll("[data-assign]").forEach((btn) => btn.addEventListener("click", async () => {
+        const sel = list.querySelector(`[data-dest="${btn.dataset.assign}"]`);
+        const [scope, plotId, blockId, storey] = sel.value.split("|");
+        const destScope = scope === "site" ? "site" : scope === "plot" ? "plot_storey" : "block_storey";
+        const title = destScope === "site" ? "Site Layout"
+          : destScope === "plot_storey" ? `${(plots.find((p) => p.id === plotId) || {}).plot_number} – ${storey}`
+          : `${(blocks.find((b) => b.id === blockId) || {}).block_name} – ${storey}`;
+        btn.disabled = true;
+        try {
+          await assignDrawingPage(projectId, btn.dataset.pageId, {
+            scope: destScope, plotId: plotId || null, blockId: blockId || null, storey: storey || null, title,
+          });
+          btn.textContent = "Assigned ✓";
+        } catch (err) {
+          btn.disabled = false;
+          showError(document.getElementById("uploadErrorBox"), err);
+        }
+      }));
     } catch (err) {
-      showError(drawingErrorBox, err);
-    } finally {
-      document.getElementById("saveDrawingBtn").disabled = false;
+      status.textContent = "";
+      showError(document.getElementById("uploadErrorBox"), err);
     }
   });
-
-  // ─── Bulk upload ────────────────────────────────────────────────
-  // Guesses a file's plot from its own name, the same digit-based way
-  // plot tags are matched everywhere else in this app (so "Plot 5 -
-  // Ground Floor.pdf" and "P5-GF.pdf" both match a real plot named
-  // "Plot 5") — never trusted blindly, just a pre-fill the reviewer can
-  // fix per-file before anything actually uploads.
-  function guessPlotFromFilename(filename, plotList) {
-    const base = filename.replace(/\.[^.]+$/, "");
-    const token = normalisePlotToken(base);
-    if (!token) return null;
-    return plotList.find((pn) => normalisePlotToken(pn) === token) || null;
-  }
-
-  let bulkEntries = [];
-
-  function renderBulkReview() {
-    const wrap = document.getElementById("bulkReviewWrap");
-    if (!bulkEntries.length) { wrap.style.display = "none"; return; }
-    wrap.style.display = "block";
-    document.getElementById("bulkReviewRows").innerHTML = bulkEntries.map((entry, i) => `
-      <tr>
-        <td>${escapeHtml(entry.file.name)}</td>
-        <td><input type="text" class="bulk-name" data-i="${i}" value="${escapeHtml(entry.drawingName)}"></td>
-        <td><input type="text" class="bulk-plot" data-i="${i}" value="${escapeHtml(entry.plotNumber || "")}" list="plotSuggestions" placeholder="optional"></td>
-        <td><button type="button" class="btn btn-outline btn-sm" data-remove="${i}">Remove</button></td>
-      </tr>
-    `).join("");
-
-    document.querySelectorAll(".bulk-name").forEach((el) => el.addEventListener("input", () => {
-      bulkEntries[Number(el.dataset.i)].drawingName = el.value;
-    }));
-    document.querySelectorAll(".bulk-plot").forEach((el) => el.addEventListener("input", () => {
-      bulkEntries[Number(el.dataset.i)].plotNumber = el.value.trim() || null;
-    }));
-    document.querySelectorAll("[data-remove]").forEach((btn) => btn.addEventListener("click", () => {
-      bulkEntries.splice(Number(btn.dataset.remove), 1);
-      renderBulkReview();
-    }));
-  }
-
-  document.getElementById("bulkUploadBtn").addEventListener("click", () => {
-    document.getElementById("bulkUploadCard").style.display = "block";
-  });
-
-  function resetBulkUpload() {
-    document.getElementById("bulkUploadCard").style.display = "none";
-    document.getElementById("bulkDrawingInput").value = "";
-    document.getElementById("bulkStatus").textContent = "";
-    bulkEntries = [];
-    renderBulkReview();
-  }
-  document.getElementById("bulkCancelBtn").addEventListener("click", resetBulkUpload);
-
-  document.getElementById("bulkDrawingInput").addEventListener("change", () => {
-    const files = Array.from(document.getElementById("bulkDrawingInput").files);
-    bulkEntries = files.map((file) => ({
-      file,
-      drawingName: file.name.replace(/\.[^.]+$/, ""),
-      plotNumber: guessPlotFromFilename(file.name, plotNumbers),
-    }));
-    renderBulkReview();
-  });
-
-  document.getElementById("bulkUploadAllBtn").addEventListener("click", async () => {
-    clearError(document.getElementById("bulkErrorBox"));
-    const btn = document.getElementById("bulkUploadAllBtn");
-    btn.disabled = true;
-    const statusEl = document.getElementById("bulkStatus");
-    const { data: { user } } = await supabase.auth.getUser();
-    let succeeded = 0;
-    const failed = [];
-    for (let i = 0; i < bulkEntries.length; i++) {
-      const entry = bulkEntries[i];
-      statusEl.textContent = `Uploading ${i + 1} of ${bulkEntries.length}…`;
-      try {
-        const url = await uploadDrawing(entry.file, `${projectId}/drawings`);
-        const { error } = await supabase.from("drawings").insert({
-          project_id: projectId,
-          drawing_name: entry.drawingName.trim() || entry.file.name,
-          plot_number: entry.plotNumber,
-          drawing_url: url,
-          created_by: user.id,
-        });
-        if (error) throw error;
-        succeeded++;
-      } catch (err) {
-        failed.push({ name: entry.file.name, message: err.message });
-      }
-    }
-    btn.disabled = false;
-    if (failed.length) {
-      showError(document.getElementById("bulkErrorBox"), { message: `${succeeded} of ${bulkEntries.length} uploaded. Failed: ${failed.map((f) => `${f.name} (${f.message})`).join("; ")}` });
-      bulkEntries = bulkEntries.filter((entry) => failed.some((f) => f.name === entry.file.name));
-      renderBulkReview();
-      statusEl.textContent = "";
-    } else {
-      resetBulkUpload();
-    }
-    loadDrawings();
-  });
-
-  async function deleteDrawing(id, name) {
-    if (!confirm(`Delete "${name}"? Any pinned snags on it will keep their record but lose their pin.`)) return;
-    await supabase.from("drawings").delete().eq("id", id);
-    loadDrawings();
-  }
-  window.deleteDrawing = deleteDrawing;
-
-  async function loadDrawings() {
-    const { data: drawings, error } = await supabase
-      .from("drawings")
-      .select("*")
-      .eq("project_id", projectId)
-      .order("created_at", { ascending: false });
-
-    const grid = document.getElementById("drawingsGrid");
-    if (error || !drawings || !drawings.length) {
-      grid.innerHTML = "";
-      document.getElementById("emptyState").style.display = "block";
-      return;
-    }
-    document.getElementById("emptyState").style.display = "none";
-
-    const isPdf = (d) => d.drawing_url.toLowerCase().endsWith(".pdf");
-    grid.innerHTML = drawings.map((d) => `
-      <div class="tile" style="cursor:default;">
-        <a href="${isPdf(d) ? d.drawing_url : `drawing-view.html?id=${d.id}`}" ${isPdf(d) ? 'target="_blank"' : ""} style="text-decoration:none; color:inherit; display:block;">
-          ${isPdf(d)
-            ? `<div style="height:120px; display:flex; align-items:center; justify-content:center; background:var(--off); border-radius:6px; font-size:2rem;">📄</div>`
-            : `<img src="${d.drawing_url}" style="width:100%; height:120px; object-fit:cover; border-radius:6px;">`}
-          <div class="tile-name" style="margin-top:0.6rem; font-size:1rem;">${escapeHtml(d.drawing_name)}</div>
-          <div class="tile-meta">${d.plot_number ? escapeHtml(d.plot_number) : "No plot set"}${isPdf(d) ? " · PDF (view only, no pinning)" : ""}</div>
-        </a>
-        <button class="btn btn-outline btn-sm" style="margin-top:0.6rem; width:100%;" onclick="deleteDrawing('${d.id}', '${escapeHtml(d.drawing_name).replace(/'/g, "\\'")}')">Delete</button>
-      </div>
-    `).join("");
-  }
 
   async function init() {
     const { data, error } = await supabase.from("projects").select("*").eq("id", projectId).single();
@@ -400,14 +292,17 @@
       { label: project.name, href: `project.html?id=${projectId}` },
       { label: "Drawings & Layouts" },
     ]);
-    document.getElementById("projectSub").textContent = `${project.name} — site layout for reference, plot floor plans for pinpointing snags.`;
-    renderSiteLayout();
-    loadSpecifications();
-    loadDrawings();
+    document.getElementById("projectSub").textContent = `${project.name} — site layout, plot/block floor plans per storey.`;
 
-    const { data: plots } = await supabase.from("plots").select("plot_number").eq("project_id", projectId);
-    plotNumbers = (plots || []).map((p) => p.plot_number);
-    document.getElementById("plotSuggestions").innerHTML = plotNumbers.map((p) => `<option value="${escapeHtml(p)}">`).join("");
+    const [{ data: plotRows }, { data: blockRows }] = await Promise.all([
+      supabase.from("plots").select("id, plot_number").eq("project_id", projectId),
+      supabase.from("blocks").select("id, block_name").eq("project_id", projectId),
+    ]);
+    plots = plotRows || [];
+    blocks = blockRows || [];
+
+    await loadDrawings();
+    loadSpecifications();
   }
 
   init();

@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="js/theme-init.js"></script>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Queries – The Site Office</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page">
+  <div class="page-head">
+    <div>
+      <div class="page-title">Queries</div>
+      <div class="page-sub" id="projectSub">Quick on-site questions — lighter than a formal RFI.</div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-amber" id="newQueryBtn">+ New Query</button>
+    </div>
+  </div>
+
+  <div id="errorBox" class="error-box"></div>
+
+  <div class="card" id="newQueryCard" style="display:none; margin-bottom:1.5rem;">
+    <form id="queryForm">
+      <div class="field"><label for="queryQuestion">Question *</label><textarea id="queryQuestion" rows="2" required placeholder="A quick on-site question"></textarea></div>
+      <div class="field"><label for="queryPlot">Plot (optional)</label><select id="queryPlot"><option value="">—</option></select></div>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-amber" id="saveQueryBtn">Raise Query</button>
+        <button type="button" class="btn btn-outline" id="cancelQueryBtn">Cancel</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Question</th><th>Plot</th><th>Status</th><th>Raised</th><th></th></tr></thead>
+      <tbody id="queryRows"></tbody>
+    </table>
+  </div>
+  <div id="emptyState" class="empty" style="display:none;"><p>No queries raised yet.</p></div>
+</div>
+
+<div class="modal-backdrop no-print" id="answerModal" style="display:none;">
+  <div class="modal-box">
+    <h3 class="card-heading" style="margin-bottom:0.8rem;">Answer Query</h3>
+    <div id="answerErrorBox" class="error-box"></div>
+    <div class="field"><label for="answerResponse">Response *</label><textarea id="answerResponse" rows="3" required></textarea></div>
+    <div class="btn-row">
+      <button type="button" class="btn btn-amber" id="saveAnswerBtn">Save Answer</button>
+      <button type="button" class="btn btn-outline" id="cancelAnswerBtn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import {
+    requireAuth, renderHeader, getParam, escapeHtml, showError, clearError, formatDate,
+    getProjectQueries, createQuery, answerQuery, closeQuery, QUERY_STATUS_LABEL, QUERY_STATUS_BADGE,
+  } from "./js/app.js";
+
+  await requireAuth();
+  const projectId = getParam("project");
+  if (!projectId) window.location.href = "dashboard.html";
+
+  const errorBox = document.getElementById("errorBox");
+  let plots = [];
+  let answeringId = null;
+
+  const newQueryCard = document.getElementById("newQueryCard");
+  document.getElementById("newQueryBtn").addEventListener("click", () => newQueryCard.style.display = "block");
+  document.getElementById("cancelQueryBtn").addEventListener("click", () => {
+    newQueryCard.style.display = "none";
+    document.getElementById("queryForm").reset();
+  });
+
+  document.getElementById("queryForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearError(errorBox);
+    document.getElementById("saveQueryBtn").disabled = true;
+    try {
+      await createQuery(projectId, document.getElementById("queryQuestion").value.trim(), {
+        plotId: document.getElementById("queryPlot").value || null,
+      });
+      document.getElementById("cancelQueryBtn").click();
+      loadQueries();
+    } catch (err) {
+      showError(errorBox, err);
+    } finally {
+      document.getElementById("saveQueryBtn").disabled = false;
+    }
+  });
+
+  function openAnswer(id) {
+    answeringId = id;
+    document.getElementById("answerResponse").value = "";
+    clearError(document.getElementById("answerErrorBox"));
+    document.getElementById("answerModal").style.display = "flex";
+  }
+  window.openAnswer = openAnswer;
+  document.getElementById("cancelAnswerBtn").addEventListener("click", () => document.getElementById("answerModal").style.display = "none");
+  document.getElementById("saveAnswerBtn").addEventListener("click", async () => {
+    const response = document.getElementById("answerResponse").value.trim();
+    if (!response) { showError(document.getElementById("answerErrorBox"), { message: "A response is required." }); return; }
+    try {
+      await answerQuery(answeringId, response);
+      document.getElementById("answerModal").style.display = "none";
+      loadQueries();
+    } catch (err) {
+      showError(document.getElementById("answerErrorBox"), err);
+    }
+  });
+
+  async function closeOne(id) {
+    if (!confirm("Close this query?")) return;
+    await closeQuery(id);
+    loadQueries();
+  }
+  window.closeOne = closeOne;
+
+  async function loadQueries() {
+    const queries = await getProjectQueries(projectId);
+    const rows = document.getElementById("queryRows");
+    if (!queries.length) {
+      rows.innerHTML = "";
+      document.getElementById("emptyState").style.display = "block";
+      return;
+    }
+    document.getElementById("emptyState").style.display = "none";
+    const plotName = (id) => (plots.find((p) => p.id === id) || {}).plot_number || "";
+    rows.innerHTML = queries.map((q) => `
+      <tr>
+        <td>${escapeHtml(q.question)}${q.response ? `<div class="hint" style="margin-top:0.3rem;">${escapeHtml(q.response)}</div>` : ""}</td>
+        <td>${escapeHtml(plotName(q.plot_id))}</td>
+        <td><span class="badge ${QUERY_STATUS_BADGE[q.status]}">${QUERY_STATUS_LABEL[q.status]}</span></td>
+        <td>${formatDate(q.raised_at?.slice(0, 10))}</td>
+        <td class="btn-row">
+          ${q.status === "open" ? `<button class="btn btn-outline btn-sm" onclick="openAnswer('${q.id}')">Answer</button>` : ""}
+          ${q.status !== "closed" ? `<button class="btn btn-outline btn-sm" onclick="closeOne('${q.id}')">Close</button>` : ""}
+        </td>
+      </tr>
+    `).join("");
+  }
+
+  async function init() {
+    const { data: project } = await supabase.from("projects").select("*").eq("id", projectId).single();
+    renderHeader([
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project?.name || "", href: `project.html?id=${projectId}` },
+      { label: "Queries" },
+    ]);
+    document.getElementById("projectSub").textContent = `${project?.name || ""} — quick on-site questions, lighter than a formal RFI.`;
+
+    const { data: plotRows } = await supabase.from("plots").select("id, plot_number").eq("project_id", projectId);
+    plots = plotRows || [];
+    document.getElementById("queryPlot").innerHTML = `<option value="">—</option>` + plots.map((p) => `<option value="${p.id}">${escapeHtml(p.plot_number)}</option>`).join("");
+
+    loadQueries();
+  }
+
+  init();
+</script>
+</body>
+</html>

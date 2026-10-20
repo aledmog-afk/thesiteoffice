@@ -49,7 +49,7 @@ before(async () => {
   });
   // OSTAFF is an approved member of Owner Co (as via a membership request).
   await sql("insert into public.organisation_members (org_id, user_id, role) values ($1, $2, 'member')", [fx.ownerOrg, OSTAFF]);
-  await sql(`insert into public.drawings (project_id, drawing_name, drawing_url) values ($1, 'GA plan', 'x/ga.pdf')`, [fx.job1]);
+  await sql(`insert into public.drawings (project_id, scope, title) values ($1, 'site', 'GA plan')`, [fx.job1]);
   await sql(`insert into public.commercial_items (project_id, title, type) values ($1, 'VO1', 'instruction')`, [fx.job1]);
   await sql(`insert into public.monthly_reports (project_id, month) values ($1, '2026-10-01')`, [fx.job1]);
   await sql(`insert into public.weekly_reports (project_id, week_starting, week_ending) values ($1, '2026-10-05', '2026-10-11')`, [fx.job1]);
@@ -272,8 +272,8 @@ test("cross-job: a party on Job 1 sees nothing of Job 2", async () => {
 test("drawings: invited companies can view but not change them", async () => {
   await as(SUBB, async (c) => {
     assert.equal((await c.query("select 1 from public.drawings where project_id = $1", [fx.job1])).rowCount, 1);
-    assert.equal((await c.query("update public.drawings set drawing_name = 'x' where project_id = $1", [fx.job1])).rowCount, 0);
-    await assert.rejects(c.query("insert into public.drawings (project_id, drawing_name, drawing_url) values ($1, 'n', 'u')", [fx.job1]), denied);
+    assert.equal((await c.query("update public.drawings set title = 'x' where project_id = $1", [fx.job1])).rowCount, 0);
+    await assert.rejects(c.query("insert into public.drawings (project_id, scope, title) values ($1, 'site', 'n')", [fx.job1]), denied);
   });
 });
 
