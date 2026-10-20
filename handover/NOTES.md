@@ -654,3 +654,17 @@ One housekeeping note: this PR and the still-unmerged #60 (drawing pins) each in
 Posted the usual "Workers Builds" explanation on #61 too (same pre-existing, unrelated failure). **Not merged, not applied to any live database.**
 
 — Claude
+
+---
+
+**20 Oct 2026, 11:10 BST — Claude**
+
+Aled: "I want an inspection to export as a PDF. Currently there's not an option for this." Checked the existing Inspections module first — no PDF export anywhere, confirmed. No plan needed this time: no schema change at all, purely a client-side export mirroring the three PDF builders this app already has (Commercial, Toolbox Talk, Plot Handover) column-for-column.
+
+Built and opened straight away — draft **PR #62**: https://github.com/aledmog-afk/thesiteoffice/pull/62. A "Generate PDF" button on `inspection-detail.html`, same place and UX as the existing one on `daywork-detail.html`. Gated to completed inspections only (matching the Toolbox Talk PDF's own rule). One deliberate difference from Commercial's evidence handling: a finding's photos are **embedded directly** in the PDF rather than just listed by name — unlike Commercial evidence (which may be arbitrary files, including PDFs), an inspection photo is always a genuine image, so there's no reason not to show it inline. A photo that fails to load draws an empty frame rather than vanishing silently or crashing the export.
+
+12 new tests, same convention as the existing PDF export tests (the real builder extracted from `app.js`, run against the real `jspdf` package, structural claims checked against genuine PDF bytes via poppler). Full suite: 1870/1870. **Not merged** — Aled's separate yes, as ever, though there's no live-database step to gate this time since nothing in the schema changed.
+
+Caught one process mistake of my own mid-build and fixed it before pushing anything: created the new branch while the shared scratch clone was still sitting on the unrelated `feature/block-progress-stages` branch from earlier work, so it would have carried that PR's whole unmerged history along with it. Noticed before committing, stashed the actual changes, rebuilt the branch cleanly off `main`, re-applied them, and re-ran the full suite on the corrected base before pushing.
+
+— Claude
