@@ -16717,3 +16717,53 @@ commit;
 
 -- End of the v75 transaction. Future sections go below this line,
 -- outside the block (or in their own begin;/commit;).
+
+-- ─── v76 ADDITIONS: Inspection weather, labour, plant, result ───────
+-- Aled flagged the inspection PDF export as "not looking good" (fixed
+-- separately), then asked for more info on the inspection itself:
+-- weather on the day, and labour levels — findings were already
+-- carrying typed-out text like "Weather - Dry" because there was
+-- nowhere structured to put it. Five new plain columns on inspections,
+-- all nullable/empty-default — no existing row needs a value, no other
+-- live figure is computed from any of these, so there is nothing for a
+-- go-live hard-acceptance check to protect here (unlike v69/v75's own
+-- progress-percentage carry-over).
+--
+-- weather_conditions: reuses WEATHER_CONDITIONS verbatim (the same
+-- Dry / Light Rain / Heavy Rain / Snow / Ice vocabulary weekly reports
+-- already use) and the same auto-fill mechanism (the project's own
+-- geocoded latitude/longitude, already stored on projects from the
+-- site details page, fed through fetchWeatherConditions() against the
+-- inspection's single date) — no new integration, same helper
+-- functions weekly-report-form.html already calls.
+--
+-- labour_records / plant_records: a plain jsonb array each, matching
+-- weekly_reports.labour_records' own established shape and the
+-- "a new nullable dual-purpose column is avoided; here a new sibling
+-- array needs no dual-purpose question at all since nothing existing
+-- used this table's rows for labour/plant before" convention. labour
+-- rows reuse the exact RESOURCE_ADEQUACY ("Adequate" / "Low / Risk to
+-- Programme") vocabulary already live elsewhere — Aled's own "option
+-- to select labour levels" ask, not invented here. plant_records is a
+-- lighter sibling (item / quantity / location / notes) with no select
+-- vocabulary of its own, since nothing in the existing app establishes
+-- one for plant/equipment status.
+--
+-- accompanied_by: plain free text, mirrors conducted_by's own shape.
+--
+-- overall_result: Satisfactory / Satisfactory with observations /
+-- Unsatisfactory — a top-line verdict for the inspection as a whole,
+-- separate from individual findings' own status. Checked at the
+-- database level, same as inspection_type/status already are on this
+-- table (a plain top-level categorical column, unlike weather, which
+-- stays unchecked at the DB level to match weekly_reports.weather_days'
+-- own precedent — its vocabulary lives in the JS WEATHER_CONDITIONS
+-- array only).
+alter table public.inspections add column if not exists weather_conditions text;
+alter table public.inspections add column if not exists labour_records jsonb not null default '[]'::jsonb;
+alter table public.inspections add column if not exists plant_records jsonb not null default '[]'::jsonb;
+alter table public.inspections add column if not exists accompanied_by text;
+alter table public.inspections add column if not exists overall_result text;
+alter table public.inspections drop constraint if exists inspections_overall_result_check;
+alter table public.inspections add constraint inspections_overall_result_check
+  check (overall_result is null or overall_result in ('satisfactory', 'satisfactory_with_observations', 'unsatisfactory'));

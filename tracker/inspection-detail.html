@@ -28,6 +28,7 @@
       <div class="page-sub" id="projectSub"></div>
     </div>
     <div class="btn-row">
+      <span class="badge" id="overallResultBadge" style="display:none;"></span>
       <span class="badge" id="statusBadge"></span>
       <button class="btn btn-outline btn-sm" id="generatePdfBtn" style="display:none;">Generate PDF</button>
       <button class="btn btn-danger btn-sm" id="deleteBtn">Delete Inspection</button>
@@ -55,13 +56,39 @@
           <select id="status"></select>
         </div>
       </div>
+      <div class="form-grid">
+        <div class="field">
+          <label for="weatherConditions">Weather</label>
+          <div class="btn-row" style="align-items:center;">
+            <select id="weatherConditions" style="flex:1 1 auto;"><option value="">Not recorded</option></select>
+            <button type="button" class="btn btn-outline btn-sm" id="autoFillWeatherBtn">Auto-fill</button>
+          </div>
+        </div>
+        <div class="field">
+          <label for="overallResult">Overall Result</label>
+          <select id="overallResult"><option value="">Not set</option></select>
+        </div>
+      </div>
       <div class="field"><label for="conductedBy">Inspector</label><input type="text" id="conductedBy"></div>
+      <div class="field"><label for="accompaniedBy">Accompanied By <span class="hint">(optional)</span></label><input type="text" id="accompaniedBy" placeholder="e.g. Site Manager, subcontractor rep"></div>
       <div class="field"><label for="description">Notes</label><textarea id="description" rows="2"></textarea></div>
       <div class="btn-row">
         <button type="submit" class="btn btn-amber btn-sm">Save Details</button>
       </div>
     </form>
   </div>
+
+  <div class="card" style="margin-bottom:2rem;">
+    <h3 class="card-heading">Labour on Site</h3>
+    <div id="labourItems"></div>
+  </div>
+
+  <div class="card" style="margin-bottom:2rem;">
+    <h3 class="card-heading">Plant &amp; Equipment on Site</h3>
+    <div id="plantItems"></div>
+  </div>
+
+  <datalist id="tradeSuggestions"></datalist>
 
   <div class="card">
     <div class="row-between row-wrap" style="margin-bottom:1rem;">
@@ -97,7 +124,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, getInspection, updateInspection, deleteInspection, getFindings, createFinding, updateFinding, resolveFinding, deleteFinding, createActionFromFinding, createSnagFromFinding, getFindingPhotos, addFindingPhoto, deleteFindingPhoto, comparePlotNumbers, INSPECTION_TYPES, INSPECTION_TYPE_LABEL, INSPECTION_STATUSES, INSPECTION_STATUS_LABEL, INSPECTION_STATUS_BADGE, FINDING_SEVERITIES, FINDING_SEVERITY_LABEL, FINDING_SEVERITY_BADGE, FINDING_STATUSES, FINDING_STATUS_LABEL, FINDING_STATUS_BADGE, isFindingOutstanding, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel, generateInspectionPdfBlob } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, getInspection, updateInspection, deleteInspection, getFindings, createFinding, updateFinding, resolveFinding, deleteFinding, createActionFromFinding, createSnagFromFinding, getFindingPhotos, addFindingPhoto, deleteFindingPhoto, comparePlotNumbers, INSPECTION_TYPES, INSPECTION_TYPE_LABEL, INSPECTION_STATUSES, INSPECTION_STATUS_LABEL, INSPECTION_STATUS_BADGE, INSPECTION_OVERALL_RESULTS, INSPECTION_OVERALL_RESULT_LABEL, INSPECTION_OVERALL_RESULT_BADGE, FINDING_SEVERITIES, FINDING_SEVERITY_LABEL, FINDING_SEVERITY_BADGE, FINDING_STATUSES, FINDING_STATUS_LABEL, FINDING_STATUS_BADGE, isFindingOutstanding, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel, generateInspectionPdfBlob, WEATHER_CONDITIONS, fetchWeatherConditions, mountTableEditor, RESOURCE_ADEQUACY, RESOURCE_ADEQUACY_BADGE, PLANT_RECORD_COLUMNS } from "./js/app.js";
 
   await requireAuth();
   const inspectionId = getParam("id");
@@ -105,6 +132,11 @@
 
   const errorBox = document.getElementById("errorBox");
   let inspection = null;
+  // Captured once at load, separately from `inspection` — updateInspection()'s
+  // own plain select() (no projects join) means `inspection.projects` would
+  // otherwise disappear the moment any field is saved, silently breaking
+  // weather auto-fill on the second edit of the page.
+  let siteProject = null;
   let findings = [];
   let photosByFinding = {};
   let actionsById = {};
@@ -115,12 +147,53 @@
   document.getElementById("inspectionType").innerHTML = INSPECTION_TYPES.map((t) => `<option value="${t}">${INSPECTION_TYPE_LABEL[t]}</option>`).join("");
   document.getElementById("status").innerHTML = INSPECTION_STATUSES.map((s) => `<option value="${s}">${INSPECTION_STATUS_LABEL[s]}</option>`).join("");
   document.getElementById("findingSeverity").innerHTML = FINDING_SEVERITIES.map((s) => `<option value="${s}" ${s === "medium" ? "selected" : ""}>${FINDING_SEVERITY_LABEL[s]}</option>`).join("");
+  document.getElementById("weatherConditions").innerHTML += WEATHER_CONDITIONS.map((w) => `<option value="${w}">${w}</option>`).join("");
+  document.getElementById("overallResult").innerHTML += INSPECTION_OVERALL_RESULTS.map((r) => `<option value="${r}">${INSPECTION_OVERALL_RESULT_LABEL[r]}</option>`).join("");
+  document.getElementById("tradeSuggestions").innerHTML = ["Bricklayers", "Carpenters", "Plumbers", "Electricians", "Groundworkers", "Roofers", "Scaffolders", "Painters & Decorators", "Plasterers"].map((t) => `<option value="${escapeHtml(t)}">`).join("");
+
+  // ─── Labour & Plant trackers ────────────────────────────────────
+  // Immediately-persisted list editors, same pattern as Findings on
+  // this page (not batched into the Details form's own "Save Details"
+  // button, which is only for the inspection's scalar fields).
+  const labourColumns = [
+    { key: "trade", label: "Trade", type: "text", placeholder: "Subcontractor / trade", datalist: "tradeSuggestions", flex: "1 1 160px" },
+    { key: "headcount", label: "Headcount", type: "number", placeholder: "No. on site", flex: "0 0 110px" },
+    { key: "activity_location", label: "Activity / Location", type: "text", placeholder: "Trade activity / location", flex: "1 1 200px" },
+    { key: "adequacy", label: "Resource Adequacy", type: "select", options: RESOURCE_ADEQUACY, badgeMap: RESOURCE_ADEQUACY_BADGE, placeholder: "Resource adequacy…" },
+  ];
+  let labourEditor = null;
+  let plantEditor = null;
+
+  async function saveLabourRecords(rows) {
+    clearError(errorBox);
+    try {
+      inspection = await updateInspection(inspectionId, { labour_records: rows });
+    } catch (err) {
+      showError(errorBox, err);
+    }
+  }
+  async function savePlantRecords(rows) {
+    clearError(errorBox);
+    try {
+      inspection = await updateInspection(inspectionId, { plant_records: rows });
+    } catch (err) {
+      showError(errorBox, err);
+    }
+  }
 
   function renderTitleAndStatus() {
     document.getElementById("inspectionTitle").textContent = inspection.title;
     const badge = document.getElementById("statusBadge");
     badge.className = `badge ${INSPECTION_STATUS_BADGE[inspection.status]}`;
     badge.textContent = INSPECTION_STATUS_LABEL[inspection.status];
+    const resultBadge = document.getElementById("overallResultBadge");
+    if (inspection.overall_result) {
+      resultBadge.className = `badge ${INSPECTION_OVERALL_RESULT_BADGE[inspection.overall_result]}`;
+      resultBadge.textContent = INSPECTION_OVERALL_RESULT_LABEL[inspection.overall_result];
+      resultBadge.style.display = "";
+    } else {
+      resultBadge.style.display = "none";
+    }
     document.getElementById("generatePdfBtn").style.display = inspection.status === "completed" ? "inline-flex" : "none";
     document.getElementById("pdfStatusText").textContent = "";
   }
@@ -155,7 +228,12 @@
     document.getElementById("inspectionType").value = inspection.inspection_type;
     document.getElementById("status").value = inspection.status;
     document.getElementById("conductedBy").value = inspection.conducted_by || "";
+    document.getElementById("accompaniedBy").value = inspection.accompanied_by || "";
     document.getElementById("description").value = inspection.description || "";
+    document.getElementById("weatherConditions").value = inspection.weather_conditions || "";
+    document.getElementById("overallResult").value = inspection.overall_result || "";
+    labourEditor = mountTableEditor(document.getElementById("labourItems"), inspection.labour_records || [], saveLabourRecords, { columns: labourColumns });
+    plantEditor = mountTableEditor(document.getElementById("plantItems"), inspection.plant_records || [], savePlantRecords, { columns: PLANT_RECORD_COLUMNS });
   }
 
   document.getElementById("detailsForm").addEventListener("submit", async (e) => {
@@ -168,12 +246,29 @@
         inspection_type: document.getElementById("inspectionType").value,
         status: document.getElementById("status").value,
         conducted_by: document.getElementById("conductedBy").value.trim() || null,
+        accompanied_by: document.getElementById("accompaniedBy").value.trim() || null,
         description: document.getElementById("description").value.trim() || null,
+        weather_conditions: document.getElementById("weatherConditions").value || null,
+        overall_result: document.getElementById("overallResult").value || null,
       });
       renderTitleAndStatus();
     } catch (err) {
       showError(errorBox, err);
     }
+  });
+
+  // Fire-and-forget: looks up the project's own location (geocoded once
+  // from its postcode on the site details page, same as weekly reports
+  // already use) and, if set, fetches real weather for the inspection's
+  // own date. Never throws — no postcode set, or a network hiccup, just
+  // means no auto-fill this time, not a broken form. Same helper
+  // functions weekly-report-form.html's own tryAutoFillWeather() calls.
+  document.getElementById("autoFillWeatherBtn").addEventListener("click", async () => {
+    const date = document.getElementById("inspectionDate").value;
+    if (!siteProject?.latitude || !siteProject?.longitude || !date) return;
+    const conditions = await fetchWeatherConditions(siteProject.latitude, siteProject.longitude, date, date);
+    const condition = conditions.get(date);
+    if (condition) document.getElementById("weatherConditions").value = condition;
   });
 
   document.getElementById("deleteBtn").addEventListener("click", async () => {
@@ -498,6 +593,7 @@
       return;
     }
     const project = inspection.projects;
+    siteProject = project;
     renderHeader([
       { label: "Dashboard", href: "dashboard.html" },
       { label: project?.name || "Project", href: `project.html?id=${inspection.project_id}` },

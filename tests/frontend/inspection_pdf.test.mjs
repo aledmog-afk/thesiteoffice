@@ -73,6 +73,7 @@ const built = new Function(
   ${extractConst("INSPECTION_STATUS_LABEL")}
   ${extractConst("FINDING_SEVERITY_LABEL")}
   ${extractConst("FINDING_STATUS_LABEL")}
+  ${extractConst("INSPECTION_OVERALL_RESULT_LABEL")}
   const INSP_PDF_PAGE = { width: 595.28, height: 841.89 };
   const INSP_PDF_MARGIN = 42;
   const INSP_PDF_CONTENT_WIDTH = INSP_PDF_PAGE.width - INSP_PDF_MARGIN * 2;
@@ -266,4 +267,57 @@ test("PDF: every page is genuinely A4 and carries a page-number footer", async (
   } finally {
     fs.unlinkSync(tmpFile);
   }
+});
+
+// ─── Weather, accompanied by, overall result, labour, plant ─────────
+
+test("PDF: weather, accompanied by and overall result appear in Report Details when set, and are simply absent when not", async () => {
+  const withThem = buildInspectionPdfDocument({
+    jsPDFCtor: jsPDF, inspection: makeInspection({ weather_conditions: "Heavy Rain", accompanied_by: "J. Site Manager", overall_result: "satisfactory_with_observations" }), findings: [],
+  });
+  const { text: textWith } = await renderAndExtractText(withThem);
+  assert.ok(textWith.includes("Heavy Rain"));
+  assert.ok(textWith.includes("J. Site Manager"));
+  assert.ok(textWith.includes("Satisfactory with observations"));
+
+  const withoutThem = buildInspectionPdfDocument({ jsPDFCtor: jsPDF, inspection: makeInspection(), findings: [] });
+  const { text: textWithout } = await renderAndExtractText(withoutThem);
+  assert.ok(!textWithout.includes("Heavy Rain"));
+  assert.ok(!textWithout.includes("J. Site Manager"));
+  assert.ok(!/Satisfactory/i.test(textWithout));
+});
+
+test("PDF: labour on site renders as a table with trade, headcount, location and resource adequacy", async () => {
+  const doc = buildInspectionPdfDocument({
+    jsPDFCtor: jsPDF, inspection: makeInspection({
+      labour_records: [{ id: "l1", trade: "Bricklayers", headcount: 4, activity_location: "Plot 7 external walls", adequacy: "Adequate" }],
+    }), findings: [],
+  });
+  const { text } = await renderAndExtractText(doc);
+  assert.ok(text.includes("Labour on Site"));
+  assert.ok(text.includes("Bricklayers"));
+  assert.ok(text.includes("4"));
+  assert.ok(text.includes("Plot 7 external walls"));
+  assert.ok(text.includes("Adequate"));
+});
+
+test("PDF: plant & equipment on site renders as a table with item, quantity, location and notes", async () => {
+  const doc = buildInspectionPdfDocument({
+    jsPDFCtor: jsPDF, inspection: makeInspection({
+      plant_records: [{ id: "p1", item: "Tower crane", quantity: 1, location: "Central core", notes: "Awaiting LOLER cert" }],
+    }), findings: [],
+  });
+  const { text } = await renderAndExtractText(doc);
+  assert.ok(text.includes("Plant"));
+  assert.ok(text.includes("Equipment on Site"));
+  assert.ok(text.includes("Tower crane"));
+  assert.ok(text.includes("Central core"));
+  assert.ok(text.includes("Awaiting LOLER cert"));
+});
+
+test("PDF: no labour or plant records shows neither table at all (not an empty one)", async () => {
+  const doc = buildInspectionPdfDocument({ jsPDFCtor: jsPDF, inspection: makeInspection({ labour_records: [], plant_records: [] }), findings: [] });
+  const { text } = await renderAndExtractText(doc);
+  assert.ok(!text.includes("Labour on Site"));
+  assert.ok(!text.includes("Equipment on Site"));
 });
