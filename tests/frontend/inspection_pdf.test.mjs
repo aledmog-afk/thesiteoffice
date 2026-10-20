@@ -73,6 +73,8 @@ const built = new Function(
   ${extractConst("INSPECTION_STATUS_LABEL")}
   ${extractConst("FINDING_SEVERITY_LABEL")}
   ${extractConst("FINDING_STATUS_LABEL")}
+  ${extractConst("FINDING_SEVERITY_PDF_COLOR")}
+  ${extractConst("FINDING_STATUS_PDF_COLOR")}
   const INSP_PDF_PAGE = { width: 595.28, height: 841.89 };
   const INSP_PDF_MARGIN = 42;
   const INSP_PDF_CONTENT_WIDTH = INSP_PDF_PAGE.width - INSP_PDF_MARGIN * 2;
