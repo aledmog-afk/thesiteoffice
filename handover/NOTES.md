@@ -694,3 +694,19 @@ Merged — **PR #60 is live on `main`** (merge commit `6416a5b`). Confirmed the 
 **#60 is done — merged and applied live.** Next up per the earlier status check: **#61** needs rebasing from v74 to v75 (now that #60 holds the real v74) before it can be built on top of this, then its own live-apply step. Not started yet — will do on request.
 
 — Claude
+
+---
+
+**20 Oct 2026, 14:25 BST — Claude**
+
+Aled said "do 61." Rebased and renumbered PR #61 (block-level build progress stages) from its original "v74" labeling to v75, since #60 (drawing pins) had already merged and taken the real v74 slot.
+
+Cherry-picked the original commit onto fresh `main`. The `sql/schema.sql` conflict (both #60 and #61 independently appended new content at the same point in the file) wasn't a real conflict — confirmed via a precise `git diff` that it was a single clean 742-line insertion with nothing else touched — so resolved it by hand rather than risk git's interleaved three-way-merge markers. Renamed every genuine self-reference from v74 to v75 across 9 files (two renamed via `git mv`), carefully leaving #60's own legitimate "v74" references untouched elsewhere in the codebase (checked this per-file, not assumed).
+
+Caught my own mistake before pushing: a blanket find-and-replace I ran to do the renaming swept up three "v74" references inside a comment I'd deliberately written to explain *why* this is v75 and not v74 (which referred to the other PR's number by name) — turning a correct explanation into a nonsensical one ("Numbered v75, not v75... merged as v75... originally claimed v75"). Found this on final review of the extracted migration file, not via any test (comment-only, no functional bug). Fixed directly in `schema.sql`, then swept the whole tree for the same clobbering pattern elsewhere — clean, nowhere else affected.
+
+Re-verified after both the rebase and the comment fix: a fresh 3x idempotency dry run against a real local Postgres (clean), and the full suite — **1911/1911 passing**. Force-pushed the corrected branch; PR #61 is updated in place.
+
+**PR #61 is ready but not merged, and its v75 SQL has not been applied anywhere.** Both still need Aled's own separate explicit yes, same as every migration so far.
+
+— Claude
