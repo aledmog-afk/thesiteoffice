@@ -16317,6 +16317,14 @@ revoke all on function public.resolve_block_tags(uuid, text) from public, anon, 
 -- gap. The plot-raising half is untouched (same body as before); the
 -- block half runs in the same loop, over the same items, so a report
 -- that mixes a block tag and plot tags in one go still raises both.
+-- Signature deliberately unchanged (p_report_id, p_source) — adding a
+-- third parameter here would make `create or replace function` create
+-- a second overload alongside the original 2-arg definition above
+-- instead of truly replacing it, and any ordinary 2-arg caller
+-- elsewhere would then silently resolve to that stale plots-only
+-- overload. The one-off go-live exclusion below instead reads a GUC
+-- (app.progress_block_floor_zero_ids), the same session-setting idiom
+-- already used throughout this schema for app.progress_internal etc.
 create or replace function public.apply_weekly_report_progress(p_report_id uuid, p_source text default 'report')
 returns integer
 language plpgsql security definer set search_path = public as $$
@@ -16389,6 +16397,8 @@ begin
          and m.applicable
          and m.percent < v_pct
          and m.block_id in (select public.resolve_block_tags(v_rep.project_id, v_item->>'plot'))
+         and (nullif(current_setting('app.progress_block_floor_zero_ids', true), '') is null
+              or m.block_id::text <> all(string_to_array(current_setting('app.progress_block_floor_zero_ids', true), ',')))
       returning m.block_id
     )
     select coalesce(array_agg(ub.block_id), '{}') into v_hit from ub;
@@ -16613,9 +16623,26 @@ begin
   -- 4. Backfill every ISSUED weekly report (never drafts) so a
   -- historical block-name tag that was previously silently skipped now
   -- raises the block's stages, exactly like v69 backfilled plot tags.
+  --
+  -- A real block in the live data caught this: a block whose
+  -- progress_pct was genuinely 0% (so step 3 above gave it no override
+  -- to carry over — "0% needs no carry-over") nonetheless had an
+  -- ISSUED historical report tagging it with real stage progress.
+  -- Backfilling that report would raise this block's calculated figure
+  -- above 0 with nothing to protect the displayed percentage, which is
+  -- exactly the live-figure movement the hard acceptance check below
+  -- exists to catch — and did, on the first run of this migration.
+  -- Fix: exclude every block that started at 0% from this one-time
+  -- backfill (their stages simply start at the seeded default and rise
+  -- only from here forward, same as a brand new block) while every
+  -- other block — the normal case, protected by its carried-over
+  -- override — still gets the full retroactive correction.
+  perform set_config('app.progress_block_floor_zero_ids',
+    coalesce((select string_agg(block_id::text, ',') from v75_block_snapshot where progress_pct = 0), ''), true);
   for v_bid in select w.id from public.weekly_reports w where w.status = 'issued' order by w.week_ending, w.created_at, w.id loop
     perform public.apply_weekly_report_progress(v_bid, 'backfill');
   end loop;
+  perform set_config('app.progress_block_floor_zero_ids', '', true);
   perform set_config('app.progress_internal', 'on', true);
   perform set_config('app.progress_bulk', 'on', true);
   perform set_config('app.progress_source', '', true);

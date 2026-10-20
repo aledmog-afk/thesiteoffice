@@ -133,6 +133,91 @@ test("v75: every block and site figure is identical after go-live; shell stages 
   }
 });
 
+// Regression: a real bug the hard acceptance check itself caught on the
+// live database (not hypothetical) — a block whose progress_pct was
+// genuinely 0% gets NO override carried over in step 3 ("0% needs no
+// carry-over"), so it has nothing protecting its displayed figure if
+// the go-live backfill then raises its block_milestones above 0 from a
+// historical issued report's block-name tag. The live apply aborted
+// with "block ...: 0 -> 6.1" and rolled back cleanly before this was
+// fixed. Fixed by excluding exactly the 0%-starting blocks from the
+// one-time backfill (via the app.progress_block_floor_zero_ids GUC) —
+// this test locks that in for a block that is genuinely 0% AND has a
+// matching issued report, alongside the normal (protected, non-zero)
+// case the test above already covers.
+test("v75: a block that starts at genuinely 0% is excluded from the go-live backfill, so its figure can't move with no override to protect it", async () => {
+  const db = "tracker_test_v75_zero_block";
+  await createTestDatabase(db);
+  const admin = adminClient(db);
+  try {
+    await admin.connect();
+    await runSqlFile(admin, MOCK_SETUP);
+    await runSql(admin, PRE_V74);
+    const fx = await seedPreV74(admin);
+
+    // A second block, genuinely at 0% (never manually set), with its
+    // own issued report tagging it by name — exactly the shape that
+    // broke on the real data.
+    const zeroBlock = (await admin.query(
+      "insert into public.blocks (project_id, block_name, progress_pct) values ($1, 'Block Z', 0) returning id", [fx.proj])).rows[0].id;
+    // Update by this one report's own id, not by project_id — seedPreV74
+    // already left a deliberately-draft report on this same project
+    // (to prove drafts are never backfilled), and a project-wide status
+    // update would wrongly promote that one to issued too.
+    const zReport = (await admin.query(
+      "insert into public.weekly_reports (project_id, week_starting, week_ending, progress_items) values ($1, '2026-09-07', '2026-09-13', $2::jsonb) returning id",
+      [fx.proj, JSON.stringify([{ plot: "Block Z", milestone: "Groundworks", percent: 30 }])])).rows[0].id;
+    await admin.query("update public.weekly_reports set status='reviewed' where id=$1", [zReport]);
+    await admin.query("update public.weekly_reports set status='approved' where id=$1", [zReport]);
+    await admin.query("update public.weekly_reports set status='issued' where id=$1", [zReport]);
+    await admin.query("select public.recalc_project_progress($1)", [fx.proj]);
+    const before = (await admin.query(FIGURES)).rows[0].f;
+
+    await runSqlFile(admin, SCHEMA);
+    const after = (await admin.query(FIGURES)).rows[0].f;
+    assert.deepEqual(after, before, "HARD ACCEPTANCE: the 0%-block's figure (and every other figure) is unchanged");
+
+    // The 0%-block's own stage was NOT retroactively raised...
+    const groundworksZ = (await admin.query(
+      "select percent::float p from public.block_milestones where block_id=$1 and stage_key='st_groundworks'", [zeroBlock])).rows[0];
+    assert.equal(groundworksZ.p, 0, "a block that started at 0% must not be retroactively raised by its own historical report");
+
+    // ...and it got no carried-over override (consistent with "0% needs no carry-over").
+    const zb = (await admin.query(
+      "select progress_pct::float p, progress_override o from public.blocks where id=$1", [zeroBlock])).rows[0];
+    assert.equal(zb.p, 0);
+    assert.equal(zb.o, null);
+    const carriedZero = (await admin.query(
+      "select count(*)::int n from public.block_progress_overrides where block_id=$1", [zeroBlock])).rows[0].n;
+    assert.equal(carriedZero, 0);
+
+    // The OTHER (non-zero, protected) block's own backfill is unaffected
+    // by the exclusion — still raised exactly like the first test shows.
+    const roofingA = (await admin.query(
+      "select percent::float p, last_source s from public.block_milestones where block_id=$1 and stage_key='st_roofing'", [fx.block])).rows[0];
+    assert.equal(roofingA.p, 55);
+    assert.equal(roofingA.s, "backfill");
+
+    // A live 'report' call (not the go-live backfill) still raises a
+    // 0%-progress block normally — the exclusion is scoped to the
+    // one-time go-live step only, never to ordinary live reporting.
+    // (weekly_reports_before_write() forces every INSERT to 'draft'
+    // regardless of what's passed; apply_weekly_report_progress itself
+    // doesn't gate on status, so calling it directly here is enough to
+    // exercise the one behaviour this assertion cares about.)
+    const liveReport = (await admin.query(
+      "insert into public.weekly_reports (project_id, week_starting, week_ending, progress_items) values ($1, '2026-10-05', '2026-10-11', $2::jsonb) returning id",
+      [fx.proj, JSON.stringify([{ plot: "Block Z", milestone: "Foundations (Foots)", percent: 15 }])])).rows[0].id;
+    await admin.query("select public.apply_weekly_report_progress($1, 'report')", [liveReport]);
+    const foundationsZ = (await admin.query(
+      "select percent::float p from public.block_milestones where block_id=$1 and stage_key='st_foundations'", [zeroBlock])).rows[0];
+    assert.equal(foundationsZ.p, 15, "the floor-zero exclusion must not leak into ordinary live reporting");
+  } finally {
+    await admin.end();
+    await dropTestDatabase(db);
+  }
+});
+
 test("v75: recalc_block_progress - calculated is the average of applicable live stages, GREATEST(override, calculated), override retires itself once calculated catches up", async () => {
   const db = "tracker_test_v75_recalc";
   await createTestDatabase(db);
