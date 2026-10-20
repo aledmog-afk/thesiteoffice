@@ -710,3 +710,19 @@ Re-verified after both the rebase and the comment fix: a fresh 3x idempotency dr
 **PR #61 is ready but not merged, and its v75 SQL has not been applied anywhere.** Both still need Aled's own separate explicit yes, same as every migration so far.
 
 — Claude
+
+---
+
+**20 Oct 2026, 15:05 BST — Claude**
+
+Aled said "yes to everything" (merge PR #61 and apply its SQL live) and ran the v75 SQL I'd sent. Its own hard acceptance check caught a real bug and correctly aborted, applying nothing: `block ...: 0 -> 6.1; site ...: 49.1/65 -> 49.9/65`.
+
+Root cause: a live block whose `progress_pct` was genuinely 0% gets no carried-over override at go-live ("0% needs no carry-over" — deliberate, since a fresh calculated figure already starts at 0). That block also had a real issued historical weekly report tagging it by name with stage progress. The go-live backfill (feature (I), closing the "block tags were previously silently skipped" gap) correctly raised that block's stages from the historical report — but with no override protecting it, the raised figure showed up immediately as a live change, which the migration must never do. The check is exactly what caught this before it ever touched the live database.
+
+Fixed by excluding every block that started at 0% from the one-time backfill — their stages simply start at the seeded default and rise from here forward, same as any new block; every other (protected, non-zero) block still gets the full retroactive correction. First attempt at the fix (a 3rd function parameter) would itself have been a real bug: `create or replace function` with a different argument count creates a new overload instead of replacing the original, which would have silently routed every ordinary 2-arg caller back to the stale plots-only version. Caught this before testing it, used a session setting instead (matching this schema's own existing idiom for `app.progress_internal` etc.), which keeps the function's signature untouched.
+
+Added a regression test reproducing the exact live shape (a genuinely-0% block with a matching issued report) plus a check that ordinary live reporting is unaffected by the exclusion. Re-ran the 3x idempotency dry run and the full suite clean: **1912/1912**. Force-pushed the fix, updated PR #61's body to describe what happened, and re-extracted the corrected migration file for Aled to re-run.
+
+**Not applied live yet** — sent Aled the corrected v75 SQL to run; will verify and merge once he confirms.
+
+— Claude
