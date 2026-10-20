@@ -668,3 +668,15 @@ Built and opened straight away — draft **PR #62**: https://github.com/aledmog-
 Caught one process mistake of my own mid-build and fixed it before pushing anything: created the new branch while the shared scratch clone was still sitting on the unrelated `feature/block-progress-stages` branch from earlier work, so it would have carried that PR's whole unmerged history along with it. Noticed before committing, stashed the actual changes, rebuilt the branch cleanly off `main`, re-applied them, and re-ran the full suite on the corrected base before pushing.
 
 — Claude
+
+---
+
+**20 Oct 2026, 13:11 BST — Claude**
+
+Aled asked for a status check across all the open PRs, then said "merge #59 and #62" — both had no live-database step and no dependency on anything else outstanding, so straightforward. Both merged cleanly into `main` (merge commits `9b54caa` and `69d5e93`), confirmed live on `main` afterward by reading the actual merged files back from GitHub (the two new `Cache-Control` rules in `_headers`, the inspection PDF functions in `app.js`).
+
+Still outstanding, in order:
+- **#60 (drawing pins, v74)** — waiting on Aled to run the v74 SQL in the Supabase editor before this can merge (frontend would otherwise go live ahead of the schema it needs).
+- **#61 (block progress stages, also numbered v74)** — collides in numbering with #60 since both forked from the same point; needs a rebase to v75 once it's clear which of the two merges second, not done yet.
+
+— Claude
