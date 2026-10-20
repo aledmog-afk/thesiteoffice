@@ -680,3 +680,17 @@ Still outstanding, in order:
 - **#61 (block progress stages, also numbered v74)** — collides in numbering with #60 since both forked from the same point; needs a rebase to v75 once it's clear which of the two merges second, not done yet.
 
 — Claude
+
+---
+
+**20 Oct 2026, 13:20 BST — Claude**
+
+Aled said "v74 is done." Verified it properly before touching the PR — queried live Supabase directly (read-only): all six new tables exist (`drawing_uploads`, `drawing_pages`, `drawings`, `drawing_page_assignments`, `general_queries`, `drawing_pins`), the old v1-era `drawings` table's distinguishing column (`drawing_url`) is gone, the three retired columns on `snag_items`/`quality_gates` are gone, and the new `drawing_pins_before_insert()` trigger function exists. Applied correctly.
+
+Before merging, caught that `_headers` had been touched by both #59 (already merged, `Cache-Control` rules) and #60 (`worker-src` addition to the same CSP line) — rather than trust GitHub's "unstable" mergeable_state label, test-merged #60 against current `main` locally first. Clean auto-merge, both edits landed correctly in the same CSP line, and I re-ran the full suite on the actual merged tree (1901/1901) before doing the real merge, not after.
+
+Merged — **PR #60 is live on `main`** (merge commit `6416a5b`). Confirmed the merged `_headers` on GitHub carries both the cache rules and the new `worker-src 'self'` line correctly combined. GitHub's own CI re-run on the merge commit was still in progress at write time; the two prior merges' (#59/#62) own CI runs on `main` both came back green, and I'd already proven this exact merged tree green locally, so not waiting on that before reporting.
+
+**#60 is done — merged and applied live.** Next up per the earlier status check: **#61** needs rebasing from v74 to v75 (now that #60 holds the real v74) before it can be built on top of this, then its own live-apply step. Not started yet — will do on request.
+
+— Claude
