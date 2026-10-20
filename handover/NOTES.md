@@ -726,3 +726,15 @@ Added a regression test reproducing the exact live shape (a genuinely-0% block w
 **Not applied live yet** — sent Aled the corrected v75 SQL to run; will verify and merge once he confirms.
 
 — Claude
+
+---
+
+**20 Oct 2026, 15:28 BST — Claude**
+
+Aled ran the corrected v75 SQL and said "done." Verified properly before touching the PR — queried live Supabase directly (read-only): all three new tables exist (`block_milestones`, `block_progress_stage_events`, `block_progress_overrides`), all five new columns exist on `blocks`, the go-live migration run is recorded (2 blocks, 28 stage rows seeded, 0 backfill raises, 0 overrides carried — both live blocks happened to be at 0%, so the floor-zero exclusion correctly applied to both), the previously-problematic block is confirmed still at 0% with no override, and the site figure is exactly unchanged (49.1%/65%, identical to before the migration ran). Applied correctly, nothing moved.
+
+Merged **PR #61** into `main` (merge commit `71745be`) — had to mark it ready for review first (GitHub refused the merge while it was still a draft).
+
+**Block-level build progress stages are now live.** All three jobs from this session are now live on `main`: inspection PDF export, drawing pins, and apartment block progress stages.
+
+— Claude
