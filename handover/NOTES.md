@@ -628,3 +628,29 @@ Posted the same "Workers Builds: thesiteoffice" explanation on this PR as on #58
 **Not merged, not applied to any live database** — both need Aled's separate yes, as ever. Will also need the schema reviewed (the actual DDL is in `sql/schema.sql`'s v74 block, and the diff in #60) before that yes, given how much this one restructures compared to v71-73's purely additive migrations.
 
 — Claude
+
+---
+
+**20 Oct 2026, 09:40 BST — Claude**
+
+Aled said "Do that first then this" — apply v74 live, then merge #60. Reviewed the full ~620-line v74 migration myself line by line before touching anything live (the IDOR-closing trigger logic, the `current_page_id` immutability bypass mirroring `document_revisions`' own established trick, the audit-trail `can_read_audit_row` member-level bucket registration) — satisfied it's sound. Pre-checked live Supabase again first: `drawings`/pinned-column counts still all zero, safe to drop.
+
+Hit a real mistake of my own on the first `apply_migration` attempt: passed a placeholder comment ("-- loaded from v74_migration.sql") as the actual query text instead of the real SQL, so it silently ran a no-op — confirmed by checking live Supabase afterward (none of the six new tables existed). Corrected on retry with the real SQL content, which then hit the same tool-approval wall every live migration in this engagement has hit (v70-v73 too) — not a flake, confirmed by trying twice. Sent `v74_migration.sql` to Aled with the Supabase SQL editor link, same pattern as every prior live apply. **Still waiting on him to run it** — PR #60 cannot merge until it has, since `main` auto-deploys to production the moment it merges and the new frontend code assumes the new tables exist.
+
+— Claude
+
+---
+
+**20 Oct 2026, 10:05 BST — Claude**
+
+Aled flagged a real gap in Plot Handovers: apartment blocks have no build-stage breakdown (scaffold, brickwork, roofing etc.) — just one bare manual % input on `block-detail.html`, no history, no override. Investigated before proposing anything: plots/flats already get the full v69 33-stage grid (`internal_milestones`); blocks never got the equivalent, despite 12 of those 33 stages (`house_default_applicable = true, flat_default_applicable = false` — Groundworks through Cladding) being exactly the shell/structure stages a block needs once, not per-flat. That manual block % already feeds the live site-wide Actual Progress figure (weighted by flat count, per `tracker/docs/SITE_PROGRESS_SPEC.md`), and weekly reports already recognise a block-name tag but explicitly skip it — the system was clearly built anticipating this gap.
+
+Proposed mirroring the existing plot mechanic exactly (same stage list, same calculated-vs-override pattern, same weekly-report tag-raising) via a new `block_milestones` table, with the one real risk — changing how a block's % gets its value could shift today's live Actual Progress — neutralised by carrying each block's current manual figure over as a one-time override at migration time, so nothing visibly moves at go-live (same idiom v69 itself used: "aborts if any figure would differ from the snapshot"). Aled said "Yes, build it."
+
+Built — draft **PR #61**: https://github.com/aledmog-afk/thesiteoffice/pull/61. The go-live safety property isn't just asserted — the migration snapshots every block's and the site's current progress figure, runs the backfill, and hard-aborts the whole transaction if anything would move by even a fraction of a percent (a dedicated test proves this empirically, not just structurally). Along the way the build caught and fixed several real bugs before they shipped: a stage-filter seeding 29 stages instead of the intended ~14 shell-only ones, a missing `progress_internal` guard bypass on `seed_block_defaults()` that `seed_plot_defaults()` already has, `block_milestones.project_id` trusting the client instead of being trigger-derived (the same IDOR class closed elsewhere in this schema), and RLS/grants that were initially over-restrictive enough to break real block creation. **Full suite: 1868/1868.**
+
+One housekeeping note: this PR and the still-unmerged #60 (drawing pins) each independently number their new schema section "v74", since both forked from the same `main`. Whichever merges second will need a rebase/renumber to v75 — flagged on both PRs, not resolved yet since neither is merged.
+
+Posted the usual "Workers Builds" explanation on #61 too (same pre-existing, unrelated failure). **Not merged, not applied to any live database.**
+
+— Claude
