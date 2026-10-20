@@ -368,25 +368,87 @@ test("dashboard: a failed create_site shows the error and doesn't navigate (noth
   assert.ok(!String(window.location.href).includes("project.html"));
 });
 
-// ─── Block page ────────────────────────────────────────────────────
-test("block page: the Suggest button is gone; the block % is still typed and saved, with no browser-side site recalculation", async () => {
-  const block = { id: "b1", project_id: "p1", block_name: "Flats 14-19", progress_pct: 30, projects: { id: "p1", name: "Fake Meadows" } };
-  const sb = mockSupabase({ singles: { blocks: block }, tables: { plots: [], quality_gates: [], handover_documents: [] } });
+// ─── Block page (v75 build stages) ────────────────────────────────
+const BLOCK_BASE = { id: "b1", project_id: "p1", block_name: "Flats 14-19", projects: { id: "p1", name: "Fake Meadows" } };
+const BLOCK_STAGES = [
+  { id: "bm1", block_id: "b1", stage_key: "st_groundworks", title: "Groundworks", percent: 100, applicable: true, sort_order: 2, last_source: "report", updated_at: "2026-10-12T09:00:00Z" },
+  { id: "bm2", block_id: "b1", stage_key: "st_roofing", title: "Roofing", percent: 40, applicable: true, sort_order: 9, last_source: "block_page", updated_at: "2026-10-14T09:00:00Z" },
+  { id: "bm3", block_id: "b1", stage_key: "st_scaffold", title: "Scaffold", percent: 0, applicable: false, sort_order: 5, last_source: null, updated_at: null },
+];
+
+async function runBlockPage(block, { history = [] } = {}) {
+  const sb = mockSupabase({
+    tables: { plots: [], quality_gates: [], handover_documents: [], block_milestones: BLOCK_STAGES.map((s) => ({ ...s })), block_progress_overrides: history },
+    singles: { blocks: { ...block } },
+  });
   const ctx = {
     supabase: sb, requireAuth: async () => ({ id: "u-owner" }), renderHeader: () => {}, getParam: () => "b1",
-    escapeHtml, formatDate, showError, clearError, uploadImage: async () => "",
+    confirm: () => true,
+    escapeHtml, formatDate, formatDateTime: progressHelpers.formatDateTime, showError, clearError, uploadImage: async () => "",
     comparePlotNumbers: (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }), generateFlatsFromSpec: () => [],
+    blockProgressMode: progressHelpers.blockProgressMode, BLOCK_STAGE_SOURCE_LABEL: progressHelpers.BLOCK_STAGE_SOURCE_LABEL, historyActorName: progressHelpers.historyActorName,
   };
-  const { document } = await runPage(page("block-detail.html"), extractScript(page("block-detail.html")), ctx);
+  const r = await runPage(page("block-detail.html"), extractScript(page("block-detail.html")), ctx);
   await wait(30);
-  assert.equal(document.getElementById("suggestProgressBtn"), null);
-  assert.equal(document.getElementById("blockProgressInput").value, "30");
-  document.getElementById("blockProgressInput").value = "45";
-  fireEvent(document.getElementById("saveProgressBtn"), "click");
+  return { ...r, sb };
+}
+
+test("block page: no typed % input any more; automatic figure shown with an 'Automatic' label", async () => {
+  const { document } = await runBlockPage({ ...BLOCK_BASE, progress_pct: 46.7, progress_calculated: 46.7, progress_override: null });
+  assert.equal(document.getElementById("blockProgressInput"), null);
+  assert.equal(document.getElementById("saveProgressBtn"), null);
+  assert.equal(document.getElementById("blockProgressFigure").textContent, "46.7%");
+  assert.equal(document.getElementById("blockProgressMode").textContent, "Automatic");
+  assert.equal(document.getElementById("blockOverrideActive").style.display, "none");
+});
+
+test("block page: a manual figure above the calculated one shows 'Manual', its note, and a 'Switch back to automatic' button that calls clear_block_override", async () => {
+  const block = { ...BLOCK_BASE, progress_pct: 60, progress_calculated: 46.7, progress_override: 60,
+    progress_override_note: "Carried over at the block-stages go-live — this was the block's previous manual figure", progress_override_at: "2026-10-17T11:00:00Z" };
+  const history = [{ action: "carried_over", new_override: 60, calculated: 46.7, note: block.progress_override_note, changed_at: "2026-10-17T11:00:00Z" }];
+  const { document, sb } = await runBlockPage(block, { history });
+  assert.equal(document.getElementById("blockProgressMode").textContent, "Manual");
+  assert.match(document.getElementById("blockProgressExplain").textContent, /Calculated from the stages: 46\.7%/);
+  assert.match(document.getElementById("blockOverrideActive").textContent, /Carried over at the block-stages go-live/);
+  assert.match(document.getElementById("blockOverrideHistory").textContent, /Carried over at the block-stages go-live/);
+  fireEvent(document.getElementById("clearBlockOverrideBtn"), "click");
   await wait(20);
-  assert.deepEqual(plain(sb.calls.find((c) => c.op === "update" && c.table === "blocks").payload), { progress_pct: 45 });
-  assert.equal(sb.calls.filter((c) => c.table === "projects" && c.op === "update").length, 0);
-  assert.match(document.getElementById("progressSavedHint").textContent, /Saved/);
+  const call = sb.calls.find((c) => c.op === "rpc" && c.name === "clear_block_override");
+  assert.deepEqual(plain(call.args), { p_block_id: "b1", p_note: "Switched back to automatic" });
+});
+
+test("block page: saving a manual figure requires a note (no call without one) and goes through set_block_override", async () => {
+  const { document, sb } = await runBlockPage({ ...BLOCK_BASE, progress_pct: 10, progress_calculated: 10, progress_override: null });
+  document.getElementById("blockOverrideInput").value = "55";
+  fireEvent(document.getElementById("saveBlockOverrideBtn"), "click");
+  await wait(10);
+  assert.equal(sb.calls.filter((c) => c.name === "set_block_override").length, 0);
+  assert.match(document.getElementById("errorBox").textContent, /note/);
+  document.getElementById("blockOverrideNote").value = "Checked on site: frame and roof complete";
+  fireEvent(document.getElementById("saveBlockOverrideBtn"), "click");
+  await wait(20);
+  const call = sb.calls.find((c) => c.name === "set_block_override");
+  assert.deepEqual(plain(call.args), { p_block_id: "b1", p_percent: 55, p_note: "Checked on site: frame and roof complete" });
+  assert.equal(sb.calls.filter((c) => c.op === "update" && c.table === "blocks").length, 0, "block % is never written directly");
+});
+
+test("block page: the shared build-stage table shows the source, lets you lower a value and toggle N/A (written to block_milestones)", async () => {
+  const { document, sb } = await runBlockPage({ ...BLOCK_BASE, progress_pct: 46.7, progress_calculated: 46.7, progress_override: null });
+  const rows = document.querySelectorAll("#blockMilestoneRows tr");
+  assert.equal(rows.length, 3);
+  assert.match(rows[0].textContent, /Weekly report, 12 Oct 2026/);
+  assert.match(rows[2].textContent, /N\/A/);
+  assert.equal(document.querySelector('input.block-milestone-percent[data-block-milestone-id="bm3"]').disabled, true);
+  const input = document.querySelector('input.block-milestone-percent[data-block-milestone-id="bm1"]');
+  input.value = "30";
+  fireEvent(input, "change");
+  await wait(20);
+  assert.deepEqual(plain(sb.calls.find((c) => c.op === "update" && c.table === "block_milestones").payload), { percent: 30 });
+  const na = document.querySelector('input.block-milestone-na[data-block-milestone-id="bm3"]');
+  na.checked = false;
+  fireEvent(na, "change");
+  await wait(20);
+  assert.deepEqual(plain(sb.calls.filter((c) => c.op === "update" && c.table === "block_milestones")[1].payload), { applicable: true });
 });
 
 // ─── Weekly report ─────────────────────────────────────────────────

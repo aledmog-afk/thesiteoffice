@@ -21,9 +21,10 @@ function grabFunction(name) {
 }
 
 const CONSTS = ["EXTERNAL_WORKS_TAG", "PROGRESS_STAGES", "BUILD_MILESTONES", "PLOT_STAGE_SOURCE_LABEL",
-  "EXTERNAL_WORKS_STALE_DAYS", "MONTHLY_PROGRESS_BASIS_NOTE", "HISTORY_ACTOR_FALLBACK"];
+  "EXTERNAL_WORKS_STALE_DAYS", "MONTHLY_PROGRESS_BASIS_NOTE", "HISTORY_ACTOR_FALLBACK", "BLOCK_STAGE_SOURCE_LABEL"];
 const FUNCTIONS = ["plotTagKey", "resolvePlotTagsDetailed", "resolvePlotTags", "plotProgressMode", "externalWorksStale",
-  "externalWorksShareSet", "externalWorksSuggestions", "formatDateTime", "historyActorName", "normalisedPackageShare"];
+  "externalWorksShareSet", "externalWorksSuggestions", "formatDateTime", "historyActorName", "normalisedPackageShare",
+  "blockProgressMode", "resolveBlockTags"];
 
 const src = [
   ...CONSTS.map(grabConst),

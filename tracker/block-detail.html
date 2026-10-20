@@ -25,18 +25,49 @@
   <div id="errorBox" class="error-box"></div>
 
   <h3 class="display-font" style="font-size:1.1rem; margin-bottom:1rem;">Block Progress</h3>
-  <div class="card" style="margin-bottom:2.5rem;">
-    <p class="hint" style="margin-bottom:0.8rem;">Shared structure and civils for the whole block — foundations, frame, roof, communal areas. Each flat's own fit-out progress is tracked separately, on the flat itself.</p>
-    <div class="form-grid" style="align-items:end;">
-      <div class="field">
-        <label for="blockProgressInput">Progress complete (%)</label>
-        <input type="number" id="blockProgressInput" min="0" max="100" step="1">
-      </div>
-      <div class="btn-row">
-        <button type="button" class="btn btn-amber" id="saveProgressBtn">Save</button>
-      </div>
+  <div class="card" id="blockProgressCard" style="margin-bottom:2.5rem;">
+    <p class="hint" style="margin-bottom:0.8rem;">Shared structure and civils for the whole block — foundations, frame, roof, scaffold, windows, render/cladding. Each flat's own fit-out progress is tracked separately, on the flat itself.</p>
+    <div style="display:flex; align-items:baseline; gap:0.75rem; flex-wrap:wrap;">
+      <div class="display-font" id="blockProgressFigure" style="font-size:2rem;">–</div>
+      <span class="badge" id="blockProgressMode"></span>
     </div>
+    <p class="hint" id="blockProgressExplain" style="margin-top:0.4rem;"></p>
+    <div id="blockOverrideActive" style="display:none; margin-top:0.75rem;"></div>
+    <details id="blockOverrideFormWrap" style="margin-top:0.9rem;">
+      <summary style="cursor:pointer; font-weight:600;">Set a manual figure</summary>
+      <p class="hint" style="margin:0.5rem 0;">Use this when the stages don't yet reflect what's on site (for example, a block taken over mid-build). The block shows the higher of your figure and the calculated one, and switches back to automatic by itself once the stages catch up. A note is required.</p>
+      <div class="form-grid" style="align-items:end;">
+        <div class="field">
+          <label for="blockOverrideInput">Manual figure (%)</label>
+          <input type="number" id="blockOverrideInput" min="0" max="100" step="0.5">
+        </div>
+        <div class="field" style="grid-column:1 / -1;">
+          <label for="blockOverrideNote">Note (required)</label>
+          <textarea id="blockOverrideNote" rows="2" maxlength="500" placeholder="Why this figure? e.g. checked on site, frame and roof complete"></textarea>
+        </div>
+        <div class="btn-row">
+          <button type="button" class="btn btn-amber" id="saveBlockOverrideBtn">Save manual figure</button>
+        </div>
+      </div>
+    </details>
+    <details id="blockOverrideHistoryWrap" style="margin-top:0.6rem;">
+      <summary style="cursor:pointer; font-weight:600;">Manual figure history</summary>
+      <div id="blockOverrideHistory" style="margin-top:0.5rem;"></div>
+    </details>
     <p class="hint" id="progressSavedHint" style="margin-top:0.5rem;"></p>
+  </div>
+
+  <h3 class="display-font" style="font-size:1.1rem; margin-bottom:1rem;">Build Stages (Block)</h3>
+  <div class="card" style="margin-bottom:2.5rem;">
+    <p class="hint" style="margin-bottom:0.6rem;">The shell stages shared by the whole block — groundworks through cladding, plus gas first fix and solar PV. An issued weekly report tagging this block by name raises these, never lowers them; you can set any value here, or mark a stage N/A so it doesn't count. Block progress is the average of the applicable stages.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Stage</th><th>Status</th><th>% Complete</th><th>N/A</th><th>Last set by</th></tr>
+        </thead>
+        <tbody id="blockMilestoneRows"></tbody>
+      </table>
+    </div>
   </div>
 
   <h3 class="display-font" style="font-size:1.1rem; margin-bottom:1rem;">Quality Gates (Block)</h3>
@@ -84,7 +115,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, uploadImage, comparePlotNumbers, generateFlatsFromSpec } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, formatDateTime, showError, clearError, uploadImage, comparePlotNumbers, generateFlatsFromSpec, blockProgressMode, BLOCK_STAGE_SOURCE_LABEL, historyActorName } from "./js/app.js";
 
   await requireAuth();
   const blockId = getParam("id");
@@ -277,29 +308,188 @@
     await loadDocs();
   });
 
-  // ─── Block progress ───────────────────────────────────────────────
-  // The block's own % (shared structure/envelope for every flat in it)
-  // stays typed here. The database recalculates the site figure after
-  // the save (each block counts once per flat). The old "Suggest from
-  // Milestones" button is gone (it matched the block name's first
-  // number against plot tags, so "Block 1" picked up plot 1).
-  document.getElementById("saveProgressBtn").addEventListener("click", async () => {
+  // ─── Block progress (v75) ───────────────────────────────────────────
+  // Mirrors Plot Progress exactly (plot-detail.html): blocks.progress_pct
+  // = GREATEST(override, calculated), kept by the database from the
+  // shell-only stages below. The old single manual-%-input no longer
+  // works at all — blocks_v75_progress_guard ignores a direct write to
+  // progress_pct, same "old cached page can't break" idiom plots already
+  // had — so this is a full replacement, not a tweak.
+  function fmtPct(v) {
+    const n = Number(v) || 0;
+    return `${Math.round(n * 10) / 10}%`;
+  }
+
+  function renderBlockProgress() {
+    const mode = blockProgressMode(block);
+    document.getElementById("blockProgressFigure").textContent = fmtPct(block.progress_pct);
+    const badge = document.getElementById("blockProgressMode");
+    badge.textContent = mode === "manual" ? "Manual" : "Automatic";
+    badge.className = `badge ${mode === "manual" ? "badge-amber" : "badge-green"}`;
+    document.getElementById("blockProgressExplain").textContent = mode === "manual"
+      ? `Calculated from the stages: ${fmtPct(block.progress_calculated)}. Showing the manual figure until the stages reach ${fmtPct(block.progress_override)}.`
+      : `Calculated from the stages below: the average of the applicable stages.`;
+    const active = document.getElementById("blockOverrideActive");
+    if (mode === "manual") {
+      active.style.display = "";
+      active.innerHTML = `
+        <div class="hint"><strong>Manual figure ${escapeHtml(fmtPct(block.progress_override))}</strong>${block.progress_override_at ? ` · set ${escapeHtml(formatDateTime(block.progress_override_at))}` : ""}</div>
+        <div style="margin:0.3rem 0 0.5rem;">${escapeHtml(block.progress_override_note || "")}</div>
+        <button type="button" class="btn btn-outline btn-sm" id="clearBlockOverrideBtn">Switch back to automatic</button>`;
+      document.getElementById("clearBlockOverrideBtn").addEventListener("click", clearBlockOverride);
+    } else {
+      active.style.display = "none";
+      active.innerHTML = "";
+    }
+  }
+
+  const BLOCK_OVERRIDE_ACTION_LABEL = {
+    set: "Manual figure set",
+    cleared: "Switched back to automatic",
+    superseded: "Stages caught up, back to automatic",
+    carried_over: "Carried over at the block-stages go-live",
+  };
+
+  async function loadBlockOverrideHistory() {
+    const { data, error } = await supabase
+      .from("block_progress_overrides")
+      .select("action, old_override, new_override, calculated, note, changed_by_name, changed_at")
+      .eq("block_id", blockId)
+      .order("changed_at", { ascending: false });
+    const wrap = document.getElementById("blockOverrideHistory");
+    if (error || !data || !data.length) {
+      wrap.innerHTML = `<p class="hint">No manual figures have been set for this block.</p>`;
+      return;
+    }
+    wrap.innerHTML = `<div class="table-wrap"><table>
+      <thead><tr><th>When</th><th>What</th><th>Figure</th><th>Calculated</th><th>Note</th><th>Who</th></tr></thead>
+      <tbody>${data.map((h) => `<tr>
+        <td>${escapeHtml(formatDateTime(h.changed_at))}</td>
+        <td>${escapeHtml(BLOCK_OVERRIDE_ACTION_LABEL[h.action] || h.action)}</td>
+        <td>${h.new_override !== null && h.new_override !== undefined ? escapeHtml(fmtPct(h.new_override)) : (h.old_override !== null && h.old_override !== undefined ? `<s>${escapeHtml(fmtPct(h.old_override))}</s>` : "")}</td>
+        <td>${h.calculated !== null && h.calculated !== undefined ? escapeHtml(fmtPct(h.calculated)) : ""}</td>
+        <td>${escapeHtml(h.note || "")}</td>
+        <td>${escapeHtml(historyActorName(h))}</td>
+      </tr>`).join("")}</tbody></table></div>`;
+  }
+
+  async function loadBlockProgress() {
+    const { data } = await supabase
+      .from("blocks")
+      .select("progress_pct, progress_calculated, progress_override, progress_override_note, progress_override_at")
+      .eq("id", blockId)
+      .single();
+    if (data) Object.assign(block, data);
+    renderBlockProgress();
+    loadBlockOverrideHistory();
+  }
+
+  async function clearBlockOverride() {
     clearError(errorBox);
-    const val = document.getElementById("blockProgressInput").value;
-    const pct = Math.max(0, Math.min(100, Number(val) || 0));
-    const saveBtn = document.getElementById("saveProgressBtn");
-    saveBtn.disabled = true;
+    if (!confirm("Switch this block back to its calculated figure?")) return;
+    const { error } = await supabase.rpc("clear_block_override", { p_block_id: blockId, p_note: "Switched back to automatic" });
+    if (error) { showError(errorBox, error); return; }
+    document.getElementById("progressSavedHint").textContent = "Switched back to automatic. Site progress has been updated.";
+    await loadBlockProgress();
+  }
+
+  document.getElementById("saveBlockOverrideBtn").addEventListener("click", async () => {
+    clearError(errorBox);
+    const pct = Number(document.getElementById("blockOverrideInput").value);
+    const note = document.getElementById("blockOverrideNote").value.trim();
+    if (!note || note.length < 3) { showError(errorBox, "Add a short note explaining the manual figure."); return; }
+    if (!Number.isFinite(pct) || pct < 0 || pct > 100) { showError(errorBox, "Enter a figure between 0 and 100."); return; }
+    const btn = document.getElementById("saveBlockOverrideBtn");
+    btn.disabled = true;
     try {
-      const { error } = await supabase.from("blocks").update({ progress_pct: pct }).eq("id", blockId);
+      const { error } = await supabase.rpc("set_block_override", { p_block_id: blockId, p_percent: pct, p_note: note });
       if (error) throw error;
-      block.progress_pct = pct;
-      document.getElementById("progressSavedHint").textContent = "Saved — the site's Actual Progress has been updated.";
+      document.getElementById("blockOverrideInput").value = "";
+      document.getElementById("blockOverrideNote").value = "";
+      document.getElementById("blockOverrideFormWrap").open = false;
+      document.getElementById("progressSavedHint").textContent = "Manual figure saved. Site progress has been updated.";
+      await loadBlockProgress();
     } catch (err) {
       showError(errorBox, err);
     } finally {
-      saveBtn.disabled = false;
+      btn.disabled = false;
     }
   });
+
+  // ─── Build stages (block, v75) ───────────────────────────────────
+  function blockMilestoneStatusBadge(m) {
+    if (!m.applicable) return "badge-grey";
+    return m.percent <= 0 ? "badge-grey" : m.percent >= 100 ? "badge-green" : "badge-blue";
+  }
+  function blockMilestoneStatusLabel(m) {
+    if (!m.applicable) return "N/A";
+    return m.percent <= 0 ? "Not Started" : m.percent >= 100 ? "Complete" : "In Progress";
+  }
+  function blockStageSourceLabel(m) {
+    const label = BLOCK_STAGE_SOURCE_LABEL[m.last_source] || "";
+    if (!label) return "";
+    return m.updated_at ? `${label}, ${formatDateTime(m.updated_at)}` : label;
+  }
+
+  function blockMilestoneRowHtml(m) {
+    return `
+      <tr data-block-milestone-id="${m.id}" style="${m.applicable ? "" : "opacity:0.55;"}">
+        <td><strong>${escapeHtml(m.title)}</strong></td>
+        <td><span class="badge ${blockMilestoneStatusBadge(m)}">${blockMilestoneStatusLabel(m)}</span></td>
+        <td><input type="number" class="block-milestone-percent" data-block-milestone-id="${m.id}" min="0" max="100" step="5" value="${m.percent}" style="width:90px;" ${m.applicable ? "" : "disabled"}></td>
+        <td><input type="checkbox" class="block-milestone-na" data-block-milestone-id="${m.id}" ${m.applicable ? "" : "checked"} aria-label="${escapeHtml(m.title)} not applicable"></td>
+        <td class="hint">${escapeHtml(blockStageSourceLabel(m))}</td>
+      </tr>
+    `;
+  }
+
+  async function saveBlockMilestone(m, patch) {
+    const previous = { percent: m.percent, applicable: m.applicable };
+    const { error } = await supabase.from("block_milestones").update(patch).eq("id", m.id);
+    if (error) {
+      alert("Couldn't save that change: " + error.message);
+      Object.assign(m, previous);
+      rerenderBlockMilestoneRow(m);
+      return;
+    }
+    Object.assign(m, patch, { last_source: "block_page", updated_at: new Date().toISOString() });
+    rerenderBlockMilestoneRow(m);
+    await loadBlockProgress();
+  }
+
+  function wireBlockMilestoneRow(m) {
+    const input = document.querySelector(`input.block-milestone-percent[data-block-milestone-id="${m.id}"]`);
+    input.addEventListener("change", async () => {
+      const pct = Math.max(0, Math.min(100, Number(input.value) || 0));
+      await saveBlockMilestone(m, { percent: pct });
+    });
+    const na = document.querySelector(`input.block-milestone-na[data-block-milestone-id="${m.id}"]`);
+    na.addEventListener("change", async () => {
+      await saveBlockMilestone(m, { applicable: !na.checked });
+    });
+  }
+
+  function rerenderBlockMilestoneRow(m) {
+    const el = document.querySelector(`tr[data-block-milestone-id="${m.id}"]`);
+    el.outerHTML = blockMilestoneRowHtml(m);
+    wireBlockMilestoneRow(m);
+  }
+
+  async function loadBlockMilestones() {
+    const { data: milestones, error } = await supabase
+      .from("block_milestones")
+      .select("*")
+      .eq("block_id", blockId)
+      .is("retired_at", null)
+      .order("sort_order", { ascending: true });
+
+    if (error || !milestones || !milestones.length) {
+      document.getElementById("blockMilestoneRows").innerHTML = `<tr><td colspan="5" style="text-align:center; color:var(--ink-soft);">No build stages found for this block.</td></tr>`;
+      return;
+    }
+    document.getElementById("blockMilestoneRows").innerHTML = milestones.map(blockMilestoneRowHtml).join("");
+    milestones.forEach(wireBlockMilestoneRow);
+  }
 
   // ─── EWS1 flag (v71) ────────────────────────────────────────────
   // Toggling this on triggers seed_block_ews1_document() server-side,
@@ -414,7 +604,6 @@
 
     document.getElementById("blockTitle").textContent = block.block_name;
     document.getElementById("projectSub").textContent = project.name;
-    document.getElementById("blockProgressInput").value = block.progress_pct || 0;
     document.getElementById("needsEws1Input").checked = !!block.needs_ews1;
     renderHeader([
       { label: "Dashboard", href: "dashboard.html" },
@@ -426,6 +615,8 @@
     loadGates();
     loadDocs();
     loadFlats();
+    loadBlockProgress();
+    loadBlockMilestones();
   }
 
   init();

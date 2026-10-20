@@ -2959,6 +2959,42 @@ export const PLOT_STAGE_SOURCE_LABEL = {
   backfill: "Past report",
 };
 
+// ─── Block progress (v75) ────────────────────────────────────────
+// Mirrors the plot mechanic exactly: blocks.progress_pct =
+// GREATEST(progress_override, progress_calculated), kept by the
+// database from block_milestones — the shell-only stage subset
+// (house_default_applicable AND NOT flat_default_applicable), applied
+// once to the block rather than per flat.
+export function blockProgressMode(block) {
+  const override = block?.progress_override;
+  if (override === null || override === undefined) return "auto";
+  return Number(override) > Number(block?.progress_calculated || 0) ? "manual" : "auto";
+}
+
+export const BLOCK_STAGE_SOURCE_LABEL = {
+  block_page: "Block page",
+  report: "Weekly report",
+  migration: "Go-live backfill",
+  backfill: "Past report",
+};
+
+// resolve_block_tags()'s JS twin (same convention as resolvePlotTags()'s
+// own twin of resolve_plot_tags_detail() — both checked against the same
+// shape of normalisation, no range support since blocks aren't numbered
+// the way plots are: a tag is either one exact block name or it isn't).
+export function resolveBlockTags(tag, blockNames) {
+  if (tag === null || tag === undefined) return [];
+  const external = TAG_SPACE(EXTERNAL_WORKS_TAG);
+  const byName = new Map((blockNames || []).map((b) => [TAG_SPACE(b.block_name ?? b), b.id ?? b]));
+  const found = [];
+  String(tag).split(",").forEach((raw) => {
+    const low = TAG_SPACE(raw);
+    if (!low || low === external) return;
+    if (byName.has(low)) found.push(byName.get(low));
+  });
+  return found;
+}
+
 // ─── External works (v69) ───────────────────────────────────────
 // The figure is never set automatically. Stale when the site isn't
 // complete and nothing has been noted for more than 21 days.
