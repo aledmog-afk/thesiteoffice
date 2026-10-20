@@ -6874,6 +6874,253 @@ export async function generateCommercialEventPdfBlob(eventId, type) {
   return { blob: doc.output("blob"), filename: commercialEventPdfFilename(event) };
 }
 
+// ─── Inspection report PDF export ────────────────────────────────────
+export function inspectionPdfFilename(inspection) {
+  const label = inspection.inspection_date ? `${inspection.inspection_date} - ${inspection.title}` : inspection.title;
+  return `${sanitizeExportFilename(label)}.pdf`;
+}
+
+const INSP_PDF_PAGE = { width: 595.28, height: 841.89 }; // A4 in points
+const INSP_PDF_MARGIN = 42;
+const INSP_PDF_CONTENT_WIDTH = INSP_PDF_PAGE.width - INSP_PDF_MARGIN * 2;
+const INSP_PDF_FOOTER_RESERVE = 30;
+
+// The pure PDF builder. `inspection` is exactly getInspection()'s own
+// shape (including its projects(name) join); `findings` is
+// getFindings()'s shape; `findingPhotos` is { [finding.id]: Array<{
+// dataUrl, width, height } | null> } — already-loaded image data, one
+// entry per photo in the same order getFindingPhotos() returned them,
+// with a load failure represented as null (drawn as an empty frame,
+// never silently dropped — matches the belt-and-braces addImage
+// try/catch pattern the Commercial/Toolbox Talk PDF builders already
+// use for a logo/signature jsPDF can't decode). Refuses to build for
+// anything but a completed inspection — belt and braces alongside
+// generateInspectionPdfBlob()'s own check below, since this function
+// can also be called directly (e.g. in tests).
+export function buildInspectionPdfDocument({ jsPDFCtor, inspection, findings, findingPhotos = {}, projectName, orgName, logo, plotLabel = () => null }) {
+  if (inspection.status !== "completed") {
+    throw new Error("Only a completed inspection can be exported as a PDF.");
+  }
+
+  const doc = new jsPDFCtor({ unit: "pt", format: "a4" });
+  let y = INSP_PDF_MARGIN;
+
+  function newPage() {
+    doc.addPage();
+    y = INSP_PDF_MARGIN;
+  }
+  function ensureSpace(needed) {
+    if (y + needed > INSP_PDF_PAGE.height - INSP_PDF_MARGIN - INSP_PDF_FOOTER_RESERVE) newPage();
+  }
+  function heading(text, size = 11.5) {
+    ensureSpace(size + 12);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(size);
+    doc.setTextColor(20, 20, 20);
+    doc.text(text, INSP_PDF_MARGIN, y);
+    y += size + 8;
+  }
+  function paragraph(text, size = 10) {
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(size);
+    doc.setTextColor(40, 40, 40);
+    const lines = doc.splitTextToSize(String(text), INSP_PDF_CONTENT_WIDTH);
+    for (const line of lines) {
+      ensureSpace(size + 4);
+      doc.text(line, INSP_PDF_MARGIN, y);
+      y += size + 4;
+    }
+    y += 6;
+  }
+
+  // ─── HEADER ─────────────────────────────────────────────────────
+  if (logo && logo.dataUrl) {
+    const maxH = 36;
+    const ratio = logo.width && logo.height ? logo.width / logo.height : 1;
+    const h = maxH;
+    const w = Math.min(140, h * ratio);
+    const fmt = detectImageFormat(logo.dataUrl);
+    try { doc.addImage(logo.dataUrl, fmt, INSP_PDF_MARGIN, y, w, h); } catch { /* a logo jsPDF can't decode is skipped, never fails the export */ }
+    y += maxH + 14;
+  }
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.5);
+  doc.setTextColor(130, 130, 130);
+  doc.text("INSPECTION REPORT", INSP_PDF_MARGIN, y);
+  y += 16;
+  doc.setFontSize(18);
+  doc.setTextColor(15, 17, 23);
+  const titleLines = doc.splitTextToSize(inspection.title, INSP_PDF_CONTENT_WIDTH);
+  titleLines.forEach((line) => { doc.text(line, INSP_PDF_MARGIN, y); y += 21; });
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(10);
+  doc.setTextColor(100, 100, 100);
+  const subLine = [INSPECTION_TYPE_LABEL[inspection.inspection_type], INSPECTION_STATUS_LABEL[inspection.status]].filter(Boolean).join("   ·   ");
+  if (subLine) { doc.text(subLine, INSP_PDF_MARGIN, y); y += 18; }
+  y += 4;
+  doc.setDrawColor(210, 210, 210);
+  doc.line(INSP_PDF_MARGIN, y, INSP_PDF_MARGIN + INSP_PDF_CONTENT_WIDTH, y);
+  y += 22;
+
+  // ─── DETAILS ────────────────────────────────────────────────────
+  const details = [
+    ["Project", projectName],
+    ["Organisation", orgName],
+    ["Date", inspection.inspection_date ? formatDate(inspection.inspection_date) : null],
+    ["Inspector", inspection.conducted_by],
+  ].filter(([, value]) => value);
+  if (details.length) {
+    const colW = INSP_PDF_CONTENT_WIDTH / 2;
+    const rows = Math.ceil(details.length / 2);
+    ensureSpace(rows * 34 + 10);
+    const gridTop = y;
+    details.forEach(([label, value], i) => {
+      const col = i % 2;
+      const row = Math.floor(i / 2);
+      const x = INSP_PDF_MARGIN + col * colW;
+      const rowY = gridTop + row * 34;
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(7.5);
+      doc.setTextColor(140, 140, 140);
+      doc.text(label.toUpperCase(), x, rowY);
+      doc.setFontSize(10.5);
+      doc.setTextColor(20, 20, 20);
+      doc.text(String(value), x, rowY + 14);
+    });
+    y = gridTop + rows * 34 + 8;
+  }
+  if (inspection.description && inspection.description.trim()) {
+    heading("Notes");
+    paragraph(inspection.description.trim());
+  }
+
+  // ─── FINDINGS ───────────────────────────────────────────────────
+  heading("Findings", 13);
+  if (!findings.length) {
+    doc.setFont("helvetica", "italic");
+    doc.setFontSize(9.5);
+    doc.setTextColor(140, 140, 140);
+    ensureSpace(16);
+    doc.text("No findings recorded.", INSP_PDF_MARGIN, y);
+    y += 16;
+  }
+  for (const finding of findings) {
+    ensureSpace(40);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(11);
+    doc.setTextColor(20, 20, 20);
+    const findingTitleLines = doc.splitTextToSize(finding.title, INSP_PDF_CONTENT_WIDTH);
+    findingTitleLines.forEach((line) => { ensureSpace(14); doc.text(line, INSP_PDF_MARGIN, y); y += 14; });
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(100, 100, 100);
+    const plot = plotLabel(finding.plot_id);
+    const metaLine = [FINDING_SEVERITY_LABEL[finding.severity], FINDING_STATUS_LABEL[finding.status], plot].filter(Boolean).join("   ·   ");
+    ensureSpace(14);
+    doc.text(metaLine, INSP_PDF_MARGIN, y);
+    y += 16;
+
+    if (finding.description && finding.description.trim()) {
+      paragraph(finding.description.trim(), 9.5);
+    }
+
+    // Photos are embedded (not just referenced, unlike Commercial's
+    // evidence) — a finding's photo is always a genuine image, never an
+    // arbitrary file type, so there's no format Commercial's "may be a
+    // PDF" caveat would apply to here.
+    const photos = findingPhotos[finding.id] || [];
+    if (photos.length) {
+      const thumb = 80;
+      const gap = 10;
+      const perRow = Math.max(1, Math.floor((INSP_PDF_CONTENT_WIDTH + gap) / (thumb + gap)));
+      const rows = Math.ceil(photos.length / perRow);
+      ensureSpace(rows * (thumb + gap) + 10);
+      const gridTop = y;
+      photos.forEach((photo, i) => {
+        const col = i % perRow;
+        const row = Math.floor(i / perRow);
+        const x = INSP_PDF_MARGIN + col * (thumb + gap);
+        const py = gridTop + row * (thumb + gap);
+        const fmt = photo && photo.dataUrl ? detectImageFormat(photo.dataUrl) : undefined;
+        if (fmt) {
+          try {
+            doc.addImage(photo.dataUrl, fmt, x, py, thumb, thumb);
+            return;
+          } catch { /* falls through to the empty frame below */ }
+        }
+        doc.setDrawColor(210, 210, 210);
+        doc.rect(x, py, thumb, thumb);
+      });
+      y = gridTop + rows * (thumb + gap) + 6;
+    }
+
+    ensureSpace(14);
+    doc.setDrawColor(230, 230, 230);
+    doc.line(INSP_PDF_MARGIN, y, INSP_PDF_MARGIN + INSP_PDF_CONTENT_WIDTH, y);
+    y += 16;
+  }
+
+  // ─── FOOTER (every page, drawn last since it needs the final page count) ──
+  const totalPages = doc.internal.getNumberOfPages();
+  for (let i = 1; i <= totalPages; i++) {
+    doc.setPage(i);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    doc.setTextColor(150, 150, 150);
+    doc.text("Inspection report export — The Site Office.", INSP_PDF_MARGIN, INSP_PDF_PAGE.height - 20);
+    doc.text(`Page ${i} of ${totalPages}`, INSP_PDF_PAGE.width - INSP_PDF_MARGIN, INSP_PDF_PAGE.height - 20, { align: "right" });
+  }
+
+  return doc;
+}
+
+// The async orchestrator: every read here goes through the same RLS
+// this user's own session already has for viewing the inspection — no
+// separate PDF-generation privilege to grant or misconfigure.
+export async function generateInspectionPdfBlob(inspectionId) {
+  const inspection = await getInspection(inspectionId);
+  if (inspection.status !== "completed") {
+    throw new Error("Only a completed inspection can be exported as a PDF.");
+  }
+  const findings = await getFindings(inspectionId);
+
+  const [photoLists, plotsResult, orgName] = await Promise.all([
+    Promise.all(findings.map((f) => getFindingPhotos(f.id))),
+    supabase.from("plots").select("id, plot_number").eq("project_id", inspection.project_id),
+    getOrganisationName(inspection.org_id),
+  ]);
+
+  const findingPhotos = {};
+  await Promise.all(findings.map(async (f, i) => {
+    const photos = photoLists[i] || [];
+    findingPhotos[f.id] = await Promise.all(photos.map((p) => loadImageDataUrl(p.photo_url)));
+  }));
+
+  const plotMap = {};
+  for (const p of plotsResult.data || []) plotMap[p.id] = p.plot_number;
+
+  const logoUrl = await getOrgLogoUrl(inspection.org_id);
+  const logo = logoUrl ? await loadImageDataUrl(logoUrl) : null;
+
+  // Same CDN-import approach this app already uses for the Commercial/
+  // Toolbox Talk/Handover PDFs — a pinned exact version, dynamically
+  // imported, zero build step.
+  const { jsPDF } = await import("https://esm.sh/jspdf@2.5.2");
+
+  const doc = buildInspectionPdfDocument({
+    jsPDFCtor: jsPDF,
+    inspection,
+    findings,
+    findingPhotos,
+    projectName: inspection.projects?.name || null,
+    orgName,
+    logo,
+    plotLabel: (plotId) => plotMap[plotId] || null,
+  });
+  return { blob: doc.output("blob"), filename: inspectionPdfFilename(inspection) };
+}
+
 // ─── v62: role-based access per company role ─────────────────────────
 // Plain-English summary of what each company role can do (mirrors the
 // party_role_capabilities table in schema.sql — the database is the
