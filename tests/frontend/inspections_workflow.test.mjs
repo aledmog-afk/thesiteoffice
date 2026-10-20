@@ -23,6 +23,13 @@ const INSPECTION_TYPE_LABEL = extractConst("INSPECTION_TYPE_LABEL");
 const INSPECTION_STATUSES = extractConst("INSPECTION_STATUSES");
 const INSPECTION_STATUS_LABEL = extractConst("INSPECTION_STATUS_LABEL");
 const INSPECTION_STATUS_BADGE = extractConst("INSPECTION_STATUS_BADGE");
+const INSPECTION_OVERALL_RESULTS = extractConst("INSPECTION_OVERALL_RESULTS");
+const INSPECTION_OVERALL_RESULT_LABEL = extractConst("INSPECTION_OVERALL_RESULT_LABEL");
+const INSPECTION_OVERALL_RESULT_BADGE = extractConst("INSPECTION_OVERALL_RESULT_BADGE");
+const WEATHER_CONDITIONS = extractConst("WEATHER_CONDITIONS");
+const RESOURCE_ADEQUACY = extractConst("RESOURCE_ADEQUACY");
+const RESOURCE_ADEQUACY_BADGE = extractConst("RESOURCE_ADEQUACY_BADGE");
+const PLANT_RECORD_COLUMNS = extractConst("PLANT_RECORD_COLUMNS");
 const FINDING_SEVERITIES = extractConst("FINDING_SEVERITIES");
 const FINDING_SEVERITY_LABEL = extractConst("FINDING_SEVERITY_LABEL");
 const FINDING_SEVERITY_BADGE = extractConst("FINDING_SEVERITY_BADGE");
@@ -140,11 +147,19 @@ async function run(store, { plots = [] } = {}) {
     getFindingPhotos: store.getFindingPhotos, addFindingPhoto: store.addFindingPhoto, deleteFindingPhoto: store.deleteFindingPhoto,
     createSnagFromFinding: store.createSnagFromFinding,
     INSPECTION_TYPES, INSPECTION_TYPE_LABEL, INSPECTION_STATUSES, INSPECTION_STATUS_LABEL, INSPECTION_STATUS_BADGE,
+    INSPECTION_OVERALL_RESULTS, INSPECTION_OVERALL_RESULT_LABEL, INSPECTION_OVERALL_RESULT_BADGE,
+    WEATHER_CONDITIONS, RESOURCE_ADEQUACY, RESOURCE_ADEQUACY_BADGE, PLANT_RECORD_COLUMNS,
     FINDING_SEVERITIES, FINDING_SEVERITY_LABEL, FINDING_SEVERITY_BADGE, FINDING_STATUSES, FINDING_STATUS_LABEL, FINDING_STATUS_BADGE, isFindingOutstanding: isOutstanding,
     ACTION_PRIORITIES, ACTION_PRIORITY_LABEL, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE,
     SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE,
     comparePlotNumbers: (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }),
     alert: () => {}, confirm: () => true,
+    // Generic, self-contained helpers with no supabase/network dependency
+    // of their own — mocked here, same convention as
+    // weekly_report_workflow.test.mjs, since this file's job is to prove
+    // the page wires things correctly, not to re-test those helpers.
+    mountTableEditor: () => ({ getRows: () => [] }),
+    fetchWeatherConditions: async () => new Map(),
   });
 }
 

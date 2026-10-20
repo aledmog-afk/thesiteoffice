@@ -29,6 +29,13 @@ const INSPECTION_TYPE_LABEL = extractConst("INSPECTION_TYPE_LABEL");
 const INSPECTION_STATUSES = extractConst("INSPECTION_STATUSES");
 const INSPECTION_STATUS_LABEL = extractConst("INSPECTION_STATUS_LABEL");
 const INSPECTION_STATUS_BADGE = extractConst("INSPECTION_STATUS_BADGE");
+const INSPECTION_OVERALL_RESULTS = extractConst("INSPECTION_OVERALL_RESULTS");
+const INSPECTION_OVERALL_RESULT_LABEL = extractConst("INSPECTION_OVERALL_RESULT_LABEL");
+const INSPECTION_OVERALL_RESULT_BADGE = extractConst("INSPECTION_OVERALL_RESULT_BADGE");
+const WEATHER_CONDITIONS = extractConst("WEATHER_CONDITIONS");
+const RESOURCE_ADEQUACY = extractConst("RESOURCE_ADEQUACY");
+const RESOURCE_ADEQUACY_BADGE = extractConst("RESOURCE_ADEQUACY_BADGE");
+const PLANT_RECORD_COLUMNS = extractConst("PLANT_RECORD_COLUMNS");
 const FINDING_SEVERITIES = extractConst("FINDING_SEVERITIES");
 const FINDING_SEVERITY_LABEL = extractConst("FINDING_SEVERITY_LABEL");
 const FINDING_SEVERITY_BADGE = extractConst("FINDING_SEVERITY_BADGE");
@@ -119,6 +126,15 @@ async function run(overrides = {}) {
     saveFileToDevice: overrides.saveFileToDevice || (async () => ({ method: "share", status: "saved" })),
     deviceSavePhotoFilename: overrides.deviceSavePhotoFilename || (() => "site-photo-test.jpg"),
     deviceSaveStatusLabel: overrides.deviceSaveStatusLabel || ((s) => (s ? `STATUS:${s}` : "")),
+    INSPECTION_OVERALL_RESULTS, INSPECTION_OVERALL_RESULT_LABEL, INSPECTION_OVERALL_RESULT_BADGE,
+    WEATHER_CONDITIONS, RESOURCE_ADEQUACY, RESOURCE_ADEQUACY_BADGE, PLANT_RECORD_COLUMNS,
+    // mountTableEditor and fetchWeatherConditions are generic, self-contained
+    // helpers with no supabase/network dependency of their own — mocked
+    // here with trivial stubs, same as weekly_report_workflow.test.mjs's
+    // own convention, since this file's job is to prove the PAGE wires
+    // things correctly, not to re-test those helpers' own internals.
+    mountTableEditor: () => ({ getRows: () => [] }),
+    fetchWeatherConditions: async () => new Map(),
   });
   return { document, window, store };
 }
@@ -223,6 +239,10 @@ test("inspection-detail.html: a finding photo loaded from a fresh page load (no 
     saveFileToDevice: async () => ({ method: "share", status: "saved" }),
     deviceSavePhotoFilename: () => "site-photo-test.jpg",
     deviceSaveStatusLabel: (s) => (s ? `STATUS:${s}` : ""),
+    INSPECTION_OVERALL_RESULTS, INSPECTION_OVERALL_RESULT_LABEL, INSPECTION_OVERALL_RESULT_BADGE,
+    WEATHER_CONDITIONS, RESOURCE_ADEQUACY, RESOURCE_ADEQUACY_BADGE, PLANT_RECORD_COLUMNS,
+    mountTableEditor: () => ({ getRows: () => [] }),
+    fetchWeatherConditions: async () => new Map(),
   });
   await wait(30);
 

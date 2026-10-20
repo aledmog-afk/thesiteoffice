@@ -949,6 +949,24 @@ export const INSPECTION_STATUSES = ["draft", "completed", "cancelled"];
 export const INSPECTION_STATUS_LABEL = { draft: "Draft", completed: "Completed", cancelled: "Cancelled" };
 export const INSPECTION_STATUS_BADGE = { draft: "badge-grey", completed: "badge-green", cancelled: "badge-red" };
 
+// A top-line verdict for the inspection as a whole, separate from any
+// individual finding's own status (a Satisfactory inspection can still
+// carry low-severity findings; this is the inspector's overall call).
+export const INSPECTION_OVERALL_RESULTS = ["satisfactory", "satisfactory_with_observations", "unsatisfactory"];
+export const INSPECTION_OVERALL_RESULT_LABEL = { satisfactory: "Satisfactory", satisfactory_with_observations: "Satisfactory with observations", unsatisfactory: "Unsatisfactory" };
+export const INSPECTION_OVERALL_RESULT_BADGE = { satisfactory: "badge-green", satisfactory_with_observations: "badge-amber", unsatisfactory: "badge-red" };
+
+// Plant/equipment on site — a lighter sibling to the Labour & Site
+// Resource Tracker (RESOURCE_ADEQUACY etc., above weekly_reports'
+// labour_records) with no select vocabulary of its own, since nothing
+// elsewhere in the app establishes a fixed set of plant status values.
+export const PLANT_RECORD_COLUMNS = [
+  { key: "item", label: "Item / Equipment", type: "text", placeholder: "e.g. Tower crane, Excavator" },
+  { key: "quantity", label: "Quantity", type: "number", placeholder: "No. on site" },
+  { key: "location", label: "Location", type: "text", placeholder: "Area / plot" },
+  { key: "notes", label: "Notes", type: "text", placeholder: "Notes" },
+];
+
 export const FINDING_SEVERITIES = ["low", "medium", "high", "critical"];
 export const FINDING_SEVERITY_LABEL = { low: "Low", medium: "Medium", high: "High", critical: "Critical" };
 export const FINDING_SEVERITY_BADGE = { low: "badge-grey", medium: "badge-blue", high: "badge-amber", critical: "badge-red" };
@@ -971,7 +989,7 @@ export async function getInspections(projectId) {
 }
 
 export async function getInspection(inspectionId) {
-  const { data, error } = await supabase.from("inspections").select("*, projects(name)").eq("id", inspectionId).single();
+  const { data, error } = await supabase.from("inspections").select("*, projects(name, latitude, longitude)").eq("id", inspectionId).single();
   if (error) throw error;
   return data;
 }
@@ -7004,6 +7022,9 @@ export function buildInspectionPdfDocument({ jsPDFCtor, inspection, findings, fi
     ["Organisation", orgName],
     ["Date", inspection.inspection_date ? formatDate(inspection.inspection_date) : null],
     ["Inspector", inspection.conducted_by],
+    ["Weather", inspection.weather_conditions],
+    ["Accompanied By", inspection.accompanied_by],
+    ["Overall Result", INSPECTION_OVERALL_RESULT_LABEL[inspection.overall_result]],
   ].filter(([, value]) => value);
   if (details.length) {
     const colW = INSP_PDF_CONTENT_WIDTH / 2;
@@ -7029,6 +7050,49 @@ export function buildInspectionPdfDocument({ jsPDFCtor, inspection, findings, fi
     heading("Notes");
     paragraph(inspection.description.trim());
   }
+
+  // ─── LABOUR / PLANT TABLES ────────────────────────────────────────
+  // Same shaded-header-row convention as Commercial PDF's Line Items
+  // table (plain text rows, no colour pills — the Findings bands'
+  // own colour-coding is reserved for severity/status, not reused
+  // here to keep these two visually distinct roles apart).
+  function recordsTable(title, columns, rows) {
+    if (!rows || !rows.length) return;
+    heading(title, 11.5);
+    const widths = columns.map((c) => c.width);
+    const xs = [];
+    let cx = INSP_PDF_MARGIN;
+    for (const w of widths) { xs.push(cx); cx += w; }
+    ensureSpace(20);
+    doc.setFillColor(240, 240, 240);
+    doc.rect(INSP_PDF_MARGIN, y - 12, INSP_PDF_CONTENT_WIDTH, 18, "F");
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(8);
+    doc.setTextColor(70, 70, 70);
+    columns.forEach((c, i) => doc.text(c.label.toUpperCase(), xs[i] + 4, y));
+    y += 16;
+    for (const row of rows) {
+      ensureSpace(15);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8.5);
+      doc.setTextColor(40, 40, 40);
+      columns.forEach((c, i) => doc.text(row[c.key] || row[c.key] === 0 ? String(row[c.key]) : "—", xs[i] + 4, y));
+      y += 15;
+    }
+    y += 8;
+  }
+  recordsTable("Labour on Site", [
+    { key: "trade", label: "Trade", width: 150 },
+    { key: "headcount", label: "Headcount", width: 80 },
+    { key: "activity_location", label: "Activity / Location", width: 170 },
+    { key: "adequacy", label: "Resource Adequacy", width: INSP_PDF_CONTENT_WIDTH - 150 - 80 - 170 },
+  ], inspection.labour_records);
+  recordsTable("Plant & Equipment on Site", [
+    { key: "item", label: "Item / Equipment", width: 170 },
+    { key: "quantity", label: "Quantity", width: 70 },
+    { key: "location", label: "Location", width: 130 },
+    { key: "notes", label: "Notes", width: INSP_PDF_CONTENT_WIDTH - 170 - 70 - 130 },
+  ], inspection.plant_records);
 
   // ─── FINDINGS ───────────────────────────────────────────────────
   heading("Findings", 13);

@@ -90,6 +90,62 @@ test("CRUD: an editor can create an inspection with org_id correctly derived (ne
   }
 });
 
+// v76: weather, labour/plant on-site records, accompanied by, overall
+// result — plain columns, already covered by this table's own existing
+// editor-only RLS policies (not column-specific), so the one thing
+// genuinely worth checking here is that they actually round-trip
+// through the real `authenticated` role, not just the admin bypass
+// connection, plus the one new check constraint.
+test("v76: fresh inspection defaults weather/accompanied_by/overall_result to null and labour/plant records to an empty array", async () => {
+  const ownerA = await userClient(DB, OWNER_A);
+  try {
+    const created = await ownerA.query(
+      "insert into public.inspections (project_id, title) values ($1,'Fresh inspection') returning weather_conditions, accompanied_by, overall_result, labour_records, plant_records",
+      [fx.projA1]
+    );
+    assert.equal(created.rows[0].weather_conditions, null);
+    assert.equal(created.rows[0].accompanied_by, null);
+    assert.equal(created.rows[0].overall_result, null);
+    assert.deepEqual(created.rows[0].labour_records, []);
+    assert.deepEqual(created.rows[0].plant_records, []);
+  } finally {
+    await ownerA.end();
+  }
+});
+
+test("v76: an editor can set and read back weather, accompanied by, overall result, and labour/plant records", async () => {
+  const ownerA = await userClient(DB, OWNER_A);
+  try {
+    const labour = [{ id: "l1", trade: "Bricklayers", headcount: 4, activity_location: "Plot 7", adequacy: "Adequate" }];
+    const plant = [{ id: "p1", item: "Tower crane", quantity: 1, location: "Central core", notes: "Awaiting LOLER cert" }];
+    const updated = await ownerA.query(
+      `update public.inspections set weather_conditions = 'Heavy Rain', accompanied_by = 'J. Site Manager',
+         overall_result = 'satisfactory_with_observations', labour_records = $2, plant_records = $3
+       where id = $1 returning weather_conditions, accompanied_by, overall_result, labour_records, plant_records`,
+      [fx.inspA1, JSON.stringify(labour), JSON.stringify(plant)]
+    );
+    assert.equal(updated.rows[0].weather_conditions, "Heavy Rain");
+    assert.equal(updated.rows[0].accompanied_by, "J. Site Manager");
+    assert.equal(updated.rows[0].overall_result, "satisfactory_with_observations");
+    assert.deepEqual(updated.rows[0].labour_records, labour);
+    assert.deepEqual(updated.rows[0].plant_records, plant);
+  } finally {
+    await ownerA.end();
+  }
+});
+
+test("v76: overall_result rejects a value outside satisfactory / satisfactory_with_observations / unsatisfactory", async () => {
+  const ownerA = await userClient(DB, OWNER_A);
+  try {
+    await assert.rejects(
+      ownerA.query("update public.inspections set overall_result = 'mostly fine' where id = $1", [fx.inspA1]),
+      /inspections_overall_result_check/
+    );
+  } finally {
+    await ownerA.end();
+  }
+});
+
 test("CRUD: create/read/update/delete a finding, including status/severity", async () => {
   const ownerA = await userClient(DB, OWNER_A);
   try {
