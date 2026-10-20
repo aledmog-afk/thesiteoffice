@@ -111,7 +111,10 @@ test("v69: every plot and site figure is identical after go-live; grid carried, 
     assert.equal(c1.st, 5 * 33);
     assert.equal(c1.retired, legacyBefore);
     assert.equal(c1.im, legacyBefore + 5 * 33, "nothing deleted");
-    assert.equal(c1.runs, 1);
+    // 2 markers: v69's own go-live, plus v75 (block build stages) running
+    // its own one-time go-live later in the same schema.sql — this
+    // fixture's Block A goes through both.
+    assert.equal(c1.runs, 2);
 
     const stage = async (plot, key) => (await admin.query(
       "select percent::float p, applicable a, last_source s from public.internal_milestones where plot_id=$1 and stage_key=$2", [plot, key])).rows[0];

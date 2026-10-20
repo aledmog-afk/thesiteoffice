@@ -15950,3 +15950,743 @@ begin
     execute format('revoke execute on function %s from public, anon, authenticated', f);
   end loop;
 end $$;
+
+-- ─── v75 ADDITIONS: Block-level build progress stages ───────────────
+-- Numbered v75, not v74: this and feature/drawing-pins (merged as v74,
+-- PR #60) were built independently off the same main and both
+-- originally claimed "v74" — rebased and renumbered here now that
+-- it's clear drawing-pins merged first.
+--
+-- Gap (confirmed against the live code, not assumed): plots and flats
+-- already get full 33-stage build tracking via internal_milestones
+-- (v69). The BLOCK itself — the shared shell: groundworks, foundations,
+-- drainage, slab, frame, brick & block, scaffold up/down, roofing,
+-- windows, render, cladding — has no stage tracking at all.
+-- tracker/block-detail.html only had one bare manual "Progress complete
+-- (%)" number, writing straight to blocks.progress_pct with no
+-- breakdown, no history, no override mechanism. That figure already
+-- feeds the live site-wide Actual Progress calculation today (see
+-- recalc_project_progress(), tracker/docs/SITE_PROGRESS_SPEC.md) — not
+-- cosmetic, a real reporting input.
+--
+-- The 12 stages flagged house_default_applicable = true,
+-- flat_default_applicable = false in progress_stages (Site Set-Up
+-- through Cladding/External Finishes — everything up to and including
+-- the shell) are exactly the stages that apply once to a block's own
+-- shell, not per-flat. Reused directly here (not a new boolean column)
+-- since the shell is conceptually identical for a standalone house and
+-- a block's own shell.
+--
+-- Shape: mirrors the plot mechanic (internal_milestones / plots_v69_*)
+-- as closely as the two domains allow — a new, separate block_milestones
+-- table (not a nullable dual-purpose column bolted onto
+-- internal_milestones: blocks never carried the old pre-v69 grid, so
+-- there's no legacy baggage to share, and this repo's own convention
+-- throughout its history prefers a new parallel table over retrofitting
+-- a live, heavily-relied-upon one). block_progress_stage_events and
+-- block_progress_overrides likewise mirror progress_stage_events and
+-- plot_progress_overrides, scoped to block_id.
+--
+-- blocks_v69_after() (v69) already recalculates the site figure
+-- whenever blocks.progress_pct changes — untouched here, it already
+-- reacts correctly to whatever recalc_block_progress() below writes.
+--
+-- CRITICAL SAFETY PROPERTY: blocks.progress_pct already feeds the LIVE
+-- Actual Progress figure. Seeding block_milestones at 0% would crash
+-- every block's calculated figure to 0 the instant this runs, unless
+-- handled — so, exactly like v69 did for plots, every EXISTING block's
+-- CURRENT progress_pct is carried over as a noted manual override at
+-- go-live (GREATEST(override, calculated) then keeps returning the same
+-- number until real stage progress naturally overtakes it). This
+-- migration then runs the exact same "hard acceptance" check v69
+-- pioneered (see its own comment, "(O) One-time go-live data step"):
+-- snapshot every block and site figure immediately before the backfill,
+-- run it, recalculate, then verify NOTHING changed — if anything did,
+-- the whole transaction raises and rolls back rather than silently
+-- shipping a live figure change. Wrapped in its own begin;/commit; for
+-- the same reason v69 is: so the guarantee holds even when this file is
+-- run bare (e.g. pasted into the Supabase SQL editor), not only inside
+-- apply_migration's own transaction.
+begin;
+
+-- (A) blocks gains the same calculated/override shape plots already has.
+alter table public.blocks add column if not exists progress_calculated numeric not null default 0;
+alter table public.blocks add column if not exists progress_override numeric;
+alter table public.blocks add column if not exists progress_override_note text;
+alter table public.blocks add column if not exists progress_override_by uuid;
+alter table public.blocks add column if not exists progress_override_at timestamptz;
+alter table public.blocks drop constraint if exists blocks_progress_override_check;
+alter table public.blocks add constraint blocks_progress_override_check
+  check (progress_override is null or (progress_override >= 0 and progress_override <= 100
+         and progress_override_note is not null and length(btrim(progress_override_note)) >= 3));
+
+-- (B) block_milestones: one row per block per applicable shell stage.
+-- Simpler than internal_milestones (no milestone_key/legacy grid dual-
+-- purpose column — blocks never had a pre-v69 grid to carry across),
+-- so stage_key alone is both the content and the unique key.
+create table if not exists public.block_milestones (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  block_id uuid not null references public.blocks(id) on delete cascade,
+  stage_key text not null references public.progress_stages(stage_key),
+  title text not null,
+  percent numeric not null default 0 check (percent >= 0 and percent <= 100),
+  sort_order integer not null default 0,
+  applicable boolean not null default true,
+  retired_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz,
+  updated_by uuid,
+  last_source text check (last_source is null or last_source in ('block_page', 'report', 'migration', 'backfill')),
+  last_report_id uuid,
+  unique (block_id, stage_key)
+);
+create index if not exists block_milestones_block_idx on public.block_milestones (block_id) where retired_at is null;
+create index if not exists block_milestones_project_idx on public.block_milestones (project_id);
+
+alter table public.block_milestones enable row level security;
+revoke all on table public.block_milestones from anon;
+drop policy if exists "editors read block_milestones" on public.block_milestones;
+create policy "editors read block_milestones" on public.block_milestones for select to authenticated
+  using (public.is_project_editor(project_id));
+drop policy if exists "editors insert block_milestones" on public.block_milestones;
+create policy "editors insert block_milestones" on public.block_milestones for insert to authenticated
+  with check (public.is_project_editor(project_id));
+drop policy if exists "editors update block_milestones" on public.block_milestones;
+create policy "editors update block_milestones" on public.block_milestones for update to authenticated
+  using (public.is_project_editor(project_id));
+drop policy if exists "editors delete block_milestones" on public.block_milestones;
+create policy "editors delete block_milestones" on public.block_milestones for delete to authenticated
+  using (public.is_project_editor(project_id));
+
+-- (C) block_progress_stage_events: mirrors progress_stage_events, scoped to block_id.
+create table if not exists public.block_progress_stage_events (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  block_id uuid not null references public.blocks(id) on delete cascade,
+  stage_key text not null,
+  old_percent numeric,
+  new_percent numeric,
+  old_applicable boolean,
+  new_applicable boolean,
+  source text not null check (source in ('block_page', 'report', 'migration', 'backfill')),
+  weekly_report_id uuid,
+  note text,
+  changed_by uuid,
+  changed_at timestamptz not null default now()
+);
+create index if not exists block_progress_stage_events_block_idx on public.block_progress_stage_events (block_id, changed_at desc);
+create index if not exists block_progress_stage_events_project_idx on public.block_progress_stage_events (project_id);
+alter table public.block_progress_stage_events enable row level security;
+revoke all on table public.block_progress_stage_events from anon;
+revoke insert, update, delete, truncate, references, trigger on table public.block_progress_stage_events from authenticated;
+drop policy if exists "editors read block_progress_stage_events" on public.block_progress_stage_events;
+create policy "editors read block_progress_stage_events" on public.block_progress_stage_events for select to authenticated
+  using (public.is_project_editor(project_id));
+
+-- (D) block_progress_overrides: mirrors plot_progress_overrides, scoped to block_id.
+create table if not exists public.block_progress_overrides (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  block_id uuid not null references public.blocks(id) on delete cascade,
+  action text not null check (action in ('set', 'cleared', 'superseded', 'carried_over')),
+  old_override numeric,
+  new_override numeric,
+  calculated numeric,
+  note text not null check (length(btrim(note)) >= 3),
+  changed_by uuid,
+  changed_by_name text,
+  changed_at timestamptz not null default now()
+);
+create index if not exists block_progress_overrides_block_idx on public.block_progress_overrides (block_id, changed_at desc);
+create index if not exists block_progress_overrides_project_idx on public.block_progress_overrides (project_id);
+alter table public.block_progress_overrides enable row level security;
+revoke all on table public.block_progress_overrides from anon; revoke insert, update, delete, truncate, references, trigger on table public.block_progress_overrides from authenticated;
+drop policy if exists "members read block_progress_overrides" on public.block_progress_overrides;
+create policy "members read block_progress_overrides" on public.block_progress_overrides for select to authenticated
+  using (public.is_project_member(project_id));
+
+-- (E) recalc_block_progress: mirrors recalc_plot_progress exactly.
+create or replace function public.recalc_block_progress(p_block_id uuid)
+returns void
+language plpgsql security definer set search_path = public as $$
+declare
+  v_block public.blocks%rowtype;
+  v_calc numeric;
+  v_override numeric;
+  v_new numeric;
+  v_prev text := coalesce(current_setting('app.progress_internal', true), '');
+begin
+  select * into v_block from public.blocks where id = p_block_id;
+  if not found then return; end if;
+
+  select coalesce(round(avg(m.percent), 1), 0) into v_calc
+    from public.block_milestones m
+   where m.block_id = p_block_id and m.retired_at is null and m.applicable;
+
+  v_override := v_block.progress_override;
+  perform set_config('app.progress_internal', 'on', true);
+
+  if v_override is not null and v_calc >= v_override then
+    insert into public.block_progress_overrides (project_id, block_id, action, old_override, new_override, calculated, note, changed_by)
+    values (v_block.project_id, v_block.id, 'superseded', v_override, null, v_calc,
+            'Calculated progress reached the manual figure; back to automatic', auth.uid());
+    update public.blocks
+       set progress_override = null, progress_override_note = null,
+           progress_override_by = null, progress_override_at = null
+     where id = p_block_id;
+    v_override := null;
+  end if;
+
+  v_new := greatest(coalesce(v_override, 0), v_calc);
+  if v_block.progress_calculated is distinct from v_calc or v_block.progress_pct is distinct from v_new then
+    update public.blocks set progress_calculated = v_calc, progress_pct = v_new where id = p_block_id;
+  end if;
+
+  perform set_config('app.progress_internal', v_prev, true);
+end;
+$$;
+revoke all on function public.recalc_block_progress(uuid) from public, anon, authenticated;
+
+-- (F) block_milestones triggers: mirror internal_milestones_v69_before/after exactly.
+create or replace function public.block_milestones_v75_before()
+returns trigger
+language plpgsql security definer set search_path = public as $$
+declare
+  v_src text := nullif(current_setting('app.progress_source', true), '');
+begin
+  if tg_op = 'DELETE' then
+    if not public.progress_internal() and exists (select 1 from public.blocks b where b.id = old.block_id) then
+      raise exception 'Build stages can''t be deleted. Mark the stage N/A instead.' using errcode = '42501';
+    end if;
+    return old;
+  end if;
+  if tg_op = 'INSERT' then
+    if not public.progress_internal() then
+      raise exception 'Build stages are created by the system for each block.' using errcode = '42501';
+    end if;
+    -- project_id is always derived from the real block, never
+    -- client-trusted — same idiom every other child table in this
+    -- schema uses (documents/document_revisions etc.), defense in depth
+    -- even though block_milestones has no direct client insert path.
+    select b.project_id into new.project_id from public.blocks b where b.id = new.block_id;
+    if new.project_id is null then
+      raise exception 'block_milestones.block_id must reference an existing block';
+    end if;
+    new.retired_at := null;
+    new.last_source := null;
+    new.last_report_id := null;
+    return new;
+  end if;
+
+  if not public.progress_internal() then
+    -- Clients (block page) may change percent and applicable only.
+    new.id := old.id;
+    new.project_id := old.project_id;
+    new.block_id := old.block_id;
+    new.stage_key := old.stage_key;
+    new.title := old.title;
+    new.sort_order := old.sort_order;
+    new.retired_at := old.retired_at;
+    new.created_at := old.created_at;
+    if new.percent is distinct from old.percent or new.applicable is distinct from old.applicable then
+      new.last_source := 'block_page';
+      new.last_report_id := null;
+    else
+      new.last_source := old.last_source;
+      new.last_report_id := old.last_report_id;
+    end if;
+  elsif v_src is not null and (new.percent is distinct from old.percent or new.applicable is distinct from old.applicable) then
+    new.last_source := v_src;
+    new.last_report_id := nullif(current_setting('app.progress_report_id', true), '')::uuid;
+  end if;
+
+  if new.percent is distinct from old.percent or new.applicable is distinct from old.applicable then
+    new.updated_at := now();
+    new.updated_by := auth.uid();
+  end if;
+  return new;
+end;
+$$;
+revoke all on function public.block_milestones_v75_before() from public, anon, authenticated;
+
+create or replace function public.block_milestones_v75_after()
+returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if tg_op = 'DELETE' then
+    if not public.progress_bulk() then
+      perform public.recalc_block_progress(old.block_id);
+    end if;
+    return old;
+  end if;
+
+  if tg_op = 'UPDATE' and (new.percent is distinct from old.percent or new.applicable is distinct from old.applicable) then
+    insert into public.block_progress_stage_events (project_id, block_id, stage_key, old_percent, new_percent,
+      old_applicable, new_applicable, source, weekly_report_id, note, changed_by)
+    values (new.project_id, new.block_id, new.stage_key, old.percent, new.percent, old.applicable, new.applicable,
+      coalesce(new.last_source, 'block_page'), new.last_report_id,
+      nullif(current_setting('app.progress_note', true), ''), auth.uid());
+  end if;
+
+  if not public.progress_bulk()
+     and (tg_op = 'INSERT' or new.percent is distinct from old.percent
+          or new.applicable is distinct from old.applicable
+          or new.retired_at is distinct from old.retired_at) then
+    perform public.recalc_block_progress(new.block_id);
+  end if;
+  return new;
+end;
+$$;
+revoke all on function public.block_milestones_v75_after() from public, anon, authenticated;
+
+drop trigger if exists trg_block_milestones_v75_before on public.block_milestones;
+create trigger trg_block_milestones_v75_before before insert or update or delete on public.block_milestones
+  for each row execute function public.block_milestones_v75_before();
+drop trigger if exists trg_block_milestones_v75_after on public.block_milestones;
+create trigger trg_block_milestones_v75_after after insert or update or delete on public.block_milestones
+  for each row execute function public.block_milestones_v75_after();
+
+-- (G) blocks_v75_progress_guard: mirrors plots_v69_progress_guard — new,
+-- didn't exist before. This is what stops block-detail.html's old
+-- direct `.update({ progress_pct })` call from working; that page's UI
+-- is rebuilt below the old write path, not worked around.
+create or replace function public.blocks_v75_progress_guard()
+returns trigger
+language plpgsql security invoker set search_path = public as $$
+begin
+  if public.progress_internal() or current_user not in ('authenticated', 'anon') then return new; end if;
+  if tg_op = 'INSERT' then
+    new.progress_pct := 0;
+    new.progress_calculated := 0;
+    new.progress_override := null;
+    new.progress_override_note := null;
+    new.progress_override_by := null;
+    new.progress_override_at := null;
+  else
+    new.progress_pct := old.progress_pct;
+    new.progress_calculated := old.progress_calculated;
+    new.progress_override := old.progress_override;
+    new.progress_override_note := old.progress_override_note;
+    new.progress_override_by := old.progress_override_by;
+    new.progress_override_at := old.progress_override_at;
+  end if;
+  return new;
+end;
+$$;
+revoke all on function public.blocks_v75_progress_guard() from public, anon, authenticated;
+grant execute on function public.blocks_v75_progress_guard() to authenticated;
+drop trigger if exists trg_blocks_v75_progress_guard on public.blocks;
+create trigger trg_blocks_v75_progress_guard before insert or update on public.blocks
+  for each row execute function public.blocks_v75_progress_guard();
+
+-- (H) resolve_block_tags: a block-name tag match, mirroring the exact
+-- trim/lower-case/collapse-whitespace normalisation resolve_plot_tags_detail
+-- already uses to RECOGNISE (and skip) a block name. No range support —
+-- blocks aren't numbered the way plots are; a tag is either one exact
+-- block name or it isn't.
+create or replace function public.resolve_block_tags(p_project_id uuid, p_tag text)
+returns setof uuid
+language plpgsql stable security definer set search_path = public as $$
+declare
+  v_ext constant text := 'external / engineering works';
+  v_seg text;
+  v_low text;
+  v_hit uuid;
+begin
+  if p_tag is null then return; end if;
+  foreach v_seg in array string_to_array(p_tag, ',') loop
+    v_low := lower(regexp_replace(regexp_replace(v_seg, '^\s+|\s+$', '', 'g'), '\s+', ' ', 'g'));
+    continue when v_low = '' or v_low = v_ext;
+    select b.id into v_hit from public.blocks b
+      where b.project_id = p_project_id
+        and lower(regexp_replace(regexp_replace(b.block_name, '^\s+|\s+$', '', 'g'), '\s+', ' ', 'g')) = v_low
+      limit 1;
+    if v_hit is not null then
+      return next v_hit;
+    end if;
+  end loop;
+  return;
+end;
+$$;
+revoke all on function public.resolve_block_tags(uuid, text) from public, anon, authenticated;
+
+-- (I) apply_weekly_report_progress: extended to ALSO raise a matching
+-- block's stages for the same progress_items, closing the "weekly
+-- reports already recognise a block-name tag but explicitly skip it"
+-- gap. The plot-raising half is untouched (same body as before); the
+-- block half runs in the same loop, over the same items, so a report
+-- that mixes a block tag and plot tags in one go still raises both.
+create or replace function public.apply_weekly_report_progress(p_report_id uuid, p_source text default 'report')
+returns integer
+language plpgsql security definer set search_path = public as $$
+declare
+  v_rep record;
+  v_item jsonb;
+  v_stage text;
+  v_pct numeric;
+  v_hit uuid[];
+  v_plots uuid[] := '{}';
+  v_blocks uuid[] := '{}';
+  v_total integer := 0;
+  v_pid uuid;
+  v_prev_int text := coalesce(current_setting('app.progress_internal', true), '');
+  v_prev_bulk text := coalesce(current_setting('app.progress_bulk', true), '');
+  v_prev_src text := coalesce(current_setting('app.progress_source', true), '');
+  v_prev_rep text := coalesce(current_setting('app.progress_report_id', true), '');
+begin
+  if p_source not in ('report', 'backfill') then
+    raise exception 'apply_weekly_report_progress: bad source %', p_source;
+  end if;
+  select w.id, w.project_id, w.progress_items into v_rep from public.weekly_reports w where w.id = p_report_id;
+  if not found or v_rep.progress_items is null or jsonb_typeof(v_rep.progress_items) <> 'array' then
+    return 0;
+  end if;
+
+  perform set_config('app.progress_internal', 'on', true);
+  perform set_config('app.progress_bulk', 'on', true);
+  perform set_config('app.progress_source', p_source, true);
+  perform set_config('app.progress_report_id', p_report_id::text, true);
+
+  for v_item in select value from jsonb_array_elements(v_rep.progress_items) loop
+    continue when jsonb_typeof(v_item) <> 'object';
+    select s.stage_key into v_stage from public.progress_stages s where s.name = btrim(coalesce(v_item->>'milestone', ''));
+    continue when v_stage is null;
+    v_pct := case
+      when jsonb_typeof(v_item->'percent') = 'number' then (v_item->>'percent')::numeric
+      when jsonb_typeof(v_item->'percent') = 'string' and btrim(v_item->>'percent') ~ '^[0-9]{1,3}(\.[0-9]+)?$'
+        then btrim(v_item->>'percent')::numeric
+    end;
+    continue when v_pct is null or v_pct <= 0 or v_pct > 100;
+
+    insert into public.progress_tag_skips (project_id, weekly_report_id, tag, token, reason, source)
+    select v_rep.project_id, p_report_id, coalesce(v_item->>'plot', ''), d.token, d.problem, p_source
+      from public.resolve_plot_tags_detail(v_rep.project_id, v_item->>'plot') d
+     where d.problem is not null
+    on conflict do nothing;
+
+    with u as (
+      update public.internal_milestones m
+         set percent = v_pct
+       where m.project_id = v_rep.project_id
+         and m.stage_key = v_stage
+         and m.retired_at is null
+         and m.applicable
+         and m.percent < v_pct
+         and m.plot_id in (select public.resolve_plot_tags(v_rep.project_id, v_item->>'plot'))
+      returning m.plot_id
+    )
+    select coalesce(array_agg(u.plot_id), '{}') into v_hit from u;
+    v_plots := v_plots || v_hit;
+    v_total := v_total + coalesce(array_length(v_hit, 1), 0);
+
+    with ub as (
+      update public.block_milestones m
+         set percent = v_pct
+       where m.project_id = v_rep.project_id
+         and m.stage_key = v_stage
+         and m.retired_at is null
+         and m.applicable
+         and m.percent < v_pct
+         and m.block_id in (select public.resolve_block_tags(v_rep.project_id, v_item->>'plot'))
+      returning m.block_id
+    )
+    select coalesce(array_agg(ub.block_id), '{}') into v_hit from ub;
+    v_blocks := v_blocks || v_hit;
+    v_total := v_total + coalesce(array_length(v_hit, 1), 0);
+  end loop;
+
+  -- The go-live backfill recalculates everything once at the end itself.
+  if p_source = 'report' then
+    for v_pid in select distinct x from unnest(v_plots) x loop
+      perform public.recalc_plot_progress(v_pid);
+    end loop;
+    for v_pid in select distinct x from unnest(v_blocks) x loop
+      perform public.recalc_block_progress(v_pid);
+    end loop;
+    if v_total > 0 then
+      perform public.recalc_project_progress(v_rep.project_id);
+    end if;
+  end if;
+
+  perform set_config('app.progress_internal', v_prev_int, true);
+  perform set_config('app.progress_bulk', v_prev_bulk, true);
+  perform set_config('app.progress_source', v_prev_src, true);
+  perform set_config('app.progress_report_id', v_prev_rep, true);
+  return v_total;
+end;
+$$;
+revoke all on function public.apply_weekly_report_progress(uuid, text) from public, anon, authenticated;
+
+-- (J) set_block_override / clear_block_override: mirror set_plot_override
+-- / clear_plot_override exactly.
+create or replace function public.set_block_override(p_block_id uuid, p_percent numeric, p_note text)
+returns numeric
+language plpgsql security definer set search_path = public as $$
+declare
+  v_block public.blocks%rowtype;
+  v_prev text := coalesce(current_setting('app.progress_internal', true), '');
+begin
+  select * into v_block from public.blocks where id = p_block_id;
+  if not found or not public.is_project_editor(v_block.project_id) or public.is_party_only(v_block.project_id) then
+    raise exception 'You don''t have permission to change this block''s progress.' using errcode = '42501';
+  end if;
+  if p_note is null or length(btrim(p_note)) < 3 or length(btrim(p_note)) > 500 then
+    raise exception 'A note is required (3 to 500 characters).' using errcode = '22023';
+  end if;
+  if p_percent is null or p_percent < 0 or p_percent > 100 then
+    raise exception 'The manual figure must be between 0 and 100.' using errcode = '22023';
+  end if;
+  if p_percent <= v_block.progress_calculated then
+    raise exception using errcode = '22023',
+      message = format('The manual figure must be higher than the calculated %s%%.', v_block.progress_calculated);
+  end if;
+
+  perform set_config('app.progress_internal', 'on', true);
+  insert into public.block_progress_overrides (project_id, block_id, action, old_override, new_override, calculated, note, changed_by, changed_by_name)
+  values (v_block.project_id, v_block.id, 'set', v_block.progress_override, round(p_percent, 1), v_block.progress_calculated,
+          btrim(p_note), auth.uid(), public.progress_actor_name(auth.uid()));
+  update public.blocks
+     set progress_override = round(p_percent, 1), progress_override_note = btrim(p_note),
+         progress_override_by = auth.uid(), progress_override_at = now()
+   where id = p_block_id;
+  perform public.recalc_block_progress(p_block_id);
+  perform set_config('app.progress_internal', v_prev, true);
+  return (select progress_pct from public.blocks where id = p_block_id);
+end;
+$$;
+revoke all on function public.set_block_override(uuid, numeric, text) from public, anon, authenticated; grant execute on function public.set_block_override(uuid, numeric, text) to authenticated;
+
+create or replace function public.clear_block_override(p_block_id uuid, p_note text default null)
+returns numeric
+language plpgsql security definer set search_path = public as $$
+declare
+  v_block public.blocks%rowtype;
+  v_prev text := coalesce(current_setting('app.progress_internal', true), '');
+begin
+  select * into v_block from public.blocks where id = p_block_id;
+  if not found or not public.is_project_editor(v_block.project_id) or public.is_party_only(v_block.project_id) then
+    raise exception 'You don''t have permission to change this block''s progress.' using errcode = '42501';
+  end if;
+  if v_block.progress_override is null then
+    return v_block.progress_pct;
+  end if;
+  perform set_config('app.progress_internal', 'on', true);
+  insert into public.block_progress_overrides (project_id, block_id, action, old_override, new_override, calculated, note, changed_by, changed_by_name)
+  values (v_block.project_id, v_block.id, 'cleared', v_block.progress_override, null, v_block.progress_calculated,
+          case when length(btrim(coalesce(p_note, ''))) >= 3 then left(btrim(p_note), 500) else 'Switched back to automatic' end,
+          auth.uid(), public.progress_actor_name(auth.uid()));
+  update public.blocks
+     set progress_override = null, progress_override_note = null, progress_override_by = null, progress_override_at = null
+   where id = p_block_id;
+  perform public.recalc_block_progress(p_block_id);
+  perform set_config('app.progress_internal', v_prev, true);
+  return (select progress_pct from public.blocks where id = p_block_id);
+end;
+$$;
+revoke all on function public.clear_block_override(uuid, text) from public, anon, authenticated; grant execute on function public.clear_block_override(uuid, text) to authenticated;
+
+-- (K) seed_block_defaults: adds the 12 shell-stage block_milestones rows
+-- for every NEW block, alongside the gates/documents it already seeds.
+-- Existing blocks are handled by the go-live backfill below, not here.
+create or replace function public.seed_block_defaults()
+returns trigger as $$
+begin
+  insert into public.quality_gates (project_id, block_id, gate_key, title, sort_order, checklist) values
+    (new.project_id, new.id, 'block_substructure_drainage', 'Substructure & Drainage (Block)', 1, '[
+       {"text": "Foundation excavation inspected by Building Control", "checked": false, "checked_at": null},
+       {"text": "Drainage test (air/water) passed and recorded", "checked": false, "checked_at": null},
+       {"text": "DPC level verified across the block", "checked": false, "checked_at": null},
+       {"text": "Building Control sign-off for substructure received", "checked": false, "checked_at": null}
+     ]'::jsonb),
+    (new.project_id, new.id, 'block_frame_superstructure', 'Frame & Superstructure (Block)', 2, '[
+       {"text": "Structural frame inspected at each floor", "checked": false, "checked_at": null},
+       {"text": "Structural engineer sign-off uploaded", "checked": false, "checked_at": null},
+       {"text": "Fire-stopping / compartmentation between floors installed", "checked": false, "checked_at": null},
+       {"text": "Superstructure Building Control inspection passed", "checked": false, "checked_at": null}
+     ]'::jsonb),
+    (new.project_id, new.id, 'block_envelope_watertight', 'Roof & Building Envelope (Wind/Watertight)', 3, '[
+       {"text": "Roof covering complete and inspected", "checked": false, "checked_at": null},
+       {"text": "Moisture readings recorded", "checked": false, "checked_at": null},
+       {"text": "Cladding / render system signed off", "checked": false, "checked_at": null},
+       {"text": "Building confirmed wind and watertight", "checked": false, "checked_at": null}
+     ]'::jsonb),
+    (new.project_id, new.id, 'block_communal_fire', 'Communal Areas, M&E & Fire Strategy', 4, '[
+       {"text": "Lift(s) commissioned and certified", "checked": false, "checked_at": null},
+       {"text": "Communal M&E systems (AOV, sprinklers, fire alarm) commissioned", "checked": false, "checked_at": null},
+       {"text": "Fire strategy walk-through completed with Building Control / Fire Officer", "checked": false, "checked_at": null},
+       {"text": "Communal areas snagging closed out", "checked": false, "checked_at": null}
+     ]'::jsonb)
+  on conflict (block_id, gate_key) do nothing;
+
+  insert into public.handover_documents (project_id, block_id, doc_key, title) values
+    (new.project_id, new.id, 'block_building_control', 'Building Control Sign-off (Block)'),
+    (new.project_id, new.id, 'block_warranty', 'NHBC/Structural Warranty Cover Note (Block)'),
+    (new.project_id, new.id, 'block_fire_strategy', 'Fire Strategy & Compartmentation Report'),
+    (new.project_id, new.id, 'block_communal_me', 'Communal M&E Handover Pack (Lifts, AOV, Sprinklers)'),
+    (new.project_id, new.id, 'block_insurance', 'Building Insurance / Buildings Warranty'),
+    (new.project_id, new.id, 'block_lift_cert', 'Lift(s) Commissioning / Thorough Examination Certificate (LOLER)')
+  on conflict (block_id, doc_key) do nothing;
+
+  -- Shell-only stages: house_default_applicable alone is NOT the right
+  -- filter (29 of 33 stages are true for houses, since a standalone
+  -- house's own progress covers its whole build, shell AND fit-out).
+  -- The stages that apply ONCE to a block's own shared shell are the
+  -- ones NO flat gets individually: house_default_applicable = true AND
+  -- flat_default_applicable = false (groundworks through cladding, plus
+  -- the shell-adjacent 1st Fix – Gas and Solar PV — 14 stages today;
+  -- deliberately not hardcoded as a count, since progress_stages' own
+  -- flags are the single source of truth this depends on).
+  -- block_milestones_v75_before() refuses an INSERT unless
+  -- progress_internal() is on — same reason seed_plot_defaults() sets
+  -- and restores it around its own internal_milestones insert.
+  declare v_prev text := coalesce(current_setting('app.progress_internal', true), '');
+  begin
+    perform set_config('app.progress_internal', 'on', true);
+    insert into public.block_milestones (project_id, block_id, stage_key, title, sort_order, applicable, last_source)
+    select new.project_id, new.id, s.stage_key, s.name, s.sort_order, true, null
+      from public.progress_stages s where s.house_default_applicable and not s.flat_default_applicable
+    on conflict (block_id, stage_key) do nothing;
+    perform set_config('app.progress_internal', v_prev, true);
+  end;
+
+  return new;
+end;
+$$ language plpgsql;
+revoke all on function public.seed_block_defaults() from public, anon, authenticated;
+
+-- (L) One-time go-live data step for existing blocks. Guarded by
+-- progress_migration_runs so a re-run never re-backfills or re-carries,
+-- same idiom v69 established.
+do $v75$
+declare
+  v_diff text;
+  v_bid uuid;
+begin
+  perform set_config('app.progress_internal', 'on', true);
+  perform set_config('app.progress_bulk', 'on', true);
+
+  if exists (select 1 from public.progress_migration_runs where step = 'v75_block_stages_rolled_back') then
+    raise exception 'v75 block stages was rolled back here (sql/rollback/v75_block_progress_stages_rollback.sql); re-applying it needs a fresh go-live decision';
+  end if;
+  if exists (select 1 from public.progress_migration_runs where step = 'v75_block_stages_go_live') then
+    perform set_config('app.progress_internal', '', true);
+    perform set_config('app.progress_bulk', '', true);
+    return;
+  end if;
+
+  -- 1. Snapshot every existing block's and site's current figure.
+  create temporary table v75_block_snapshot on commit drop as
+  select id as block_id, project_id, progress_pct from public.blocks;
+  create temporary table v75_site_snapshot on commit drop as
+  select id as project_id, actual_progress_pct, external_works_pct from public.projects;
+
+  -- 2. Seed the shell-stage rows for every block that doesn't already
+  -- have them (new blocks created after this migration's own
+  -- seed_block_defaults() change already get them; this is only for
+  -- blocks that existed before this migration ran). Same filter as
+  -- seed_block_defaults(): house_default_applicable alone is wrong
+  -- (29 of 33 stages are true for houses) — the shell-only set is
+  -- house_default_applicable = true AND flat_default_applicable = false.
+  insert into public.block_milestones (project_id, block_id, stage_key, title, sort_order, applicable, last_source)
+  select b.project_id, b.id, s.stage_key, s.name, s.sort_order, true, 'migration'
+    from public.blocks b
+    cross join public.progress_stages s
+   where s.house_default_applicable and not s.flat_default_applicable
+  on conflict (block_id, stage_key) do nothing;
+
+  -- 3. Carry each block's CURRENT figure over as a manual override —
+  -- the safety property this whole migration depends on. Only for
+  -- blocks whose figure is above zero (a 0% block needs no carry-over:
+  -- the fresh calculated figure already starts at 0).
+  insert into public.block_progress_overrides (project_id, block_id, action, old_override, new_override, calculated, note)
+  select s.project_id, s.block_id, 'carried_over', null, s.progress_pct, 0,
+         'Carried over at the block-stages go-live — this was the block''s previous manual figure'
+    from v75_block_snapshot s where s.progress_pct > 0;
+  update public.blocks b
+     set progress_override = s.progress_pct,
+         progress_override_note = 'Carried over at the block-stages go-live — this was the block''s previous manual figure',
+         progress_override_at = now()
+    from v75_block_snapshot s
+   where s.block_id = b.id and s.progress_pct > 0;
+
+  -- 4. Backfill every ISSUED weekly report (never drafts) so a
+  -- historical block-name tag that was previously silently skipped now
+  -- raises the block's stages, exactly like v69 backfilled plot tags.
+  for v_bid in select w.id from public.weekly_reports w where w.status = 'issued' order by w.week_ending, w.created_at, w.id loop
+    perform public.apply_weekly_report_progress(v_bid, 'backfill');
+  end loop;
+  perform set_config('app.progress_internal', 'on', true);
+  perform set_config('app.progress_bulk', 'on', true);
+  perform set_config('app.progress_source', '', true);
+  perform set_config('app.progress_report_id', '', true);
+
+  -- 5. Recalculate every block, then every site.
+  for v_bid in select id from public.blocks loop
+    perform public.recalc_block_progress(v_bid);
+  end loop;
+  for v_bid in select id from public.projects loop
+    perform public.recalc_project_progress(v_bid);
+  end loop;
+
+  -- 6. HARD ACCEPTANCE: every block and site figure must be unchanged.
+  select string_agg(x, '; ') into v_diff from (
+    select 'block ' || b.id || ': ' || s.progress_pct || ' -> ' || b.progress_pct as x
+      from public.blocks b join v75_block_snapshot s on s.block_id = b.id
+     where b.progress_pct is distinct from s.progress_pct
+    union all
+    select 'site ' || j.id || ': ' || s.actual_progress_pct || '/' || s.external_works_pct
+           || ' -> ' || j.actual_progress_pct || '/' || j.external_works_pct
+      from public.projects j join v75_site_snapshot s on s.project_id = j.id
+     where j.actual_progress_pct is distinct from s.actual_progress_pct
+        or j.external_works_pct is distinct from s.external_works_pct
+    limit 50
+  ) d;
+  if v_diff is not null then
+    raise exception 'v75 block stages go-live stopped: figures would change (%). Nothing was applied.', v_diff;
+  end if;
+
+  insert into public.progress_migration_runs (step, detail) values ('v75_block_stages_go_live', jsonb_build_object(
+    'blocks', (select count(*) from public.blocks),
+    'stage_rows', (select count(*) from public.block_milestones),
+    'overrides_carried', (select count(*) from public.block_progress_overrides where action = 'carried_over'),
+    'backfill_raises', (select count(*) from public.block_progress_stage_events where source = 'backfill')
+  ));
+
+  perform set_config('app.progress_internal', '', true);
+  perform set_config('app.progress_bulk', '', true);
+end;
+$v75$;
+
+-- (M) Grants (v69 pattern).
+do $v75g$
+declare f text;
+begin
+  foreach f in array array[
+    'public.resolve_block_tags(uuid, text)',
+    'public.recalc_block_progress(uuid)',
+    'public.block_milestones_v75_before()',
+    'public.block_milestones_v75_after()'
+  ] loop
+    execute format('revoke all on function %s from public', f);
+    execute format('revoke execute on function %s from anon, authenticated', f);
+  end loop;
+end;
+$v75g$;
+revoke all on function public.blocks_v75_progress_guard() from public;
+revoke execute on function public.blocks_v75_progress_guard() from anon;
+grant execute on function public.blocks_v75_progress_guard() to authenticated;
+
+-- Tables: read-only to the appropriate audience (RLS above decides rows).
+do $v75t$
+begin
+  revoke all on table public.block_progress_overrides from anon;
+  revoke insert, update, delete, truncate, references, trigger on table public.block_progress_overrides from authenticated;
+  grant select on table public.block_progress_overrides to authenticated;
+end;
+$v75t$;
+
+commit;
+
+-- End of the v75 transaction. Future sections go below this line,
+-- outside the block (or in their own begin;/commit;).
