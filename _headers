@@ -31,6 +31,22 @@
   ! Content-Security-Policy
   Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://esm.sh; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://*.supabase.co; connect-src 'self' https://*.supabase.co https://api.postcodes.io https://api.open-meteo.com https://esm.sh; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
 
+# This app has no build step, so js/app.js, css/app.css etc. keep the
+# exact same filename across every deploy — nothing tells a browser a
+# cached copy is stale. Without this, a browser can keep serving a
+# pre-deploy app.js against a freshly-fetched page that imports a name
+# only the new app.js exports, which fails outright at the browser's
+# module-load step with no visible error (see handover/NOTES.md, 19
+# Oct 2026, for the live incident this was written to fix). `no-cache`
+# does not mean "don't cache" — it means always revalidate with the
+# server (a conditional request, backed by Pages' own ETag) before
+# using the cached copy, so an unchanged file still gets a fast 304
+# and only a real change ever downloads fresh.
+/tracker/js/*
+  Cache-Control: no-cache
+/tracker/css/*
+  Cache-Control: no-cache
+
 # /contents-inventory is a separate app page and Aled's decision; it is
 # left exactly as it was before this change (no headers from /*).
 /contents-inventory

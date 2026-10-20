@@ -134,6 +134,20 @@ test("_headers: /contents-inventory is left exactly as before (Aled's decision) 
   for (const p of ["/contents-inventory", "/contents-inventory.html"]) assert.deepEqual(resolveHeaders(rules, p), {}, p);
 });
 
+test("_headers: the app's own JS and CSS always revalidate (no-cache), so a stale cached copy can never outlive a deploy", () => {
+  const rules = parseHeaders(readRootFile("_headers"));
+  for (const p of ["/tracker/js/app.js", "/tracker/js/theme-init.js", "/tracker/js/supabase-client.js", "/tracker/css/app.css"]) {
+    assert.equal(resolveHeaders(rules, p)["Cache-Control"], "no-cache", p);
+  }
+});
+
+test("_headers: Cache-Control is scoped to the app's JS/CSS only - HTML pages and root pages don't get it from this file", () => {
+  const rules = parseHeaders(readRootFile("_headers"));
+  for (const p of ["/", "/privacy.html", "/tracker/login.html", "/tracker/plot-detail.html", "/tracker/favicon.svg"]) {
+    assert.equal(resolveHeaders(rules, p)["Cache-Control"], undefined, p);
+  }
+});
+
 test("robots and sitemap: the front page is listed, the app itself is kept out of search", () => {
   const robots = readRootFile("robots.txt");
   assert.match(robots, /^Disallow: \/tracker\/$/m);
