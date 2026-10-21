@@ -1,0 +1,25 @@
+{
+  "name": "liftwatch",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Pilot decision-support tool: checks a planned crane lift against the wind forecast and records the Appointed Person's decision. Never an authorisation to lift.",
+  "author": "LiftWatch",
+  "license": "UNLICENSED",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p worker",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vite": "8.3.5",
+    "vitest": "5.0.5"
+  },
+  "dependencies": {
+    "jspdf": "4.2.1"
+  }
+}
