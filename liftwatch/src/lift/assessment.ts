@@ -17,8 +17,27 @@ import {
 } from '../wind';
 import type { LiftSetup } from './setup';
 
+/** How one load in the lift plan fares against the forecast. */
+export interface LoadOutcome {
+  ref: string;
+  isMain: boolean;
+  result: LoadWindResult;
+  /** Status for each lift-day hour, in the same order as LiftAssessment.liftDayHours. */
+  statuses: Status[];
+  /** Worst status in the lift window, and its % of this load's limit. */
+  windowStatus: Status;
+  windowWorstPercent: number | null;
+  /** Daylight runs of 1 hour or more within limits for this load. */
+  periods: Period[];
+}
+
 export interface LiftAssessment {
+  /** The governing load: the most wind-sensitive (lowest permitted speed) in the plan. */
   load: LoadWindResult;
+  /** Reference of the governing load. */
+  governingRef: string;
+  /** Every load in the plan, main load first. Absent on records saved before load schedules. */
+  loads: LoadOutcome[];
   heightM: number;
   terrain: Terrain;
   heightFactor: number;
@@ -62,7 +81,26 @@ export function assessLift(s: LiftSetup, forecast: Forecast): LiftAssessment {
   if (s.chartLimitType !== 'gust') {
     throw new AssessmentError('The chart limit must be a gust limit for this method.');
   }
-  const load = loadResult(s);
+  const mainRef = s.loadDescription.trim() || 'Main load';
+  const candidates = [
+    { ref: mainRef, isMain: true, result: loadResult(s) },
+    ...(s.extraLoads ?? []).map((l) => ({
+      ref: l.ref,
+      isMain: false,
+      result: permittedWindSpeed({
+        loadLengthM: l.lengthM,
+        loadHeightM: l.heightM,
+        dragCoefficient: l.dragCoefficient,
+        loadMassKg: l.massKg,
+        riggingMassKg: l.riggingMassKg,
+        chartLimitMs: s.chartLimitMs ?? Number.NaN,
+      }),
+    })),
+  ];
+  // Every load sees the same gust, so the load with the lowest permitted speed is
+  // the worst in every hour. It drives the banner. Ties keep the main load.
+  const governing = candidates.reduce((g, c) => (c.result.permittedMs < g.result.permittedMs ? c : g));
+  const load = governing.result;
   const heightM = s.heightM ?? Number.NaN;
   const terrain = s.terrain ?? 'open';
   const heightFactor = terrainHeightFactor(heightM, terrain);
@@ -74,6 +112,8 @@ export function assessLift(s: LiftSetup, forecast: Forecast): LiftAssessment {
     throw new AssessmentError(`The forecast does not cover ${s.liftDate}. It runs 7 days from today.`);
   }
   const liftDaySun = forecast.days.find((d) => d.date === s.liftDate) ?? null;
+  const clip = (p: Period) => (liftDaySun && p.end > liftDaySun.sunset ? { ...p, end: liftDaySun.sunset } : p);
+  const liftDayForecast = forecast.hours.filter((h) => h.time.startsWith(s.liftDate));
 
   const windowDefaulted = !s.windowStart || !s.windowEnd;
   const windowStart = windowDefaulted ? (liftDaySun?.sunrise ?? `${s.liftDate}T00:00`) : `${s.liftDate}T${s.windowStart}`;
@@ -81,9 +121,26 @@ export function assessLift(s: LiftSetup, forecast: Forecast): LiftAssessment {
   // An hour counts if any part of it is in the window: it ends after the start and starts before the end.
   const windowHours = liftDayHours.filter((h) => endOfHour(h.time) > windowStart && h.time < windowEnd);
   const worst = worstHour(windowHours);
+  const inWindow = (time: string) => endOfHour(time) > windowStart && time < windowEnd;
+
+  const loads: LoadOutcome[] = candidates.map((c) => {
+    const hours = assessHours(liftDayForecast, forecast.days, { heightM, permittedMs: c.result.permittedMs, terrain });
+    const w = worstHour(hours.filter((h) => inWindow(h.time)));
+    return {
+      ref: c.ref,
+      isMain: c.isMain,
+      result: c.result,
+      statuses: hours.map((h) => h.status),
+      windowStatus: w ? w.status : 'no-data',
+      windowWorstPercent: w ? w.percentOfLimit : null,
+      periods: findWorkablePeriods(hours, 1).map(clip),
+    };
+  });
 
   return {
     load,
+    governingRef: governing.ref,
+    loads,
     heightM,
     terrain,
     heightFactor,
@@ -92,15 +149,13 @@ export function assessLift(s: LiftSetup, forecast: Forecast): LiftAssessment {
     windowStart,
     windowEnd,
     windowDefaulted,
-    liftDayForecast: forecast.hours.filter((h) => h.time.startsWith(s.liftDate)),
+    liftDayForecast,
     liftDayHours,
     windowHours,
     worst,
     overallStatus: worst ? worst.status : 'no-data',
     // The last hour of a period can start before sunset and end after it. Show the period ending at sunset.
-    periods: findWorkablePeriods(liftDayHours).map((p) =>
-      liftDaySun && p.end > liftDaySun.sunset ? { ...p, end: liftDaySun.sunset } : p,
-    ),
+    periods: findWorkablePeriods(liftDayHours).map(clip),
     outlook: dailyOutlook(all),
   };
 }

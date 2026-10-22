@@ -7,7 +7,7 @@ import type { Ctx } from '../app';
 import { clear, download, h } from '../dom';
 import { card } from '../fields';
 import { hhmm, instant, longDate, num, pct, speed } from '../format';
-import { banner, flagCounts, statusPill } from './assessment';
+import { banner, flagCounts, loadsCard, statusPill } from './assessment';
 
 /** Result of the last import, shown once after the list is rebuilt. */
 let sessionNote = '';
@@ -212,6 +212,7 @@ function recordView(ctx: Ctx, r: DecisionRecord, integrityOk: boolean): HTMLElem
         ['Flags in window', flags.map((f) => `${f.label} (${f.hours} h)`).join(', ') || 'None'],
       ]),
     ),
+    a.loads && a.loads.length > 1 ? loadsCard(a) : null,
     card(
       h('h2', null, 'Forecast used'),
       kv([

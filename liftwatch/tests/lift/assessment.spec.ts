@@ -67,6 +67,25 @@ describe('assessLift', () => {
     expect(city.terrain).toBe('city');
   });
 
+  it('the most wind-sensitive load in the schedule governs the banner', () => {
+    const heavy = { id: 'h', ref: 'C1 cassette', lengthM: 2, heightM: 1, massKg: 3000, riggingMassKg: 0, dragCoefficient: 1.2 };
+    const light = { id: 'l', ref: 'W9 gable', lengthM: 6, heightM: 3, massKg: 900, riggingMassKg: 0, dragCoefficient: 1.2 };
+    const a = assessLift(panelSetup({ extraLoads: [heavy, light] }), forecast(() => 3));
+    expect(a.loads.map((l) => l.ref)).toEqual(['Wall panel W12', 'C1 cassette', 'W9 gable']);
+    expect(a.governingRef).toBe('W9 gable');
+    expect(a.load.permittedMs).toBeCloseTo(17 * Math.sqrt(1.2 / ((6 * 3 * 1.2) / 0.9)), 9);
+    expect(a.loads[1].result.permittedMs).toBe(17); // compact: chart limit
+    expect(a.loads[1].windowStatus).toBe('within');
+    expect(a.loads[0].statuses).toHaveLength(24);
+  });
+
+  it('with no other loads, the main load governs as before', () => {
+    const a = assessLift(panelSetup(), forecast(() => 3));
+    expect(a.governingRef).toBe('Wall panel W12');
+    expect(a.loads).toHaveLength(1);
+    expect(a.loads[0].periods.length).toBeGreaterThan(0);
+  });
+
   it('refuses a date the forecast does not cover', () => {
     expect(() => assessLift(panelSetup({ liftDate: '2026-11-30' }), forecast())).toThrow(AssessmentError);
   });

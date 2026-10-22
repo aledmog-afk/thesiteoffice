@@ -1,4 +1,5 @@
 import type { SiteLocation } from '../data/postcode';
+import { validateScheduleLoad, type ScheduleLoad } from './loads';
 import { DEFAULT_DRAG_COEFFICIENT, MAX_METHOD_HEIGHT_M, type Terrain } from '../wind';
 
 export type LimitType = 'gust' | 'mean';
@@ -23,6 +24,8 @@ export interface LiftSetup {
   loadMassKg: number | null;
   riggingMassKg: number | null;
   dragCoefficient: number | null;
+  /** Other loads in the same lift plan, e.g. the day's panels. The most wind-sensitive load governs. */
+  extraLoads: ScheduleLoad[];
   /** Planned lift window, "HH:MM". Empty means sunrise to sunset. */
   windowStart: string;
   windowEnd: string;
@@ -44,6 +47,7 @@ export function emptySetup(today: string): LiftSetup {
     loadMassKg: null,
     riggingMassKg: 0,
     dragCoefficient: DEFAULT_DRAG_COEFFICIENT,
+    extraLoads: [],
     windowStart: '',
     windowEnd: '',
   };
@@ -77,6 +81,8 @@ export function validateSetup(s: LiftSetup): SetupErrors {
     e.riggingMassKg = 'Enter the mass of rigging, hook block and hoist rope in kg (0 if included in the load mass).';
   }
   if (!positive(s.dragCoefficient)) e.dragCoefficient = 'Enter a drag coefficient above zero (1.2 for flat panels).';
+  const badLoad = (s.extraLoads ?? []).map(validateScheduleLoad).find((m) => m !== null);
+  if (badLoad) e.extraLoads = badLoad;
   const hhmm = /^([01]\d|2[0-3]):[0-5]\d$/;
   if (s.windowStart && !hhmm.test(s.windowStart)) e.windowStart = 'Use HH:MM.';
   if (s.windowEnd && !hhmm.test(s.windowEnd)) e.windowEnd = 'Use HH:MM.';

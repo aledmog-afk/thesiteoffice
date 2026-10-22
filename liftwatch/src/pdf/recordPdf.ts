@@ -254,7 +254,7 @@ export async function buildRecordPdf(record: DecisionRecord, integrityOk: boolea
     ['Load', `${s.loadDescription || 'Flat load'}: ${s.loadLengthM} m × ${s.loadHeightM} m, ${s.loadMassKg} kg + ${s.riggingMassKg} kg rigging, hook block and rope, cw ${s.dragCoefficient}`],
   ]);
 
-  L.heading('Calculation');
+  L.heading(a.loads && a.loads.length > 1 ? `Calculation (governing load: ${a.governingRef})` : 'Calculation');
   L.kv(a.load.steps.map((st) => [st.label, `${st.formula} = ${st.value.toFixed(st.unit === 'm/s' ? 2 : 3)} ${st.unit}`]));
   L.kv([
     ['Permitted (rounded)', spd(a.load.permittedMs)],
@@ -262,6 +262,25 @@ export async function buildRecordPdf(record: DecisionRecord, integrityOk: boolea
     ['Worst hour in window', w ? `${hm(w.time)}: gust at height ${spd(w.gustAtHeightMs)} (10 m gust ${n1(w.gust10mMs)} m/s) = ${percentLabel(w.percentOfLimit, w.status)} of permitted` : '-'],
     ['Direction (worst hour)', w?.windDirectionDeg != null ? `from ${compassPoint(w.windDirectionDeg)} (${Math.round(w.windDirectionDeg)}°)` : '-'],
   ]);
+
+  if (a.loads && a.loads.length > 1) {
+    L.heading(`Loads in this plan (${a.loads.length})`);
+    L.para('Every load is checked against the same forecast. The most wind-sensitive load (lowest permitted speed) governs the status.', 8.5);
+    const dims = [
+      { l: s.loadLengthM, h: s.loadHeightM, m: s.loadMassKg, r: s.riggingMassKg, cw: s.dragCoefficient },
+      ...(s.extraLoads ?? []).map((x) => ({ l: x.lengthM, h: x.heightM, m: x.massKg, r: x.riggingMassKg, cw: x.dragCoefficient })),
+    ];
+    L.kv(
+      a.loads.map((o, i) => {
+        const d = dims[i];
+        const within = o.periods.length ? `within limits ${o.periods.map((p) => `${hm(p.start)}-${hm(p.end)}`).join(', ')}` : 'no daylight hour within limits';
+        return [
+          o.ref + (o.ref === a.governingRef ? ' (governs)' : ''),
+          `${d.l} × ${d.h} m, ${d.m} kg + ${d.r} kg, cw ${d.cw}; ${o.result.areaToMassRatio.toFixed(2)} m²/t; permitted ${spd(o.result.permittedMs)}. Window: ${STATUS_LABEL[o.windowStatus]} (${percentLabel(o.windowWorstPercent, o.windowStatus)}); ${within}.`,
+        ];
+      }),
+    );
+  }
 
   L.heading('Forecast used');
   L.kv([

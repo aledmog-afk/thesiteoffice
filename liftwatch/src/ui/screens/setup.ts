@@ -5,6 +5,7 @@ import { NEAR_LIMIT_RATIO, REFERENCE_AREA_RATIO, TERRAIN, terrainHeightFactor, t
 import type { Ctx } from '../app';
 import { clear, h, readNumber } from '../dom';
 import { card, field, numberInput, textInput, type FieldHandle } from '../fields';
+import { loadsEditor } from '../loadsEditor';
 import { addDays, longDate, num, speed, ukToday } from '../format';
 import { saveSetup } from '../state';
 
@@ -185,7 +186,7 @@ export function setupScreen(ctx: Ctx): HTMLElement {
   const height = numberInput(setup.heightM, (v) => set('heightM', v), { placeholder: 'e.g. 30' });
 
   // ---------- Load ----------
-  const loadDesc = textInput(setup.loadDescription, (v) => set('loadDescription', v), { placeholder: 'e.g. External wall panel W12 (optional)' });
+  const loadDesc = textInput(setup.loadDescription, (v) => set('loadDescription', v), { placeholder: 'Optional' });
   const len = numberInput(setup.loadLengthM, (v) => set('loadLengthM', v), { placeholder: '3.6' });
   const ht = numberInput(setup.loadHeightM, (v) => set('loadHeightM', v), { placeholder: '2.4' });
   const mass = numberInput(setup.loadMassKg, (v) => set('loadMassKg', v), { placeholder: '1300' });
@@ -241,6 +242,15 @@ export function setupScreen(ctx: Ctx): HTMLElement {
     }
   }
 
+  const extraErr = h('div', { class: 'error', role: 'alert', hidden: true });
+  handles.extraLoads = {
+    el: extraErr,
+    setError(m) {
+      extraErr.hidden = !m;
+      extraErr.textContent = m ?? '';
+    },
+  };
+
   const go = h('button', { class: 'btn primary block', type: 'button' }, 'Check against the forecast →');
   go.addEventListener('click', () => {
     showAll = true;
@@ -293,8 +303,8 @@ export function setupScreen(ctx: Ctx): HTMLElement {
       track('heightM', field('Boom / jib head height (m)', height, 'Height above ground of the boom or jib head, where the crane anemometer is. Up to 150 m.'), height),
     ),
     card(
-      h('h2', null, 'Load'),
-      field('Load description', loadDesc).el,
+      h('h2', null, 'Main load'),
+      field('Load reference', loadDesc, 'e.g. W12 or "gable panel"').el,
       h(
         'div',
         { class: 'row' },
@@ -309,7 +319,13 @@ export function setupScreen(ctx: Ctx): HTMLElement {
       ),
       h('div', { style: 'margin-top:14px' }, track('dragCoefficient', field('Drag coefficient cw', cw, '1.2 for flat panels (EN 13000). Change only with a source.'), cw)),
     ),
-    card(h('h2', null, 'Working'), working),
+    card(
+      h('h2', null, 'Other loads in this plan ', h('span', { class: 'tag' }, 'Optional')),
+      h('p', { class: 'small muted' }, 'Every load is checked against the forecast. The most wind-sensitive one sets the status.'),
+      loadsEditor(setup, changed),
+      extraErr,
+    ),
+    card(h('h2', null, 'Working (main load)'), working),
     go,
   );
   refresh();

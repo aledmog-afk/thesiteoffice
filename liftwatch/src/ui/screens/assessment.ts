@@ -105,7 +105,11 @@ export function assessmentScreen(ctx: Ctx): HTMLElement {
     title,
     h('p', { class: 'lede' }, `${longDate(a.liftDate)} · ${state.setup.site!.label}`),
     banner(a.overallStatus),
+    a.loads && a.loads.length > 1
+      ? h('p', { class: 'notice' }, h('strong', null, `Governing load: ${a.governingRef}`), ` — the most wind-sensitive of ${a.loads.length} loads (permitted ${speed(a.load.permittedMs)}).`)
+      : null,
     summary(a),
+    a.loads && a.loads.length > 1 ? loadsCard(a) : null,
     forecastSource(ctx),
     dayChart(state, a),
     periodsCard(a),
@@ -269,6 +273,60 @@ function dayChart(state: AppState, a: LiftAssessment): HTMLElement {
     }),
     detail,
     table,
+  );
+}
+
+/** Which loads are within limits in each daylight hour: helps sequence the day (CPA page 22). */
+export function loadsCard(a: LiftAssessment): HTMLElement {
+  const loads = [...a.loads].sort((x, y) => x.result.permittedMs - y.result.permittedMs);
+  const cols = a.liftDayHours.map((hr, i) => ({ hr, i })).filter(({ hr }) => hr.daylight);
+  const icon = (st: Status) => h('span', { class: `cell st-${st}`, title: STATUS_LABEL[st] }, STATUS_ICON[st]);
+  return card(
+    h('h2', null, 'Loads hour by hour'),
+    h(
+      'p',
+      { class: 'small muted' },
+      'Most wind-sensitive first. Plan the light, large loads for the calmest hours and the heavy, compact ones for the windier hours (CPA page 22).',
+    ),
+    h(
+      'div',
+      { class: 'table-scroll' },
+      h(
+        'table',
+        { class: 'matrix' },
+        h(
+          'thead',
+          null,
+          h('tr', null, h('th', { class: 'l sticky' }, 'Load'), h('th', null, 'Permitted'), cols.map(({ hr }) => h('th', null, hhmm(hr.time).slice(0, 2)))),
+        ),
+        h(
+          'tbody',
+          null,
+          loads.map((l) =>
+            h(
+              'tr',
+              null,
+              h('th', { class: 'l sticky', scope: 'row' }, l.ref, l.ref === a.governingRef ? h('span', { class: 'tag' }, 'governs') : null),
+              h('td', null, `${l.result.permittedMs.toFixed(1)}`),
+              cols.map(({ i }) => h('td', { class: 'c' }, icon(l.statuses[i]))),
+            ),
+          ),
+        ),
+      ),
+    ),
+    h('p', { class: 'small muted' }, `Daylight hours only. Permitted in m/s. ${STATUS_ICON.within} within, ${STATUS_ICON.near} near, ${STATUS_ICON.over} over limit.`),
+    h(
+      'ul',
+      { class: 'periods' },
+      loads.map((l) =>
+        h(
+          'li',
+          null,
+          `${l.ref}: `,
+          h('span', { style: 'font-weight:400' }, l.periods.length ? `within limits ${l.periods.map((p) => `${hhmm(p.start)}–${hhmm(p.end)}`).join(', ')}` : 'no daylight hour within limits'),
+        ),
+      ),
+    ),
   );
 }
 
