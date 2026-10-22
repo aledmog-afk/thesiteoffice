@@ -1,6 +1,7 @@
 import type { DecisionRecord } from '../../lift/record';
 import {
   allUnits,
+  compareWithForecast,
   DEFAULT_WAIT_MINUTES,
   evaluateLog,
   fromMs,
@@ -86,6 +87,8 @@ export function windLogView(ctx: Ctx, record: DecisionRecord, back: () => void):
       );
     }
 
+    const cmp = compareWithForecast(entries, a.liftDayHours);
+    const fcst = new Map(cmp.pairs.map((p) => [p.entry.id, p.forecastMs]));
     clear(listBox);
     if (ev.timeline.length === 0) {
       listBox.append(h('p', { class: 'muted small' }, 'Nothing logged yet.'));
@@ -98,7 +101,7 @@ export function windLogView(ctx: Ctx, record: DecisionRecord, back: () => void):
         h(
           'table',
           null,
-          h('thead', null, h('tr', null, h('th', null, 'Time'), h('th', null, 'Reading'), h('th', null, 'm/s'), h('th', { class: 'l' }, 'After'), h('th', { class: 'l' }, 'Note / by'))),
+          h('thead', null, h('tr', null, h('th', null, 'Time'), h('th', null, 'Reading'), h('th', null, 'm/s'), h('th', null, 'Forecast'), h('th', { class: 'l' }, 'After'), h('th', { class: 'l' }, 'Note / by'))),
           h(
             'tbody',
             null,
@@ -109,12 +112,20 @@ export function windLogView(ctx: Ctx, record: DecisionRecord, back: () => void):
                 h('td', null, time(entry.at)),
                 h('td', null, entry.kind === 'reading' ? `${entry.value} ${UNIT_LABEL[entry.unit ?? 'ms']}` : entry.kind === 'wind-off' ? 'Wind off' : 'Note'),
                 h('td', null, entry.gustMs !== undefined ? entry.gustMs.toFixed(1) : '–'),
+                h('td', null, fcst.has(entry.id) ? fcst.get(entry.id)!.toFixed(1) : '–'),
                 h('td', { class: 'l' }, STATE_LABEL[state]),
                 h('td', { class: 'l', style: 'white-space:normal' }, [entry.note, entry.by].filter(Boolean).join(' · ') || '–'),
               ),
             ),
           ),
         ),
+      ),
+      h(
+        'p',
+        { class: 'small muted' },
+        cmp.meanRatio === null
+          ? 'Forecast: the forecast gust at height for the same hour, in m/s.'
+          : `Forecast vs measured: over ${cmp.pairs.length} reading${cmp.pairs.length === 1 ? '' : 's'}, the anemometer read on average ${Math.round(cmp.meanRatio * 100)} % of the forecast gust at height. Over a pilot this shows whether the forecast runs high or low here (CPA 5.2.2). It does not change any status.`,
       ),
     );
   }

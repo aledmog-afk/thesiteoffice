@@ -164,3 +164,36 @@ export function newLogEntry(recordId: string, kind: LogKind, fields: Partial<Log
   counter += 1;
   return { id: `${now.getTime().toString(36)}-${counter.toString(36)}-${Math.random().toString(36).slice(2, 7)}`, recordId, at: now.toISOString(), kind, ...fields };
 }
+
+export interface ForecastComparison {
+  /** Readings that fall within a forecast hour of the lift day. */
+  pairs: { entry: LogEntry; forecastMs: number; ratio: number }[];
+  /** Mean of measured ÷ forecast gust at height. Null with no pairs. */
+  meanRatio: number | null;
+}
+
+/**
+ * Measured gusts against the forecast gust at height for the same hour. CPA/TCIG
+ * 2507 section 5.2.2: contractors are trialling comparing forecasts with on-site
+ * readings to correct future forecasts. Over a pilot this shows whether the
+ * forecast tends to run high or low at a site. It is not used in any status.
+ */
+export function compareWithForecast(
+  entries: LogEntry[],
+  hours: { time: string; gustAtHeightMs: number | null }[],
+): ForecastComparison {
+  const localHour = (iso: string) =>
+    new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23' })
+      .format(new Date(iso))
+      .replace(', ', 'T')
+      .slice(0, 13);
+  const byHour = new Map(hours.map((h) => [h.time.slice(0, 13), h.gustAtHeightMs]));
+  const pairs: ForecastComparison['pairs'] = [];
+  for (const e of entries) {
+    if (e.kind !== 'reading' || e.gustMs === undefined) continue;
+    const f = byHour.get(localHour(e.at));
+    if (f !== undefined && f !== null && f > 0) pairs.push({ entry: e, forecastMs: f, ratio: e.gustMs / f });
+  }
+  const meanRatio = pairs.length ? pairs.reduce((s, p) => s + p.ratio, 0) / pairs.length : null;
+  return { pairs, meanRatio };
+}

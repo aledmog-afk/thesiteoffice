@@ -5,7 +5,7 @@ import { percentLabel } from '../lift/display';
 import { METHOD_SOURCES, METHOD_SUMMARY } from '../lift/methodSummary';
 import { CHECK_ANEMOMETER, CHECK_OPERATOR, DECISION_LABEL, tickLabel, type DecisionRecord } from '../lift/record';
 import { compassPoint, msToMph, STATUS_LABEL, TERRAIN, type HourAssessment, type Status } from '../wind';
-import { allUnits, DEFAULT_WAIT_MINUTES, evaluateLog, STATE_LABEL, UNIT_LABEL, type LogEntry } from '../windlog/log';
+import { allUnits, compareWithForecast, DEFAULT_WAIT_MINUTES, evaluateLog, STATE_LABEL, UNIT_LABEL, type LogEntry } from '../windlog/log';
 
 /**
  * The PDF uses jsPDF's built-in Helvetica, which only covers Latin-1. Characters
@@ -327,6 +327,10 @@ export async function buildRecordPdf(record: DecisionRecord, integrityOk: boolea
       ]),
     );
     L.para(`At the last entry: ${ev.headline}. Wait reset ${ev.resets} time(s).`, 8.5, true);
+    const cmp = compareWithForecast(windLog, a.liftDayHours);
+    if (cmp.meanRatio !== null) {
+      L.para(`Forecast vs measured: over ${cmp.pairs.length} reading(s) the anemometer read on average ${Math.round(cmp.meanRatio * 100)} % of the forecast gust at height for the same hour (for information; CPA 5.2.2).`, 8.5);
+    }
   }
 
   L.heading('Method summary');

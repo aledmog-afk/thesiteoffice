@@ -71,3 +71,23 @@ describe('evaluateLog (CPA 6.4.3 stop / wait / reset)', () => {
     expect(evaluateLog(log, limit, 30, new Date(T('09:15'))).state).toBe('waiting');
   });
 });
+
+describe('compareWithForecast', () => {
+  it('pairs readings with the forecast gust at height for the same UK hour', async () => {
+    const { compareWithForecast } = await import('../../src/windlog/log');
+    const hours = [
+      { time: '2026-10-22T09:00', gustAtHeightMs: 8 },
+      { time: '2026-10-22T10:00', gustAtHeightMs: 10 },
+    ];
+    // 08:30 UTC is 09:30 BST on 22 October 2026.
+    const entries: LogEntry[] = [
+      { id: 'a', recordId: 'r', at: '2026-10-22T08:30:00Z', kind: 'reading', gustMs: 6 },
+      { id: 'b', recordId: 'r', at: '2026-10-22T09:10:00Z', kind: 'reading', gustMs: 12 },
+      { id: 'c', recordId: 'r', at: '2026-10-22T15:00:00Z', kind: 'reading', gustMs: 5 },
+      { id: 'd', recordId: 'r', at: '2026-10-22T09:20:00Z', kind: 'note', note: 'x' },
+    ];
+    const r = compareWithForecast(entries, hours);
+    expect(r.pairs.map((p) => [p.entry.id, p.forecastMs])).toEqual([['a', 8], ['b', 10]]);
+    expect(r.meanRatio).toBeCloseTo((0.75 + 1.2) / 2, 9);
+  });
+});
