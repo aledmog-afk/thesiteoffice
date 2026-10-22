@@ -15,6 +15,12 @@ export const CHECK_ANEMOMETER =
   "I have checked on-site wind with an anemometer or the crane's jib anemometer before lifting";
 export const CHECK_OPERATOR = 'The crane operator retains the final decision to lift, continue or stop';
 
+/** Postponing does not need the confirmations, so an empty box is not a gap in the record. */
+export function tickLabel(ticked: boolean, choice: DecisionChoice): string {
+  if (ticked) return 'Ticked';
+  return choice === 'postpone' ? 'Not ticked (not required for Postpone)' : 'Not ticked';
+}
+
 export interface Decision {
   choice: DecisionChoice;
   name: string;

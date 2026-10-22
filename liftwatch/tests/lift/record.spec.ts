@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { assessLift } from '../../src/lift/assessment';
-import { createRecord, validateDecision, verifyRecord, type Decision } from '../../src/lift/record';
+import { createRecord, tickLabel, validateDecision, verifyRecord, type Decision } from '../../src/lift/record';
 import { MemoryRecordStore } from '../../src/storage/memory';
 import { exportRecords, importRecords } from '../../src/storage/exchange';
 import { DuplicateRecordError } from '../../src/storage/types';
@@ -35,6 +35,14 @@ describe('validateDecision', () => {
     const e = validateDecision({ ...decision, name: '', role: ' ' });
     expect(e.name).toBeTruthy();
     expect(e.role).toBeTruthy();
+  });
+});
+
+describe('tickLabel', () => {
+  it('explains an empty box on a Postpone', () => {
+    expect(tickLabel(false, 'postpone')).toBe('Not ticked (not required for Postpone)');
+    expect(tickLabel(false, 'proceed')).toBe('Not ticked');
+    expect(tickLabel(true, 'postpone')).toBe('Ticked');
   });
 });
 

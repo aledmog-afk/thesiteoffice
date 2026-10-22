@@ -39,4 +39,13 @@ export const POSTCODE_API_URL = 'https://api.postcodes.io/postcodes/';
 export const DISCLAIMER =
   "Forecasts are modelled estimates, not measurements. This assessment supports, and does not replace, the lift plan, the Appointed Person's judgement, manufacturer data, BS 7121 and on-site wind checks.";
 
+/** The method page (method.html, built from METHOD.md). */
+export const METHOD_PAGE_PATH = '/method';
+
+/** Full address of the method page, for the PDF. Falls back to the path outside a browser. */
+export function methodPageUrl(): string {
+  const origin = globalThis.location?.origin;
+  return origin && origin !== 'null' ? `${origin}${METHOD_PAGE_PATH}` : METHOD_PAGE_PATH;
+}
+
 export const BANNER_SUFFIX = 'forecast assessment against the limits you entered';

@@ -1,7 +1,8 @@
 import type { jsPDF as JsPdf } from 'jspdf';
-import { APP_NAME, BANNER_SUFFIX, DISCLAIMER } from '../config';
+import { APP_NAME, BANNER_SUFFIX, DISCLAIMER, methodPageUrl } from '../config';
+import { percentLabel } from '../lift/display';
 import { METHOD_SOURCES, METHOD_SUMMARY } from '../lift/methodSummary';
-import { CHECK_ANEMOMETER, CHECK_OPERATOR, DECISION_LABEL, type DecisionRecord } from '../lift/record';
+import { CHECK_ANEMOMETER, CHECK_OPERATOR, DECISION_LABEL, tickLabel, type DecisionRecord } from '../lift/record';
 import { compassPoint, msToMph, STATUS_LABEL, type HourAssessment, type Status } from '../wind';
 
 /**
@@ -36,7 +37,6 @@ const STATUS_TEXT_RGB: Record<Status, [number, number, number]> = {
 
 const n1 = (v: number | null | undefined) => (v === null || v === undefined ? '-' : v.toFixed(1));
 const spd = (v: number | null | undefined) => (v === null || v === undefined ? '-' : `${v.toFixed(1)} m/s (${msToMph(v).toFixed(0)} mph)`);
-const pc = (v: number | null | undefined) => (v === null || v === undefined ? '-' : `${Math.round(v)} %`);
 const hm = (t: string) => t.slice(11, 16);
 const ukInstant = (iso: string) =>
   new Intl.DateTimeFormat('en-GB', {
@@ -48,6 +48,8 @@ const ukInstant = (iso: string) =>
     minute: '2-digit',
     timeZoneName: 'short',
   }).format(new Date(iso));
+const shortDate = (d: string) =>
+  new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' }).format(new Date(`${d}T12:00:00Z`));
 const longDate = (d: string) =>
   new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${d}T12:00:00Z`));
 
@@ -148,7 +150,13 @@ function chart(L: Layout, hours: HourAssessment[], permitted: number): void {
   doc.setDrawColor(20, 20, 20).setLineWidth(0.5).setLineDashPattern([1.5, 1], 0);
   doc.line(x0, y(permitted), x0 + w, y(permitted));
   doc.setLineDashPattern([], 0);
-  doc.setFont('helvetica', 'bold').setTextColor(20, 20, 20).text(pdfSafe(`Permitted ${permitted.toFixed(1)} m/s`), x0 + w, y(permitted) - 1.2, { align: 'right' });
+  // Label on a white box so it stays readable over the bars.
+  const limitText = pdfSafe(`Permitted ${permitted.toFixed(1)} m/s`);
+  doc.setFont('helvetica', 'bold').setFontSize(7.5);
+  const tw = doc.getTextWidth(limitText);
+  doc.setFillColor(255, 255, 255).setDrawColor(20, 20, 20).setLineWidth(0.2);
+  doc.rect(x0 + w - tw - 2.5, y(permitted) - 4.6, tw + 2, 3.6, 'FD');
+  doc.setTextColor(20, 20, 20).text(limitText, x0 + w - 1.5, y(permitted) - 1.9, { align: 'right' });
   L.y = base + 7;
   L.para('Bars: gust at height (m/s), coloured by status (green within, amber near, red over). Dashed line: permitted limit. Shaded: night. Values in the table below.', 8, false, [90, 98, 108]);
 }
@@ -186,7 +194,7 @@ function hourTable(L: Layout, hours: HourAssessment[]): void {
         hm(hr.time),
         n1(hr.gust10mMs),
         n1(hr.gustAtHeightMs),
-        pc(hr.percentOfLimit),
+        percentLabel(hr.percentOfLimit, hr.status).replace('–', '-'),
         STATUS_LABEL[hr.status],
         hr.windDirectionDeg === null ? '-' : `${compassPoint(hr.windDirectionDeg)} ${Math.round(hr.windDirectionDeg)}°`,
         hr.flags.map((f) => f.label).join(', ') || '-',
@@ -223,8 +231,8 @@ export async function buildRecordPdf(record: DecisionRecord, integrityOk: boolea
     ['Name', d.name],
     ['Role', d.role],
     ['Notes / conditions', d.notes || '-'],
-    [d.anemometerChecked ? 'Ticked' : 'NOT ticked', CHECK_ANEMOMETER],
-    [d.operatorRetainsDecision ? 'Ticked' : 'NOT ticked', CHECK_OPERATOR],
+    ['Anemometer check', `${tickLabel(d.anemometerChecked, d.choice)}: ${CHECK_ANEMOMETER}`],
+    ['Operator decision', `${tickLabel(d.operatorRetainsDecision, d.choice)}: ${CHECK_OPERATOR}`],
   ]);
 
   L.heading('Lift');
@@ -242,9 +250,9 @@ export async function buildRecordPdf(record: DecisionRecord, integrityOk: boolea
   L.heading('Calculation');
   L.kv(a.load.steps.map((st) => [st.label, `${st.formula} = ${st.value.toFixed(st.unit === 'm/s' ? 2 : 3)} ${st.unit}`]));
   L.kv([
-    ['Permitted wind speed', spd(a.load.permittedMs)],
+    ['Permitted (rounded)', spd(a.load.permittedMs)],
     ['Gust factor at height', `${a.heightFactor.toFixed(3)} at ${a.heightM} m`],
-    ['Worst hour in window', w ? `${hm(w.time)}: gust at height ${spd(w.gustAtHeightMs)} (10 m gust ${n1(w.gust10mMs)} m/s) = ${pc(w.percentOfLimit)} of permitted` : '-'],
+    ['Worst hour in window', w ? `${hm(w.time)}: gust at height ${spd(w.gustAtHeightMs)} (10 m gust ${n1(w.gust10mMs)} m/s) = ${percentLabel(w.percentOfLimit, w.status)} of permitted` : '-'],
     ['Direction (worst hour)', w?.windDirectionDeg != null ? `from ${compassPoint(w.windDirectionDeg)} (${Math.round(w.windDirectionDeg)}°)` : '-'],
   ]);
 
@@ -268,10 +276,11 @@ export async function buildRecordPdf(record: DecisionRecord, integrityOk: boolea
       : 'No daylight period of 2 hours or more within limits on the lift day.',
   );
   L.para('Outlook - planning guidance only (worst daylight hour each day):', 9.5, true);
-  L.kv(a.outlook.map((o) => [o.date, `${o.worstStatus ? STATUS_LABEL[o.worstStatus] : 'No daylight data'}, max ${spd(o.maxGustAtHeightMs)} at height, ${o.daylightHoursWithin} of ${o.daylightHours} daylight hours within`]));
+  L.kv(a.outlook.map((o) => [shortDate(o.date), `${o.worstStatus ? STATUS_LABEL[o.worstStatus] : 'No daylight data'}, max ${spd(o.maxGustAtHeightMs)} at height, ${o.daylightHoursWithin} of ${o.daylightHours} daylight hours within`]));
 
   L.heading('Method summary');
   METHOD_SUMMARY.forEach((line) => L.para(line, 8.5));
+  L.para(`Full method with sources: ${methodPageUrl()}`, 8.5, true);
   L.heading('Sources');
   METHOD_SOURCES.forEach((line) => L.para(`- ${line}`, 8.5));
   L.heading('Record integrity');

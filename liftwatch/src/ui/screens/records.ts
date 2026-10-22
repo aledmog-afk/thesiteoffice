@@ -1,5 +1,5 @@
 import { APP_NAME } from '../../config';
-import { CHECK_ANEMOMETER, CHECK_OPERATOR, DECISION_LABEL, verifyRecord, type DecisionRecord } from '../../lift/record';
+import { CHECK_ANEMOMETER, CHECK_OPERATOR, DECISION_LABEL, tickLabel, verifyRecord, type DecisionRecord } from '../../lift/record';
 import { buildRecordPdf, pdfFilename } from '../../pdf/recordPdf';
 import { exportRecords, importRecords } from '../../storage/exchange';
 import { STATUS_LABEL } from '../../wind';
@@ -185,8 +185,8 @@ function recordView(ctx: Ctx, r: DecisionRecord, integrityOk: boolean): HTMLElem
         ['Name', d.name],
         ['Role', d.role],
         ['Notes', d.notes],
-        [d.anemometerChecked ? '✓ Ticked' : '✕ Not ticked', CHECK_ANEMOMETER],
-        [d.operatorRetainsDecision ? '✓ Ticked' : '✕ Not ticked', CHECK_OPERATOR],
+        ['Anemometer check', `${tickLabel(d.anemometerChecked, d.choice)}: ${CHECK_ANEMOMETER}`],
+        ['Operator decision', `${tickLabel(d.operatorRetainsDecision, d.choice)}: ${CHECK_OPERATOR}`],
       ]),
     ),
     card(
@@ -207,7 +207,7 @@ function recordView(ctx: Ctx, r: DecisionRecord, integrityOk: boolean): HTMLElem
       kv([
         ...a.load.steps.map((st): [string, string] => [st.label, `${st.formula} = ${num(st.value, st.unit === 'm/s' ? 2 : 3)} ${st.unit}`]),
         ['Gust factor', `${num(a.heightFactor, 3)} at ${a.heightM} m`],
-        ['Worst hour', w ? `${hhmm(w.time)}: ${speed(w.gustAtHeightMs)} at height, ${pct(w.percentOfLimit)} of permitted (${STATUS_LABEL[w.status]})` : ''],
+        ['Worst hour', w ? `${hhmm(w.time)}: ${speed(w.gustAtHeightMs)} at height, ${pct(w.percentOfLimit, w.status)} of permitted (${STATUS_LABEL[w.status]})` : ''],
         ['Flags in window', flags.map((f) => `${f.label} (${f.hours} h)`).join(', ') || 'None'],
       ]),
     ),

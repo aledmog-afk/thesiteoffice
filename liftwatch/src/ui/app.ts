@@ -1,4 +1,4 @@
-import { APP_NAME } from '../config';
+import { APP_NAME, METHOD_PAGE_PATH } from '../config';
 import { createDefaultStore } from '../storage/indexeddb';
 import { clear, h, safeStorage } from './dom';
 import { assessmentScreen } from './screens/assessment';
@@ -82,7 +82,7 @@ export function startApp(root: HTMLElement): void {
         'header',
         { class: 'topbar' },
         h('div', { class: 'brand' }, APP_NAME, h('small', null, 'Wind check for crane lifts · decision support')),
-        themeButton(),
+        h('div', { class: 'links' }, h('a', { href: METHOD_PAGE_PATH }, 'Method'), themeButton()),
       ),
       h('main', null, screens[state.screen](ctx)),
       h(

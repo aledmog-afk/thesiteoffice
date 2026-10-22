@@ -15,7 +15,8 @@ Pilot scope: timber frame panels, floor cassettes and similar flat loads lifted 
 a mobile crane on a UK site. There are no logins, billing, alerts, lightning feeds
 or crane library.
 
-- How the numbers are worked out, with sources: [METHOD.md](METHOD.md)
+- How the numbers are worked out, with sources: [METHOD.md](METHOD.md). The app also shows it as a page at `/method`
+  (built from the same file), and every PDF links to it.
 - Build plan: [PLAN.md](PLAN.md)
 
 ## What it does

@@ -1,3 +1,4 @@
+import { percentLabel } from '../lift/display';
 import { compassPoint, msToMph, STATUS_LABEL, type Status } from '../wind';
 
 export function ms(v: number | null | undefined, dp = 1): string {
@@ -16,8 +17,10 @@ export function speed(v: number | null | undefined, dp = 1): string {
   return `${ms(v, dp)} (${mph(v)})`;
 }
 
-export function pct(v: number | null | undefined): string {
-  return v === null || v === undefined ? '–' : `${Math.round(v)} %`;
+/** "% of limit". Give the status so the number never contradicts it near a threshold. */
+export function pct(v: number | null | undefined, status?: Status): string {
+  if (v === null || v === undefined) return '–';
+  return status ? percentLabel(v, status) : `${Math.round(v)} %`;
 }
 
 export function num(v: number | null | undefined, dp = 2): string {
