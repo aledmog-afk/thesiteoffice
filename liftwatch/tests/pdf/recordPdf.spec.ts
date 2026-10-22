@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DISCLAIMER } from '../../src/config';
 import { assessLift } from '../../src/lift/assessment';
+import { buildChecksReport, emptyChecks } from '../../src/checks/model';
 import { createRecord } from '../../src/lift/record';
 import { buildRecordPdf, pdfFilename, pdfSafe } from '../../src/pdf/recordPdf';
 import { panelSetup, forecast } from '../lift/helpers';
@@ -39,5 +40,22 @@ describe('buildRecordPdf', () => {
     expect(raw).toContain('LW-M1.1');
     expect(raw).toContain('Lift plan LP-014 / LTM 1090 load chart');
     expect(pdfFilename(record)).toBe('LiftWatch-2026-10-22-SW1A1AA-abcdef12.pdf');
+  });
+
+  it('includes the checks when a record has them', async () => {
+    const setup = panelSetup();
+    const f = forecast(() => 3);
+    const checks = emptyChecks();
+    checks.craneExamDate = '2025-01-01';
+    checks.answers.overhead = 'no';
+    checks.crew.push({ name: 'C. Operator', role: 'Crane operator', signedAt: '2026-10-22T07:00:00Z' });
+    const record = await createRecord(setup, f, assessLift(setup, f), {
+      choice: 'postpone', name: 'A. Person', role: 'Appointed Person', notes: '', anemometerChecked: false, operatorRetainsDecision: false,
+    }, new Date('2026-10-22T08:00:00Z'), 'abcdef12-0000-4000-8000-000000000001', buildChecksReport(checks, '2026-10-22'));
+    const raw = (await buildRecordPdf(record, true)).output();
+    expect(raw).toContain('Pre-lift checklist');
+    expect(raw).toContain('Crew briefing sign-on');
+    expect(raw).toContain('C. Operator');
+    expect(raw).toContain('Overhead power lines');
   });
 });

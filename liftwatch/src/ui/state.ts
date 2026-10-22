@@ -1,3 +1,4 @@
+import { emptyChecks, type LiftChecks } from '../checks/model';
 import { roundCoord, type Forecast } from '../data/openMeteo';
 import { AssessmentError, assessLift, type LiftAssessment } from '../lift/assessment';
 import { emptySetup, validateSetup, type LiftSetup } from '../lift/setup';
@@ -6,11 +7,13 @@ import { OutsideMethodRangeError, WindInputError } from '../wind';
 import { safeStorage } from './dom';
 import { ukToday } from './format';
 
-export type Screen = 'setup' | 'assessment' | 'decision' | 'records';
+export type Screen = 'setup' | 'assessment' | 'checks' | 'decision' | 'records';
 
 export interface AppState {
   screen: Screen;
   setup: LiftSetup;
+  /** Checks screen draft, kept on the device until saved with a record. */
+  checks: LiftChecks;
   forecast: Forecast | null;
   /** Rounded site the forecast is for, so a changed site triggers a new fetch. */
   forecastKey: string | null;
@@ -27,6 +30,19 @@ export interface AppState {
 }
 
 const SETUP_KEY = 'liftwatch.setup.v1';
+const CHECKS_KEY = 'liftwatch.checks.v1';
+
+function loadChecks(): LiftChecks {
+  try {
+    return { ...emptyChecks(), ...(JSON.parse(safeStorage.get(CHECKS_KEY) ?? '{}') as Partial<LiftChecks>) };
+  } catch {
+    return emptyChecks();
+  }
+}
+
+export function saveChecks(checks: LiftChecks): void {
+  safeStorage.set(CHECKS_KEY, JSON.stringify(checks));
+}
 
 function loadSetup(): LiftSetup {
   const today = ukToday();
@@ -51,6 +67,7 @@ export function createState(store: RecordStore, persistent: boolean): AppState {
   return {
     screen: 'setup',
     setup: loadSetup(),
+    checks: loadChecks(),
     forecast: null,
     forecastKey: null,
     forecastError: null,

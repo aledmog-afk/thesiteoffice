@@ -1,4 +1,5 @@
 import type { jsPDF as JsPdf } from 'jspdf';
+import { checksSections } from '../checks/reportLines';
 import { APP_NAME, BANNER_SUFFIX, DISCLAIMER, methodPageUrl } from '../config';
 import { percentLabel } from '../lift/display';
 import { METHOD_SOURCES, METHOD_SUMMARY } from '../lift/methodSummary';
@@ -303,6 +304,14 @@ export async function buildRecordPdf(record: DecisionRecord, integrityOk: boolea
   );
   L.para('Outlook - planning guidance only (worst daylight hour each day):', 9.5, true);
   L.kv(a.outlook.map((o) => [shortDate(o.date), `${o.worstStatus ? STATUS_LABEL[o.worstStatus] : 'No daylight data'}, max ${spd(o.maxGustAtHeightMs)} at height, ${o.daylightHoursWithin} of ${o.daylightHours} daylight hours within`]));
+
+  if (record.checks) {
+    L.heading('Checks');
+    for (const sec of checksSections(record.checks)) {
+      L.para(sec.title, 9.5, true);
+      L.kv(sec.rows);
+    }
+  }
 
   L.heading('Method summary');
   METHOD_SUMMARY.forEach((line) => L.para(line, 8.5));

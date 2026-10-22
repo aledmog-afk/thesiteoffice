@@ -1,3 +1,4 @@
+import type { ChecksReport } from '../checks/model';
 import { APP_NAME, METHOD_VERSION } from '../config';
 import type { Forecast } from '../data/openMeteo';
 import type { LiftAssessment } from './assessment';
@@ -50,6 +51,8 @@ export interface DecisionRecord {
   };
   assessment: LiftAssessment;
   decision: Decision;
+  /** Checks screen at the time of saving. Absent on records saved before checks existed. */
+  checks?: ChecksReport;
   /** SHA-256 (hex) of the record without this field. Shows whether a record was altered. */
   integrity: string;
 }
@@ -107,6 +110,7 @@ export async function createRecord(
   decision: Decision,
   now: Date = new Date(),
   id: string = crypto.randomUUID(),
+  checks?: ChecksReport,
 ): Promise<DecisionRecord> {
   const body: Omit<DecisionRecord, 'integrity'> = structuredClone({
     schema: 1 as const,
@@ -127,6 +131,7 @@ export async function createRecord(
     },
     assessment,
     decision,
+    ...(checks ? { checks } : {}),
   });
   const record: DecisionRecord = { ...body, integrity: await computeIntegrity(body) };
   return deepFreeze(record);

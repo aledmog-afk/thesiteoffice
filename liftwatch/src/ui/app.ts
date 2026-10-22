@@ -2,6 +2,7 @@ import { APP_NAME, METHOD_PAGE_PATH } from '../config';
 import { createDefaultStore } from '../storage/indexeddb';
 import { clear, h, safeStorage } from './dom';
 import { assessmentScreen } from './screens/assessment';
+import { checksScreen } from './screens/checks';
 import { decisionScreen } from './screens/decision';
 import { recordsScreen } from './screens/records';
 import { setupScreen } from './screens/setup';
@@ -26,7 +27,8 @@ function applyTheme(theme: Theme): void {
 const TABS: { screen: Screen; n: string; label: string }[] = [
   { screen: 'setup', n: '1', label: 'Set-up' },
   { screen: 'assessment', n: '2', label: 'Assessment' },
-  { screen: 'decision', n: '3', label: 'Decision' },
+  { screen: 'checks', n: '3', label: 'Checks' },
+  { screen: 'decision', n: '4', label: 'Decision' },
   { screen: 'records', n: '☰', label: 'Records' },
 ];
 
@@ -74,6 +76,7 @@ export function startApp(root: HTMLElement): void {
     const screens: Record<Screen, (c: Ctx) => HTMLElement> = {
       setup: setupScreen,
       assessment: assessmentScreen,
+      checks: checksScreen,
       decision: decisionScreen,
       records: recordsScreen,
     };

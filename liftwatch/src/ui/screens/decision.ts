@@ -1,3 +1,4 @@
+import { buildChecksReport } from '../../checks/model';
 import { DISCLAIMER } from '../../config';
 import {
   CHECK_ANEMOMETER,
@@ -12,6 +13,7 @@ import type { Ctx } from '../app';
 import { h, safeStorage } from '../dom';
 import { card, field, textInput, type FieldHandle } from '../fields';
 import { hhmm, longDate, pct, speed } from '../format';
+import { saveChecks } from '../state';
 import { banner } from './assessment';
 
 const PERSON_KEY = 'liftwatch.person.v1';
@@ -33,6 +35,21 @@ const CHOICES: { value: DecisionChoice; desc: string }[] = [
   { value: 'postpone', desc: 'Do not lift in this window' },
   { value: 'proceed-with-conditions', desc: 'Lift only under the conditions written below' },
 ];
+
+function checksSummary(ctx: Ctx): HTMLElement {
+  const r = buildChecksReport(ctx.state.checks, ctx.state.setup.liftDate);
+  return card(
+    h('h2', null, 'Checks'),
+    h(
+      'p',
+      null,
+      r.attention.length ? `${r.attention.length} item${r.attention.length === 1 ? ' needs' : 's need'} attention` : 'Nothing flagged',
+      ` · ${r.incomplete.length} not done · ${ctx.state.checks.crew.length} signed on.`,
+    ),
+    r.attention.length ? h('ul', { class: 'attention-list' }, r.attention.map((x) => h('li', null, x))) : h('span'),
+    h('div', { class: 'actions' }, h('button', { type: 'button', class: 'btn small', onclick: () => ctx.go('checks') }, 'Open checks')),
+  );
+}
 
 export function decisionScreen(ctx: Ctx): HTMLElement {
   const { state } = ctx;
@@ -106,10 +123,14 @@ export function decisionScreen(ctx: Ctx): HTMLElement {
     }
     save.disabled = true;
     try {
-      const record = await createRecord(state.setup, state.forecast!, a, d);
+      const record = await createRecord(state.setup, state.forecast!, a, d, new Date(), crypto.randomUUID(), buildChecksReport(state.checks, a.liftDate));
       await state.store.add(record);
       safeStorage.set(PERSON_KEY, JSON.stringify({ name: d.name, role: d.role }));
       draft = null;
+      // Answers and sign-ons belong to this lift. Dates, cards and calculations carry over.
+      state.checks.answers = {};
+      state.checks.crew = [];
+      saveChecks(state.checks);
       state.viewingRecordId = record.id;
       ctx.go('records');
     } catch (err) {
@@ -129,6 +150,7 @@ export function decisionScreen(ctx: Ctx): HTMLElement {
       h('p', null, `Worst hour ${w ? hhmm(w.time) : '–'}: gust at height ${speed(w?.gustAtHeightMs)} against a permitted ${speed(a.load.permittedMs)} (${pct(w?.percentOfLimit, w?.status)}).`),
       h('p', { class: 'small muted' }, 'Saving stores every input, the full calculation, the forecast values used, the forecast fetch time and the method version. A saved record cannot be edited.'),
     ),
+    checksSummary(ctx),
     card(h('h2', { id: 'dc-label' }, 'Decision'), choiceGroup),
     card(nameF.el, roleF.el, notesF.el),
     card(h('h2', null, 'Confirm'), tick('anemometerChecked', CHECK_ANEMOMETER), tick('operatorRetainsDecision', CHECK_OPERATOR), h('p', { class: 'small muted' }, 'Both are required to record a decision to proceed.')),

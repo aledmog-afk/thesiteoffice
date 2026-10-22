@@ -1,3 +1,4 @@
+import { checksSections } from '../../checks/reportLines';
 import { APP_NAME } from '../../config';
 import { CHECK_ANEMOMETER, CHECK_OPERATOR, DECISION_LABEL, tickLabel, verifyRecord, type DecisionRecord } from '../../lift/record';
 import { buildRecordPdf, pdfFilename, terrainText } from '../../pdf/recordPdf';
@@ -223,6 +224,12 @@ function recordView(ctx: Ctx, r: DecisionRecord, integrityOk: boolean): HTMLElem
         ['Hours stored', `${a.liftDayForecast.length} hourly values for ${a.liftDate}`],
       ]),
     ),
+    r.checks
+      ? card(
+          h('h2', null, 'Checks'),
+          checksSections(r.checks).map((sec) => [h('h3', { style: 'margin-top:12px' }, sec.title), kv(sec.rows)]),
+        )
+      : null,
     card(h('h2', null, 'Integrity'), h('p', { class: 'small', style: 'overflow-wrap:anywhere' }, `SHA-256 ${r.integrity}`), h('p', { class: 'small muted' }, integrityOk ? 'Content matches the hash.' : 'Content does NOT match the hash.')),
   );
 }

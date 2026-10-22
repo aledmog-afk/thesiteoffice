@@ -120,7 +120,7 @@ main { flex: 1; width: 100%; max-width: 760px; margin: 0 auto; padding: 16px 16p
 
 .tabs {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
-  display: grid; grid-template-columns: repeat(4, 1fr);
+  display: grid; grid-template-columns: repeat(5, 1fr);
   background: var(--surface); border-top: 1px solid var(--line);
   padding-bottom: env(safe-area-inset-bottom);
   /* On wide screens the four buttons sit under the content, not across the whole window. */
@@ -321,6 +321,31 @@ details.more > summary { cursor: pointer; font-weight: 700; color: var(--accent)
 .method table { margin-bottom: 14px; }
 .method td { white-space: normal; }
 .method a { color: var(--accent); overflow-wrap: anywhere; }
+
+/* ---------- Checks ---------- */
+
+.check-result { margin-top: 8px; font-size: 0.88rem; font-weight: 700; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); border-left: 5px solid var(--nodata-bg); }
+.check-result.tone-ok { border-left-color: var(--within-bg); }
+.check-result.tone-attention { border-left-color: var(--over-bg); }
+.check-result.tone-ok::before { content: '✓ '; }
+.check-result.tone-attention::before { content: '✕ '; }
+.mini.wide { grid-column: span 2; }
+.mini select { min-height: 46px; padding: 8px 10px; }
+.attention-list { margin: 0; padding-left: 20px; font-size: 0.9rem; }
+.attention-list li { margin-bottom: 4px; }
+.checklist { padding-left: 22px; margin: 0; }
+.checklist li { padding: 10px 0; border-bottom: 1px solid var(--grid); }
+.checklist li:last-child { border-bottom: 0; }
+.checklist .t { font-weight: 700; }
+.yn { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 8px; }
+.yn label { display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 48px; border: 2px solid var(--line); border-radius: 10px; font-weight: 700; cursor: pointer; }
+.yn input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.yn label:has(input:focus-visible) { outline: 3px solid var(--focus); outline-offset: 2px; }
+.yn .yn-yes:has(input:checked) { background: var(--within-bg); color: var(--within-ink); border-color: var(--within-bg); }
+.yn .yn-no:has(input:checked) { background: var(--over-bg); color: var(--over-ink); border-color: var(--over-bg); }
+.yn .yn-na:has(input:checked) { background: var(--nodata-bg); color: var(--nodata-ink); border-color: var(--nodata-bg); }
+.crew { list-style: none; padding: 0; margin: 0; }
+.crew li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--grid); }
 
 /* ---------- Loads matrix ---------- */
 
