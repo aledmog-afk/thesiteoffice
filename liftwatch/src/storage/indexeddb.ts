@@ -1,10 +1,13 @@
 import type { DecisionRecord } from '../lift/record';
 import { MemoryRecordStore } from './memory';
-import { DuplicateRecordError, newestFirst, type RecordStore } from './types';
+import type { LogEntry } from '../windlog/log';
+import { byTime, DuplicateRecordError, newestFirst, type RecordStore } from './types';
 
 const DB_NAME = 'liftwatch';
-const DB_VERSION = 1;
+// Version 2 added the wind log store. Existing records are untouched by the upgrade.
+const DB_VERSION = 2;
 const STORE = 'records';
+const LOG_STORE = 'windlog';
 
 function promisify<T>(req: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -22,8 +25,13 @@ export class IndexedDbRecordStore implements RecordStore {
       this.db = new Promise((resolve, reject) => {
         const req = indexedDB.open(DB_NAME, DB_VERSION);
         req.onupgradeneeded = () => {
-          const store = req.result.createObjectStore(STORE, { keyPath: 'id' });
-          store.createIndex('createdAt', 'createdAt');
+          const db = req.result;
+          if (!db.objectStoreNames.contains(STORE)) {
+            db.createObjectStore(STORE, { keyPath: 'id' }).createIndex('createdAt', 'createdAt');
+          }
+          if (!db.objectStoreNames.contains(LOG_STORE)) {
+            db.createObjectStore(LOG_STORE, { keyPath: 'id' }).createIndex('recordId', 'recordId');
+          }
         };
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(req.error);
@@ -53,6 +61,23 @@ export class IndexedDbRecordStore implements RecordStore {
       if (err instanceof DOMException && err.name === 'ConstraintError') throw new DuplicateRecordError(record.id);
       throw err;
     }
+  }
+
+  async addLogEntry(entry: LogEntry): Promise<void> {
+    const db = await this.open();
+    try {
+      await promisify(db.transaction(LOG_STORE, 'readwrite').objectStore(LOG_STORE).add(entry));
+    } catch (err) {
+      if (err instanceof DOMException && err.name === 'ConstraintError') throw new DuplicateRecordError(entry.id);
+      throw err;
+    }
+  }
+
+  async listLog(recordId?: string): Promise<LogEntry[]> {
+    const db = await this.open();
+    const store = db.transaction(LOG_STORE, 'readonly').objectStore(LOG_STORE);
+    const all = (await promisify(recordId ? store.index('recordId').getAll(recordId) : store.getAll())) as LogEntry[];
+    return all.sort(byTime);
   }
 }
 

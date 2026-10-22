@@ -3,22 +3,24 @@ import { APP_NAME } from '../../config';
 import { CHECK_ANEMOMETER, CHECK_OPERATOR, DECISION_LABEL, tickLabel, verifyRecord, type DecisionRecord } from '../../lift/record';
 import { buildRecordPdf, pdfFilename, terrainText } from '../../pdf/recordPdf';
 import { exportRecords, importRecords } from '../../storage/exchange';
+import type { RecordStore } from '../../storage/types';
 import { STATUS_LABEL } from '../../wind';
 import type { Ctx } from '../app';
 import { clear, download, h } from '../dom';
 import { card } from '../fields';
 import { hhmm, instant, longDate, num, pct, speed } from '../format';
 import { banner, flagCounts, loadsCard, statusPill } from './assessment';
+import { windLogView } from './windlog';
 
 /** Result of the last import, shown once after the list is rebuilt. */
 let sessionNote = '';
 
-async function savePdf(record: DecisionRecord, button: HTMLButtonElement): Promise<void> {
+async function savePdf(record: DecisionRecord, store: RecordStore, button: HTMLButtonElement): Promise<void> {
   const label = button.textContent;
   button.disabled = true;
   button.textContent = 'Making PDF…';
   try {
-    const doc = await buildRecordPdf(record, await verifyRecord(record));
+    const doc = await buildRecordPdf(record, await verifyRecord(record), await store.listLog(record.id));
     download(pdfFilename(record), doc.output('blob'));
   } finally {
     button.disabled = false;
@@ -26,9 +28,9 @@ async function savePdf(record: DecisionRecord, button: HTMLButtonElement): Promi
   }
 }
 
-function pdfButton(record: DecisionRecord, primary = false): HTMLButtonElement {
+function pdfButton(record: DecisionRecord, store: RecordStore, primary = false): HTMLButtonElement {
   const b = h('button', { class: `btn ${primary ? 'primary' : ''} small`, type: 'button' }, 'PDF');
-  b.addEventListener('click', () => void savePdf(record, b));
+  b.addEventListener('click', () => void savePdf(record, store, b));
   return b;
 }
 
@@ -42,12 +44,22 @@ export function recordsScreen(ctx: Ctx): HTMLElement {
       if (state.viewingRecordId) {
         const record = await state.store.get(state.viewingRecordId);
         if (record) {
-          const ok = await verifyRecord(record);
           clear(body);
+          if (state.viewingLog) {
+            body.append(
+              windLogView(ctx, record, () => {
+                state.viewingLog = false;
+                ctx.go('records');
+              }),
+            );
+            return;
+          }
+          const ok = await verifyRecord(record);
           body.append(recordView(ctx, record, ok));
           return;
         }
         state.viewingRecordId = null;
+        state.viewingLog = false;
       }
       const records = await state.store.list();
       clear(body);
@@ -71,7 +83,7 @@ function listView(ctx: Ctx, records: DecisionRecord[]): HTMLElement {
     if (!f) return;
     try {
       const result = await importRecords(state.store, await f.text());
-      const parts = [`${result.added} added`, `${result.skippedExisting} already here`];
+      const parts = [`${result.added} added`, `${result.skippedExisting} already here`, `${result.logEntriesAdded} wind log entries`];
       if (result.rejected.length) parts.push(`${result.rejected.length} rejected (${result.rejected.map((r) => r.reason).join('; ')})`);
       sessionNote = `Import: ${parts.join(', ')}.`;
       ctx.rerender();
@@ -142,7 +154,7 @@ function listView(ctx: Ctx, records: DecisionRecord[]): HTMLElement {
                   },
                   'View',
                 ),
-                pdfButton(r),
+                pdfButton(r, state.store),
               ),
             ),
           ),
@@ -178,7 +190,23 @@ function recordView(ctx: Ctx, r: DecisionRecord, integrityOk: boolean): HTMLElem
     h('p', { class: 'lede' }, `Saved ${instant(r.createdAt)} · read-only · method ${r.methodVersion}`),
     integrityOk ? null : h('div', { class: 'notice warn', role: 'alert' }, 'This record does not match its integrity hash. It may have been altered after saving.'),
     banner(a.overallStatus),
-    h('div', { class: 'actions', style: 'margin:-4px 0 14px' }, pdfButton(r, true)),
+    h(
+      'div',
+      { class: 'actions', style: 'margin:-4px 0 14px' },
+      pdfButton(r, ctx.state.store, true),
+      h(
+        'button',
+        {
+          class: 'btn small',
+          type: 'button',
+          onclick: () => {
+            ctx.state.viewingLog = true;
+            ctx.go('records');
+          },
+        },
+        'Wind log on the day',
+      ),
+    ),
     card(
       h('h2', null, 'Decision'),
       kv([

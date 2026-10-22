@@ -25,6 +25,8 @@ export interface AppState {
   selectedHour: string | null;
   /** Record open on the records screen. */
   viewingRecordId: string | null;
+  /** Showing the wind log of the record being viewed. */
+  viewingLog: boolean;
   store: RecordStore;
   storePersistent: boolean;
 }
@@ -76,6 +78,7 @@ export function createState(store: RecordStore, persistent: boolean): AppState {
     assessmentError: null,
     selectedHour: null,
     viewingRecordId: null,
+    viewingLog: false,
     store,
     storePersistent: persistent,
   };

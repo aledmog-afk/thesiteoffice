@@ -88,12 +88,14 @@ describe('record store and JSON exchange', () => {
     const a = new MemoryRecordStore();
     await a.add(await makeRecord('rec-1', '2026-10-22T08:15:00Z'));
     await a.add(await makeRecord('rec-2', '2026-10-22T09:15:00Z'));
+    await a.addLogEntry({ id: 'log-1', recordId: 'rec-1', at: '2026-10-22T09:00:00Z', kind: 'reading', value: 4.2, unit: 'ms', gustMs: 4.2 });
     const json = await exportRecords(a);
 
     const b = new MemoryRecordStore();
-    expect(await importRecords(b, json)).toEqual({ added: 2, skippedExisting: 0, rejected: [] });
+    expect(await importRecords(b, json)).toEqual({ added: 2, skippedExisting: 0, logEntriesAdded: 1, rejected: [] });
     expect((await b.list()).map((r) => r.id)).toEqual(['rec-2', 'rec-1']);
-    expect(await importRecords(b, json)).toEqual({ added: 0, skippedExisting: 2, rejected: [] });
+    expect(await importRecords(b, json)).toEqual({ added: 0, skippedExisting: 2, logEntriesAdded: 0, rejected: [] });
+    expect((await b.listLog('rec-1'))[0].gustMs).toBe(4.2);
   });
 
   it('rejects edited records and files that are not exports', async () => {

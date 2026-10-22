@@ -5,6 +5,7 @@ import { percentLabel } from '../lift/display';
 import { METHOD_SOURCES, METHOD_SUMMARY } from '../lift/methodSummary';
 import { CHECK_ANEMOMETER, CHECK_OPERATOR, DECISION_LABEL, tickLabel, type DecisionRecord } from '../lift/record';
 import { compassPoint, msToMph, STATUS_LABEL, TERRAIN, type HourAssessment, type Status } from '../wind';
+import { allUnits, DEFAULT_WAIT_MINUTES, evaluateLog, STATE_LABEL, UNIT_LABEL, type LogEntry } from '../windlog/log';
 
 /**
  * The PDF uses jsPDF's built-in Helvetica, which only covers Latin-1. Characters
@@ -214,7 +215,7 @@ function hourTable(L: Layout, hours: HourAssessment[]): void {
 }
 
 /** Builds the PDF for a record. jsPDF is loaded on demand to keep the app quick to open. */
-export async function buildRecordPdf(record: DecisionRecord, integrityOk: boolean): Promise<JsPdf> {
+export async function buildRecordPdf(record: DecisionRecord, integrityOk: boolean, windLog: LogEntry[] = []): Promise<JsPdf> {
   const { jsPDF } = await import('jspdf');
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   doc.setProperties({ title: `${APP_NAME} record ${record.id}`, author: APP_NAME, creator: APP_NAME, subject: 'Lift wind assessment record' });
@@ -311,6 +312,21 @@ export async function buildRecordPdf(record: DecisionRecord, integrityOk: boolea
       L.para(sec.title, 9.5, true);
       L.kv(sec.rows);
     }
+  }
+
+  if (windLog.length) {
+    const limit = a.load.permittedMs;
+    const ev = evaluateLog(windLog, limit, DEFAULT_WAIT_MINUTES, new Date(windLog[windLog.length - 1].at));
+    const t = (iso: string) => new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' }).format(new Date(iso));
+    L.heading('Wind log on the day');
+    L.para(`Crane anemometer gust readings at the boom / jib head against the permitted ${allUnits(limit)}${a.loads && a.loads.length > 1 ? ` (governing load ${a.governingRef})` : ''}. Stop above the limit; wait ${DEFAULT_WAIT_MINUTES} minutes below it before restarting (CPA 6.4.3). Log entries cannot be edited.`, 8.5);
+    L.kv(
+      ev.timeline.map(({ entry, state }): [string, string] => [
+        t(entry.at),
+        `${entry.kind === 'reading' ? `${entry.value} ${UNIT_LABEL[entry.unit ?? 'ms']} (${entry.gustMs?.toFixed(1)} m/s)` : entry.kind === 'wind-off' ? 'Winded off for the day' : 'Note'} - ${STATE_LABEL[state]}${entry.note ? `. ${entry.note}` : ''}${entry.by ? ` (${entry.by})` : ''}`,
+      ]),
+    );
+    L.para(`At the last entry: ${ev.headline}. Wait reset ${ev.resets} time(s).`, 8.5, true);
   }
 
   L.heading('Method summary');
