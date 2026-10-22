@@ -3,7 +3,7 @@ import {
   assessHours,
   dailyOutlook,
   findWorkablePeriods,
-  gustHeightFactor,
+  terrainHeightFactor,
   permittedWindSpeed,
   worstHour,
   type DayOutlook,
@@ -13,12 +13,14 @@ import {
   type LoadWindResult,
   type Period,
   type Status,
+  type Terrain,
 } from '../wind';
 import type { LiftSetup } from './setup';
 
 export interface LiftAssessment {
   load: LoadWindResult;
   heightM: number;
+  terrain: Terrain;
   heightFactor: number;
   liftDate: string;
   liftDaySun: DaySun | null;
@@ -62,8 +64,9 @@ export function assessLift(s: LiftSetup, forecast: Forecast): LiftAssessment {
   }
   const load = loadResult(s);
   const heightM = s.heightM ?? Number.NaN;
-  const heightFactor = gustHeightFactor(heightM);
-  const options = { heightM, permittedMs: load.permittedMs };
+  const terrain = s.terrain ?? 'open';
+  const heightFactor = terrainHeightFactor(heightM, terrain);
+  const options = { heightM, permittedMs: load.permittedMs, terrain };
 
   const all = assessHours(forecast.hours, forecast.days, options);
   const liftDayHours = all.filter((h) => h.time.startsWith(s.liftDate));
@@ -82,6 +85,7 @@ export function assessLift(s: LiftSetup, forecast: Forecast): LiftAssessment {
   return {
     load,
     heightM,
+    terrain,
     heightFactor,
     liftDate: s.liftDate,
     liftDaySun,

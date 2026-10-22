@@ -1,11 +1,13 @@
 import type { SiteLocation } from '../data/postcode';
-import { DEFAULT_DRAG_COEFFICIENT, MAX_METHOD_HEIGHT_M } from '../wind';
+import { DEFAULT_DRAG_COEFFICIENT, MAX_METHOD_HEIGHT_M, type Terrain } from '../wind';
 
 export type LimitType = 'gust' | 'mean';
 
 /** Everything the AP enters on the set-up screen. Numbers are null until entered. */
 export interface LiftSetup {
   site: SiteLocation | null;
+  /** Upwind terrain around the site. Records saved before LW-M1.1 have none: open country. */
+  terrain: Terrain;
   /** "YYYY-MM-DD" */
   liftDate: string;
   craneDescription: string;
@@ -29,6 +31,7 @@ export interface LiftSetup {
 export function emptySetup(today: string): LiftSetup {
   return {
     site: null,
+    terrain: 'open',
     liftDate: today,
     craneDescription: '',
     chartLimitMs: null,
@@ -55,6 +58,7 @@ const positive = (v: number | null) => v !== null && Number.isFinite(v) && v > 0
 export function validateSetup(s: LiftSetup): SetupErrors {
   const e: SetupErrors = {};
   if (!s.site) e.site = 'Look up a postcode or enter latitude and longitude.';
+  if (!['open', 'town', 'city'].includes(s.terrain)) e.terrain = 'Choose the terrain around the site.';
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s.liftDate)) e.liftDate = 'Enter the lift date.';
   if (!s.craneDescription.trim()) e.craneDescription = 'Describe the crane, e.g. "Liebherr LTM 1090-4.2, 40 t counterweight".';
   if (!positive(s.chartLimitMs)) e.chartLimitMs = 'Enter the in-service wind limit from the load chart, in m/s.';

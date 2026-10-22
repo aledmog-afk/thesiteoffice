@@ -50,7 +50,7 @@ describe('createRecord', () => {
   it('holds inputs, calculation, forecast values, fetch time and method version', async () => {
     const r = await makeRecord();
     expect(r.createdAt).toBe('2026-10-22T08:15:00.000Z');
-    expect(r.methodVersion).toBe('LW-M1.0');
+    expect(r.methodVersion).toBe('LW-M1.1');
     expect(r.setup.chartLimitSource).toBe('Lift plan LP-014 / LTM 1090 load chart');
     expect(r.assessment.load.permittedMs).toBeCloseTo(6.594, 3);
     expect(r.assessment.liftDayForecast).toHaveLength(24);

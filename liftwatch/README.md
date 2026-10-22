@@ -152,10 +152,10 @@ Dependencies: Vite, TypeScript, Vitest (dev) and jsPDF. The Worker is deployed w
 - **Forecast grid resolution.** Open-Meteo is a modelled forecast on a grid, a few
   km at best, and the Worker rounds the site to about 1 km. It does not resolve
   conditions at the exact crane position.
-- **Height factors ignore ground roughness.** The Liebherr gust factors are used
-  for every site. CPA (section 5.2, Annex H) explains that wind at height depends on
-  the upwind terrain, from open country to city centres, and the factors' assumed
-  terrain is not stated. The gust at height is an estimate.
+- **Terrain is a simple three-way choice.** Open country uses the published Liebherr
+  factors; town and city use the EN 1991-1-4 gust profile for terrain categories III
+  and IV (METHOD.md). Hills, escarpments and the UK National Annex's more detailed
+  procedure are not modelled. The gust at height is an estimate.
 - **Some rules are LiftWatch's own.** The formula and factors come from CPA/TCIG 2507
   and EN 13000, and reproduce the CPA guide's worked examples (METHOD.md). The 80 %
   "Near limit" band and the weather flags are pilot choices, not from CPA or a

@@ -58,6 +58,15 @@ describe('assessLift', () => {
     expect(a.outlook).toHaveLength(2);
   });
 
+  it('uses the terrain for the height factor', () => {
+    const open = assessLift(panelSetup({ terrain: 'open' }), forecast(() => 3));
+    const city = assessLift(panelSetup({ terrain: 'city' }), forecast(() => 3));
+    expect(open.heightFactor).toBeCloseTo(gustHeightFactor(30), 12);
+    expect(city.heightFactor).toBeCloseTo(1.285, 3);
+    expect(city.worst!.gustAtHeightMs!).toBeGreaterThan(open.worst!.gustAtHeightMs!);
+    expect(city.terrain).toBe('city');
+  });
+
   it('refuses a date the forecast does not cover', () => {
     expect(() => assessLift(panelSetup({ liftDate: '2026-11-30' }), forecast())).toThrow(AssessmentError);
   });

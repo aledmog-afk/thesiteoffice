@@ -3,7 +3,7 @@
  * any of these change: it is stored in every decision record.
  */
 
-export const METHOD_VERSION = 'LW-M1.0';
+export const METHOD_VERSION = 'LW-M1.1';
 
 export interface FactorPoint {
   heightM: number;

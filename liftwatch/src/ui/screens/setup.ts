@@ -1,7 +1,7 @@
 import { lookupPostcode, manualLocation, PostcodeError } from '../../data/postcode';
 import { loadResult } from '../../lift/assessment';
 import { validateSetup, type LiftSetup, type SetupErrors, type SetupField } from '../../lift/setup';
-import { gustHeightFactor, NEAR_LIMIT_RATIO, REFERENCE_AREA_RATIO } from '../../wind';
+import { NEAR_LIMIT_RATIO, REFERENCE_AREA_RATIO, TERRAIN, terrainHeightFactor, type Terrain } from '../../wind';
 import type { Ctx } from '../app';
 import { clear, h, readNumber } from '../dom';
 import { card, field, numberInput, textInput, type FieldHandle } from '../fields';
@@ -138,6 +138,16 @@ export function setupScreen(ctx: Ctx): HTMLElement {
     },
   };
 
+  // ---------- Terrain ----------
+  const terrainGroup = h('div', { class: 'choices', role: 'radiogroup', 'aria-labelledby': 'terrain-label' });
+  for (const value of ['open', 'town', 'city'] as Terrain[]) {
+    const radio = h('input', { type: 'radio', name: 'terrain', value, checked: setup.terrain === value });
+    radio.addEventListener('change', () => set('terrain', value));
+    terrainGroup.append(
+      h('label', { class: 'choice' }, radio, h('span', null, h('span', { class: 't' }, TERRAIN[value].label), h('span', { class: 'd' }, TERRAIN[value].description))),
+    );
+  }
+
   // ---------- Lift ----------
   const today = ukToday();
   const date = h('input', { type: 'date', value: setup.liftDate, min: today, max: addDays(today, 6) });
@@ -218,12 +228,12 @@ export function setupScreen(ctx: Ctx): HTMLElement {
       ),
     );
     if (!errors.heightM && setup.heightM) {
-      const f = gustHeightFactor(setup.heightM);
+      const f = terrainHeightFactor(setup.heightM, setup.terrain);
       working.append(
         h(
           'ol',
           null,
-          h('li', null, h('span', { class: 'lbl' }, `Gust factor at ${setup.heightM} m`), h('span', { class: 'v' }, `× ${num(f, 3)}`), h('span', { class: 'f' }, 'Liebherr factors quoted by CPA (page 21), log-height interpolation')),
+          h('li', null, h('span', { class: 'lbl' }, `Gust factor at ${setup.heightM} m`), h('span', { class: 'v' }, `× ${num(f, 3)}`), h('span', { class: 'f' }, setup.terrain === 'open' ? 'Open country: Liebherr factors quoted by CPA (page 21)' : `${TERRAIN[setup.terrain].label}: EN 1991-1-4 terrain category ${TERRAIN[setup.terrain].category} profile`)),
           h('li', null, h('span', { class: 'lbl' }, 'Near limit from (gust at height)'), h('span', { class: 'v' }, speed(result.permittedMs * NEAR_LIMIT_RATIO)), h('span', { class: 'f' }, `${NEAR_LIMIT_RATIO * 100} % of the permitted speed`)),
           h('li', null, h('span', { class: 'lbl' }, 'Same limit as a 10 m forecast gust'), h('span', { class: 'v' }, speed(result.permittedMs / f)), h('span', { class: 'f' }, `${num(result.permittedMs, 2)} ÷ ${num(f, 3)}`)),
         ),
@@ -251,7 +261,18 @@ export function setupScreen(ctx: Ctx): HTMLElement {
     null,
     h('h1', { tabindex: -1 }, 'Lift set-up'),
     h('p', { class: 'lede' }, 'Enter the lift as planned. The permitted wind speed and the working update as you type.'),
-    card(h('h2', null, 'Site'), siteBox, siteErr),
+    card(
+      h('h2', null, 'Site'),
+      siteBox,
+      siteErr,
+      h(
+        'div',
+        { class: 'field', style: 'margin-top:14px' },
+        h('span', { class: 'label', id: 'terrain-label' }, 'Terrain around the site'),
+        h('span', { class: 'hint' }, 'Rougher ground slows the wind near the ground, so gusts rise more with height. If unsure, pick the rougher one: it gives the more cautious result.'),
+        terrainGroup,
+      ),
+    ),
     card(
       h('h2', null, 'Lift'),
       track('liftDate', field('Lift date', date, `${longDate(today)} to ${longDate(addDays(today, 6))} (7-day forecast)`), date),

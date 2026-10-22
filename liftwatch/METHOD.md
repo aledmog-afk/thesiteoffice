@@ -1,4 +1,4 @@
-# LiftWatch method (version LW-M1.0)
+# LiftWatch method (version LW-M1.1)
 
 This is the method used by `src/wind/`. Every formula below also carries its source
 in a code comment next to the code that applies it. The method version is stored
@@ -60,12 +60,54 @@ Example: at 25 m, t = ln(25/10) / ln(50/10) = 0.5693, so F = 1 + 0.5693 × 0.181
 The interpolation between the published heights is LiftWatch's choice; CPA gives
 the factors at 50, 100 and 150 m only.
 
-**Ground roughness.** How much wind increases with height depends on the upwind
-terrain: open country, towns or city centres (CPA section 5.2 and Annex H). CPA warns
-that default parameters often suit open countryside (roughness class 0.5–1) and that
-city centres are class 3.5 or more. The guide does not say which roughness the
-Liebherr factors assume, and LiftWatch uses them for every site. Treat the gust at
-height as an estimate, and use the crane's anemometer on the day.
+### Terrain: open country, town or city (added in LW-M1.1)
+
+How much the wind increases with height depends on the upwind terrain (CPA section
+5.2 and Annex H). Rough ground (towns, city centres) slows the wind near the ground
+more, so the gust rises more between 10 m and the jib head. CPA warns that default
+parameters often suit open countryside and that city centres are much rougher.
+The AP picks the terrain around the site:
+
+| Setting | Means | EN 1991-1-4 category | z0 (m) | zmin (m) |
+|---|---|---|--:|--:|
+| Open country | Fields, coast, airfields, scattered buildings | II | 0.05 | 2 |
+| Town | Suburbs, villages, industrial estates, woodland | III | 0.3 | 5 |
+| City | City centre, ≥ 15 % covered by buildings over 15 m | IV | 1.0 | 10 |
+
+Roughness lengths and minimum heights are from EN 1991-1-4 Table 4.1. CPA Annex H
+gives similar classes (open agricultural land 0.03 m, villages and small towns 0.4 m,
+larger cities 0.8 m).
+
+- **Open country** uses the published Liebherr factors above, unchanged.
+- **Town and city** use the gust profile of EN 1991-1-4 (clauses 4.3–4.5), as a ratio
+  to the gust at 10 m. The basic wind speed cancels out:
+
+```
+vm(z) ∝ ln(z / z0)                      mean wind, flat terrain
+Iv(z) = 1 / ln(z / z0)                  turbulence intensity (kI = 1)
+vp(z) = vm(z) × √(1 + 7 × Iv(z))        peak (gust) speed, from qp = [1 + 7 Iv] ½ ρ vm²
+F(h)  = vp(max(h, zmin)) / vp(max(10 m, zmin))
+```
+
+  The factor is never less than the open-country factor and never below 1.0.
+
+Check: the same profile for open country (category II) gives 1.214 at 50 m, 1.305
+at 100 m and 1.358 at 150 m, within 3 % of the Liebherr 1.181, 1.272 and 1.329. That
+is why the published factors are kept for open country.
+
+| Height | Open country | Town | City |
+|--:|--:|--:|--:|
+| 20 m | 1.078 | 1.130 | 1.182 |
+| 30 m | 1.124 | 1.204 | 1.285 |
+| 50 m | 1.181 | 1.297 | 1.412 |
+| 100 m | 1.272 | 1.421 | 1.580 |
+| 150 m | 1.329 | 1.493 | 1.676 |
+
+Limits of this step: it assumes the 10 m forecast gust applies to the site's own
+terrain, uses flat-terrain profiles (no hills, cliffs or escarpments), and does not
+model funnelling between buildings, which can be stronger than any of these
+factors. The UK National Annex to EN 1991-1-4 has its own, more detailed procedure;
+this is a simplified estimate. Use the crane's anemometer on the day.
 
 ## Step 2: 10-minute mean to gust at height (for sources without gusts)
 
