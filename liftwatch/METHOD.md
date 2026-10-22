@@ -248,6 +248,52 @@ then Near limit, then Within limits. Within one status the highest ratio is show
 - 7-day outlook: for each day, the worst status in daylight hours and the highest
   gust at height. Labelled "Outlook — planning guidance only".
 
+## Load schedule (several loads)
+
+Each load in the plan gets its own permitted speed (step 3) and is assessed against
+the same gust at height. Because the gust is the same for every load, the load with
+the lowest permitted speed is the worst in every hour: that "governing" load sets
+the banner and the record's headline figures. The assessment also shows, for each
+daylight hour, which loads are within limits, to help sequence the day (CPA page
+22). Rows pasted from a panel schedule are: reference, length, height, mass, and
+optionally rigging and cw.
+
+## Other checks (Checks tab)
+
+These sit beside the wind method. They are saved with the decision record, but they
+never change the wind status and never block a decision.
+
+| Check | Rule | Source |
+|---|---|---|
+| Crane capacity | hook load = load + accessories + hook block and rope; utilisation = hook load ÷ chart capacity at radius. Flagged above 75 % and 90 %; over 100 % is over the chart | Hook load as CPA Annex A. The 75 % and 90 % bands are company-rule settings (`src/checks/capacity.ts`), not legal limits |
+| Slings | β = asin(d ÷ leg length), d = half the spacing (2 legs), half the diagonal (4 legs) or spacing ÷ √3 (3 legs). Mode factor: 2 legs 1.4 (β ≤ 45°), 1.0 (≤ 60°); 3–4 legs 2.1, 1.5; over 60° not permitted. Required single-leg WLL = load ÷ factor | Uniform load method: BS EN 818-4, BS EN 13414-1, BS EN 1492-1; LEEA Code of Practice |
+| Outrigger ground bearing | pressure = (outrigger load × 9.81 if in tonnes + mat mass × 9.81 ÷ 1000) ÷ mat area (kN/m²); compared with the allowable pressure; minimum mat area = load ÷ allowable | Simple uniform-pressure check. Assumes a stiff mat; CPA *Ground conditions for construction plant* (2014). Outrigger load from the manufacturer, allowable pressure from the ground assessment |
+| Thorough examinations | crane in date if the lift date is within 12 months of the last examination; lifting accessories within 6 months | LOLER 1998 regulation 9 (HSE). A written scheme of examination can set other intervals |
+| Cards | valid if the expiry date is on or after the lift date | — |
+| Checklist and crew sign-on | Yes / No / N/A answers and names with times | Items drawn from common reasons plans fail review, CPA and STA guidance |
+
+## Wind log on the day
+
+Readings from the crane's anemometer (a gust at the boom / jib head) are compared
+directly with the governing load's permitted speed. No height factor is applied.
+
+| State | When |
+|---|---|
+| Within limit | the last reading is below 80 % of the permitted speed |
+| Near limit | the last reading is 80 % to 100 % of it |
+| Stop | a reading is above the permitted speed |
+| Waiting | after a stop, readings are back at or below the limit; the wait runs from the first such reading |
+| Wait complete | readings have stayed at or below the limit for the wait time (default 30 minutes, CPA 6.4.3; 10 or 20 can be chosen, BS 7121-5 uses 10 for tower cranes). The crane operator decides whether to restart |
+| Winded off | logged as winded off for the day |
+
+A reading above the limit while waiting resets the wait. After three resets the log
+quotes CPA 6.4.3: the day may need to be declared winded off. Units: 1 mph =
+0.44704 m/s, 1 km/h = 1/3.6 m/s, 1 knot = 1852/3600 m/s.
+
+For information only, each reading is also compared with the forecast gust at
+height for the same hour, and the average measured ÷ forecast ratio is shown
+(CPA 5.2.2). It does not change any status.
+
 ## Not in this method
 
 - **Wind direction.** CPA gives a rule of thumb, used mainly for crawler cranes on
@@ -280,3 +326,10 @@ and stored in each record. Open-Meteo's default "best match" picks and blends
 weather models for the location. The forecast response does not say which model
 run was used, so LiftWatch records the time the forecast was fetched from
 Open-Meteo.
+
+## Version history
+
+| Version | Change |
+|---|---|
+| LW-M1.0 | First pilot method. |
+| LW-M1.1 | Terrain setting: town and city use the EN 1991-1-4 gust profile (categories III and IV); open country unchanged. Records saved under LW-M1.0 used open country. Load schedule, checks and wind log added; they do not change the wind maths. |

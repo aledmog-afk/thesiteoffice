@@ -92,10 +92,11 @@ export async function buildBriefingPdf(record: DecisionRecord): Promise<JsPdf> {
     const att = record.checks.attention;
     text(att.length ? `Checks needing attention (${att.length}):` : 'Checks: nothing flagged.', 10, true, att.length ? [179, 33, 30] : [11, 110, 11]);
     for (const line of att.slice(0, 8)) text(`- ${line}`, 8.5);
+    // Results that passed. Flagged ones are already in the list above.
     const calc = [
-      ...record.checks.capacity.filter((c) => c.result.band !== 'incomplete').map((c) => `Capacity ${c.label}: ${c.result.message}`),
-      ...record.checks.slings.filter((c) => !c.result.incomplete).map((c) => `Slings ${c.label}: ${c.result.message}`),
-      ...record.checks.bearing.filter((c) => !c.result.incomplete).map((c) => `Ground ${c.label}: ${c.result.message}`),
+      ...record.checks.capacity.filter((c) => c.result.band === 'ok').map((c) => `Capacity ${c.label}: ${c.result.message}`),
+      ...record.checks.slings.filter((c) => c.result.ok).map((c) => `Slings ${c.label}: ${c.result.message}`),
+      ...record.checks.bearing.filter((c) => c.result.ok).map((c) => `Ground ${c.label}: ${c.result.message}`),
     ];
     for (const line of calc.slice(0, 6)) text(line, 8.5);
   }

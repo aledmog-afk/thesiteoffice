@@ -18,25 +18,40 @@ or crane library.
 - How the numbers are worked out, with sources: [METHOD.md](METHOD.md). The app also shows it as a page at `/method`
   (built from the same file), and every PDF links to it.
 - Build plan: [PLAN.md](PLAN.md)
+- What gets in the way of lift planning, and what each feature is for: [docs/RESEARCH.md](docs/RESEARCH.md)
+- Step-by-step test script: [TESTING.md](TESTING.md)
 
 ## What it does
 
-1. **Set-up**: site (UK postcode or latitude/longitude), lift date, planned window,
-   crane, the chart's in-service wind limit **and where that figure came from**,
-   whether the limit is a gust or a mean, boom / jib head height, and the
-   load's size, mass, rigging (with hook block and rope) mass and drag coefficient. The permitted wind speed
-   and the working update as you type.
+1. **Set-up**: site (UK postcode or latitude/longitude) and terrain (open country,
+   town, city), lift date, planned window, crane, the chart's in-service wind limit
+   **and where that figure came from**, whether the limit is a gust or a mean,
+   boom / jib head height, and the main load's size, mass, rigging (with hook block
+   and rope) mass and drag coefficient. Other loads can be added or pasted from a
+   panel schedule. The permitted wind speed and the working update as you type.
 2. **Assessment**: status banner ("Within limits / Near limit / Over limit —
    forecast assessment against the limits you entered"), gust at height against
    the permitted speed, % of the limit, direction, weather flags, the forecast
    source and fetch time, an hourly chart and table, daylight periods within
    limits and a 7-day outlook. The periods and the outlook are labelled planning
-   guidance only.
-3. **Decision**: Proceed, Postpone or Proceed with conditions, with name, role,
+   guidance only. With several loads, the most wind-sensitive one governs, and a
+   table shows which loads are within limits hour by hour.
+3. **Checks**: crane capacity at radius, sling leg angle and rating, outrigger
+   mat bearing pressure, LOLER examination dates and card expiry against the lift
+   date, a pre-lift checklist and crew briefing sign-on. Saved with the record;
+   never blocks a decision.
+4. **Decision**: Proceed, Postpone or Proceed with conditions, with name, role,
    notes and the two confirmations. Saving creates a timestamped, read-only
    record. It holds every input, the full calculation, the forecast values used,
-   the forecast fetch time, the method version and a SHA-256 integrity hash.
-4. **Records**: list, view, PDF export of any record, and JSON export/import.
+   the forecast fetch time, the method version, the checks and a SHA-256
+   integrity hash.
+5. **Records**: list, view, full PDF, one-page crew **briefing sheet**, JSON
+   export/import, "Use as new set-up", and the **wind log** for the day: crane
+   anemometer readings with the stop / 30-minute wait / reset pattern from CPA
+   6.4.3, and a comparison with the forecast.
+
+It works offline: the app is kept on the phone, and the last forecast for the site
+is used, clearly labelled, when there is no signal.
 
 ## Run it locally
 
@@ -83,6 +98,11 @@ Worker (`worker/wrangler.toml` `[vars]`, plus secrets):
 | `OPEN_METEO_API_KEY` | unset | Commercial key: `npx wrangler secret put OPEN_METEO_API_KEY`. |
 | `ALLOWED_ORIGIN` | `*` | Set to the Pages site origin once deployed. |
 
+Company-rule settings: capacity bands in `src/checks/capacity.ts`
+(`CAPACITY_REVIEW_UTILISATION` 0.75, `CAPACITY_HIGH_UTILISATION` 0.90), the wind
+log's default wait and reset prompt in `src/windlog/log.ts`, and the checklist in
+`src/checks/model.ts`.
+
 Method constants live in `src/wind/constants.ts` and are re-exported from
 `src/config.ts`: gust and mean-to-gust factor tables, the reference ratio
 r0 = 1.2 m²/t, the default cw = 1.2, the status thresholds, the flag thresholds,
@@ -122,10 +142,12 @@ the Worker.
 
 ## Records and storage
 
-Records are kept in IndexedDB in the browser that saved them, behind the
-`RecordStore` interface (`src/storage/types.ts`). The interface is append-only:
-there is no update. To move to Supabase later, write a `SupabaseRecordStore` that
-implements `list`, `get` and `add`, and return it from `createDefaultStore()`.
+Records and wind log entries are kept in IndexedDB in the browser that saved them,
+behind the `RecordStore` interface (`src/storage/types.ts`). The interface is
+append-only: there is no update or delete. To move to Supabase later, write a
+`SupabaseRecordStore` that implements `list`, `get`, `add`, `addLogEntry` and
+`listLog`, and return it from `createDefaultStore()`. Drafts of the set-up and the
+checks are kept in `localStorage` until a record is saved.
 
 Use **Records → Export all (JSON)** to back up or move records. Import skips
 records that already exist and rejects any record whose content no longer matches
@@ -180,5 +202,11 @@ Dependencies: Vite, TypeScript, Vitest (dev) and jsPDF. The Worker is deployed w
   run it used. LiftWatch shows and records the time the forecast was fetched from
   Open-Meteo. A cached response keeps its original fetch time, so what you see
   can be up to 60 minutes old. Use "Refresh forecast" to check the time.
+- **The checks are simple calculations.** Capacity uses the chart figure you enter;
+  the sling check assumes the hook is centred and the legs share the load; the
+  bearing check assumes a stiff mat spreading the load evenly. Outrigger loads and
+  allowable pressures must come from the manufacturer and the ground assessment.
+- **Offline forecasts get old.** Offline, the last forecast saved on the phone is
+  used for up to 48 hours, with a warning. Refresh as soon as there is signal.
 - **Weather flags are indicators only.** CAPE is not a lightning detector, and
   there is no lightning feed in this build.

@@ -54,3 +54,17 @@ liftwatch/
 - Never "safe", "clear to lift" or "go".
 - Status always has a text label as well as a colour.
 - Weather flags never count as a pass.
+
+## Phase 2 (built after the first pilot review)
+
+Driven by the CPA/TCIG 2507 guide and the research in docs/RESEARCH.md:
+
+1. Terrain setting (open country, town, city), method LW-M1.1.
+2. Load schedule: many loads, pasted from a panel schedule; the most wind-sensitive governs.
+3. Checks tab: crane capacity, slings, outrigger ground bearing, LOLER dates, cards,
+   pre-lift checklist, crew sign-on.
+4. Lift-day wind log with the CPA 6.4.3 stop / wait / reset pattern, compared with the forecast.
+5. One-page crew briefing sheet, reuse a set-up, offline use.
+
+TESTING.md is the step-by-step test script.
+
