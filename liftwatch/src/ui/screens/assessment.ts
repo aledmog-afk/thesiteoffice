@@ -1,5 +1,6 @@
 import { BANNER_SUFFIX, DISCLAIMER, FORECAST_CONFIG } from '../../config';
 import { fetchForecast, ForecastFetchError } from '../../data/forecast';
+import { loadCachedForecast, saveForecast } from '../../data/forecastCache';
 import { ForecastFormatError } from '../../data/openMeteo';
 import type { LiftAssessment } from '../../lift/assessment';
 import { compassPoint, FLAG_LABEL, TERRAIN, STATUS_LABEL, type FlagCode, type HourAssessment, type Status } from '../../wind';
@@ -30,13 +31,25 @@ async function loadForecast(ctx: Ctx): Promise<void> {
   if (!site || state.loading) return;
   state.loading = true;
   state.forecastError = null;
+  const key = siteKey(state.setup);
   try {
     state.forecast = await fetchForecast(site.latitude, site.longitude);
-    state.forecastKey = siteKey(state.setup);
+    state.forecastKey = key;
+    state.forecastOffline = false;
+    if (key) saveForecast(key, state.forecast);
     recompute(state);
   } catch (err) {
-    state.forecastError =
-      err instanceof ForecastFetchError || err instanceof ForecastFormatError ? err.message : 'The forecast could not be loaded.';
+    const saved = key ? loadCachedForecast(key) : null;
+    if (saved) {
+      // No signal: fall back to the last forecast for this site, clearly labelled.
+      state.forecast = saved;
+      state.forecastKey = key;
+      state.forecastOffline = true;
+      recompute(state);
+    } else {
+      state.forecastError =
+        err instanceof ForecastFetchError || err instanceof ForecastFormatError ? err.message : 'The forecast could not be loaded.';
+    }
   } finally {
     state.loading = false;
     if (state.screen === 'assessment') ctx.rerender();
@@ -104,6 +117,14 @@ export function assessmentScreen(ctx: Ctx): HTMLElement {
     null,
     title,
     h('p', { class: 'lede' }, `${longDate(a.liftDate)} · ${state.setup.site!.label}`),
+    state.forecastOffline
+      ? h(
+          'div',
+          { class: 'notice warn', role: 'alert' },
+          h('strong', null, 'Offline: saved forecast. '),
+          `No connection, so this uses the forecast saved on this phone, fetched ${instant(state.forecast!.fetchedAt)}. Refresh when you have signal.`,
+        )
+      : null,
     banner(a.overallStatus),
     a.loads && a.loads.length > 1
       ? h('p', { class: 'notice' }, h('strong', null, `Governing load: ${a.governingRef}`), ` — the most wind-sensitive of ${a.loads.length} loads (permitted ${speed(a.load.permittedMs)}).`)

@@ -24,13 +24,13 @@ export function pdfSafe(text: string): string {
     .replace(/[^\x09\x0a\x0d\x20-\x7e\xa0-\xff]/g, '?');
 }
 
-const STATUS_RGB: Record<Status, [number, number, number]> = {
+export const STATUS_RGB: Record<Status, [number, number, number]> = {
   within: [11, 110, 11],
   near: [250, 178, 25],
   over: [179, 33, 30],
   'no-data': [84, 94, 105],
 };
-const STATUS_TEXT_RGB: Record<Status, [number, number, number]> = {
+export const STATUS_TEXT_RGB: Record<Status, [number, number, number]> = {
   within: [255, 255, 255],
   near: [17, 17, 17],
   over: [255, 255, 255],

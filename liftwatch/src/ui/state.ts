@@ -18,6 +18,8 @@ export interface AppState {
   /** Rounded site the forecast is for, so a changed site triggers a new fetch. */
   forecastKey: string | null;
   forecastError: string | null;
+  /** True when the forecast shown is the saved copy because the live fetch failed. */
+  forecastOffline: boolean;
   loading: boolean;
   assessment: LiftAssessment | null;
   assessmentError: string | null;
@@ -73,6 +75,7 @@ export function createState(store: RecordStore, persistent: boolean): AppState {
     forecast: null,
     forecastKey: null,
     forecastError: null,
+    forecastOffline: false,
     loading: false,
     assessment: null,
     assessmentError: null,

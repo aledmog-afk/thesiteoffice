@@ -1,14 +1,16 @@
 import { checksSections } from '../../checks/reportLines';
 import { APP_NAME } from '../../config';
 import { CHECK_ANEMOMETER, CHECK_OPERATOR, DECISION_LABEL, tickLabel, verifyRecord, type DecisionRecord } from '../../lift/record';
+import { buildBriefingPdf } from '../../pdf/briefingPdf';
 import { buildRecordPdf, pdfFilename, terrainText } from '../../pdf/recordPdf';
+import { saveChecks, saveSetup } from '../state';
 import { exportRecords, importRecords } from '../../storage/exchange';
 import type { RecordStore } from '../../storage/types';
 import { STATUS_LABEL } from '../../wind';
 import type { Ctx } from '../app';
 import { clear, download, h } from '../dom';
 import { card } from '../fields';
-import { hhmm, instant, longDate, num, pct, speed } from '../format';
+import { hhmm, instant, longDate, num, pct, speed, ukToday } from '../format';
 import { banner, flagCounts, loadsCard, statusPill } from './assessment';
 import { windLogView } from './windlog';
 
@@ -26,6 +28,20 @@ async function savePdf(record: DecisionRecord, store: RecordStore, button: HTMLB
     button.disabled = false;
     button.textContent = label;
   }
+}
+
+function briefingButton(record: DecisionRecord): HTMLButtonElement {
+  const b = h('button', { class: 'btn small', type: 'button' }, 'Briefing sheet');
+  b.addEventListener('click', async () => {
+    b.disabled = true;
+    try {
+      const doc = await buildBriefingPdf(record);
+      download(pdfFilename(record).replace('.pdf', '-briefing.pdf'), doc.output('blob'));
+    } finally {
+      b.disabled = false;
+    }
+  });
+  return b;
 }
 
 function pdfButton(record: DecisionRecord, store: RecordStore, primary = false): HTMLButtonElement {
@@ -205,6 +221,31 @@ function recordView(ctx: Ctx, r: DecisionRecord, integrityOk: boolean): HTMLElem
           },
         },
         'Wind log on the day',
+      ),
+      briefingButton(r),
+      h(
+        'button',
+        {
+          class: 'btn small',
+          type: 'button',
+          onclick: () => {
+            // Start a new lift from this one: same site, crane and loads, today's date.
+            const copy = structuredClone(r.setup);
+            copy.liftDate = r.assessment.liftDate >= ukToday() ? r.assessment.liftDate : ukToday();
+            copy.terrain ??= 'open';
+            copy.extraLoads ??= [];
+            ctx.state.setup = copy;
+            saveSetup(copy);
+            if (r.checks) {
+              ctx.state.checks = { ...structuredClone(r.checks.inputs), answers: {}, crew: [] };
+              saveChecks(ctx.state.checks);
+            }
+            ctx.state.assessment = null;
+            ctx.state.viewingRecordId = null;
+            ctx.go('setup');
+          },
+        },
+        'Use as new set-up',
       ),
     ),
     card(

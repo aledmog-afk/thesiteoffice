@@ -59,3 +59,21 @@ describe('buildRecordPdf', () => {
     expect(raw).toContain('Overhead power lines');
   });
 });
+
+describe('buildBriefingPdf', () => {
+  it('shows the stop reading in every unit and fits on one page', async () => {
+    const { buildBriefingPdf } = await import('../../src/pdf/briefingPdf');
+    const setup = panelSetup();
+    const f = forecast(() => 3);
+    const record = await createRecord(setup, f, assessLift(setup, f), {
+      choice: 'proceed', name: 'A. Person', role: 'Appointed Person', notes: '', anemometerChecked: true, operatorRetainsDecision: true,
+    }, new Date('2026-10-22T08:00:00Z'), 'abcdef12-0000-4000-8000-000000000002', buildChecksReport(emptyChecks(), '2026-10-22'));
+    const doc = await buildBriefingPdf(record);
+    expect(doc.getNumberOfPages()).toBe(1);
+    const raw = doc.output();
+    expect(raw).toContain('STOP lifting if the crane anemometer gust reading is above');
+    // 6.59 m/s = 14.7 mph, 23.7 km/h, 12.8 knots
+    for (const v of ['6.6', '15', '24', '13']) expect(raw).toContain(`(${v})`);
+    expect(raw).toContain('The crane operator retains the final decision');
+  });
+});
