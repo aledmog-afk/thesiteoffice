@@ -198,8 +198,8 @@ function recordView(ctx: Ctx, r: DecisionRecord, integrityOk: boolean): HTMLElem
         ['Crane', s.craneDescription],
         ['Chart limit', `${speed(s.chartLimitMs)} (${s.chartLimitType})`],
         ['Limit source', s.chartLimitSource],
-        ['Height', `${s.heightM} m`],
-        ['Load', `${s.loadDescription || 'Flat load'}: ${s.loadLengthM} × ${s.loadHeightM} m, ${s.loadMassKg} kg + ${s.riggingMassKg} kg rigging, cw ${s.dragCoefficient}`],
+        ['Boom / jib head height', `${s.heightM} m`],
+        ['Load', `${s.loadDescription || 'Flat load'}: ${s.loadLengthM} × ${s.loadHeightM} m, ${s.loadMassKg} kg + ${s.riggingMassKg} kg rigging, hook block and rope, cw ${s.dragCoefficient}`],
       ]),
     ),
     card(

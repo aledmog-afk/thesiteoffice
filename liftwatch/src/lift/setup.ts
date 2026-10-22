@@ -13,7 +13,7 @@ export interface LiftSetup {
   /** Where the chart limit came from, e.g. "Lift plan LP-014 / LTM 1090 load chart". Required. */
   chartLimitSource: string;
   chartLimitType: LimitType | null;
-  /** Height used for the gust correction: the higher of jib head and load during the lift (m). */
+  /** Boom / jib head height above ground, used for the gust correction (m). CPA pages 22–23. */
   heightM: number | null;
   loadDescription: string;
   loadLengthM: number | null;
@@ -64,13 +64,13 @@ export function validateSetup(s: LiftSetup): SetupErrors {
     e.chartLimitType =
       'This method compares gusts at height with a gust limit. Get the 3-second gust limit from the crane supplier or lift plan.';
   }
-  if (!positive(s.heightM)) e.heightM = 'Enter the height for the wind correction, in metres.';
+  if (!positive(s.heightM)) e.heightM = 'Enter the boom / jib head height, in metres.';
   else if (s.heightM! > MAX_METHOD_HEIGHT_M) e.heightM = `Outside method range: the factors stop at ${MAX_METHOD_HEIGHT_M} m.`;
   if (!positive(s.loadLengthM)) e.loadLengthM = 'Enter the length of the face presented to the wind.';
   if (!positive(s.loadHeightM)) e.loadHeightM = 'Enter the height of the face presented to the wind.';
   if (!positive(s.loadMassKg)) e.loadMassKg = 'Enter the load mass in kg.';
   if (s.riggingMassKg === null || !Number.isFinite(s.riggingMassKg) || s.riggingMassKg < 0) {
-    e.riggingMassKg = 'Enter the rigging mass in kg (0 if included in the load mass).';
+    e.riggingMassKg = 'Enter the mass of rigging, hook block and hoist rope in kg (0 if included in the load mass).';
   }
   if (!positive(s.dragCoefficient)) e.dragCoefficient = 'Enter a drag coefficient above zero (1.2 for flat panels).';
   const hhmm = /^([01]\d|2[0-3]):[0-5]\d$/;

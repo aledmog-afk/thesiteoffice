@@ -223,7 +223,7 @@ export function setupScreen(ctx: Ctx): HTMLElement {
         h(
           'ol',
           null,
-          h('li', null, h('span', { class: 'lbl' }, `Gust factor at ${setup.heightM} m`), h('span', { class: 'v' }, `× ${num(f, 3)}`), h('span', { class: 'f' }, 'Liebherr factors quoted by CPA, log-height interpolation')),
+          h('li', null, h('span', { class: 'lbl' }, `Gust factor at ${setup.heightM} m`), h('span', { class: 'v' }, `× ${num(f, 3)}`), h('span', { class: 'f' }, 'Liebherr factors quoted by CPA (page 21), log-height interpolation')),
           h('li', null, h('span', { class: 'lbl' }, 'Near limit from (gust at height)'), h('span', { class: 'v' }, speed(result.permittedMs * NEAR_LIMIT_RATIO)), h('span', { class: 'f' }, `${NEAR_LIMIT_RATIO * 100} % of the permitted speed`)),
           h('li', null, h('span', { class: 'lbl' }, 'Same limit as a 10 m forecast gust'), h('span', { class: 'v' }, speed(result.permittedMs / f)), h('span', { class: 'f' }, `${num(result.permittedMs, 2)} ÷ ${num(f, 3)}`)),
         ),
@@ -269,7 +269,7 @@ export function setupScreen(ctx: Ctx): HTMLElement {
       track('chartLimitMs', field('In-service wind limit from the load chart (m/s)', limit, 'For this configuration and duty'), limit),
       track('chartLimitSource', field('Where this figure came from', limitSource, 'Required. Lift plan reference, load chart, manufacturer data'), limitSource),
       h('div', { class: 'field' }, h('span', { class: 'label', id: 'lt-label' }, 'The limit is a'), typeGroup, typeErr),
-      track('heightM', field('Height for the wind correction (m)', height, 'The higher of the jib head and the load during the lift. Up to 150 m.'), height),
+      track('heightM', field('Boom / jib head height (m)', height, 'Height above ground of the boom or jib head, where the crane anemometer is. Up to 150 m.'), height),
     ),
     card(
       h('h2', null, 'Load'),
@@ -284,7 +284,7 @@ export function setupScreen(ctx: Ctx): HTMLElement {
         'div',
         { class: 'row' },
         track('loadMassKg', field('Load mass (kg)', mass), mass),
-        track('riggingMassKg', field('Rigging mass (kg)', rig), rig),
+        track('riggingMassKg', field('Rigging, hook block and rope (kg)', rig, 'Only what is actually lifted'), rig),
       ),
       h('div', { style: 'margin-top:14px' }, track('dragCoefficient', field('Drag coefficient cw', cw, '1.2 for flat panels (EN 13000). Change only with a source.'), cw)),
     ),

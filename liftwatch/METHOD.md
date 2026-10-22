@@ -13,9 +13,10 @@ lift plan, the AP's judgement, manufacturer data, BS 7121 or on-site wind checks
 
 | Ref | Source |
 |-----|--------|
-| CPA | Construction Plant-hire Association / Tower Crane Interest Group (CPA/TCIG), *Planning and Control of Lifting Operations in Wind*, July 2025. Quotes Liebherr gust factors and mean-to-gust factors, and gives a worked example of a flat panel. |
-| EN13000 | BS EN 13000, *Cranes. Mobile cranes*. Mobile crane in-service wind limits on load charts assume a load with a wind area of 1.2 m² per tonne of load and a drag coefficient of 1.2. |
-| BS7121 | BS 7121-1, *Code of practice for safe use of cranes. General*, Annex D: the method for reducing the permitted wind speed for loads with a large wind area. |
+| CPA | CPA/TCIG 2507, *Planning and Control of Lifting Operations in Wind*, V1, July 2025 (Construction Plant-hire Association, Crane and Tower Crane Interest Groups). Page numbers below are the guide's own (“Page n of 57”). |
+| EN13000 | BS EN 13000:2010+A1:2014, *Cranes. Mobile cranes*, in-service wind clause 4.1.2.2.2. Load charts assume a load wind area of 1.0 m² per tonne with a drag coefficient cw of 1.2, so 1.2 m² of effective wind area (Ap × cw) per tonne (CPA pages 10–11, citing cl. 4.1.3.1.2). |
+| BS7121 | BS 7121-1:2016, *Code of practice for safe use of cranes. General*, Annex D-1: flow chart for assessing loads with a large wind area (reproduced as CPA Figure 5, page 18). |
+| Liebherr | Liebherr, *Wind influences on cranes* (2017): gust factors with height (Table 2) and drag coefficients (Table 1), as quoted by CPA. |
 | OM | Open-Meteo forecast API, https://open-meteo.com/en/docs. Variables are listed below. |
 
 ## Units
@@ -28,10 +29,13 @@ lift plan, the AP's judgement, manufacturer data, BS 7121 or on-site wind checks
 ## Step 1: 10 m gust corrected to height
 
 Open-Meteo gives `wind_gusts_10m`, the gust at 10 m. Wind increases with height, so
-the gust is scaled to the height used for the lift (the higher of the jib head and
-the load during the lift; the AP enters it).
+the gust is scaled to the height of the boom / jib head, which the AP enters. CPA
+says the crane's limit is checked against the wind at the boom / jib head, where the
+crane's anemometer is, because it is the crane the limit protects (pages 22–23).
 
-Gust factors from Liebherr, quoted in CPA:
+Gust factors from Liebherr Table 2, quoted in CPA page 21 (“1.181 at 50m AGL, 1.272
+at 100m AGL and 1.329 at 150m AGL. This assumes a wind gust speed has been supplied
+in the forecast”):
 
 | Height (m) | Factor |
 |-----------:|-------:|
@@ -53,10 +57,22 @@ F(h) = F_lo + t × (F_hi − F_lo)
 
 Example: at 25 m, t = ln(25/10) / ln(50/10) = 0.5693, so F = 1 + 0.5693 × 0.181 = 1.103.
 
+The interpolation between the published heights is LiftWatch's choice; CPA gives
+the factors at 50, 100 and 150 m only.
+
+**Ground roughness.** How much wind increases with height depends on the upwind
+terrain: open country, towns or city centres (CPA section 5.2 and Annex H). CPA warns
+that default parameters often suit open countryside (roughness class 0.5–1) and that
+city centres are class 3.5 or more. The guide does not say which roughness the
+Liebherr factors assume, and LiftWatch uses them for every site. Treat the gust at
+height as an estimate, and use the crane's anemometer on the day.
+
 ## Step 2: 10-minute mean to gust at height (for sources without gusts)
 
-Some sources give only a 10-minute mean wind speed at 10 m. CPA gives these factors
-to turn the 10 m mean into a gust at height:
+Some sources give only a 10-minute mean wind speed at 10 m. CPA page 21 gives these
+factors to turn the 10 m mean into a gust at height (“1.653 at 50m AGL, 1.78 at 100m
+AGL and 1.861 at 150m AGL. This allows for converting the 10-minute mean wind to a
+maximum gust”):
 
 | Height (m) | Factor |
 |-----------:|-------:|
@@ -77,38 +93,65 @@ implemented and tested so a future mean-only source can use it.
 
 ## Step 3: permitted wind speed for the load (wind-area reduction)
 
-Source: EN13000 assumption, method as BS7121 Annex D, worked example in CPA.
+Source: EN13000 assumption (1.2 m² effective wind area per tonne); the formula is the
+one in CPA section 4.3 (page 12) and the Annex A calculator (page 40), based on the
+Liebherr wind document; BS7121 Annex D-1 sets out the same assessment as a flow chart.
 
 1. Projected area of the face presented to the wind:
    `Ap = length × height` (m²). For a panel lifted upright this is the panel face.
 2. Effective wind area: `Aw = Ap × cw`. Default `cw = 1.2` for flat panels. The AP
    can change it.
-3. Mass: `m = (load mass + rigging mass) / 1000` (t). Rigging is entered separately
-   and added.
+3. Mass: `m = (load mass + rigging mass) / 1000` (t). CPA's calculator counts the
+   hoist load as the load plus lifting accessories, hook block and any relevant
+   portion of hoist rope (Annex A, page 40). LiftWatch asks for the load and for
+   "rigging, hook block and hoist rope" separately and adds them. Only count what is
+   actually lifted: a higher mass gives a higher permitted speed.
 4. Ratio: `r = Aw / m` (m²/t).
 5. Reference ratio from EN13000: `r0 = 1.2 m²/t` (`REFERENCE_AREA_RATIO` in config).
 6. Permitted wind speed:
    - if `r ≤ r0`: `v_perm = v_chart` (the crane chart limit, unchanged)
    - if `r > r0`: `v_perm = v_chart × √(r0 / r)`
-7. `v_perm` is never above `v_chart`.
+7. `v_perm` is never above `v_chart` (CPA Annex A, Note 1).
 
 Why the square root: wind force is proportional to v² × Aw. The chart limit
 assumes a wind area of r0 × m. Holding the force at the chart's design value,
 `v_perm² × Aw = v_chart² × r0 × m`, so `v_perm = v_chart × √(r0 × m / Aw) = v_chart × √(r0 / r)`.
 
-### Worked example (CPA)
+### Worked example (LiftWatch)
 
+A timber frame wall panel. This example is LiftWatch's own; it is not in the CPA guide.
 Panel 3.6 m × 2.4 m, cw 1.2, mass 1,300 kg, no rigging, chart limit 17 m/s.
 
 - Ap = 8.64 m²
 - Aw = 10.368 m²
 - r = 10.368 / 1.3 = 7.975 m²/t
-- v_perm = 17 × √(1.2 / 7.975) = 6.59 m/s (14.8 mph). CPA quotes about 6.5 m/s.
+- v_perm = 17 × √(1.2 / 7.975) = 6.59 m/s (14.8 mph).
+
+### Checked against the CPA guide's worked examples
+
+LiftWatch reproduces every worked example in the guide to within its rounding (one
+decimal place). These are automated tests (`tests/wind/loadArea.spec.ts`).
+
+| CPA example | Guide | LiftWatch |
+|---|--:|--:|
+| Annex E Fig 15: shutter 2.4 × 6.6 m, 2.392 t, mobile crane 11 m/s | 4.3 | 4.27 |
+| Annex E Fig 15: shutter 7.2 × 6.6 m, 7.215 t, mobile crane 11 m/s | 4.3 | 4.29 |
+| Annex E Fig 15: pack of ply 2.4 × 0.7 m, 0.9 t, mobile crane 11 m/s | 8.1 | 8.05 |
+| Annex E Fig 15: person basket 1.45 × 1.1 m, 0.64 t, mobile crane 11 m/s | 7.0 | 6.97 |
+| Annex E Fig 14: shutter 2.4 × 6.6 m, 2.392 t, tower crane 17 m/s | 6.6 | 6.61 |
+| Annex E Fig 14: pack of ply 2.4 × 0.7 m, 0.9 t, tower crane 17 m/s | 12.4 | 12.44 |
+| Section 4.3: insulation pack 1.2 × 2.4 m, 113 kg, 11.1 m/s | 2.1 | 2.20 |
+
+The insulation pack is the one difference. The guide works it as 11.1 × 0.198 and
+prints 2.1, but 11.1 × 0.198 = 2.198, so 2.2 m/s. The guide's own description, “an
+80% reduction”, matches 2.2 (2.2 is 19.8 % of 11.1), so the printed 2.1 is a rounding
+slip in the guide, not a different method.
 
 ### The chart limit must be a gust
 
-EN 13000 load charts give the in-service limit as a 3-second gust at the highest
-point of the crane. LiftWatch compares gusts at height with that limit. If the AP
+EN 13000 (clause 4.1.2.2, as quoted by CPA page 20) applies a 3-second gust to the
+crane at height, and CPA says gusts, not means, should be used when deciding whether
+a lift proceeds (section 3.3). LiftWatch compares gusts at height with that limit. If the AP
 says the chart limit is a mean, the app does not assess. It asks for the gust figure
 from the crane supplier or lift plan. Comparing a gust with a mean limit would
 give a misleading result either way.
@@ -127,13 +170,18 @@ ratio = v_gust(h) / v_perm
 | 0.80 to 1.00 inclusive | Near limit |
 | above 1.00 | Over limit |
 
+The 0.80 "Near limit" band is LiftWatch's own choice, set for this pilot. It is not
+from CPA or any standard. CPA does stress allowing time to finish a lift and make
+the crane safe before the limit is reached (section 6.1.3).
+
 If the gust is missing for an hour, that hour has no status ("No data"). It does not
 pass.
 
 ### Flags
 
 Flags are shown next to the status. A flag never makes an hour pass, and the
-absence of a flag never makes an hour pass either.
+absence of a flag never makes an hour pass either. The flags and their thresholds
+are LiftWatch's own choices for this pilot, not from CPA or any standard.
 
 | Flag | Rule (Open-Meteo variable) |
 |------|----------------------------|
@@ -158,6 +206,16 @@ then Near limit, then Within limits. Within one status the highest ratio is show
 - 7-day outlook: for each day, the worst status in daylight hours and the highest
   gust at height. Labelled "Outlook — planning guidance only".
 
+## Not in this method
+
+- **Wind direction.** CPA gives a rule of thumb, used mainly for crawler cranes on
+  wind farms, of reducing the permissible speed by about 1 m/s for oblique winds and
+  2 m/s for side-on winds (section 5.2.1, Figure 8). LiftWatch shows the direction but
+  does not apply a reduction.
+- **The crane operator decides.** CPA section 6.4: the crane operator has the final
+  decision whether a lift starts, continues or is aborted. LiftWatch asks the AP to
+  confirm this in every decision to proceed.
+
 ## Forecast request (Open-Meteo)
 
 ```
@@ -168,6 +226,11 @@ wind_speed_unit=ms
 timezone=Europe/London
 forecast_days=7
 ```
+
+CPA notes that forecasts are usually for 10 m above ground and for the middle of a
+grid square, so they can miss local features and neighbouring buildings (page 20),
+and that any forecast data used to make decisions should be recorded (page 20).
+LiftWatch stores the forecast values it used in every record.
 
 The Worker rounds latitude and longitude to 2 decimal places (about 1 km) and caches
 each site's response for 60 minutes. The fetch time and source are shown on screen

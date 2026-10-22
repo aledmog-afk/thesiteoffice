@@ -2,7 +2,7 @@ import { parseForecast, type Forecast } from '../../src/data/openMeteo';
 import { emptySetup, type LiftSetup } from '../../src/lift/setup';
 import { openMeteoResponse } from '../fixtures/openMeteo';
 
-export function cpaSetup(patch: Partial<LiftSetup> = {}): LiftSetup {
+export function panelSetup(patch: Partial<LiftSetup> = {}): LiftSetup {
   return {
     ...emptySetup('2026-10-22'),
     site: { postcode: 'SW1A 1AA', label: 'SW1A 1AA, Westminster', latitude: 51.501, longitude: -0.1416 },

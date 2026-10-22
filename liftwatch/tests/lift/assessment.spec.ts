@@ -2,29 +2,29 @@ import { describe, expect, it } from 'vitest';
 import { assessLift, AssessmentError } from '../../src/lift/assessment';
 import { validateSetup } from '../../src/lift/setup';
 import { gustHeightFactor } from '../../src/wind';
-import { cpaSetup, forecast } from './helpers';
+import { panelSetup, forecast } from './helpers';
 
 describe('validateSetup', () => {
   it('accepts a complete set-up', () => {
-    expect(validateSetup(cpaSetup())).toEqual({});
+    expect(validateSetup(panelSetup())).toEqual({});
   });
   it('requires the source of the chart limit', () => {
-    expect(validateSetup(cpaSetup({ chartLimitSource: '  ' })).chartLimitSource).toBeTruthy();
+    expect(validateSetup(panelSetup({ chartLimitSource: '  ' })).chartLimitSource).toBeTruthy();
   });
   it('refuses a mean chart limit with an explanation', () => {
-    expect(validateSetup(cpaSetup({ chartLimitType: 'mean' })).chartLimitType).toMatch(/gust limit/);
+    expect(validateSetup(panelSetup({ chartLimitType: 'mean' })).chartLimitType).toMatch(/gust limit/);
   });
   it('refuses heights above 150 m', () => {
-    expect(validateSetup(cpaSetup({ heightM: 160 })).heightM).toMatch(/Outside method range/);
+    expect(validateSetup(panelSetup({ heightM: 160 })).heightM).toMatch(/Outside method range/);
   });
   it('checks the lift window', () => {
-    expect(validateSetup(cpaSetup({ windowStart: '10:00', windowEnd: '09:00' })).windowEnd).toBeTruthy();
+    expect(validateSetup(panelSetup({ windowStart: '10:00', windowEnd: '09:00' })).windowEnd).toBeTruthy();
   });
 });
 
 describe('assessLift', () => {
   it('uses daylight hours of the lift date by default', () => {
-    const a = assessLift(cpaSetup(), forecast(() => 3));
+    const a = assessLift(panelSetup(), forecast(() => 3));
     expect(a.windowDefaulted).toBe(true);
     expect(a.windowStart).toBe('2026-10-22T07:40');
     // 07:00 overlaps sunrise, 17:00 overlaps sunset
@@ -37,7 +37,7 @@ describe('assessLift', () => {
 
   it('reports the worst hour in the planned window', () => {
     // gust rises through the day: 0.25 m/s per hour from 1 m/s
-    const a = assessLift(cpaSetup({ windowStart: '09:00', windowEnd: '12:00' }), forecast((i) => 1 + (i % 24) * 0.25));
+    const a = assessLift(panelSetup({ windowStart: '09:00', windowEnd: '12:00' }), forecast((i) => 1 + (i % 24) * 0.25));
     expect(a.windowHours.map((h) => h.time.slice(11))).toEqual(['09:00', '10:00', '11:00']);
     expect(a.worst?.time).toBe('2026-10-22T11:00');
     const expectedGust = (1 + 11 * 0.25) * gustHeightFactor(30);
@@ -47,22 +47,22 @@ describe('assessLift', () => {
   });
 
   it('flags over limit when the gust at height exceeds the permitted speed', () => {
-    const a = assessLift(cpaSetup(), forecast(() => 8));
+    const a = assessLift(panelSetup(), forecast(() => 8));
     expect(a.overallStatus).toBe('over');
     expect(a.periods).toEqual([]);
   });
 
   it('lists daylight periods within limits', () => {
-    const a = assessLift(cpaSetup(), forecast(() => 2));
+    const a = assessLift(panelSetup(), forecast(() => 2));
     expect(a.periods).toEqual([{ start: '2026-10-22T08:00', end: '2026-10-22T17:50', hours: 10 }]);
     expect(a.outlook).toHaveLength(2);
   });
 
   it('refuses a date the forecast does not cover', () => {
-    expect(() => assessLift(cpaSetup({ liftDate: '2026-11-30' }), forecast())).toThrow(AssessmentError);
+    expect(() => assessLift(panelSetup({ liftDate: '2026-11-30' }), forecast())).toThrow(AssessmentError);
   });
 
   it('refuses a mean chart limit', () => {
-    expect(() => assessLift(cpaSetup({ chartLimitType: 'mean' }), forecast())).toThrow(AssessmentError);
+    expect(() => assessLift(panelSetup({ chartLimitType: 'mean' }), forecast())).toThrow(AssessmentError);
   });
 });

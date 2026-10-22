@@ -3,7 +3,7 @@ import { DISCLAIMER } from '../../src/config';
 import { assessLift } from '../../src/lift/assessment';
 import { createRecord } from '../../src/lift/record';
 import { buildRecordPdf, pdfFilename, pdfSafe } from '../../src/pdf/recordPdf';
-import { cpaSetup, forecast } from '../lift/helpers';
+import { panelSetup, forecast } from '../lift/helpers';
 
 describe('pdfSafe', () => {
   it('replaces characters the built-in PDF font cannot draw', () => {
@@ -14,7 +14,7 @@ describe('pdfSafe', () => {
 
 describe('buildRecordPdf', () => {
   it('includes the status, method, sources and the required footer on every page', async () => {
-    const setup = cpaSetup();
+    const setup = panelSetup();
     const f = forecast(() => 3);
     const record = await createRecord(setup, f, assessLift(setup, f), {
       choice: 'postpone',

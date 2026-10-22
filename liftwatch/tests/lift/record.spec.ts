@@ -4,7 +4,7 @@ import { createRecord, tickLabel, validateDecision, verifyRecord, type Decision 
 import { MemoryRecordStore } from '../../src/storage/memory';
 import { exportRecords, importRecords } from '../../src/storage/exchange';
 import { DuplicateRecordError } from '../../src/storage/types';
-import { cpaSetup, forecast } from './helpers';
+import { panelSetup, forecast } from './helpers';
 
 const decision: Decision = {
   choice: 'proceed-with-conditions',
@@ -16,7 +16,7 @@ const decision: Decision = {
 };
 
 async function makeRecord(id = 'rec-1', when = '2026-10-22T08:15:00Z') {
-  const setup = cpaSetup();
+  const setup = panelSetup();
   const f = forecast(() => 3);
   return createRecord(setup, f, assessLift(setup, f), decision, new Date(when), id);
 }

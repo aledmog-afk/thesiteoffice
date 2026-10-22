@@ -23,8 +23,8 @@ or crane library.
 
 1. **Set-up**: site (UK postcode or latitude/longitude), lift date, planned window,
    crane, the chart's in-service wind limit **and where that figure came from**,
-   whether the limit is a gust or a mean, height for the wind correction, and the
-   load's size, mass, rigging mass and drag coefficient. The permitted wind speed
+   whether the limit is a gust or a mean, boom / jib head height, and the
+   load's size, mass, rigging (with hook block and rope) mass and drag coefficient. The permitted wind speed
    and the working update as you type.
 2. **Assessment**: status banner ("Within limits / Near limit / Over limit —
    forecast assessment against the limits you entered"), gust at height against
@@ -152,6 +152,14 @@ Dependencies: Vite, TypeScript, Vitest (dev) and jsPDF. The Worker is deployed w
 - **Forecast grid resolution.** Open-Meteo is a modelled forecast on a grid, a few
   km at best, and the Worker rounds the site to about 1 km. It does not resolve
   conditions at the exact crane position.
+- **Height factors ignore ground roughness.** The Liebherr gust factors are used
+  for every site. CPA (section 5.2, Annex H) explains that wind at height depends on
+  the upwind terrain, from open country to city centres, and the factors' assumed
+  terrain is not stated. The gust at height is an estimate.
+- **Some rules are LiftWatch's own.** The formula and factors come from CPA/TCIG 2507
+  and EN 13000, and reproduce the CPA guide's worked examples (METHOD.md). The 80 %
+  "Near limit" band and the weather flags are pilot choices, not from CPA or a
+  standard. Wind direction is shown but not used to reduce the limit.
 - **Local funnelling between buildings.** Wind accelerating between buildings,
   around structures, over ridges or at the edges of tall buildings is not
   modelled. On-site measurement with an anemometer or the crane's jib anemometer

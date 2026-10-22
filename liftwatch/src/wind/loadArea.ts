@@ -10,7 +10,7 @@ export interface LoadWindInput {
   dragCoefficient?: number;
   /** Load mass (kg). */
   loadMassKg: number;
-  /** Rigging mass (kg), added to the load mass. */
+  /** Lifting accessories, hook block and relevant hoist rope (kg), added to the load mass (CPA Annex A). */
   riggingMassKg?: number;
   /** In-service wind limit from the crane load chart, as a 3 s gust (m/s). */
   chartLimitMs: number;
@@ -41,9 +41,11 @@ export interface LoadWindResult {
 /**
  * Permitted wind speed for a load with a large wind area.
  *
- * Method: BS EN 13000 assumption (load charts assume Aw / m = 1.2 m²/t) applied as
- * in BS 7121-1 Annex D, with the CPA/TCIG (July 2025) worked example as a check.
- * See METHOD.md, step 3.
+ * Method: BS EN 13000 assumption (load charts assume 1.0 m²/t with cw 1.2, i.e.
+ * Aw / m = 1.2 m²/t). Formula as CPA/TCIG 2507 (July 2025) section 4.3 and Annex A,
+ * from the Liebherr wind document; BS 7121-1:2016 Annex D-1 gives the same
+ * assessment as a flow chart. Checked against the guide's Annex E examples in
+ * tests/wind/loadArea.spec.ts. See METHOD.md, step 3.
  *
  *   Ap = length × height                     projected area (m²)
  *   Aw = Ap × cw                             effective wind area (m²)
@@ -54,7 +56,7 @@ export interface LoadWindResult {
  *
  * The square root comes from wind force ∝ v² × Aw: holding the force at the
  * chart's design value gives v_perm² × Aw = v_chart² × r0 × m.
- * The result is never above the chart limit.
+ * The result is never above the chart limit (CPA Annex A, Note 1).
  */
 export function permittedWindSpeed(input: LoadWindInput): LoadWindResult {
   const cw = input.dragCoefficient ?? DEFAULT_DRAG_COEFFICIENT;
@@ -88,7 +90,7 @@ export function permittedWindSpeed(input: LoadWindInput): LoadWindResult {
     { label: 'Effective wind area Aw', formula: `Ap × cw = ${fmt(projectedAreaM2)} × ${fmt(cw)}`, value: windAreaM2, unit: 'm²' },
     {
       label: 'Total mass m',
-      formula: `(${fmt(input.loadMassKg)} kg + ${fmt(rigging)} kg rigging) ÷ 1000`,
+      formula: `(${fmt(input.loadMassKg)} kg load + ${fmt(rigging)} kg rigging etc.) ÷ 1000`,
       value: totalMassT,
       unit: 't',
     },

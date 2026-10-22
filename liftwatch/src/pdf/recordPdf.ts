@@ -243,8 +243,8 @@ export async function buildRecordPdf(record: DecisionRecord, integrityOk: boolea
     ['Crane', s.craneDescription],
     ['Chart wind limit', `${spd(s.chartLimitMs)}, ${s.chartLimitType === 'gust' ? '3-second gust' : s.chartLimitType ?? '-'}`],
     ['Source of the limit', s.chartLimitSource],
-    ['Height for correction', `${s.heightM} m`],
-    ['Load', `${s.loadDescription || 'Flat load'}: ${s.loadLengthM} m × ${s.loadHeightM} m, ${s.loadMassKg} kg + ${s.riggingMassKg} kg rigging, cw ${s.dragCoefficient}`],
+    ['Boom / jib head height', `${s.heightM} m`],
+    ['Load', `${s.loadDescription || 'Flat load'}: ${s.loadLengthM} m × ${s.loadHeightM} m, ${s.loadMassKg} kg + ${s.riggingMassKg} kg rigging, hook block and rope, cw ${s.dragCoefficient}`],
   ]);
 
   L.heading('Calculation');
