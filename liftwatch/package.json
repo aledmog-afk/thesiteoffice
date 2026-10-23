@@ -12,7 +12,8 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit && tsc --noEmit -p worker",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "docs:explainer": "python3 docs/explainer/build.py"
   },
   "devDependencies": {
     "typescript": "5.9.3",

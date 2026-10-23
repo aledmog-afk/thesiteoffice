@@ -20,6 +20,9 @@ or crane library.
 - Build plan: [PLAN.md](PLAN.md)
 - What gets in the way of lift planning, and what each feature is for: [docs/RESEARCH.md](docs/RESEARCH.md)
 - Step-by-step test script: [TESTING.md](TESTING.md)
+- Full explanation of the platform as a PDF, for research with other AI tools:
+  [docs/LiftWatch-platform-explained.pdf](docs/LiftWatch-platform-explained.pdf). Rebuild it with
+  `npm run docs:explainer` (Python 3 with reportlab) whenever the platform changes; a test fails until you do.
 
 ## What it does
 
