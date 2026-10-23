@@ -38,3 +38,10 @@
 /login                    /tracker/login.html 302
 /signin                   /tracker/login.html 302
 /app                      /tracker/ 302
+
+# LiftWatch lives in this repository (liftwatch/) but runs as its own Cloudflare
+# Pages project. Its source files and documents are not part of this site: send
+# anyone who reaches them to the real app. 302 so the address can change later.
+# These stay last: the splat rule is dynamic, and dynamic rules follow static ones.
+/liftwatch                https://liftwatch.pages.dev/ 302
+/liftwatch/*              https://liftwatch.pages.dev/ 302

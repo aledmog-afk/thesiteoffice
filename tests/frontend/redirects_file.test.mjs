@@ -83,6 +83,19 @@ test("_redirects: short sign-in addresses are temporary (302) and land on the re
   }
 });
 
+test("_redirects: LiftWatch's source and documents under /liftwatch are not served; they go to the LiftWatch app", () => {
+  for (const p of ["/liftwatch", "/liftwatch/", "/liftwatch/index.html", "/liftwatch/src/main.ts", "/liftwatch/package.json", "/liftwatch/docs/LiftWatch-platform-explained.pdf", "/liftwatch/METHOD.md"]) {
+    const r = matchRedirect(rules, p);
+    assert.ok(r, `${p} must be redirected`);
+    assert.equal(r.destination, "https://liftwatch.pages.dev/");
+    assert.equal(r.code, 302);
+  }
+  for (const p of ["/", "/index.html", "/privacy.html", "/tracker/", "/liftwatchers.html"]) {
+    const r = matchRedirect(rules, p);
+    assert.ok(!r || r.destination !== "https://liftwatch.pages.dev/", `${p} must not be sent to LiftWatch`);
+  }
+});
+
 test("_redirects: the parser itself rejects lines Pages would ignore", () => {
   assert.throws(() => parseRedirects("/a /b 410"), /unsupported status/);
   assert.throws(() => parseRedirects("example.com/a /b 301"), /must be a path/);
