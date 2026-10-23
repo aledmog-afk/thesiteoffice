@@ -3,6 +3,7 @@
 - Decision support only. Never use "safe", "clear to lift" or "go" in anything a user sees.
 - Author is "LiftWatch" everywhere. No personal names, employers or emails in code, metadata or commits.
 - Ask before adding any dependency beyond Vite, TypeScript, Preact, jsPDF and Vitest.
+  Approved for docs tooling only (not the app): Python 3 with reportlab, for `docs/explainer/build.py`.
 - Wind maths stays pure in `src/wind/`, with each formula's source in a comment and in METHOD.md.
   Change `METHOD_VERSION` when any number or rule in the method changes.
 
