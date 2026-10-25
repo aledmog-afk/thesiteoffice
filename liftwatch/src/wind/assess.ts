@@ -1,7 +1,7 @@
 import { FLAG_THRESHOLDS, NEAR_LIMIT_RATIO, OVER_LIMIT_RATIO } from './constants';
 import { requirePositive, WindInputError } from './errors';
 import { hourStartMs, hourStarts, sunriseMs, sunsetMs } from './instants';
-import { terrainHeightFactor, type Terrain } from './terrain';
+import { appliedHeightFactor, type Terrain } from './terrain';
 import { FLAG_LABEL, type DaySun, type Flag, type FlagCode, type ForecastHour, type HourAssessment, type Status, type SunTimes } from './types';
 
 /**
@@ -76,7 +76,7 @@ export function assessHour(
   startMs: number = hourStartMs(hour),
 ): HourAssessment {
   requirePositive(options.permittedMs, 'Permitted wind speed');
-  const heightFactor = terrainHeightFactor(options.heightM, options.terrain ?? 'open');
+  const heightFactor = appliedHeightFactor(options.heightM, options.terrain ?? 'open');
   const gust = hour.windGusts10mMs;
   const gustAtHeightMs = gust === null ? null : gust * heightFactor;
   const ratio = gustAtHeightMs === null ? null : gustAtHeightMs / options.permittedMs;

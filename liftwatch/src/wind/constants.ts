@@ -3,7 +3,17 @@
  * any of these change: it is stored in every decision record.
  */
 
-export const METHOD_VERSION = 'LW-M1.1';
+export const METHOD_VERSION = 'LW-M1.2';
+
+/**
+ * Interim terrain rule (LW-M1.2). The town and city factors come from the
+ * EN 1991-1-4 profile and have not yet been checked against the standard and the
+ * UK National Annex by a qualified Appointed Person. Until they are, the factor
+ * used is the highest of open country, town and city at that height, whatever
+ * terrain is chosen. The chosen terrain is recorded for information only.
+ * Set to true only after that review, and change METHOD_VERSION and METHOD.md.
+ */
+export const APPLY_CHOSEN_TERRAIN = false;
 
 export interface FactorPoint {
   heightM: number;

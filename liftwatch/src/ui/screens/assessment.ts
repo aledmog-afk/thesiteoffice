@@ -4,7 +4,8 @@ import { londonLocalToEpoch } from '../../time/london';
 import { loadCachedForecast, saveForecast } from '../../data/forecastCache';
 import { ForecastFormatError } from '../../data/openMeteo';
 import type { LiftAssessment } from '../../lift/assessment';
-import { compassPoint, FLAG_LABEL, TERRAIN, STATUS_LABEL, type FlagCode, type HourAssessment, type Status } from '../../wind';
+import { compassPoint, factorTerrain, FLAG_LABEL, STATUS_LABEL, type FlagCode, type HourAssessment, type Status } from '../../wind';
+import { heightFactorSource, terrainText } from '../../lift/display';
 import type { Ctx } from '../app';
 import { hourlyChart } from '../chart';
 import { clear, h, type Child } from '../dom';
@@ -166,7 +167,7 @@ function summary(a: LiftAssessment): HTMLElement {
     h(
       'div',
       { class: 'stats' },
-      stat('Gust at height', speed(w?.gustAtHeightMs), `at ${a.heightM} m, ${TERRAIN[a.terrain ?? 'open'].label.toLowerCase()} (10 m gust ${speed(w?.gust10mMs)} × ${num(a.heightFactor, 3)})`, true),
+      stat('Gust at height', speed(w?.gustAtHeightMs), `at ${a.heightM} m (10 m gust ${speed(w?.gust10mMs)} × ${num(a.heightFactor, 3)}, ${heightFactorSource(a.terrain, factorTerrain(a.heightM))}). Terrain: ${terrainText(a.terrain)}`, true),
       stat('Permitted', speed(a.load.permittedMs), a.load.reduced ? 'reduced for wind area' : 'chart limit', true),
       stat('% of limit', pct(w?.percentOfLimit, w?.status)),
       stat('Direction', w?.windDirectionDeg != null ? compassPoint(w.windDirectionDeg) : '–', w?.windDirectionDeg != null ? `Wind ${direction(w.windDirectionDeg)}` : undefined),

@@ -1,3 +1,4 @@
+import { APPLY_CHOSEN_TERRAIN } from './constants';
 import { gustHeightFactor } from './heightFactor';
 import { requirePositive } from './errors';
 
@@ -80,4 +81,28 @@ export function terrainHeightFactor(heightM: number, terrain: Terrain = 'open'):
   if (terrain === 'open') return published;
   const t = TERRAIN[terrain];
   return Math.max(1, published, profileGustRatio(heightM, t.z0, t.zMin));
+}
+
+export const TERRAINS: readonly Terrain[] = Object.freeze(['open', 'town', 'city']);
+
+/** Shown wherever the chosen terrain appears while the interim rule is in force. */
+export const TERRAIN_NOT_APPLIED = 'for information, not yet applied (pending AP review)';
+
+/**
+ * Gust height factor actually used in the assessment (METHOD.md, step 1).
+ *
+ * Interim rule (LW-M1.2, `APPLY_CHOSEN_TERRAIN` false): the highest of the open
+ * country, town and city factors at that height, whatever terrain was chosen. This
+ * never gives a lower gust at height than any of the three settings would.
+ */
+export function appliedHeightFactor(heightM: number, terrain: Terrain = 'open', applyChosen = APPLY_CHOSEN_TERRAIN): number {
+  if (applyChosen) return terrainHeightFactor(heightM, terrain);
+  return Math.max(...TERRAINS.map((t) => terrainHeightFactor(heightM, t)));
+}
+
+/** The terrain whose factor `appliedHeightFactor` uses at this height (the first, on a tie). */
+export function factorTerrain(heightM: number, terrain: Terrain = 'open', applyChosen = APPLY_CHOSEN_TERRAIN): Terrain {
+  if (applyChosen) return terrain;
+  const f = appliedHeightFactor(heightM, terrain, false);
+  return TERRAINS.find((t) => terrainHeightFactor(heightM, t) === f) ?? 'open';
 }

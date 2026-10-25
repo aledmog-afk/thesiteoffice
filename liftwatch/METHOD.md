@@ -1,4 +1,4 @@
-# LiftWatch method (version LW-M1.1)
+# LiftWatch method (version LW-M1.2)
 
 This is the method used by `src/wind/`. Every formula below also carries its source
 in a code comment next to the code that applies it. The method version is stored
@@ -60,13 +60,26 @@ Example: at 25 m, t = ln(25/10) / ln(50/10) = 0.5693, so F = 1 + 0.5693 × 0.181
 The interpolation between the published heights is LiftWatch's choice; CPA gives
 the factors at 50, 100 and 150 m only.
 
-### Terrain: open country, town or city (added in LW-M1.1)
+### Terrain: open country, town or city (added in LW-M1.1; not applied from LW-M1.2)
+
+> **Interim rule (LW-M1.2).** The town and city factors below have not yet been
+> checked against EN 1991-1-4 and the UK National Annex by a qualified Appointed
+> Person. Until they are, **the factor used is the highest of the open country, town
+> and city factors at that height, whatever terrain is chosen.** In practice that is
+> the city factor above 10 m and 1.000 at or below 10 m. The chosen terrain is still
+> recorded, and is shown as "for information, not yet applied (pending AP review)".
+> The switch is `APPLY_CHOSEN_TERRAIN` in `src/wind/constants.ts` (false). Turning it
+> on needs the review, a new method version and an update to this file.
+>
+> This can only raise the gust at height, never lower it, compared with LW-M1.1. On
+> open-country sites it is more cautious than the published Liebherr factors (at
+> 30 m, 1.285 instead of 1.124, about 14 % higher).
 
 How much the wind increases with height depends on the upwind terrain (CPA section
 5.2 and Annex H). Rough ground (towns, city centres) slows the wind near the ground
 more, so the gust rises more between 10 m and the jib head. CPA warns that default
 parameters often suit open countryside and that city centres are much rougher.
-The AP picks the terrain around the site:
+The AP picks the terrain around the site (recorded, for information only under the interim rule):
 
 | Setting | Means | EN 1991-1-4 category | z0 (m) | zmin (m) |
 |---|---|---|--:|--:|
@@ -198,6 +211,42 @@ says the chart limit is a mean, the app does not assess. It asks for the gust fi
 from the crane supplier or lift plan. Comparing a gust with a mean limit would
 give a misleading result either way.
 
+### What Open-Meteo's gust is (open item for AP review)
+
+Open-Meteo's published definition of `wind_gusts_10m`, from its forecast API
+documentation (https://open-meteo.com/en/docs, "Hourly Parameter Definition" table,
+checked 25 October 2026):
+
+> Variable `wind_gusts_10m`, valid time "Preceding hour max", unit km/h (mph, m/s,
+> knots): "Gusts at 10 meters above ground as a maximum of the preceding hour"
+
+The same page says: "Most weather variables are given as an instantaneous value for
+the indicated hour. Some variables like precipitation are calculated from the
+preceding hour as an average or sum." (Page source:
+github.com/open-meteo/open-meteo-website, `src/routes/en/docs/+page.svelte`.)
+
+How that compares with the gust EN 13000 assumes:
+
+- **Averaging period not stated.** EN 13000 (clause 4.1.2.2, as quoted by CPA page 20)
+  applies a **3-second gust** to the crane at height. Open-Meteo does not say over
+  what period its gust is averaged. It is a value worked out by the weather model
+  (the "best match" blend), not a measurement, and the models work gusts out in
+  their own ways. LiftWatch therefore cannot show that the forecast gust is a
+  3-second gust. It may be higher or lower than a 3-second gust measured at the
+  same place.
+- **10 m, over the model grid.** It is a gust at 10 m above ground for a grid
+  square, not at the crane. LiftWatch scales it to height in step 1.
+- **Which hour it belongs to.** The value stamped HH:00 is the highest gust in the
+  hour **before** HH:00 (HH-1 to HH). LiftWatch shows and assesses each value as the
+  hour **starting** at HH:00 (HH to HH+1), the same as the other forecast values.
+  So, on a rising wind, the gust that falls in a given hour may only show up in the
+  next hour's row, an hour late. The worst hour in a window can be understated by
+  up to an hour of rising wind.
+
+LiftWatch does not change any maths for this in LW-M1.2. It is listed as an open item
+for AP review (below). Until it is reviewed, treat the forecast gust as an estimate
+and rely on the crane's anemometer on the day.
+
 ## Step 4: hourly assessment
 
 For each forecast hour:
@@ -312,8 +361,27 @@ hourly=wind_speed_10m,wind_gusts_10m,wind_direction_10m,wind_speed_80m,
 daily=sunrise,sunset
 wind_speed_unit=ms
 timezone=Europe/London
+timeformat=unixtime
 forecast_days=7
 ```
+
+### Times and the clock change (LW-M1.2)
+
+`timeformat=unixtime` makes Open-Meteo return each hour, sunrise and sunset as an
+exact instant, not a UK clock time. LiftWatch does all time arithmetic (hour ends,
+the lift window, daylight, joining hours into periods, matching wind log readings
+to forecast hours) with these instants and shows UK local time (Europe/London)
+only for display. Earlier versions read the local clock times as if they were UTC.
+
+- **Last Sunday in October** (25 October 2026): 01:00–02:00 happens twice. The day
+  has 25 hourly values. The repeated hour is shown as "01:00 BST" then "01:00 GMT".
+  A planned window that starts or ends at a repeated time starts at the first one
+  and ends at the second, so it never loses the extra hour.
+- **Last Sunday in March** (29 March 2026): 01:00–02:00 does not happen. The day has
+  23 hourly values. A planned time inside the gap (for example 01:30) is moved
+  forward by the hour that was skipped (02:30 BST).
+- Records and saved forecasts from before LW-M1.2 hold local times only. They are
+  read with the rule that a repeated clock time in a run of hours is the later one.
 
 CPA notes that forecasts are usually for 10 m above ground and for the middle of a
 grid square, so they can miss local features and neighbouring buildings (page 20),
@@ -327,9 +395,31 @@ weather models for the location. The forecast response does not say which model
 run was used, so LiftWatch records the time the forecast was fetched from
 Open-Meteo.
 
+## Open items for AP review
+
+These are known questions about the method. Each needs a decision by a qualified
+Appointed Person before the pilot is relied on. None of them is resolved by the
+software.
+
+1. **Terrain factors (step 1).** Check the town and city factors against
+   EN 1991-1-4 and the UK National Annex. Until then the highest factor is used
+   whatever terrain is chosen (interim rule, LW-M1.2).
+2. **Forecast gust definition.** Open-Meteo's `wind_gusts_10m` is a model gust,
+   "a maximum of the preceding hour", with no stated averaging period. Decide how it
+   should be compared with the 3-second gust EN 13000 assumes, and whether a margin
+   is needed (see "What Open-Meteo's gust is").
+3. **Preceding-hour timing.** The gust stamped HH:00 covers HH-1 to HH, but is
+   assessed as HH to HH+1. Decide whether each hour should also take the next value
+   into account.
+4. **The 80 % "Near permitted speed" band and the weather flag thresholds** are
+   LiftWatch pilot choices, not from CPA or a standard.
+5. **Capacity, sling and ground-bearing calculators.** Switched off from LW-M1.2
+   until reviewed (see "Other checks").
+
 ## Version history
 
 | Version | Change |
 |---|---|
 | LW-M1.0 | First pilot method. |
 | LW-M1.1 | Terrain setting: town and city use the EN 1991-1-4 gust profile (categories III and IV); open country unchanged. Records saved under LW-M1.0 used open country. Load schedule, checks and wind log added; they do not change the wind maths. |
+| LW-M1.2 | Interim terrain rule: the highest of the open country, town and city factors is used whatever terrain is chosen; the choice is recorded for information only. Forecast times are exact instants (Open-Meteo `timeformat=unixtime`), so the October and March clock changes are handled. Open-Meteo's gust definition documented, with open items for AP review. Status wording changed (no change to the bands). Capacity, sling and bearing calculators switched off pending review. |

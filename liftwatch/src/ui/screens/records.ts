@@ -2,11 +2,12 @@ import { checksSections } from '../../checks/reportLines';
 import { APP_NAME } from '../../config';
 import { CHECK_ANEMOMETER, CHECK_OPERATOR, DECISION_LABEL, tickLabel, verifyRecord, type DecisionRecord } from '../../lift/record';
 import { buildBriefingPdf } from '../../pdf/briefingPdf';
-import { buildRecordPdf, pdfFilename, terrainText } from '../../pdf/recordPdf';
+import { buildRecordPdf, pdfFilename } from '../../pdf/recordPdf';
+import { heightFactorSource, terrainText } from '../../lift/display';
 import { saveChecks, saveSetup } from '../state';
 import { exportRecords, importRecords } from '../../storage/exchange';
 import type { RecordStore } from '../../storage/types';
-import { STATUS_LABEL } from '../../wind';
+import { factorTerrain, STATUS_LABEL } from '../../wind';
 import type { Ctx } from '../app';
 import { clear, download, h } from '../dom';
 import { card } from '../fields';
@@ -269,7 +270,7 @@ function recordView(ctx: Ctx, r: DecisionRecord, integrityOk: boolean): HTMLElem
         ['Chart limit', `${speed(s.chartLimitMs)} (${s.chartLimitType})`],
         ['Limit source', s.chartLimitSource],
         ['Boom / jib head height', `${s.heightM} m`],
-        ['Terrain', terrainText(s.terrain)],
+        ['Terrain', terrainText(s.terrain, r.methodVersion)],
         ['Load', `${s.loadDescription || 'Flat load'}: ${s.loadLengthM} × ${s.loadHeightM} m, ${s.loadMassKg} kg + ${s.riggingMassKg} kg rigging, hook block and rope, cw ${s.dragCoefficient}`],
       ]),
     ),
@@ -277,7 +278,7 @@ function recordView(ctx: Ctx, r: DecisionRecord, integrityOk: boolean): HTMLElem
       h('h2', null, 'Calculation'),
       kv([
         ...a.load.steps.map((st): [string, string] => [st.label, `${st.formula} = ${num(st.value, st.unit === 'm/s' ? 2 : 3)} ${st.unit}`]),
-        ['Gust factor', `${num(a.heightFactor, 3)} at ${a.heightM} m, ${terrainText(s.terrain).toLowerCase()}`],
+        ['Gust factor', `${num(a.heightFactor, 3)} at ${a.heightM} m, ${heightFactorSource(s.terrain, factorTerrain(a.heightM), r.methodVersion)}`],
         ['Worst hour', w ? `${hourLabel(w)}: ${speed(w.gustAtHeightMs)} at height, ${pct(w.percentOfLimit, w.status)} of permitted (${STATUS_LABEL[w.status]})` : ''],
         ['Flags in window', flags.map((f) => `${f.label} (${f.hours} h)`).join(', ') || 'None'],
       ]),

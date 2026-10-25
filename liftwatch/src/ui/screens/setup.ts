@@ -1,7 +1,8 @@
 import { lookupPostcode, manualLocation, PostcodeError } from '../../data/postcode';
 import { loadResult } from '../../lift/assessment';
 import { validateSetup, type LiftSetup, type SetupErrors, type SetupField } from '../../lift/setup';
-import { NEAR_LIMIT_RATIO, REFERENCE_AREA_RATIO, TERRAIN, terrainHeightFactor, type Terrain } from '../../wind';
+import { heightFactorSource } from '../../lift/display';
+import { appliedHeightFactor, factorTerrain, NEAR_LIMIT_RATIO, REFERENCE_AREA_RATIO, TERRAIN, TERRAIN_NOT_APPLIED, type Terrain } from '../../wind';
 import type { Ctx } from '../app';
 import { clear, h, readNumber } from '../dom';
 import { card, field, numberInput, textInput, type FieldHandle } from '../fields';
@@ -229,12 +230,12 @@ export function setupScreen(ctx: Ctx): HTMLElement {
       ),
     );
     if (!errors.heightM && setup.heightM) {
-      const f = terrainHeightFactor(setup.heightM, setup.terrain);
+      const f = appliedHeightFactor(setup.heightM, setup.terrain);
       working.append(
         h(
           'ol',
           null,
-          h('li', null, h('span', { class: 'lbl' }, `Gust factor at ${setup.heightM} m`), h('span', { class: 'v' }, `× ${num(f, 3)}`), h('span', { class: 'f' }, setup.terrain === 'open' ? 'Open country: Liebherr factors quoted by CPA (page 21)' : `${TERRAIN[setup.terrain].label}: EN 1991-1-4 terrain category ${TERRAIN[setup.terrain].category} profile`)),
+          h('li', null, h('span', { class: 'lbl' }, `Gust factor at ${setup.heightM} m`), h('span', { class: 'v' }, `× ${num(f, 3)}`), h('span', { class: 'f' }, heightFactorSource(setup.terrain, factorTerrain(setup.heightM, setup.terrain)))),
           h('li', null, h('span', { class: 'lbl' }, 'Near limit from (gust at height)'), h('span', { class: 'v' }, speed(result.permittedMs * NEAR_LIMIT_RATIO)), h('span', { class: 'f' }, `${NEAR_LIMIT_RATIO * 100} % of the permitted speed`)),
           h('li', null, h('span', { class: 'lbl' }, 'Same limit as a 10 m forecast gust'), h('span', { class: 'v' }, speed(result.permittedMs / f)), h('span', { class: 'f' }, `${num(result.permittedMs, 2)} ÷ ${num(f, 3)}`)),
         ),
@@ -279,7 +280,7 @@ export function setupScreen(ctx: Ctx): HTMLElement {
         'div',
         { class: 'field', style: 'margin-top:14px' },
         h('span', { class: 'label', id: 'terrain-label' }, 'Terrain around the site'),
-        h('span', { class: 'hint' }, 'Rougher ground slows the wind near the ground, so gusts rise more with height. If unsure, pick the rougher one: it gives the more cautious result.'),
+        h('span', { class: 'hint' }, `Recorded ${TERRAIN_NOT_APPLIED}. Until the terrain factors are reviewed, the assessment uses the highest of the open country, town and city factors at the height you enter.`),
         terrainGroup,
       ),
     ),

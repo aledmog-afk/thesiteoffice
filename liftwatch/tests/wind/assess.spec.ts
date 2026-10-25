@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  appliedHeightFactor,
   assessHour,
   assessHours,
   classifyRatio,
@@ -74,11 +75,14 @@ describe('weatherFlags', () => {
 
 describe('assessHour', () => {
   it('corrects the gust to height and compares with the permitted speed', () => {
-    const a = assessHour({ ...baseHour, windGusts10mMs: 5 }, { heightM: 50, permittedMs: 6.594 }, sun);
-    expect(a.gustAtHeightMs).toBeCloseTo(5 * 1.181, 12);
-    expect(a.ratio).toBeCloseTo((5 * 1.181) / 6.594, 12);
+    // Interim rule (LW-M1.2): the highest terrain factor at 50 m, whatever is chosen.
+    const f = appliedHeightFactor(50);
+    const a = assessHour({ ...baseHour, windGusts10mMs: 4 }, { heightM: 50, permittedMs: 6.594, terrain: 'open' }, sun);
+    expect(a.heightFactor).toBe(f);
+    expect(a.gustAtHeightMs).toBeCloseTo(4 * f, 12);
+    expect(a.ratio).toBeCloseTo((4 * f) / 6.594, 12);
     expect(a.status).toBe('near');
-    expect(a.percentOfLimit).toBeCloseTo((100 * 5 * 1.181) / 6.594, 9);
+    expect(a.percentOfLimit).toBeCloseTo((100 * 4 * f) / 6.594, 9);
   });
 
   it('gives no status when the gust is missing', () => {

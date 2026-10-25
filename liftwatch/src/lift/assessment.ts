@@ -7,7 +7,7 @@ import {
   hourStartMs,
   sunriseMs,
   sunsetMs,
-  terrainHeightFactor,
+  appliedHeightFactor,
   permittedWindSpeed,
   worstHour,
   type DayOutlook,
@@ -110,7 +110,7 @@ export function assessLift(s: LiftSetup, forecast: Forecast): LiftAssessment {
   const load = governing.result;
   const heightM = s.heightM ?? Number.NaN;
   const terrain = s.terrain ?? 'open';
-  const heightFactor = terrainHeightFactor(heightM, terrain);
+  const heightFactor = appliedHeightFactor(heightM, terrain);
   const options = { heightM, permittedMs: load.permittedMs, terrain };
 
   const all = assessHours(forecast.hours, forecast.days, options);

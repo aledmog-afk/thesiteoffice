@@ -9,7 +9,17 @@ export { hourStartMs, hourStarts, sunriseMs, sunsetMs } from './instants';
 export { interpolateLogHeight } from './interpolate';
 export { gustAtHeight, gustHeightFactor } from './heightFactor';
 export { gustAtHeightFromMean, meanToGustFactor } from './meanToGust';
-export { profileGustRatio, TERRAIN, terrainHeightFactor, type Terrain, type TerrainInfo } from './terrain';
+export {
+  appliedHeightFactor,
+  factorTerrain,
+  profileGustRatio,
+  TERRAIN,
+  TERRAIN_NOT_APPLIED,
+  terrainHeightFactor,
+  TERRAINS,
+  type Terrain,
+  type TerrainInfo,
+} from './terrain';
 export { permittedWindSpeed, type LoadWindInput, type LoadWindResult, type WorkingStep } from './loadArea';
 export { assessHour, assessHours, classifyRatio, isDaylight, weatherFlags, type AssessOptions } from './assess';
 export { compareSeverity, dailyOutlook, findWorkablePeriods, worstHour, type DayOutlook, type Period } from './periods';

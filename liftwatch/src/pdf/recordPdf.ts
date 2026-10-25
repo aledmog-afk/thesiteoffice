@@ -1,11 +1,11 @@
 import type { jsPDF as JsPdf } from 'jspdf';
 import { checksSections } from '../checks/reportLines';
 import { APP_NAME, BANNER_SUFFIX, DISCLAIMER, methodPageUrl } from '../config';
-import { percentLabel } from '../lift/display';
+import { heightFactorSource, percentLabel, terrainText } from '../lift/display';
 import { londonClock } from '../time/london';
 import { METHOD_SOURCES, METHOD_SUMMARY } from '../lift/methodSummary';
 import { CHECK_ANEMOMETER, CHECK_OPERATOR, DECISION_LABEL, tickLabel, type DecisionRecord } from '../lift/record';
-import { compassPoint, msToMph, STATUS_LABEL, TERRAIN, type HourAssessment, type Status } from '../wind';
+import { compassPoint, factorTerrain, msToMph, STATUS_LABEL, type HourAssessment, type Status } from '../wind';
 import { allUnits, compareWithForecast, DEFAULT_WAIT_MINUTES, evaluateLog, STATE_LABEL, UNIT_LABEL, type LogEntry } from '../windlog/log';
 
 /**
@@ -58,11 +58,7 @@ const shortDate = (d: string) =>
 const longDate = (d: string) =>
   new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${d}T12:00:00Z`));
 
-/** Records saved before method LW-M1.1 have no terrain: they used the open-country factors. */
-export function terrainText(terrain: keyof typeof TERRAIN | undefined): string {
-  const t = TERRAIN[terrain ?? 'open'];
-  return terrain === 'open' || !terrain ? `${t.label} (published Liebherr factors)` : `${t.label} (EN 1991-1-4 category ${t.category})`;
-}
+export { terrainText };
 
 class Layout {
   y = 18;
@@ -255,7 +251,7 @@ export async function buildRecordPdf(record: DecisionRecord, integrityOk: boolea
     ['Chart wind limit', `${spd(s.chartLimitMs)}, ${s.chartLimitType === 'gust' ? '3-second gust' : s.chartLimitType ?? '-'}`],
     ['Source of the limit', s.chartLimitSource],
     ['Boom / jib head height', `${s.heightM} m`],
-    ['Terrain', terrainText(s.terrain)],
+    ['Terrain', terrainText(s.terrain, record.methodVersion)],
     ['Load', `${s.loadDescription || 'Flat load'}: ${s.loadLengthM} m × ${s.loadHeightM} m, ${s.loadMassKg} kg + ${s.riggingMassKg} kg rigging, hook block and rope, cw ${s.dragCoefficient}`],
   ]);
 
@@ -263,7 +259,7 @@ export async function buildRecordPdf(record: DecisionRecord, integrityOk: boolea
   L.kv(a.load.steps.map((st) => [st.label, `${st.formula} = ${st.value.toFixed(st.unit === 'm/s' ? 2 : 3)} ${st.unit}`]));
   L.kv([
     ['Permitted (rounded)', spd(a.load.permittedMs)],
-    ['Gust factor at height', `${a.heightFactor.toFixed(3)} at ${a.heightM} m, ${terrainText(s.terrain).toLowerCase()}`],
+    ['Gust factor at height', `${a.heightFactor.toFixed(3)} at ${a.heightM} m, ${heightFactorSource(s.terrain, factorTerrain(a.heightM), record.methodVersion)}`],
     ['Worst hour in window', w ? `${hourHm(w)}: gust at height ${spd(w.gustAtHeightMs)} (10 m gust ${n1(w.gust10mMs)} m/s) = ${percentLabel(w.percentOfLimit, w.status)} of permitted` : '-'],
     ['Direction (worst hour)', w?.windDirectionDeg != null ? `from ${compassPoint(w.windDirectionDeg)} (${Math.round(w.windDirectionDeg)}°)` : '-'],
   ]);

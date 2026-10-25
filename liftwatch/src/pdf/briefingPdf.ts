@@ -33,7 +33,7 @@ export async function buildBriefingPdf(record: DecisionRecord): Promise<JsPdf> {
 
   text(`${APP_NAME} - lift briefing`, 18, true, [51, 67, 168]);
   text(`${new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${a.liftDate}T12:00:00Z`))} · ${s.site?.label ?? ''}`, 11, true);
-  text(`Crane: ${s.craneDescription}. Boom / jib head ${s.heightM} m. Terrain: ${terrainText(s.terrain)}.`, 9.5);
+  text(`Crane: ${s.craneDescription}. Boom / jib head ${s.heightM} m. Terrain: ${terrainText(s.terrain, record.methodVersion)}.`, 9.5);
   text(`AP decision: ${DECISION_LABEL[record.decision.choice]} (${record.decision.name}, ${record.decision.role})${record.decision.notes ? ` - ${record.decision.notes}` : ''}`, 9.5, true);
 
   // Forecast status strip.
