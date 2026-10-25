@@ -79,8 +79,11 @@ export function statusLabel(s: Status | null): string {
   return s ? STATUS_LABEL[s] : 'No daylight data';
 }
 
-/** Icon that goes with every status colour, so colour never carries meaning alone. */
-export const STATUS_ICON: Record<Status, string> = { within: '✓', near: '!', over: '✕', 'no-data': '?' };
+/**
+ * Icon that goes with every status colour, so colour never carries meaning alone.
+ * Below the permitted speed has a plain circle, not a tick: it is not an approval.
+ */
+export const STATUS_ICON: Record<Status, string> = { within: '○', near: '!', over: '✕', 'no-data': '?' };
 
 /** Today's date in the UK, "YYYY-MM-DD". */
 export function ukToday(now = new Date()): string {

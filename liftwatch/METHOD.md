@@ -257,11 +257,16 @@ ratio = v_gust(h) / v_perm
 
 | Ratio | Status |
 |-------|--------|
-| below 0.80 | Within limits |
-| 0.80 to 1.00 inclusive | Near limit |
-| above 1.00 | Over limit |
+| below 0.80 | Below permitted speed (X % of limit) |
+| 0.80 to 1.00 inclusive | Near permitted speed (X %) |
+| above 1.00 | Above permitted speed (X %) |
 
-The 0.80 "Near limit" band is LiftWatch's own choice, set for this pilot. It is not
+X is the percentage of the permitted speed in the worst hour. Until LW-M1.1 these
+were called "Within limits", "Near limit" and "Over limit"; the bands are unchanged.
+"Below permitted speed" is shown in a neutral blue-grey with a plain circle, never
+green or a tick: it is a comparison with the limit entered, not an approval.
+
+The 0.80 "Near permitted speed" band is LiftWatch's own choice, set for this pilot. It is not
 from CPA or any standard. CPA does stress allowing time to finish a lift and make
 the crane safe before the limit is reached (section 6.1.3).
 
@@ -287,12 +292,12 @@ are LiftWatch's own choices for this pilot, not from CPA or any standard.
 ### Planned lift window and banner
 
 The AP can set a planned lift window (default: sunrise to sunset on the lift date).
-The banner shows the worst hour in that window, ranked Over limit, then No data,
-then Near limit, then Within limits. Within one status the highest ratio is shown.
+The banner shows the worst hour in that window, ranked Above permitted speed, then
+No data, then Near permitted speed, then Below permitted speed. Within one status the highest ratio is shown.
 
 ### Planning guidance
 
-- Periods: runs of at least 2 consecutive hours that are within limits and in
+- Periods: runs of at least 2 consecutive hours that are below the permitted speed and in
   daylight. Labelled "Planning guidance only".
 - 7-day outlook: for each day, the worst status in daylight hours and the highest
   gust at height. Labelled "Outlook — planning guidance only".
@@ -303,7 +308,7 @@ Each load in the plan gets its own permitted speed (step 3) and is assessed agai
 the same gust at height. Because the gust is the same for every load, the load with
 the lowest permitted speed is the worst in every hour: that "governing" load sets
 the banner and the record's headline figures. The assessment also shows, for each
-daylight hour, which loads are within limits, to help sequence the day (CPA page
+daylight hour, which loads are below the permitted speed, to help sequence the day (CPA page
 22). Rows pasted from a panel schedule are: reference, length, height, mass, and
 optionally rigging and cw.
 
@@ -328,11 +333,11 @@ directly with the governing load's permitted speed. No height factor is applied.
 
 | State | When |
 |---|---|
-| Within limit | the last reading is below 80 % of the permitted speed |
-| Near limit | the last reading is 80 % to 100 % of it |
+| Below permitted speed | the last reading is below 80 % of the permitted speed |
+| Near permitted speed | the last reading is 80 % to 100 % of it |
 | Stop | a reading is above the permitted speed |
 | Waiting | after a stop, readings are back at or below the limit; the wait runs from the first such reading |
-| Wait complete | readings have stayed at or below the limit for the wait time (default 30 minutes, CPA 6.4.3; 10 or 20 can be chosen, BS 7121-5 uses 10 for tower cranes). The crane operator decides whether to restart |
+| Wait period elapsed. The crane operator decides whether to restart | readings have stayed at or below the limit for the wait time (default 30 minutes, CPA 6.4.3; 10 or 20 can be chosen, BS 7121-5 uses 10 for tower cranes) |
 | Winded off | logged as winded off for the day |
 
 A reading above the limit while waiting resets the wait. After three resets the log

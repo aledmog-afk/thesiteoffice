@@ -43,7 +43,7 @@ function checksSummary(ctx: Ctx): HTMLElement {
     h(
       'p',
       null,
-      r.attention.length ? `${r.attention.length} item${r.attention.length === 1 ? ' needs' : 's need'} attention` : 'Nothing flagged',
+      r.attention.length ? `${r.attention.length} item${r.attention.length === 1 ? ' needs' : 's need'} attention` : 'No items flagged by these checks',
       ` · ${r.incomplete.length} not done · ${ctx.state.checks.crew.length} signed on.`,
     ),
     r.attention.length ? h('ul', { class: 'attention-list' }, r.attention.map((x) => h('li', null, x))) : h('span'),
@@ -145,7 +145,7 @@ export function decisionScreen(ctx: Ctx): HTMLElement {
     null,
     title,
     h('p', { class: 'lede' }, `${longDate(a.liftDate)} · ${state.setup.site!.label}`),
-    banner(a.overallStatus),
+    banner(a.overallStatus, a.worst?.percentOfLimit),
     card(
       h('p', null, `Worst hour ${w ? hourLabel(w) : '–'}: gust at height ${speed(w?.gustAtHeightMs)} against a permitted ${speed(a.load.permittedMs)} (${pct(w?.percentOfLimit, w?.status)}).`),
       h('p', { class: 'small muted' }, 'Saving stores every input, the full calculation, the forecast values used, the forecast fetch time and the method version. A saved record cannot be edited.'),

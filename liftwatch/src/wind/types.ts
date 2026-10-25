@@ -69,9 +69,9 @@ export interface HourAssessment {
 
 /** Wording used everywhere a status is shown. Never "safe", "clear" or "go". */
 export const STATUS_LABEL: Readonly<Record<Status, string>> = Object.freeze({
-  within: 'Within limits',
-  near: 'Near limit',
-  over: 'Over limit',
+  within: 'Below permitted speed',
+  near: 'Near permitted speed',
+  over: 'Above permitted speed',
   'no-data': 'No data',
 });
 

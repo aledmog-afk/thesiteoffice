@@ -236,7 +236,7 @@ export function setupScreen(ctx: Ctx): HTMLElement {
           'ol',
           null,
           h('li', null, h('span', { class: 'lbl' }, `Gust factor at ${setup.heightM} m`), h('span', { class: 'v' }, `× ${num(f, 3)}`), h('span', { class: 'f' }, heightFactorSource(setup.terrain, factorTerrain(setup.heightM, setup.terrain)))),
-          h('li', null, h('span', { class: 'lbl' }, 'Near limit from (gust at height)'), h('span', { class: 'v' }, speed(result.permittedMs * NEAR_LIMIT_RATIO)), h('span', { class: 'f' }, `${NEAR_LIMIT_RATIO * 100} % of the permitted speed`)),
+          h('li', null, h('span', { class: 'lbl' }, 'Near permitted speed from (gust at height)'), h('span', { class: 'v' }, speed(result.permittedMs * NEAR_LIMIT_RATIO)), h('span', { class: 'f' }, `${NEAR_LIMIT_RATIO * 100} % of the permitted speed`)),
           h('li', null, h('span', { class: 'lbl' }, 'Same limit as a 10 m forecast gust'), h('span', { class: 'v' }, speed(result.permittedMs / f)), h('span', { class: 'f' }, `${num(result.permittedMs, 2)} ÷ ${num(f, 3)}`)),
         ),
       );

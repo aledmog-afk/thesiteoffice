@@ -1,7 +1,7 @@
 import type { jsPDF as JsPdf } from 'jspdf';
 import { checksSections } from '../checks/reportLines';
 import { APP_NAME, BANNER_SUFFIX, DISCLAIMER, methodPageUrl } from '../config';
-import { heightFactorSource, percentLabel, terrainText } from '../lift/display';
+import { heightFactorSource, percentLabel, statusText, terrainText } from '../lift/display';
 import { londonClock } from '../time/london';
 import { METHOD_SOURCES, METHOD_SUMMARY } from '../lift/methodSummary';
 import { CHECK_ANEMOMETER, CHECK_OPERATOR, DECISION_LABEL, tickLabel, type DecisionRecord } from '../lift/record';
@@ -26,7 +26,7 @@ export function pdfSafe(text: string): string {
 }
 
 export const STATUS_RGB: Record<Status, [number, number, number]> = {
-  within: [11, 110, 11],
+  within: [63, 95, 127],
   near: [250, 178, 25],
   over: [179, 33, 30],
   'no-data': [84, 94, 105],
@@ -115,12 +115,12 @@ class Layout {
   }
 }
 
-function statusBox(L: Layout, status: Status): void {
+function statusBox(L: Layout, status: Status, percent?: number | null): void {
   const { doc } = L;
   L.ensure(18);
   doc.setFillColor(...STATUS_RGB[status]).roundedRect(L.left, L.y, L.width, 15, 2, 2, 'F');
   doc.setTextColor(...STATUS_TEXT_RGB[status]);
-  doc.setFont('helvetica', 'bold').setFontSize(15).text(pdfSafe(STATUS_LABEL[status]), L.left + 5, L.y + 7);
+  doc.setFont('helvetica', 'bold').setFontSize(15).text(pdfSafe(statusText(status, percent)), L.left + 5, L.y + 7);
   doc.setFont('helvetica', 'normal').setFontSize(9.5).text(pdfSafe(`- ${BANNER_SUFFIX}`), L.left + 5, L.y + 12);
   L.y += 20;
 }
@@ -230,7 +230,7 @@ export async function buildRecordPdf(record: DecisionRecord, integrityOk: boolea
   L.para(`Record ${record.id} · saved ${ukInstant(record.createdAt)} · method ${record.methodVersion}`, 8.5, false, [90, 98, 108]);
   L.para('Decision support only. This record is not an authorisation to lift.', 9, true);
 
-  statusBox(L, a.overallStatus);
+  statusBox(L, a.overallStatus, a.worst?.percentOfLimit);
 
   L.heading('Decision');
   L.kv([
@@ -274,7 +274,7 @@ export async function buildRecordPdf(record: DecisionRecord, integrityOk: boolea
     L.kv(
       a.loads.map((o, i) => {
         const d = dims[i];
-        const within = o.periods.length ? `within limits ${o.periods.map((p) => `${hm(p.start)}-${hm(p.end)}`).join(', ')}` : 'no daylight hour within limits';
+        const within = o.periods.length ? `below permitted speed ${o.periods.map((p) => `${hm(p.start)}-${hm(p.end)}`).join(', ')} (planning guidance only)` : 'no daylight hour below permitted speed';
         return [
           o.ref + (o.ref === a.governingRef ? ' (governs)' : ''),
           `${d.l} × ${d.h} m, ${d.m} kg + ${d.r} kg, cw ${d.cw}; ${o.result.areaToMassRatio.toFixed(2)} m²/t; permitted ${spd(o.result.permittedMs)}. Window: ${STATUS_LABEL[o.windowStatus]} (${percentLabel(o.windowWorstPercent, o.windowStatus)}); ${within}.`,
@@ -299,11 +299,11 @@ export async function buildRecordPdf(record: DecisionRecord, integrityOk: boolea
   L.heading('Planning guidance only');
   L.para(
     a.periods.length
-      ? `Daylight periods within limits (2 h or more): ${a.periods.map((p) => `${hm(p.start)}-${hm(p.end)}`).join(', ')}.`
-      : 'No daylight period of 2 hours or more within limits on the lift day.',
+      ? `Daylight periods below permitted speed (2 h or more): ${a.periods.map((p) => `${hm(p.start)}-${hm(p.end)}`).join(', ')}.`
+      : 'No daylight period of 2 hours or more below the permitted speed on the lift day.',
   );
   L.para('Outlook - planning guidance only (worst daylight hour each day):', 9.5, true);
-  L.kv(a.outlook.map((o) => [shortDate(o.date), `${o.worstStatus ? STATUS_LABEL[o.worstStatus] : 'No daylight data'}, max ${spd(o.maxGustAtHeightMs)} at height, ${o.daylightHoursWithin} of ${o.daylightHours} daylight hours within`]));
+  L.kv(a.outlook.map((o) => [shortDate(o.date), `${o.worstStatus ? STATUS_LABEL[o.worstStatus] : 'No daylight data'}, max ${spd(o.maxGustAtHeightMs)} at height, ${o.daylightHoursWithin} of ${o.daylightHours} daylight hours below permitted speed`]));
 
   if (record.checks) {
     L.heading('Checks');

@@ -206,7 +206,7 @@ function recordView(ctx: Ctx, r: DecisionRecord, integrityOk: boolean): HTMLElem
     h('h1', { tabindex: -1, style: 'margin-top:12px' }, 'Decision record'),
     h('p', { class: 'lede' }, `Saved ${instant(r.createdAt)} · read-only · method ${r.methodVersion}`),
     integrityOk ? null : h('div', { class: 'notice warn', role: 'alert' }, 'This record does not match its integrity hash. It may have been altered after saving.'),
-    banner(a.overallStatus),
+    banner(a.overallStatus, a.worst?.percentOfLimit),
     h(
       'div',
       { class: 'actions', style: 'margin:-4px 0 14px' },

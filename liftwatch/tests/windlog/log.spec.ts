@@ -37,7 +37,8 @@ describe('evaluateLog (CPA 6.4.3 stop / wait / reset)', () => {
     expect(Math.round(w.minutesWaited)).toBe(15);
     expect(w.headline).toMatch(/Waiting: below the limit since/);
     expect(at('09:40').state).toBe('waited');
-    expect(at('09:40').headline).toMatch(/30 minutes/);
+    expect(at('09:40').headline).toBe('Wait period elapsed. The crane operator decides whether to restart');
+    expect(at('09:40').detail).toMatch(/below the limit for 30 minutes, since 10:10/) // 09:10 UTC is 10:10 BST;
   });
 
   it('a reading above the limit resets the wait, and three resets prompt winding off', () => {

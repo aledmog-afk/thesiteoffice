@@ -39,7 +39,7 @@ all four units on the briefing sheet and in the wind log.
 - A timber frame day is many different panels, not one load.
 
 **LiftWatch:** a load schedule. Paste the supplier's panel schedule, and every
-panel gets its own permitted speed. A table shows which loads are within limits in
+panel gets its own permitted speed. A table shows which loads are below the permitted speed in
 each daylight hour, so the day can be sequenced around the wind. The most
 wind-sensitive load sets the status.
 
@@ -167,7 +167,7 @@ whether to trust the forecast at a site.
 These are LiftWatch defaults, not rules from a standard:
 
 - Capacity bands at 75 % and 90 %.
-- The "Near limit" band at 80 % of the permitted wind speed.
+- The "Near permitted speed" band at 80 % of the permitted wind speed.
 - The weather flags and their thresholds.
 - The 14 checklist items.
 - The 30-minute restart wait (CPA 6.4.3 "common practice"; 10 and 20 minutes can

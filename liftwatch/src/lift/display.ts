@@ -1,4 +1,4 @@
-import { APPLY_CHOSEN_TERRAIN, NEAR_LIMIT_RATIO, OVER_LIMIT_RATIO, TERRAIN, TERRAIN_NOT_APPLIED, type Status, type Terrain } from '../wind';
+import { APPLY_CHOSEN_TERRAIN, NEAR_LIMIT_RATIO, OVER_LIMIT_RATIO, STATUS_LABEL, TERRAIN, TERRAIN_NOT_APPLIED, type Status, type Terrain } from '../wind';
 
 const NEAR_PCT = NEAR_LIMIT_RATIO * 100;
 const OVER_PCT = OVER_LIMIT_RATIO * 100;
@@ -6,7 +6,7 @@ const OVER_PCT = OVER_LIMIT_RATIO * 100;
 /**
  * "% of limit" text that never contradicts the status next to it. Whole numbers
  * normally. Near a threshold, one decimal place. If even that would round onto
- * the threshold (79.96 → "80.0" while Within limits), "< 80 %" or "> 100 %".
+ * the threshold (79.96 → "80.0" while below the permitted speed), "< 80 %" or "> 100 %".
  */
 export function percentLabel(percent: number | null | undefined, status: Status): string {
   if (percent === null || percent === undefined || !Number.isFinite(percent)) return '–';
@@ -18,6 +18,17 @@ export function percentLabel(percent: number | null | undefined, status: Status)
     return Number(percent.toFixed(1)) > OVER_PCT ? `${percent.toFixed(1)} %` : `> ${OVER_PCT} %`;
   }
   return `${whole} %`;
+}
+
+/**
+ * Status with its percentage, as shown on the banner:
+ * "Below permitted speed (62 % of limit)", "Near permitted speed (85 %)",
+ * "Above permitted speed (112 %)".
+ */
+export function statusText(status: Status, percent?: number | null): string {
+  if (status === 'no-data' || percent === null || percent === undefined || !Number.isFinite(percent)) return STATUS_LABEL[status];
+  const p = percentLabel(percent, status);
+  return status === 'within' ? `${STATUS_LABEL[status]} (${p} of limit)` : `${STATUS_LABEL[status]} (${p})`;
 }
 
 /**

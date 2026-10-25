@@ -13,8 +13,8 @@ export function checksSections(r: ChecksReport): { title: string; rows: [string,
   sections.push({
     title: 'Summary',
     rows: [
-      ['Needs attention', r.attention.length ? r.attention.join('; ') : 'Nothing flagged'],
-      ['Not done', r.incomplete.length ? `${r.incomplete.length} item(s)` : 'All done'],
+      ['Needs attention', r.attention.length ? r.attention.join('; ') : 'No items flagged by these checks'],
+      ['Not done', r.incomplete.length ? `${r.incomplete.length} item(s)` : 'All items marked done'],
     ],
   });
   sections.push({

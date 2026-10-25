@@ -32,13 +32,15 @@ or crane library.
    boom / jib head height, and the main load's size, mass, rigging (with hook block
    and rope) mass and drag coefficient. Other loads can be added or pasted from a
    panel schedule. The permitted wind speed and the working update as you type.
-2. **Assessment**: status banner ("Within limits / Near limit / Over limit —
-   forecast assessment against the limits you entered"), gust at height against
+2. **Assessment**: status banner ("Below permitted speed (X % of limit) / Near
+   permitted speed (X %) / Above permitted speed (X %) — forecast assessment against
+   the limits you entered", in blue-grey, amber or red, always with the words), gust at height against
    the permitted speed, % of the limit, direction, weather flags, the forecast
    source and fetch time, an hourly chart and table, daylight periods within
    limits and a 7-day outlook. The periods and the outlook are labelled planning
    guidance only. With several loads, the most wind-sensitive one governs, and a
-   table shows which loads are within limits hour by hour.
+   table shows which loads are below the permitted speed hour by hour (planning
+   guidance only).
 3. **Checks**: crane capacity at radius, sling leg angle and rating, outrigger
    mat bearing pressure, LOLER examination dates and card expiry against the lift
    date, a pre-lift checklist and crew briefing sign-on. Saved with the record;
@@ -183,7 +185,7 @@ Dependencies: Vite, TypeScript, Vitest (dev) and jsPDF. The Worker is deployed w
   procedure are not modelled. The gust at height is an estimate.
 - **Some rules are LiftWatch's own.** The formula and factors come from CPA/TCIG 2507
   and EN 13000, and reproduce the CPA guide's worked examples (METHOD.md). The 80 %
-  "Near limit" band and the weather flags are pilot choices, not from CPA or a
+  "Near permitted speed" band and the weather flags are pilot choices, not from CPA or a
   standard. Wind direction is shown but not used to reduce the limit.
 - **Local funnelling between buildings.** Wind accelerating between buildings,
   around structures, over ridges or at the edges of tall buildings is not

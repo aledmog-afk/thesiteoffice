@@ -31,7 +31,7 @@ const TONE: Record<LogState, string> = {
   waited: 'st-no-data',
   'wound-off': 'st-no-data',
 };
-const ICON: Record<LogState, string> = { 'no-readings': '?', within: '✓', near: '!', stopped: '✕', waiting: '⏱', waited: '⏱', 'wound-off': '■' };
+const ICON: Record<LogState, string> = { 'no-readings': '?', within: '○', near: '!', stopped: '✕', waiting: '⏱', waited: '⏱', 'wound-off': '■' };
 
 function time(iso: string): string {
   return new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' }).format(new Date(iso));
@@ -78,7 +78,7 @@ export function windLogView(ctx: Ctx, record: DecisionRecord, back: () => void):
                 h(
                   'li',
                   null,
-                  `${g <= l.result.permittedMs ? '✓' : '✕'} ${l.ref}: limit ${fromMs(l.result.permittedMs, unit).toFixed(unit === 'ms' ? 1 : 0)} ${UNIT_LABEL[unit]}`,
+                  `${l.ref}: limit ${fromMs(l.result.permittedMs, unit).toFixed(unit === 'ms' ? 1 : 0)} ${UNIT_LABEL[unit]}, ${g <= l.result.permittedMs ? 'below' : 'above'}`,
                 ),
               ),
           ),

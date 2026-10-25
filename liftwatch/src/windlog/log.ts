@@ -60,11 +60,11 @@ export type LogState = 'no-readings' | 'within' | 'near' | 'stopped' | 'waiting'
 
 export const STATE_LABEL: Readonly<Record<LogState, string>> = Object.freeze({
   'no-readings': 'No readings',
-  within: 'Within limit',
-  near: 'Near limit',
+  within: 'Below permitted speed',
+  near: 'Near permitted speed',
   stopped: 'Stop',
   waiting: 'Waiting',
-  waited: 'Wait complete',
+  waited: 'Wait period elapsed. The crane operator decides whether to restart',
   'wound-off': 'Winded off',
 });
 
@@ -140,16 +140,16 @@ export function evaluateLog(entries: LogEntry[], limitMs: number, waitMinutes: n
       : '';
   const texts: Record<LogState, [string, string]> = {
     'no-readings': ['No readings yet', 'Log the crane anemometer gust reading before the first lift and regularly during lifting.'],
-    within: ['Last reading within the permitted limit', 'Keep logging readings. The crane operator decides whether to lift, continue or stop.'],
-    near: ['Last reading near the permitted limit', 'At or above 80 % of the limit. Watch the trend and be ready to stop.'],
+    within: ['Last reading below the permitted speed', 'Keep logging readings. The crane operator decides whether to lift, continue or stop.'],
+    near: ['Last reading near the permitted speed', 'At or above 80 % of the limit. Watch the trend and be ready to stop.'],
     stopped: ['Stop: reading above the permitted limit', `Wait until readings stay below the limit for ${waitMinutes} minutes (CPA 6.4.3).${windOffHint}`],
     waiting: [
       `Waiting: below the limit since ${since}`,
       `${Math.floor(minutesWaited)} of ${waitMinutes} minutes. A reading above the limit resets the wait.${windOffHint}`,
     ],
     waited: [
-      `Below the limit for ${waitMinutes} minutes (since ${since})`,
-      `The crane operator decides whether to restart, with the lifting team (CPA 6.4).${windOffHint}`,
+      'Wait period elapsed. The crane operator decides whether to restart',
+      `Readings below the limit for ${waitMinutes} minutes, since ${since}. The decision is the crane operator's, with the lifting team (CPA 6.4).${windOffHint}`,
     ],
     'wound-off': ['Winded off for the day', 'Logged as winded off. Further readings are recorded but do not change this.'],
   };

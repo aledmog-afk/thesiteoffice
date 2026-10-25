@@ -33,7 +33,8 @@ describe('buildRecordPdf', () => {
     // jsPDF splits long lines, so check a distinctive start of the footer once per page.
     const footerStart = DISCLAIMER.slice(0, 60);
     expect(raw.split(footerStart).length - 1).toBe(pages);
-    expect(raw).toContain('Within limits');
+    expect(raw).toMatch(/Below permitted speed \\\(\d+ % of limit\\\)/); // jsPDF escapes the brackets
+    expect(raw).not.toContain('Within limits');
     expect(raw).toContain('Method summary');
     expect(raw).toContain('Sources');
     expect(raw).toContain('Open-Meteo');

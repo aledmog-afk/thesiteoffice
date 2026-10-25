@@ -5,7 +5,7 @@ import { loadCachedForecast, saveForecast } from '../../data/forecastCache';
 import { ForecastFormatError } from '../../data/openMeteo';
 import type { LiftAssessment } from '../../lift/assessment';
 import { compassPoint, factorTerrain, FLAG_LABEL, STATUS_LABEL, type FlagCode, type HourAssessment, type Status } from '../../wind';
-import { heightFactorSource, terrainText } from '../../lift/display';
+import { heightFactorSource, statusText, terrainText } from '../../lift/display';
 import type { Ctx } from '../app';
 import { hourlyChart } from '../chart';
 import { clear, h, type Child } from '../dom';
@@ -18,12 +18,12 @@ export function statusPill(status: Status | null): HTMLElement {
   return h('span', { class: `pill st-${st}` }, h('span', { 'aria-hidden': 'true' }, STATUS_ICON[st]), statusLabel(status));
 }
 
-export function banner(status: Status): HTMLElement {
+export function banner(status: Status, percent?: number | null): HTMLElement {
   return h(
     'div',
     { class: `banner st-${status}`, role: 'status' },
     h('span', { class: 'icon', 'aria-hidden': 'true' }, STATUS_ICON[status]),
-    h('div', null, h('div', { class: 'label' }, STATUS_LABEL[status]), h('div', { class: 'sub' }, `— ${BANNER_SUFFIX}`)),
+    h('div', null, h('div', { class: 'label' }, statusText(status, percent)), h('div', { class: 'sub' }, `— ${BANNER_SUFFIX}`)),
   );
 }
 
@@ -127,7 +127,7 @@ export function assessmentScreen(ctx: Ctx): HTMLElement {
           `No connection, so this uses the forecast saved on this phone, fetched ${instant(state.forecast!.fetchedAt)}. Refresh when you have signal.`,
         )
       : null,
-    banner(a.overallStatus),
+    banner(a.overallStatus, a.worst?.percentOfLimit),
     a.loads && a.loads.length > 1
       ? h('p', { class: 'notice' }, h('strong', null, `Governing load: ${a.governingRef}`), ` — the most wind-sensitive of ${a.loads.length} loads (permitted ${speed(a.load.permittedMs)}).`)
       : null,
@@ -279,7 +279,7 @@ function dayChart(state: AppState, a: LiftAssessment): HTMLElement {
     h(
       'div',
       { class: 'legend' },
-      h('span', null, h('i', { class: 'sw', style: 'background:var(--within-mark)' }), 'Within'),
+      h('span', null, h('i', { class: 'sw', style: 'background:var(--within-mark)' }), 'Below'),
       h('span', null, h('i', { class: 'sw', style: 'background:var(--near-mark)' }), 'Near'),
       h('span', null, h('i', { class: 'sw', style: 'background:var(--over-mark)' }), 'Over'),
       h('span', null, h('i', { class: 'sw line' }), 'Permitted limit'),
@@ -299,7 +299,7 @@ function dayChart(state: AppState, a: LiftAssessment): HTMLElement {
   );
 }
 
-/** Which loads are within limits in each daylight hour: helps sequence the day (CPA page 22). */
+/** Which loads are below the permitted speed in each daylight hour: helps sequence the day (CPA page 22). */
 export function loadsCard(a: LiftAssessment): HTMLElement {
   const loads = [...a.loads].sort((x, y) => x.result.permittedMs - y.result.permittedMs);
   const cols = a.liftDayHours.map((hr, i) => ({ hr, i })).filter(({ hr }) => hr.daylight);
@@ -337,7 +337,7 @@ export function loadsCard(a: LiftAssessment): HTMLElement {
         ),
       ),
     ),
-    h('p', { class: 'small muted' }, `Daylight hours only. Permitted in m/s. ${STATUS_ICON.within} within, ${STATUS_ICON.near} near, ${STATUS_ICON.over} over limit.`),
+    h('p', { class: 'small muted' }, `Daylight hours only. Permitted in m/s. ${STATUS_ICON.within} below, ${STATUS_ICON.near} near, ${STATUS_ICON.over} above the permitted speed.`),
     h(
       'ul',
       { class: 'periods' },
@@ -346,7 +346,7 @@ export function loadsCard(a: LiftAssessment): HTMLElement {
           'li',
           null,
           `${l.ref}: `,
-          h('span', { style: 'font-weight:400' }, l.periods.length ? `within limits ${l.periods.map((p) => `${hhmm(p.start)}–${hhmm(p.end)}`).join(', ')}` : 'no daylight hour within limits'),
+          h('span', { style: 'font-weight:400' }, l.periods.length ? `below permitted speed ${l.periods.map((p) => `${hhmm(p.start)}–${hhmm(p.end)}`).join(', ')}` : 'no daylight hour below permitted speed', ' ', h('span', { class: 'tag' }, 'Planning guidance only')),
         ),
       ),
     ),
@@ -355,10 +355,10 @@ export function loadsCard(a: LiftAssessment): HTMLElement {
 
 function periodsCard(a: LiftAssessment): HTMLElement {
   return card(
-    h('h2', null, 'Daylight periods within limits (2 h or more) ', h('span', { class: 'tag' }, 'Planning guidance only')),
+    h('h2', null, 'Daylight periods below permitted speed (2 h or more) ', h('span', { class: 'tag' }, 'Planning guidance only')),
     a.periods.length
       ? h('ul', { class: 'periods' }, a.periods.map((p) => h('li', null, `${hhmm(p.start)}–${hhmm(p.end)} · ${p.hours} h`)))
-      : h('p', { class: 'muted' }, 'No daylight period of 2 hours or more is within limits on this day.'),
+      : h('p', { class: 'muted' }, 'No daylight period of 2 hours or more is below the permitted speed on this day.'),
   );
 }
 

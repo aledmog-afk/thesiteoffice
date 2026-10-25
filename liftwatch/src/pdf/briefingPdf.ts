@@ -1,7 +1,7 @@
 import type { jsPDF as JsPdf } from 'jspdf';
 import { APP_NAME, BANNER_SUFFIX, DISCLAIMER } from '../config';
 import { CHECK_OPERATOR, DECISION_LABEL, type DecisionRecord } from '../lift/record';
-import { STATUS_LABEL } from '../wind';
+import { statusText } from '../lift/display';
 import { DEFAULT_WAIT_MINUTES, fromMs, UNIT_LABEL, type SpeedUnit } from '../windlog/log';
 import { pdfSafe, STATUS_RGB, STATUS_TEXT_RGB, terrainText } from './recordPdf';
 
@@ -40,7 +40,7 @@ export async function buildBriefingPdf(record: DecisionRecord): Promise<JsPdf> {
   y += 1;
   doc.setFillColor(...STATUS_RGB[a.overallStatus]).roundedRect(left, y, width, 10, 2, 2, 'F');
   doc.setTextColor(...STATUS_TEXT_RGB[a.overallStatus]).setFont('helvetica', 'bold').setFontSize(11);
-  doc.text(pdfSafe(`Forecast: ${STATUS_LABEL[a.overallStatus]} - ${BANNER_SUFFIX}`), left + 4, y + 6.5);
+  doc.text(pdfSafe(`Forecast: ${statusText(a.overallStatus, a.worst?.percentOfLimit)} - ${BANNER_SUFFIX}`), left + 4, y + 6.5);
   y += 15;
 
   // The stop reading, large, in every unit.
@@ -80,7 +80,7 @@ export async function buildBriefingPdf(record: DecisionRecord): Promise<JsPdf> {
   for (const hr of a.windowHours) for (const f of hr.flags) flags.set(f.label, (flags.get(f.label) ?? 0) + 1);
   text(
     `Lift window ${hm(a.windowStart)}-${hm(a.windowEnd)}. Daylight ${a.liftDaySun ? `${hm(a.liftDaySun.sunrise)}-${hm(a.liftDaySun.sunset)}` : 'unknown'}. ` +
-      `Planning guidance: ${a.periods.length ? `within limits ${a.periods.map((p) => `${hm(p.start)}-${hm(p.end)}`).join(', ')}` : 'no 2-hour daylight period within limits for the governing load'}.`,
+      `Planning guidance: ${a.periods.length ? `below permitted speed ${a.periods.map((p) => `${hm(p.start)}-${hm(p.end)}`).join(', ')}` : 'no 2-hour daylight period below permitted speed for the governing load'}.`,
     9.5,
   );
   if (flags.size) text(`Weather flags in the window: ${[...flags].map(([k, n]) => `${k} (${n} h)`).join(', ')}.`, 9.5, true);

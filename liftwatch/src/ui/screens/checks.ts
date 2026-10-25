@@ -12,8 +12,8 @@ import { saveChecks } from '../state';
 type Tone = 'ok' | 'attention' | 'incomplete';
 
 function chip(tone: Tone, text: string): HTMLElement {
-  const cls = tone === 'ok' ? 'st-within' : tone === 'attention' ? 'st-over' : 'st-no-data';
-  const icon = tone === 'ok' ? '✓' : tone === 'attention' ? '✕' : '…';
+  const cls = tone === 'ok' ? 'neutral' : tone === 'attention' ? 'st-over' : 'st-no-data';
+  const icon = tone === 'ok' ? '' : tone === 'attention' ? '✕' : '…';
   return h('span', { class: `pill ${cls}` }, h('span', { 'aria-hidden': 'true' }, icon), text);
 }
 
@@ -113,8 +113,8 @@ export function checksScreen(ctx: Ctx): HTMLElement {
       h(
         'div',
         { class: 'actions', style: 'margin:0 0 8px' },
-        r.attention.length ? chip('attention', `${r.attention.length} need attention`) : chip('ok', 'Nothing flagged'),
-        r.incomplete.length ? chip('incomplete', `${r.incomplete.length} not done`) : chip('ok', 'All done'),
+        r.attention.length ? chip('attention', `${r.attention.length} need attention`) : chip('ok', 'No items flagged by these checks'),
+        r.incomplete.length ? chip('incomplete', `${r.incomplete.length} not done`) : chip('ok', 'All items marked done'),
       ),
     );
     if (r.attention.length) summaryBox.append(h('ul', { class: 'attention-list' }, r.attention.map((a) => h('li', null, a))));

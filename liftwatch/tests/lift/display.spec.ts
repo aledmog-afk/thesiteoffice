@@ -11,19 +11,19 @@ describe('percentLabel', () => {
     expect(label(90)).toBe('90 %');
   });
 
-  it('never shows 80 % next to Within limits', () => {
+  it('never shows 80 % next to Below permitted speed', () => {
     expect(label(79.6)).toBe('79.6 %');
     expect(label(79.96)).toBe('< 80 %');
     expect(label(79.4)).toBe('79 %');
   });
 
-  it('never shows 100 % next to Over limit', () => {
+  it('never shows 100 % next to Above permitted speed', () => {
     expect(label(100.4)).toBe('100.4 %');
     expect(label(100.02)).toBe('> 100 %');
     expect(label(100.6)).toBe('101 %');
   });
 
-  it('shows the thresholds themselves for Near limit', () => {
+  it('shows the thresholds themselves for Near permitted speed', () => {
     expect(label(80)).toBe('80 %');
     expect(label(100)).toBe('100 %');
   });

@@ -43,8 +43,9 @@ load) should be highest at about **15.8 m/s**, close to the 17 m/s chart limit.
 4. Tap **Check against the forecast**.
 
 **You should see** "Governing load: G01" under the banner, and a **Loads hour by
-hour** table with ✓ ! ✕ for each load in each daylight hour, most wind-sensitive
-first.
+hour** table with ○ ! ✕ (below, near, above the permitted speed) for each load in
+each daylight hour, most wind-sensitive first. The banner reads, for example,
+"Below permitted speed (62 % of limit)" in blue-grey: never green, never a tick.
 
 ## 3. Checks (5 minutes)
 
@@ -52,7 +53,7 @@ Tap **3 Checks**.
 
 1. **Thorough examinations:** enter a crane examination date more than 12 months
    before the lift date. **You should see** a red "Out of date" line. Change it to
-   a recent date and it turns green.
+   a recent date and the line turns neutral grey (no tick, no green).
 2. **Pre-lift checklist:** answer a few items. Tap **No** on "Overhead power
    lines". **You should see** it listed under **Summary → need attention**.
 3. **Crane capacity:** tap **+ Add a capacity check**. Enter radius `24`, chart
@@ -85,10 +86,10 @@ Tap **3 Checks**.
 ## 5. Wind log on the day (4 minutes)
 
 1. On the record, tap **Wind log on the day**.
-2. Set the unit to **mph**. Log `5`. **You should see** a green "within" panel.
+2. Set the unit to **mph**. Log `5`. **You should see** a blue-grey "Last reading below the permitted speed" panel.
 3. Log `20` (above the G01 limit of about 9 mph). **You should see** a red
    **"Stop: reading above the permitted limit"**, and under **Loads at the last
-   reading**, ✓ for the loads whose own limit is still above 20 mph.
+   reading**, "below" for the loads whose own limit is still above 20 mph (no ticks).
 4. Log `6`. **You should see** an amber **"Waiting: below the limit since …"** with
    "0 of 30 minutes".
 5. Keep alternating `20` and `6`. Each `20` after a `6` resets the wait. On the
