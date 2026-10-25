@@ -5,6 +5,7 @@
 export * from './constants';
 export * from './errors';
 export * from './types';
+export { hourStartMs, hourStarts, sunriseMs, sunsetMs } from './instants';
 export { interpolateLogHeight } from './interpolate';
 export { gustAtHeight, gustHeightFactor } from './heightFactor';
 export { gustAtHeightFromMean, meanToGustFactor } from './meanToGust';

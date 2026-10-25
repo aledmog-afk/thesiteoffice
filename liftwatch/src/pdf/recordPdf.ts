@@ -2,6 +2,7 @@ import type { jsPDF as JsPdf } from 'jspdf';
 import { checksSections } from '../checks/reportLines';
 import { APP_NAME, BANNER_SUFFIX, DISCLAIMER, methodPageUrl } from '../config';
 import { percentLabel } from '../lift/display';
+import { londonClock } from '../time/london';
 import { METHOD_SOURCES, METHOD_SUMMARY } from '../lift/methodSummary';
 import { CHECK_ANEMOMETER, CHECK_OPERATOR, DECISION_LABEL, tickLabel, type DecisionRecord } from '../lift/record';
 import { compassPoint, msToMph, STATUS_LABEL, TERRAIN, type HourAssessment, type Status } from '../wind';
@@ -40,6 +41,8 @@ export const STATUS_TEXT_RGB: Record<Status, [number, number, number]> = {
 const n1 = (v: number | null | undefined) => (v === null || v === undefined ? '-' : v.toFixed(1));
 const spd = (v: number | null | undefined) => (v === null || v === undefined ? '-' : `${v.toFixed(1)} m/s (${msToMph(v).toFixed(0)} mph)`);
 const hm = (t: string) => t.slice(11, 16);
+/** Hour label from the instant when the record has one ("01:00 BST" / "01:00 GMT" on the October change). */
+const hourHm = (hr: { time: string; startMs?: number }) => (typeof hr.startMs === 'number' ? londonClock(hr.startMs) : hm(hr.time));
 const ukInstant = (iso: string) =>
   new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Europe/London',
@@ -199,7 +202,7 @@ function hourTable(L: Layout, hours: HourAssessment[]): void {
   for (const hr of hours) {
     row(
       [
-        hm(hr.time),
+        hourHm(hr),
         n1(hr.gust10mMs),
         n1(hr.gustAtHeightMs),
         percentLabel(hr.percentOfLimit, hr.status).replace('–', '-'),
@@ -261,7 +264,7 @@ export async function buildRecordPdf(record: DecisionRecord, integrityOk: boolea
   L.kv([
     ['Permitted (rounded)', spd(a.load.permittedMs)],
     ['Gust factor at height', `${a.heightFactor.toFixed(3)} at ${a.heightM} m, ${terrainText(s.terrain).toLowerCase()}`],
-    ['Worst hour in window', w ? `${hm(w.time)}: gust at height ${spd(w.gustAtHeightMs)} (10 m gust ${n1(w.gust10mMs)} m/s) = ${percentLabel(w.percentOfLimit, w.status)} of permitted` : '-'],
+    ['Worst hour in window', w ? `${hourHm(w)}: gust at height ${spd(w.gustAtHeightMs)} (10 m gust ${n1(w.gust10mMs)} m/s) = ${percentLabel(w.percentOfLimit, w.status)} of permitted` : '-'],
     ['Direction (worst hour)', w?.windDirectionDeg != null ? `from ${compassPoint(w.windDirectionDeg)} (${Math.round(w.windDirectionDeg)}°)` : '-'],
   ]);
 

@@ -54,7 +54,7 @@ describe('assessLift', () => {
 
   it('lists daylight periods within limits', () => {
     const a = assessLift(panelSetup(), forecast(() => 2));
-    expect(a.periods).toEqual([{ start: '2026-10-22T08:00', end: '2026-10-22T17:50', hours: 10 }]);
+    expect(a.periods).toMatchObject([{ start: '2026-10-22T08:00', end: '2026-10-22T17:50', hours: 10 }]);
     expect(a.outlook).toHaveLength(2);
   });
 

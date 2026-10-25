@@ -10,7 +10,7 @@ import { STATUS_LABEL } from '../../wind';
 import type { Ctx } from '../app';
 import { clear, download, h } from '../dom';
 import { card } from '../fields';
-import { hhmm, instant, longDate, num, pct, speed, ukToday } from '../format';
+import { hhmm, hourLabel, instant, longDate, num, pct, speed, ukToday } from '../format';
 import { banner, flagCounts, loadsCard, statusPill } from './assessment';
 import { windLogView } from './windlog';
 
@@ -278,7 +278,7 @@ function recordView(ctx: Ctx, r: DecisionRecord, integrityOk: boolean): HTMLElem
       kv([
         ...a.load.steps.map((st): [string, string] => [st.label, `${st.formula} = ${num(st.value, st.unit === 'm/s' ? 2 : 3)} ${st.unit}`]),
         ['Gust factor', `${num(a.heightFactor, 3)} at ${a.heightM} m, ${terrainText(s.terrain).toLowerCase()}`],
-        ['Worst hour', w ? `${hhmm(w.time)}: ${speed(w.gustAtHeightMs)} at height, ${pct(w.percentOfLimit, w.status)} of permitted (${STATUS_LABEL[w.status]})` : ''],
+        ['Worst hour', w ? `${hourLabel(w)}: ${speed(w.gustAtHeightMs)} at height, ${pct(w.percentOfLimit, w.status)} of permitted (${STATUS_LABEL[w.status]})` : ''],
         ['Flags in window', flags.map((f) => `${f.label} (${f.hours} h)`).join(', ') || 'None'],
       ]),
     ),

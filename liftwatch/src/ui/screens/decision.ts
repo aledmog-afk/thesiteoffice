@@ -12,7 +12,7 @@ import {
 import type { Ctx } from '../app';
 import { h, safeStorage } from '../dom';
 import { card, field, textInput, type FieldHandle } from '../fields';
-import { hhmm, longDate, pct, speed } from '../format';
+import { hourLabel, longDate, pct, speed } from '../format';
 import { saveChecks } from '../state';
 import { banner } from './assessment';
 
@@ -147,7 +147,7 @@ export function decisionScreen(ctx: Ctx): HTMLElement {
     h('p', { class: 'lede' }, `${longDate(a.liftDate)} · ${state.setup.site!.label}`),
     banner(a.overallStatus),
     card(
-      h('p', null, `Worst hour ${w ? hhmm(w.time) : '–'}: gust at height ${speed(w?.gustAtHeightMs)} against a permitted ${speed(a.load.permittedMs)} (${pct(w?.percentOfLimit, w?.status)}).`),
+      h('p', null, `Worst hour ${w ? hourLabel(w) : '–'}: gust at height ${speed(w?.gustAtHeightMs)} against a permitted ${speed(a.load.permittedMs)} (${pct(w?.percentOfLimit, w?.status)}).`),
       h('p', { class: 'small muted' }, 'Saving stores every input, the full calculation, the forecast values used, the forecast fetch time and the method version. A saved record cannot be edited.'),
     ),
     checksSummary(ctx),

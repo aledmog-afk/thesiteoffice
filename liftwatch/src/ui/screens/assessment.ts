@@ -1,5 +1,6 @@
 import { BANNER_SUFFIX, DISCLAIMER, FORECAST_CONFIG } from '../../config';
 import { fetchForecast, ForecastFetchError } from '../../data/forecast';
+import { londonLocalToEpoch } from '../../time/london';
 import { loadCachedForecast, saveForecast } from '../../data/forecastCache';
 import { ForecastFormatError } from '../../data/openMeteo';
 import type { LiftAssessment } from '../../lift/assessment';
@@ -8,7 +9,7 @@ import type { Ctx } from '../app';
 import { hourlyChart } from '../chart';
 import { clear, h, type Child } from '../dom';
 import { card } from '../fields';
-import { direction, hhmm, instant, longDate, num, pct, shortDate, speed, STATUS_ICON, statusLabel } from '../format';
+import { direction, hhmm, hourLabel, instant, longDate, num, pct, shortDate, speed, STATUS_ICON, statusLabel } from '../format';
 import { recompute, saveSetup, setupReady, siteKey, type AppState } from '../state';
 
 export function statusPill(status: Status | null): HTMLElement {
@@ -161,7 +162,7 @@ function summary(a: LiftAssessment): HTMLElement {
   return h(
     'div',
     null,
-    h('p', { class: 'small muted' }, `Worst hour in the window ${windowText(a)}${w ? `: ${hhmm(w.time)}` : ''}.`),
+    h('p', { class: 'small muted' }, `Worst hour in the window ${windowText(a)}${w ? `: ${hourLabel(w)}` : ''}.`),
     h(
       'div',
       { class: 'stats' },
@@ -215,7 +216,7 @@ function forecastSource(ctx: Ctx): HTMLElement {
 function hourDetail(hr: HourAssessment | undefined): Child[] {
   if (!hr) return ['Tap a bar to see that hour.'];
   return [
-    h('strong', null, hhmm(hr.time)),
+    h('strong', null, hourLabel(hr)),
     ' · ',
     statusPill(hr.status),
     h('br'),
@@ -257,7 +258,7 @@ function dayChart(state: AppState, a: LiftAssessment): HTMLElement {
             h(
               'tr',
               { class: hr.daylight ? null : 'is-night' },
-              h('td', null, hhmm(hr.time)),
+              h('td', null, hourLabel(hr)),
               h('td', null, num(hr.gust10mMs, 1)),
               h('td', null, num(hr.gustAtHeightMs, 1)),
               h('td', null, pct(hr.percentOfLimit, hr.status)),
@@ -287,8 +288,8 @@ function dayChart(state: AppState, a: LiftAssessment): HTMLElement {
     hourlyChart({
       hours: a.liftDayHours,
       permittedMs: a.load.permittedMs,
-      windowStart: a.windowStart,
-      windowEnd: a.windowEnd,
+      windowStartMs: a.windowStartMs ?? londonLocalToEpoch(a.windowStart),
+      windowEndMs: a.windowEndMs ?? londonLocalToEpoch(a.windowEnd, 'later'),
       selected: initial,
       onSelect: pick,
     }),
@@ -318,7 +319,7 @@ export function loadsCard(a: LiftAssessment): HTMLElement {
         h(
           'thead',
           null,
-          h('tr', null, h('th', { class: 'l sticky' }, 'Load'), h('th', null, 'Permitted'), cols.map(({ hr }) => h('th', null, hhmm(hr.time).slice(0, 2)))),
+          h('tr', null, h('th', { class: 'l sticky' }, 'Load'), h('th', null, 'Permitted'), cols.map(({ hr }) => h('th', null, hourLabel(hr).replace(':00', '')))),
         ),
         h(
           'tbody',

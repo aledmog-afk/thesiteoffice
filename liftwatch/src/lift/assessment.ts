@@ -1,8 +1,12 @@
 import type { Forecast } from '../data/openMeteo';
+import { HOUR_MS, londonLocal, londonLocalToEpoch } from '../time/london';
 import {
   assessHours,
   dailyOutlook,
   findWorkablePeriods,
+  hourStartMs,
+  sunriseMs,
+  sunsetMs,
   terrainHeightFactor,
   permittedWindSpeed,
   worstHour,
@@ -43,9 +47,12 @@ export interface LiftAssessment {
   heightFactor: number;
   liftDate: string;
   liftDaySun: DaySun | null;
-  /** The lift window actually used, "YYYY-MM-DDTHH:MM". */
+  /** The lift window actually used, UK local "YYYY-MM-DDTHH:MM", for display. */
   windowStart: string;
   windowEnd: string;
+  /** The same window as instants. Absent on records saved before LW-M1.2. */
+  windowStartMs?: number;
+  windowEndMs?: number;
   windowDefaulted: boolean;
   /** Raw forecast values for the lift date (stored in the record). */
   liftDayForecast: ForecastHour[];
@@ -112,20 +119,32 @@ export function assessLift(s: LiftSetup, forecast: Forecast): LiftAssessment {
     throw new AssessmentError(`The forecast does not cover ${s.liftDate}. It runs 7 days from today.`);
   }
   const liftDaySun = forecast.days.find((d) => d.date === s.liftDate) ?? null;
-  const clip = (p: Period) => (liftDaySun && p.end > liftDaySun.sunset ? { ...p, end: liftDaySun.sunset } : p);
+  // The last hour of a period can start before sunset and end after it: show it ending at sunset.
+  const sunsetAt = liftDaySun ? sunsetMs(liftDaySun) : null;
+  const clip = (p: Period): Period =>
+    sunsetAt !== null && p.endMs !== undefined && p.endMs > sunsetAt ? { ...p, end: liftDaySun!.sunset, endMs: sunsetAt } : p;
   const liftDayForecast = forecast.hours.filter((h) => h.time.startsWith(s.liftDate));
 
+  // The window is held as instants. A planned time that happens twice (October)
+  // starts at its first occurrence and ends at its second; a time that does not
+  // happen (March) moves forward by the skipped hour.
   const windowDefaulted = !s.windowStart || !s.windowEnd;
-  const windowStart = windowDefaulted ? (liftDaySun?.sunrise ?? `${s.liftDate}T00:00`) : `${s.liftDate}T${s.windowStart}`;
-  const windowEnd = windowDefaulted ? (liftDaySun?.sunset ?? `${s.liftDate}T23:59`) : `${s.liftDate}T${s.windowEnd}`;
+  const windowStartMs = windowDefaulted
+    ? (liftDaySun ? sunriseMs(liftDaySun) : londonLocalToEpoch(`${s.liftDate}T00:00`))
+    : londonLocalToEpoch(`${s.liftDate}T${s.windowStart}`, 'earlier');
+  const windowEndMs = windowDefaulted
+    ? (liftDaySun ? sunsetMs(liftDaySun) : londonLocalToEpoch(`${s.liftDate}T23:59`, 'later'))
+    : londonLocalToEpoch(`${s.liftDate}T${s.windowEnd}`, 'later');
+  const windowStart = windowDefaulted && liftDaySun ? liftDaySun.sunrise : londonLocal(windowStartMs);
+  const windowEnd = windowDefaulted && liftDaySun ? liftDaySun.sunset : londonLocal(windowEndMs);
   // An hour counts if any part of it is in the window: it ends after the start and starts before the end.
-  const windowHours = liftDayHours.filter((h) => endOfHour(h.time) > windowStart && h.time < windowEnd);
+  const inWindow = (h: HourAssessment) => hourStartMs(h) + HOUR_MS > windowStartMs && hourStartMs(h) < windowEndMs;
+  const windowHours = liftDayHours.filter(inWindow);
   const worst = worstHour(windowHours);
-  const inWindow = (time: string) => endOfHour(time) > windowStart && time < windowEnd;
 
   const loads: LoadOutcome[] = candidates.map((c) => {
     const hours = assessHours(liftDayForecast, forecast.days, { heightM, permittedMs: c.result.permittedMs, terrain });
-    const w = worstHour(hours.filter((h) => inWindow(h.time)));
+    const w = worstHour(hours.filter(inWindow));
     return {
       ref: c.ref,
       isMain: c.isMain,
@@ -148,18 +167,15 @@ export function assessLift(s: LiftSetup, forecast: Forecast): LiftAssessment {
     liftDaySun,
     windowStart,
     windowEnd,
+    windowStartMs,
+    windowEndMs,
     windowDefaulted,
     liftDayForecast,
     liftDayHours,
     windowHours,
     worst,
     overallStatus: worst ? worst.status : 'no-data',
-    // The last hour of a period can start before sunset and end after it. Show the period ending at sunset.
     periods: findWorkablePeriods(liftDayHours).map(clip),
     outlook: dailyOutlook(all),
   };
-}
-
-function endOfHour(time: string): string {
-  return new Date(Date.parse(`${time}:00Z`) + 3_600_000).toISOString().slice(0, 16);
 }

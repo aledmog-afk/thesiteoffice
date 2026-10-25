@@ -1,4 +1,5 @@
 import { percentLabel } from '../lift/display';
+import { londonClock } from '../time/london';
 import { compassPoint, msToMph, STATUS_LABEL, type Status } from '../wind';
 
 export function ms(v: number | null | undefined, dp = 1): string {
@@ -36,6 +37,15 @@ export function direction(deg: number | null | undefined): string {
 /** "YYYY-MM-DDTHH:MM" local → "HH:MM" */
 export function hhmm(localTime: string): string {
   return localTime.slice(11, 16);
+}
+
+/**
+ * Clock label for a forecast hour. Uses the hour's instant when it has one, so the
+ * repeated October hour reads "01:00 BST" then "01:00 GMT".
+ */
+export function hourLabel(hr: { time: string; startMs?: number; epochMs?: number }): string {
+  const ms = hr.startMs ?? hr.epochMs;
+  return typeof ms === 'number' ? londonClock(ms) : hhmm(hr.time);
 }
 
 const dateFmt = new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
