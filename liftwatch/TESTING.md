@@ -79,14 +79,19 @@ Tap **3 Checks**.
 ## 4. Decision and records (3 minutes)
 
 1. Tap **4 Decision**. **You should see** a Checks summary card at the top.
-2. Choose **Proceed with conditions**, fill in your name and a condition, tick both
-   boxes, and tap **Save record**.
+2. Under **Your decision**, choose **Your decision: proceed with conditions**, fill in
+   your name and a condition, tick both boxes, and tap **Save record**. Every option
+   reads as your own decision, never as LiftWatch's.
 3. On the record, tap:
-   - **PDF**: the full record. Check it has the loads table, the terrain, the
-     **Checks** section and the method link at the end.
+   - **PDF**: the full record. Check it says "Decision recorded by <your name>
+     (<role>): proceed with conditions" and that it is not LiftWatch's decision, and
+     that it has the loads table, the terrain, the **Checks** section and the method
+     link at the end. Under the hourly table, check the note on how each hour's 10 m
+     gust is chosen (the higher of the values stamped at its start and end).
    - **Briefing sheet**: one page. Check the **STOP** table shows each load's
-     limit in m/s, mph, km/h and knots, the restart rule, and your crew names with
-     blank signature lines.
+     limit in m/s, mph, km/h and knots, the restart rule, your recorded decision
+     ("Not a LiftWatch decision"), and your crew names with blank signature lines.
+     With no checks flagged it says "No items flagged by these checks" in blue-grey.
 
 ## 5. Wind log on the day (4 minutes)
 

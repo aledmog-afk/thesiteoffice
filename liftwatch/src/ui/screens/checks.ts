@@ -1,3 +1,4 @@
+import { ALL_ITEMS_DONE, NO_ITEMS_FLAGGED } from '../../checks/reportLines';
 import { CAPACITY_HIGH_UTILISATION, CAPACITY_REVIEW_UTILISATION, capacityCheck, type CapacityInput } from '../../checks/capacity';
 import { bearingCheck } from '../../checks/bearing';
 import { ACCESSORY_EXAM_MONTHS, CRANE_EXAM_MONTHS, examStatus, expiryStatus, type ExamStatus } from '../../checks/certificates';
@@ -119,8 +120,8 @@ export function checksScreen(ctx: Ctx): HTMLElement {
       h(
         'div',
         { class: 'actions', style: 'margin:0 0 8px' },
-        r.attention.length ? chip('attention', `${r.attention.length} need attention`) : chip('ok', 'No items flagged by these checks'),
-        r.incomplete.length ? chip('incomplete', `${r.incomplete.length} not done`) : chip('ok', 'All items marked done'),
+        r.attention.length ? chip('attention', `${r.attention.length} need attention`) : chip('ok', NO_ITEMS_FLAGGED),
+        r.incomplete.length ? chip('incomplete', `${r.incomplete.length} not done`) : chip('ok', ALL_ITEMS_DONE),
       ),
     );
     if (r.attention.length) summaryBox.append(h('ul', { class: 'attention-list' }, r.attention.map((a) => h('li', null, a))));

@@ -3,7 +3,7 @@
  * any of these change: it is stored in every decision record.
  */
 
-export const METHOD_VERSION = 'LW-M1.2';
+export const METHOD_VERSION = 'LW-M1.3';
 
 /**
  * Interim terrain rule (LW-M1.2). The town and city factors come from the

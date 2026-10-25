@@ -54,7 +54,12 @@ export interface HourAssessment {
   time: string;
   /** Exact start of the hour (ms since 1970, UTC). Absent on records saved before LW-M1.2. */
   startMs?: number;
+  /** 10 m gust assessed for this hour: from LW-M1.3 the higher of the values stamped at its start and end. */
   gust10mMs: number | null;
+  /** Open-Meteo value stamped at the hour's start (max over the hour before). Absent before LW-M1.3. */
+  gustStamped10mMs?: number | null;
+  /** Open-Meteo value stamped at the hour's end (max over this hour). Absent before LW-M1.3. */
+  gustNext10mMs?: number | null;
   heightFactor: number;
   gustAtHeightMs: number | null;
   permittedMs: number;

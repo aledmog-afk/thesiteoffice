@@ -32,7 +32,9 @@ describe('assessLift', () => {
       '07:00', '08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00',
     ]);
     expect(a.liftDayHours).toHaveLength(24);
-    expect(a.liftDayForecast).toHaveLength(24);
+    // The lift day's 24 values plus the next day's 00:00, whose stamp covers 23:00-24:00 (LW-M1.3).
+    expect(a.liftDayForecast).toHaveLength(25);
+    expect(a.liftDayForecast[24].time).toBe('2026-10-23T00:00');
   });
 
   it('reports the worst hour in the planned window', () => {
@@ -40,7 +42,8 @@ describe('assessLift', () => {
     const a = assessLift(panelSetup({ windowStart: '09:00', windowEnd: '12:00' }), forecast((i) => 1 + (i % 24) * 0.25));
     expect(a.windowHours.map((h) => h.time.slice(11))).toEqual(['09:00', '10:00', '11:00']);
     expect(a.worst?.time).toBe('2026-10-22T11:00');
-    const expectedGust = (1 + 11 * 0.25) * appliedHeightFactor(30);
+    // Rising wind: 11:00-12:00 is assessed on the higher of the 11:00 and 12:00 stamps (LW-M1.3).
+    const expectedGust = (1 + 12 * 0.25) * appliedHeightFactor(30);
     expect(a.worst?.gustAtHeightMs).toBeCloseTo(expectedGust, 9);
     expect(a.worst?.ratio).toBeCloseTo(expectedGust / a.load.permittedMs, 9);
     expect(a.overallStatus).toBe(a.worst?.status);

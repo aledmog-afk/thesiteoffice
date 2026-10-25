@@ -16,7 +16,7 @@ export interface Period {
 
 /**
  * Planning guidance only: runs of at least `minHours` consecutive hours that are
- * within limits AND in daylight. A gap in the hourly data ends a run.
+ * below the permitted speed (status 'within') AND in daylight. A gap in the hourly data ends a run.
  */
 export function findWorkablePeriods(hours: HourAssessment[], minHours = MIN_PERIOD_HOURS): Period[] {
   const periods: Period[] = [];

@@ -1,4 +1,4 @@
-# LiftWatch method (version LW-M1.2)
+# LiftWatch method (version LW-M1.3)
 
 This is the method used by `src/wind/`. Every formula below also carries its source
 in a code comment next to the code that applies it. The method version is stored
@@ -237,15 +237,44 @@ How that compares with the gust EN 13000 assumes:
 - **10 m, over the model grid.** It is a gust at 10 m above ground for a grid
   square, not at the crane. LiftWatch scales it to height in step 1.
 - **Which hour it belongs to.** The value stamped HH:00 is the highest gust in the
-  hour **before** HH:00 (HH-1 to HH). LiftWatch shows and assesses each value as the
-  hour **starting** at HH:00 (HH to HH+1), the same as the other forecast values.
-  So, on a rising wind, the gust that falls in a given hour may only show up in the
-  next hour's row, an hour late. The worst hour in a window can be understated by
-  up to an hour of rising wind.
+  hour **before** HH:00 (HH-1 to HH). Up to LW-M1.2, LiftWatch assessed it as the
+  hour **starting** at HH:00, so on a rising wind a gust could show an hour late.
+  LW-M1.3 fixes this with the gust timing rule below.
 
-LiftWatch does not change any maths for this in LW-M1.2. It is listed as an open item
-for AP review (below). Until it is reviewed, treat the forecast gust as an estimate
-and rely on the crane's anemometer on the day.
+The averaging period is still an open item for AP review (below). Until it is
+reviewed, treat the forecast gust as an estimate and rely on the crane's anemometer
+on the day.
+
+### Gust timing rule (LW-M1.3)
+
+Each hour H to H+1 is assessed against the **higher** of the two values that bound
+it:
+
+```
+g(H)        = Open-Meteo wind_gusts_10m stamped H      max over (H-1, H]
+g(H+1)      = Open-Meteo wind_gusts_10m stamped H+1    max over (H, H+1]
+gust for H  = max(g(H), g(H+1))
+```
+
+- The value stamped H+1 covers the hour itself, so a rising wind is never shown
+  late. Taking the higher of the two also keeps the edge of the hour before, so a
+  falling wind is not shown early.
+- Both values must be known. If either is missing, including the hour after the last
+  forecast hour, the hour has no status ("No data").
+- H+1 is found by instant (start + 1 hour), not by clock label. On 25 October 2026
+  the hour 01:00 BST pairs with the value stamped 01:00 GMT, and 01:00 GMT with
+  02:00 GMT. On 29 March 2026 the hour 00:00 GMT pairs with the value stamped
+  02:00 BST.
+- The same gust is used everywhere an hour is assessed: the banner and worst hour,
+  the lift window, the chart, the hour table, planning periods, each load's planning
+  times and the 7-day outlook, the PDF and the briefing sheet, and the wind log's
+  comparison of readings with the forecast.
+- Records store both values for each hour, and the lift day's raw forecast includes
+  the first hour of the next day, whose value covers the lift day's last hour.
+- Records saved before LW-M1.3 keep the gust they were assessed with.
+
+This rule is LiftWatch's choice, made to avoid understating the gust. It is not
+from CPA or a standard.
 
 ## Step 4: hourly assessment
 
@@ -352,7 +381,7 @@ quotes CPA 6.4.3: the day may need to be declared winded off. Units: 1 mph =
 0.44704 m/s, 1 km/h = 1/3.6 m/s, 1 knot = 1852/3600 m/s.
 
 For information only, each reading is also compared with the forecast gust at
-height for the same hour, and the average measured ÷ forecast ratio is shown
+height for the same hour (the gust timing rule applies), and the average measured ÷ forecast ratio is shown
 (CPA 5.2.2). It does not change any status.
 
 ## Not in this method
@@ -420,9 +449,9 @@ software.
    "a maximum of the preceding hour", with no stated averaging period. Decide how it
    should be compared with the 3-second gust EN 13000 assumes, and whether a margin
    is needed (see "What Open-Meteo's gust is").
-3. **Preceding-hour timing.** The gust stamped HH:00 covers HH-1 to HH, but is
-   assessed as HH to HH+1. Decide whether each hour should also take the next value
-   into account.
+3. **Gust timing rule (LW-M1.3).** Each hour now takes the higher of the values
+   stamped at its start and end. Confirm this is the right reading of a
+   preceding-hour maximum.
 4. **The 80 % "Near permitted speed" band and the weather flag thresholds** are
    LiftWatch pilot choices, not from CPA or a standard.
 5. **Capacity, sling and ground-bearing calculators.** Switched off from LW-M1.2
@@ -434,4 +463,5 @@ software.
 |---|---|
 | LW-M1.0 | First pilot method. |
 | LW-M1.1 | Terrain setting: town and city use the EN 1991-1-4 gust profile (categories III and IV); open country unchanged. Records saved under LW-M1.0 used open country. Load schedule, checks and wind log added; they do not change the wind maths. |
+| LW-M1.3 | Gust timing rule: each hour H to H+1 is assessed against the higher of the gusts stamped H and H+1, matched by instant (so the October and March clock changes pair correctly). Applies to every assessed hour, the PDFs and the wind log comparison. Decision labels read as the user's own recorded decision. |
 | LW-M1.2 | Interim terrain rule: the highest of the open country, town and city factors is used whatever terrain is chosen; the choice is recorded for information only. Forecast times are exact instants (Open-Meteo `timeformat=unixtime`), so the October and March clock changes are handled. Open-Meteo's gust definition documented, with open items for AP review. Status wording changed (no change to the bands). Capacity, sling and bearing calculators switched off pending review. |

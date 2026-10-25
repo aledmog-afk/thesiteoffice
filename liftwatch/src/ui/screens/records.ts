@@ -1,9 +1,9 @@
 import { checksSections } from '../../checks/reportLines';
 import { APP_NAME } from '../../config';
-import { CHECK_ANEMOMETER, CHECK_OPERATOR, DECISION_LABEL, INTEGRITY_NOTE, tickLabel, verifyRecord, type DecisionRecord } from '../../lift/record';
+import { CHECK_ANEMOMETER, CHECK_OPERATOR, DECISION_LABEL, DECISION_OWNERSHIP, INTEGRITY_NOTE, tickLabel, verifyRecord, type DecisionRecord } from '../../lift/record';
 import { buildBriefingPdf } from '../../pdf/briefingPdf';
 import { buildRecordPdf, pdfFilename } from '../../pdf/recordPdf';
-import { heightFactorSource, terrainText } from '../../lift/display';
+import { heightFactorSource, terrainText, usesGustTiming } from '../../lift/display';
 import { saveChecks, saveSetup } from '../state';
 import { exportRecords, importRecords } from '../../storage/exchange';
 import { exportReminder, LAST_EXPORT_KEY, PERSIST_TEXT } from '../../storage/persistence';
@@ -256,7 +256,8 @@ function recordView(ctx: Ctx, r: DecisionRecord, integrityOk: boolean): HTMLElem
       ),
     ),
     card(
-      h('h2', null, 'Decision'),
+      h('h2', null, 'Your recorded decision'),
+      h('p', { class: 'small muted' }, DECISION_OWNERSHIP),
       kv([
         ['Decision', DECISION_LABEL[d.choice]],
         ['Name', d.name],
@@ -297,7 +298,7 @@ function recordView(ctx: Ctx, r: DecisionRecord, integrityOk: boolean): HTMLElem
         ['Model', r.forecast.model],
         ['Fetched', instant(r.forecast.fetchedAt)],
         ['Grid point', `${r.forecast.gridLatitude.toFixed(3)}, ${r.forecast.gridLongitude.toFixed(3)}`],
-        ['Hours stored', `${a.liftDayForecast.length} hourly values for ${a.liftDate}`],
+        ['Hours stored', `${a.liftDayForecast.length} hourly values for ${a.liftDate}${usesGustTiming(a.liftDayHours) ? ', including the next hour after it (its value covers the last hour of the day)' : ''}`],
       ]),
     ),
     r.checks

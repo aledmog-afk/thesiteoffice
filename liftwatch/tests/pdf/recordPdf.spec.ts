@@ -38,7 +38,7 @@ describe('buildRecordPdf', () => {
     expect(raw).toContain('Method summary');
     expect(raw).toContain('Sources');
     expect(raw).toContain('Open-Meteo');
-    expect(raw).toContain('LW-M1.2');
+    expect(raw).toContain('LW-M1.3');
     expect(raw).toContain('Lift plan LP-014 / LTM 1090 load chart');
     expect(pdfFilename(record)).toBe('LiftWatch-2026-10-22-SW1A1AA-abcdef12.pdf');
   });

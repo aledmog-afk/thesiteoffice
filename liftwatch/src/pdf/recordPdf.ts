@@ -1,10 +1,10 @@
 import type { jsPDF as JsPdf } from 'jspdf';
 import { checksSections } from '../checks/reportLines';
 import { APP_NAME, BANNER_SUFFIX, DISCLAIMER, methodPageUrl } from '../config';
-import { heightFactorSource, percentLabel, statusText, terrainText } from '../lift/display';
+import { GUST_TIMING_NOTE, heightFactorSource, percentLabel, statusText, terrainText, usesGustTiming } from '../lift/display';
 import { londonClock } from '../time/london';
 import { METHOD_SOURCES, METHOD_SUMMARY } from '../lift/methodSummary';
-import { CHECK_ANEMOMETER, CHECK_OPERATOR, DECISION_LABEL, INTEGRITY_NOTE, tickLabel, type DecisionRecord } from '../lift/record';
+import { CHECK_ANEMOMETER, CHECK_OPERATOR, DECISION_OWNERSHIP, INTEGRITY_NOTE, recordedDecisionText, tickLabel, type DecisionRecord } from '../lift/record';
 import { compassPoint, factorTerrain, msToMph, STATUS_LABEL, type HourAssessment, type Status } from '../wind';
 import { allUnits, compareWithForecast, DEFAULT_WAIT_MINUTES, evaluateLog, STATE_LABEL, UNIT_LABEL, type LogEntry } from '../windlog/log';
 
@@ -165,8 +165,12 @@ function chart(L: Layout, hours: HourAssessment[], permitted: number): void {
   doc.rect(x0 + w - tw - 2.5, y(permitted) - 4.6, tw + 2, 3.6, 'FD');
   doc.setTextColor(20, 20, 20).text(limitText, x0 + w - 1.5, y(permitted) - 1.9, { align: 'right' });
   L.y = base + 7;
-  L.para('Bars: gust at height (m/s), coloured by status (green within, amber near, red over). Dashed line: permitted limit. Shaded: night. Values in the table below.', 8, false, [90, 98, 108]);
+  L.para(CHART_CAPTION, 8, false, [90, 98, 108]);
 }
+
+/** Caption under the PDF chart. Colours named as they print: blue-grey, amber, red. */
+export const CHART_CAPTION =
+  'Bars: gust at height (m/s), coloured by status (blue-grey below, amber near, red above the permitted speed). Dashed line: permitted limit. Shaded: night. Values in the table below.';
 
 function hourTable(L: Layout, hours: HourAssessment[]): void {
   const { doc } = L;
@@ -210,7 +214,7 @@ function hourTable(L: Layout, hours: HourAssessment[]): void {
       !hr.daylight,
     );
   }
-  L.para('Speeds in m/s. Shaded rows: outside daylight.', 8, false, [90, 98, 108]);
+  L.para(`Speeds in m/s. Shaded rows: outside daylight.${usesGustTiming(hours) ? ` ${GUST_TIMING_NOTE}` : ''}`, 8, false, [90, 98, 108]);
 }
 
 /** Builds the PDF for a record. jsPDF is loaded on demand to keep the app quick to open. */
@@ -232,9 +236,10 @@ export async function buildRecordPdf(record: DecisionRecord, integrityOk: boolea
 
   statusBox(L, a.overallStatus, a.worst?.percentOfLimit);
 
-  L.heading('Decision');
+  L.heading('Recorded decision');
   L.kv([
-    ['Decision', DECISION_LABEL[d.choice]],
+    ['Decision', recordedDecisionText(d)],
+    ['Whose decision', DECISION_OWNERSHIP],
     ['Name', d.name],
     ['Role', d.role],
     ['Notes / conditions', d.notes || '-'],

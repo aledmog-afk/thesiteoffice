@@ -45,8 +45,8 @@ const DAY_MS = 86_400_000;
 export function exportReminder(lastExportAt: string | null, recordCount: number, now: Date = new Date()): string | null {
   if (recordCount === 0) return null;
   const last = lastExportAt ? Date.parse(lastExportAt) : Number.NaN;
-  if (!Number.isFinite(last)) return 'These records have not been exported from this browser yet. Export them now and keep the file somewhere safe.';
+  if (!Number.isFinite(last)) return 'These records have not been exported from this browser yet. Export them now and keep a copy of the file somewhere other than this device.';
   const days = Math.floor((now.getTime() - last) / DAY_MS);
   if (days < EXPORT_REMINDER_DAYS) return null;
-  return `Last export was ${days} days ago. Export the records now and keep the file somewhere safe.`;
+  return `Last export was ${days} days ago. Export the records now and keep a copy of the file somewhere other than this device.`;
 }

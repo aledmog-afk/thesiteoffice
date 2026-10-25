@@ -212,7 +212,7 @@ H1('Who uses it')
 T([
     ['Role', 'What they do in LiftWatch'],
     ['Appointed Person (AP)', 'Enters the lift, reads the assessment, completes the checks, records the decision '
-                              '(Proceed / Postpone / Proceed with conditions).'],
+                              '(their own decision: proceed / postpone / proceed with conditions).'],
     ['Lift supervisor', 'Runs the briefing and crew sign-on, keeps the wind log on the day.'],
     ['Crane operator', 'Has the final decision to lift, continue or stop (CPA 6.4). Reads the briefing sheet; their '
                        'anemometer readings go into the wind log.'],
@@ -277,8 +277,10 @@ P(f'Thorough examination dates, competence card expiry, a {len(CHECKLIST)}-item 
 H2('5.4 Decision')
 B([
     'Shows the status, the worst hour and a summary of the checks.',
-    'The AP chooses Proceed, Postpone or Proceed with conditions, and enters name, role and notes (conditions are '
-    'required for “Proceed with conditions”).',
+    'The AP records their own decision: “Your decision: proceed”, “Your decision: postpone” or “Your decision: proceed '
+    'with conditions”, with name, role and notes (conditions are required for proceed with conditions). Every label '
+    'reads as the user’s decision, never LiftWatch’s; PDFs say “Decision recorded by &lt;name&gt; (&lt;role&gt;)” and that it '
+    'is not LiftWatch’s decision.',
     'Two confirmations, required for either kind of Proceed: “I have checked on-site wind with an anemometer or the '
     'crane’s jib anemometer before lifting” and “The crane operator retains the final decision to lift, continue '
     'or stop”.',
@@ -369,8 +371,13 @@ H2('6.6 What the forecast gust is (open item)')
 P('Open-Meteo’s published definition of wind_gusts_10m (open-meteo.com/en/docs): “Gusts at 10 meters above ground as a '
   'maximum of the preceding hour”. It does not state an averaging period; EN 13000 assumes a 3-second gust. It is a '
   'model value, not a measurement, so LiftWatch cannot show it equals a 3-second gust. The value stamped HH:00 covers '
-  'HH-1 to HH, but LiftWatch assesses it as HH to HH+1, so on a rising wind a gust can show an hour late. No maths '
-  'is changed for this; it is listed for AP review.')
+  'HH-1 to HH. The averaging period remains an open item for AP review.')
+P('<b>Gust timing rule (method LW-M1.3):</b> each hour H to H+1 is assessed against the <b>higher</b> of the values '
+  'stamped H and H+1, so a rising wind is never shown late. Both must be known, or the hour has no data. H+1 is found '
+  'by instant, so on 25 October 2026 01:00 BST pairs with the value stamped 01:00 GMT, and on 29 March 2026 00:00 GMT '
+  'pairs with 02:00 BST. The rule applies to the banner, lift window, chart, hour table, planning periods, per-load '
+  'times, outlook, PDFs, briefing sheet and the wind log comparison. Records store both values for each hour.')
+CODE('gust for H = max(gust stamped H, gust stamped H+1)')
 H2('6.7 Step 4: hourly status')
 CODE('ratio = gust at height / permitted wind speed')
 T([['Ratio', 'Status'], ['below 0.80', 'Below permitted speed (X % of limit)'], ['0.80 to 1.00 inclusive', 'Near permitted speed (X %)'],
@@ -489,8 +496,9 @@ T([
                         'planning guidance, checks, wind log, method summary, sources, integrity check, and the '
                         'disclaimer footer on every page.'],
     ['Briefing sheet (1 page)', 'Stop reading for every load in m/s, mph, km/h and knots; the restart rule; the '
-                                'operator’s final say; lift window and flags; checks needing attention; crew names '
-                                'and blank signature lines.'],
+                                'operator’s final say; the decision as recorded by the named person (not LiftWatch); '
+                                'lift window and flags; checks needing attention, or “No items flagged by these checks” '
+                                'in blue-grey; crew names and blank signature lines.'],
 ], [40, 130])
 P('Footer on every PDF: “Forecasts are modelled estimates, not measurements. This assessment supports, and does not '
   'replace, the lift plan, the Appointed Person’s judgement, manufacturer data, BS 7121 and on-site wind checks.”',
@@ -536,7 +544,8 @@ T([
     ['Hosting', 'Cloudflare Pages (liftwatch.pages.dev), built from the repository on every push; other branches get '
                 'preview URLs.'],
     ['Tests', 'Vitest (npm test): CPA worked examples, factors, terrain and the interim rule, clock changes (25 Oct and '
-              '29 Mar 2026), thresholds, wording and colours, invalid inputs, parsing, Worker, records and integrity, '
+              '29 Mar 2026), the gust timing rule (rising and falling wind, clock changes), decision wording, a sweep of '
+              'user-facing text for banned words, thresholds, wording and colours, invalid inputs, parsing, Worker, records and integrity, '
               'export/import and reminders, checks and the calculator flag, wind log, PDFs, privacy and terms pages. '
               'GitHub Actions runs npm test and npm run typecheck in liftwatch/ on every push. Plus scripted browser runs.'],
     ['Feature flags', 'Capacity, sling and ground-bearing calculators: off (VITE_ENABLE_CALCULATORS=true for a review '
@@ -600,7 +609,8 @@ N([
     'from LiftWatch’s town/city values?',
     'Open-Meteo describes its 10 m gust as “a maximum of the preceding hour” (confirmed from its documentation), with '
     'no averaging period stated. Is that comparable with the 3-second gust EN 13000 assumes and a crane anemometer '
-    'reads, should a correction be applied, and should each hour also take the next hour’s value into account?',
+    'reads, and should a correction be applied? Is LW-M1.3’s rule (the higher of the values stamped at the start and end '
+    'of each hour) the right reading of a preceding-hour maximum?',
     'Which weather model drives Open-Meteo’s “best match” for UK sites, and how accurate are its gust forecasts at '
     '1–3 days?',
     'What are the BS 7121 lift categories (basic / intermediate / complex) and their criteria?',

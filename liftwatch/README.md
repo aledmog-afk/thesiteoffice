@@ -39,7 +39,9 @@ or crane library.
    source and fetch time, an hourly chart and table, daylight periods within
    limits and a 7-day outlook. The periods and the outlook are labelled planning
    guidance only. With several loads, the most wind-sensitive one governs, and a
-   table shows which loads are below the permitted speed hour by hour (planning
+   table shows which loads are below the permitted speed hour by hour. Each hour is
+   assessed on the higher of the two Open-Meteo gusts stamped at its start and end
+   (METHOD.md, gust timing rule), so a rising wind is not shown late (planning
    guidance only).
 3. **Checks**: LOLER examination dates and card expiry against the lift date, a
    pre-lift checklist and crew briefing sign-on. Saved with the record; never
@@ -47,7 +49,9 @@ or crane library.
    are switched off ("Not available: awaiting review by a qualified Appointed
    Person") until reviewed; `VITE_ENABLE_CALCULATORS=true` turns them on for a
    review build.
-4. **Decision**: Proceed, Postpone or Proceed with conditions, with name, role,
+4. **Decision**: the user's own decision ("Your decision: proceed", "postpone" or
+   "proceed with conditions"; recorded in PDFs as "Decision recorded by <name>
+   (<role>)", never as LiftWatch's), with name, role,
    notes and the two confirmations. Saving creates a timestamped record with an
    integrity check that detects accidental changes. It holds every input, the full
    calculation, the forecast values used, the forecast fetch time, the method

@@ -1,8 +1,9 @@
 import type { jsPDF as JsPdf } from 'jspdf';
 import { APP_NAME, BANNER_SUFFIX, DISCLAIMER } from '../config';
-import { CHECK_OPERATOR, DECISION_LABEL, type DecisionRecord } from '../lift/record';
+import { CHECK_OPERATOR, recordedDecisionText, type DecisionRecord } from '../lift/record';
 import { statusText } from '../lift/display';
 import { DEFAULT_WAIT_MINUTES, fromMs, UNIT_LABEL, type SpeedUnit } from '../windlog/log';
+import { NO_ITEMS_FLAGGED } from '../checks/reportLines';
 import { pdfSafe, STATUS_RGB, STATUS_TEXT_RGB, terrainText } from './recordPdf';
 
 const UNITS: SpeedUnit[] = ['ms', 'mph', 'kmh', 'kn'];
@@ -34,7 +35,7 @@ export async function buildBriefingPdf(record: DecisionRecord): Promise<JsPdf> {
   text(`${APP_NAME} - lift briefing`, 18, true, [51, 67, 168]);
   text(`${new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${a.liftDate}T12:00:00Z`))} · ${s.site?.label ?? ''}`, 11, true);
   text(`Crane: ${s.craneDescription}. Boom / jib head ${s.heightM} m. Terrain: ${terrainText(s.terrain, record.methodVersion)}.`, 9.5);
-  text(`AP decision: ${DECISION_LABEL[record.decision.choice]} (${record.decision.name}, ${record.decision.role})${record.decision.notes ? ` - ${record.decision.notes}` : ''}`, 9.5, true);
+  text(`${recordedDecisionText(record.decision)}${record.decision.notes ? ` - ${record.decision.notes}` : ''}. Not a LiftWatch decision.`, 9.5, true);
 
   // Forecast status strip.
   y += 1;
@@ -90,7 +91,7 @@ export async function buildBriefingPdf(record: DecisionRecord): Promise<JsPdf> {
   if (record.checks) {
     y += 1;
     const att = record.checks.attention;
-    text(att.length ? `Checks needing attention (${att.length}):` : 'Checks: nothing flagged.', 10, true, att.length ? [179, 33, 30] : [11, 110, 11]);
+    text(att.length ? `Checks needing attention (${att.length}):` : NO_ITEMS_FLAGGED, 10, true, att.length ? STATUS_RGB.over : STATUS_RGB.within);
     for (const line of att.slice(0, 8)) text(`- ${line}`, 8.5);
     // Results that passed. Flagged ones are already in the list above.
     const calc = [

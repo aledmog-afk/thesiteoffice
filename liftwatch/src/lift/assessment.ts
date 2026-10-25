@@ -31,7 +31,7 @@ export interface LoadOutcome {
   /** Worst status in the lift window, and its % of this load's limit. */
   windowStatus: Status;
   windowWorstPercent: number | null;
-  /** Daylight runs of 1 hour or more within limits for this load. */
+  /** Daylight runs of 1 hour or more below the permitted speed for this load. */
   periods: Period[];
 }
 
@@ -123,7 +123,11 @@ export function assessLift(s: LiftSetup, forecast: Forecast): LiftAssessment {
   const sunsetAt = liftDaySun ? sunsetMs(liftDaySun) : null;
   const clip = (p: Period): Period =>
     sunsetAt !== null && p.endMs !== undefined && p.endMs > sunsetAt ? { ...p, end: liftDaySun!.sunset, endMs: sunsetAt } : p;
-  const liftDayForecast = forecast.hours.filter((h) => h.time.startsWith(s.liftDate));
+  // The raw values used: the lift day's hours plus the next hour after them, whose
+  // stamp covers the lift day's last hour (gust timing rule, LW-M1.3).
+  const firstIdx = forecast.hours.findIndex((h) => h.time.startsWith(s.liftDate));
+  const dayCount = forecast.hours.filter((h) => h.time.startsWith(s.liftDate)).length;
+  const liftDayForecast = forecast.hours.slice(firstIdx, firstIdx + dayCount + 1);
 
   // The window is held as instants. A planned time that happens twice (October)
   // starts at its first occurrence and ends at its second; a time that does not
@@ -143,7 +147,9 @@ export function assessLift(s: LiftSetup, forecast: Forecast): LiftAssessment {
   const worst = worstHour(windowHours);
 
   const loads: LoadOutcome[] = candidates.map((c) => {
-    const hours = assessHours(liftDayForecast, forecast.days, { heightM, permittedMs: c.result.permittedMs, terrain });
+    const hours = assessHours(liftDayForecast, forecast.days, { heightM, permittedMs: c.result.permittedMs, terrain }).filter((h) =>
+      h.time.startsWith(s.liftDate),
+    );
     const w = worstHour(hours.filter(inWindow));
     return {
       ref: c.ref,

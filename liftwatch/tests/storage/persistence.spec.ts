@@ -53,7 +53,7 @@ describe('exportReminder', () => {
   });
 
   it('prompts from 7 days after the last export', () => {
-    expect(exportReminder(daysAgo(7), 3, now)).toBe('Last export was 7 days ago. Export the records now and keep the file somewhere safe.');
+    expect(exportReminder(daysAgo(7), 3, now)).toBe('Last export was 7 days ago. Export the records now and keep a copy of the file somewhere other than this device.');
     expect(exportReminder(daysAgo(30), 1, now)).toMatch(/30 days ago/);
   });
 });

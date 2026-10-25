@@ -5,7 +5,7 @@ import { loadCachedForecast, saveForecast } from '../../data/forecastCache';
 import { ForecastFormatError } from '../../data/openMeteo';
 import type { LiftAssessment } from '../../lift/assessment';
 import { compassPoint, factorTerrain, FLAG_LABEL, STATUS_LABEL, type FlagCode, type HourAssessment, type Status } from '../../wind';
-import { heightFactorSource, statusText, terrainText } from '../../lift/display';
+import { GUST_TIMING_NOTE, heightFactorSource, statusText, terrainText, usesGustTiming } from '../../lift/display';
 import type { Ctx } from '../app';
 import { hourlyChart } from '../chart';
 import { clear, h, type Child } from '../dom';
@@ -270,7 +270,7 @@ function dayChart(state: AppState, a: LiftAssessment): HTMLElement {
           ),
         ),
       ),
-      h('p', { class: 'small muted' }, 'Speeds in m/s. Gust at height = 10 m gust × height factor.'),
+      h('p', { class: 'small muted' }, `Speeds in m/s. Gust at height = 10 m gust × height factor.${usesGustTiming(a.liftDayHours) ? ` ${GUST_TIMING_NOTE}` : ''}`),
     ),
   );
 
@@ -387,7 +387,7 @@ function outlookCard(ctx: Ctx, a: LiftAssessment): HTMLElement {
           h('div', { class: 'd' }, shortDate(d.date)),
           h('div', { style: 'margin-top:6px' }, statusPill(d.worstStatus)),
           h('div', { class: 'g' }, `Max ${speed(d.maxGustAtHeightMs, 1)}`),
-          h('div', { class: 'g' }, `${d.daylightHoursWithin} of ${d.daylightHours} daylight h within`),
+          h('div', { class: 'g' }, `${d.daylightHoursWithin} of ${d.daylightHours} daylight h below permitted speed`),
         ),
       ),
     ),

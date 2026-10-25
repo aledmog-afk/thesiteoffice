@@ -21,6 +21,18 @@ export function percentLabel(percent: number | null | undefined, status: Status)
 }
 
 /**
+ * How the hour's 10 m gust is chosen (gust timing rule, LW-M1.3). Shown under the
+ * hourly table on screen and in the PDF.
+ */
+export const GUST_TIMING_NOTE =
+  '10 m gust for each hour = the higher of the two Open-Meteo values stamped at its start and its end (each is the highest gust in the hour before its stamp), so a rising wind is not shown late.';
+
+/** True when the hours were assessed under the gust timing rule (records from LW-M1.3). */
+export function usesGustTiming(hours: readonly { gustNext10mMs?: number | null }[]): boolean {
+  return hours.some((h) => h.gustNext10mMs !== undefined);
+}
+
+/**
  * Status with its percentage, as shown on the banner:
  * "Below permitted speed (62 % of limit)", "Near permitted speed (85 %)",
  * "Above permitted speed (112 %)".

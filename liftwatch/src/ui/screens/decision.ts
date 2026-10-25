@@ -1,3 +1,4 @@
+import { NO_ITEMS_FLAGGED } from '../../checks/reportLines';
 import { buildChecksReport } from '../../checks/model';
 import { DISCLAIMER } from '../../config';
 import {
@@ -5,6 +6,7 @@ import {
   CHECK_OPERATOR,
   createRecord,
   DECISION_LABEL,
+  DECISION_OWNERSHIP,
   validateDecision,
   type Decision,
   type DecisionChoice,
@@ -43,7 +45,7 @@ function checksSummary(ctx: Ctx): HTMLElement {
     h(
       'p',
       null,
-      r.attention.length ? `${r.attention.length} item${r.attention.length === 1 ? ' needs' : 's need'} attention` : 'No items flagged by these checks',
+      r.attention.length ? `${r.attention.length} item${r.attention.length === 1 ? ' needs' : 's need'} attention` : NO_ITEMS_FLAGGED,
       ` · ${r.incomplete.length} not done · ${ctx.state.checks.crew.length} signed on.`,
     ),
     r.attention.length ? h('ul', { class: 'attention-list' }, r.attention.map((x) => h('li', null, x))) : h('span'),
@@ -107,7 +109,7 @@ export function decisionScreen(ctx: Ctx): HTMLElement {
 
   const nameF = field('Your name', name);
   const roleF = field('Role', role);
-  const notesF = field('Notes and conditions', notes, 'Required for "Proceed with conditions"');
+  const notesF = field('Notes and conditions', notes, 'Required if your decision is to proceed with conditions');
   handles.name = nameF;
   handles.role = roleF;
   handles.notes = notesF;
@@ -151,7 +153,7 @@ export function decisionScreen(ctx: Ctx): HTMLElement {
       h('p', { class: 'small muted' }, 'Saving stores every input, the full calculation, the forecast values used, the forecast fetch time and the method version, as a timestamped record with an integrity check that detects accidental changes. There is no edit button: to change a decision, save a new record.'),
     ),
     checksSummary(ctx),
-    card(h('h2', { id: 'dc-label' }, 'Decision'), choiceGroup),
+    card(h('h2', { id: 'dc-label' }, 'Your decision'), h('p', { class: 'small muted' }, DECISION_OWNERSHIP), choiceGroup),
     card(nameF.el, roleF.el, notesF.el),
     card(h('h2', null, 'Confirm'), tick('anemometerChecked', CHECK_ANEMOMETER), tick('operatorRetainsDecision', CHECK_OPERATOR), h('p', { class: 'small muted' }, 'Both are required to record a decision to proceed.')),
     save,

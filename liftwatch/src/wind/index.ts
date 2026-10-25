@@ -21,6 +21,7 @@ export {
   type TerrainInfo,
 } from './terrain';
 export { permittedWindSpeed, type LoadWindInput, type LoadWindResult, type WorkingStep } from './loadArea';
+export { hourGusts, type HourGust } from './gustTiming';
 export { assessHour, assessHours, classifyRatio, isDaylight, weatherFlags, type AssessOptions } from './assess';
 export { compareSeverity, dailyOutlook, findWorkablePeriods, worstHour, type DayOutlook, type Period } from './periods';
 export { compassPoint, msToMph, MS_PER_MPH } from './units';
