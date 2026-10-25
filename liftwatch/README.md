@@ -105,7 +105,7 @@ Worker (`worker/wrangler.toml` `[vars]`, plus secrets):
 |---|---|---|
 | `OPEN_METEO_BASE_URL` | `https://api.open-meteo.com/v1/forecast` | Free endpoint (non-commercial). Commercial: `https://customer-api.open-meteo.com/v1/forecast`. |
 | `OPEN_METEO_API_KEY` | unset | Commercial key: `npx wrangler secret put OPEN_METEO_API_KEY`. |
-| `ALLOWED_ORIGIN` | `*` | Set to the Pages site origin once deployed. |
+| `ALLOWED_ORIGIN` | `https://liftwatch.pages.dev` | The Pages site origin allowed to call the Worker (CORS). Preview deployments have their own origin. |
 
 Company-rule settings: capacity bands in `src/checks/capacity.ts`
 (`CAPACITY_REVIEW_UTILISATION` 0.75, `CAPACITY_HIGH_UTILISATION` 0.90), the wind
