@@ -167,7 +167,7 @@ function summary(a: LiftAssessment): HTMLElement {
     h(
       'div',
       { class: 'stats' },
-      stat('Gust at height', speed(w?.gustAtHeightMs), `at ${a.heightM} m (10 m gust ${speed(w?.gust10mMs)} × ${num(a.heightFactor, 3)}, ${heightFactorSource(a.terrain, factorTerrain(a.heightM))}). Terrain: ${terrainText(a.terrain)}`, true),
+      stat('Gust at height', speed(w?.gustAtHeightMs), `at ${a.heightM} m: 10 m gust ${speed(w?.gust10mMs)} × ${num(a.heightFactor, 3)}, ${heightFactorSource(a.terrain, factorTerrain(a.heightM))}. Terrain: ${terrainText(a.terrain)}.`, true),
       stat('Permitted', speed(a.load.permittedMs), a.load.reduced ? 'reduced for wind area' : 'chart limit', true),
       stat('% of limit', pct(w?.percentOfLimit, w?.status)),
       stat('Direction', w?.windDirectionDeg != null ? compassPoint(w.windDirectionDeg) : '–', w?.windDirectionDeg != null ? `Wind ${direction(w.windDirectionDeg)}` : undefined),
@@ -281,7 +281,7 @@ function dayChart(state: AppState, a: LiftAssessment): HTMLElement {
       { class: 'legend' },
       h('span', null, h('i', { class: 'sw', style: 'background:var(--within-mark)' }), 'Below'),
       h('span', null, h('i', { class: 'sw', style: 'background:var(--near-mark)' }), 'Near'),
-      h('span', null, h('i', { class: 'sw', style: 'background:var(--over-mark)' }), 'Over'),
+      h('span', null, h('i', { class: 'sw', style: 'background:var(--over-mark)' }), 'Above'),
       h('span', null, h('i', { class: 'sw line' }), 'Permitted limit'),
       h('span', null, h('i', { class: 'sw night' }), 'Night'),
       h('span', null, h('i', { class: 'sw win' }), 'Lift window'),
