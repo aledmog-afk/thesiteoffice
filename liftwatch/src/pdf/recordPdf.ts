@@ -4,7 +4,7 @@ import { APP_NAME, BANNER_SUFFIX, DISCLAIMER, methodPageUrl } from '../config';
 import { heightFactorSource, percentLabel, statusText, terrainText } from '../lift/display';
 import { londonClock } from '../time/london';
 import { METHOD_SOURCES, METHOD_SUMMARY } from '../lift/methodSummary';
-import { CHECK_ANEMOMETER, CHECK_OPERATOR, DECISION_LABEL, tickLabel, type DecisionRecord } from '../lift/record';
+import { CHECK_ANEMOMETER, CHECK_OPERATOR, DECISION_LABEL, INTEGRITY_NOTE, tickLabel, type DecisionRecord } from '../lift/record';
 import { compassPoint, factorTerrain, msToMph, STATUS_LABEL, type HourAssessment, type Status } from '../wind';
 import { allUnits, compareWithForecast, DEFAULT_WAIT_MINUTES, evaluateLog, STATE_LABEL, UNIT_LABEL, type LogEntry } from '../windlog/log';
 
@@ -318,7 +318,7 @@ export async function buildRecordPdf(record: DecisionRecord, integrityOk: boolea
     const ev = evaluateLog(windLog, limit, DEFAULT_WAIT_MINUTES, new Date(windLog[windLog.length - 1].at));
     const t = (iso: string) => new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' }).format(new Date(iso));
     L.heading('Wind log on the day');
-    L.para(`Crane anemometer gust readings at the boom / jib head against the permitted ${allUnits(limit)}${a.loads && a.loads.length > 1 ? ` (governing load ${a.governingRef})` : ''}. Stop above the limit; wait ${DEFAULT_WAIT_MINUTES} minutes below it before restarting (CPA 6.4.3). Log entries cannot be edited.`, 8.5);
+    L.para(`Crane anemometer gust readings at the boom / jib head against the permitted ${allUnits(limit)}${a.loads && a.loads.length > 1 ? ` (governing load ${a.governingRef})` : ''}. Stop above the limit; wait ${DEFAULT_WAIT_MINUTES} minutes below it before restarting (CPA 6.4.3). The app has no way to edit or delete a log entry.`, 8.5);
     L.kv(
       ev.timeline.map(({ entry, state }): [string, string] => [
         t(entry.at),
@@ -337,9 +337,10 @@ export async function buildRecordPdf(record: DecisionRecord, integrityOk: boolea
   L.para(`Full method with sources: ${methodPageUrl()}`, 8.5, true);
   L.heading('Sources');
   METHOD_SOURCES.forEach((line) => L.para(`- ${line}`, 8.5));
-  L.heading('Record integrity');
+  L.heading('Integrity check');
   L.para(`SHA-256 ${record.integrity}`, 8);
-  L.para(integrityOk ? 'The record content matched this hash when the PDF was made.' : 'WARNING: the record content does NOT match its hash. It may have been altered after saving.', 8.5, !integrityOk);
+  L.para(integrityOk ? 'The record content matched this check when the PDF was made.' : 'WARNING: the record content does NOT match its check. It has changed since it was saved.', 8.5, !integrityOk);
+  L.para(INTEGRITY_NOTE, 8);
 
   // Footer on every page.
   const pages = doc.getNumberOfPages();

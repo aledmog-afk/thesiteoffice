@@ -48,10 +48,11 @@ or crane library.
    Person") until reviewed; `VITE_ENABLE_CALCULATORS=true` turns them on for a
    review build.
 4. **Decision**: Proceed, Postpone or Proceed with conditions, with name, role,
-   notes and the two confirmations. Saving creates a timestamped, read-only
-   record. It holds every input, the full calculation, the forecast values used,
-   the forecast fetch time, the method version, the checks and a SHA-256
-   integrity hash.
+   notes and the two confirmations. Saving creates a timestamped record with an
+   integrity check that detects accidental changes. It holds every input, the full
+   calculation, the forecast values used, the forecast fetch time, the method
+   version, the checks and a SHA-256 integrity check. The check has no key, so it
+   is not tamper-proof: anyone who edits a record can recompute it.
 5. **Records**: list, view, full PDF, one-page crew **briefing sheet**, JSON
    export/import, "Use as new set-up", and the **wind log** for the day: crane
    anemometer readings with the stop / 30-minute wait / reset pattern from CPA
@@ -156,6 +157,11 @@ append-only: there is no update or delete. To move to Supabase later, write a
 `SupabaseRecordStore` that implements `list`, `get`, `add`, `addLogEntry` and
 `listLog`, and return it from `createDefaultStore()`. Drafts of the set-up and the
 checks are kept in `localStorage` until a record is saved.
+
+The app asks the browser for persistent storage (`navigator.storage.persist()`)
+when it starts and shows the answer on the Records screen. If records have never
+been exported from this browser, or the last export was 7 or more days ago, the
+Records screen prompts an export (`src/storage/persistence.ts`).
 
 Use **Records → Export all (JSON)** to back up or move records. Import skips
 records that already exist and rejects any record whose content no longer matches

@@ -148,7 +148,7 @@ export function decisionScreen(ctx: Ctx): HTMLElement {
     banner(a.overallStatus, a.worst?.percentOfLimit),
     card(
       h('p', null, `Worst hour ${w ? hourLabel(w) : '–'}: gust at height ${speed(w?.gustAtHeightMs)} against a permitted ${speed(a.load.permittedMs)} (${pct(w?.percentOfLimit, w?.status)}).`),
-      h('p', { class: 'small muted' }, 'Saving stores every input, the full calculation, the forecast values used, the forecast fetch time and the method version. A saved record cannot be edited.'),
+      h('p', { class: 'small muted' }, 'Saving stores every input, the full calculation, the forecast values used, the forecast fetch time and the method version, as a timestamped record with an integrity check that detects accidental changes. There is no edit button: to change a decision, save a new record.'),
     ),
     checksSummary(ctx),
     card(h('h2', { id: 'dc-label' }, 'Decision'), choiceGroup),

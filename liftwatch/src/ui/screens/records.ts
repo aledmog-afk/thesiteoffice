@@ -1,15 +1,16 @@
 import { checksSections } from '../../checks/reportLines';
 import { APP_NAME } from '../../config';
-import { CHECK_ANEMOMETER, CHECK_OPERATOR, DECISION_LABEL, tickLabel, verifyRecord, type DecisionRecord } from '../../lift/record';
+import { CHECK_ANEMOMETER, CHECK_OPERATOR, DECISION_LABEL, INTEGRITY_NOTE, tickLabel, verifyRecord, type DecisionRecord } from '../../lift/record';
 import { buildBriefingPdf } from '../../pdf/briefingPdf';
 import { buildRecordPdf, pdfFilename } from '../../pdf/recordPdf';
 import { heightFactorSource, terrainText } from '../../lift/display';
 import { saveChecks, saveSetup } from '../state';
 import { exportRecords, importRecords } from '../../storage/exchange';
+import { exportReminder, LAST_EXPORT_KEY, PERSIST_TEXT } from '../../storage/persistence';
 import type { RecordStore } from '../../storage/types';
 import { factorTerrain, STATUS_LABEL } from '../../wind';
 import type { Ctx } from '../app';
-import { clear, download, h } from '../dom';
+import { clear, download, h, safeStorage } from '../dom';
 import { card } from '../fields';
 import { hhmm, hourLabel, instant, longDate, num, pct, speed, ukToday } from '../format';
 import { banner, flagCounts, loadsCard, statusPill } from './assessment';
@@ -111,6 +112,7 @@ function listView(ctx: Ctx, records: DecisionRecord[]): HTMLElement {
 
   const note = sessionNote;
   sessionNote = '';
+  const reminder = exportReminder(safeStorage.get(LAST_EXPORT_KEY), records.length);
 
   return h(
     'div',
@@ -123,6 +125,8 @@ function listView(ctx: Ctx, records: DecisionRecord[]): HTMLElement {
         ? 'Records are stored on this device only, in this browser. Clearing site data deletes them. Export them regularly.'
         : 'This browser cannot store records. They will be lost when the tab closes. Export before closing.',
     ),
+    state.storePersistent ? h('p', { class: `notice${state.persistState === 'granted' || state.persistState === 'pending' ? '' : ' warn'}`, role: 'status', 'data-persist': state.persistState }, PERSIST_TEXT[state.persistState]) : null,
+    reminder ? h('div', { class: 'notice warn', role: 'alert' }, h('strong', null, 'Export reminder. '), reminder) : null,
     note ? h('p', { class: 'notice', role: 'status' }, note) : null,
     h(
       'div',
@@ -136,6 +140,8 @@ function listView(ctx: Ctx, records: DecisionRecord[]): HTMLElement {
           onclick: async () => {
             const json = await exportRecords(state.store);
             download(`${APP_NAME}-records-${new Date().toISOString().slice(0, 10)}.json`, new Blob([json], { type: 'application/json' }));
+            safeStorage.set(LAST_EXPORT_KEY, new Date().toISOString());
+            ctx.rerender();
           },
         },
         'Export all (JSON)',
@@ -204,8 +210,8 @@ function recordView(ctx: Ctx, r: DecisionRecord, integrityOk: boolean): HTMLElem
       '← All records',
     ),
     h('h1', { tabindex: -1, style: 'margin-top:12px' }, 'Decision record'),
-    h('p', { class: 'lede' }, `Saved ${instant(r.createdAt)} · read-only · method ${r.methodVersion}`),
-    integrityOk ? null : h('div', { class: 'notice warn', role: 'alert' }, 'This record does not match its integrity hash. It may have been altered after saving.'),
+    h('p', { class: 'lede' }, `Saved ${instant(r.createdAt)} · timestamped record with an integrity check that detects accidental changes · method ${r.methodVersion}`),
+    integrityOk ? null : h('div', { class: 'notice warn', role: 'alert' }, 'This record does not match its integrity check. It has changed since it was saved, for example by a damaged file or a hand-edited export.'),
     banner(a.overallStatus, a.worst?.percentOfLimit),
     h(
       'div',
@@ -300,6 +306,6 @@ function recordView(ctx: Ctx, r: DecisionRecord, integrityOk: boolean): HTMLElem
           checksSections(r.checks).map((sec) => [h('h3', { style: 'margin-top:12px' }, sec.title), kv(sec.rows)]),
         )
       : null,
-    card(h('h2', null, 'Integrity'), h('p', { class: 'small', style: 'overflow-wrap:anywhere' }, `SHA-256 ${r.integrity}`), h('p', { class: 'small muted' }, integrityOk ? 'Content matches the hash.' : 'Content does NOT match the hash.')),
+    card(h('h2', null, 'Integrity check'), h('p', { class: 'small', style: 'overflow-wrap:anywhere' }, `SHA-256 ${r.integrity}`), h('p', { class: 'small muted' }, `${integrityOk ? 'Content matches the check.' : 'Content does NOT match the check.'} ${INTEGRITY_NOTE}`)),
   );
 }

@@ -31,7 +31,16 @@ export interface Decision {
   operatorRetainsDecision: boolean;
 }
 
-/** A saved, read-only decision record. Holds everything needed to reproduce the assessment. */
+/**
+ * How the record's protection is described everywhere. The SHA-256 check has no
+ * key, so it detects accidental changes (a damaged file, a hand-edited export) but
+ * cannot prove nobody changed the record on purpose: whoever edits it can recompute
+ * the check. Never describe records as locked or as proof against tampering.
+ */
+export const INTEGRITY_NOTE =
+  'A timestamped record with an integrity check that detects accidental changes. It is not tamper-proof: anyone who edits a record can also recompute the check.';
+
+/** A saved decision record. Holds everything needed to reproduce the assessment. */
 export interface DecisionRecord {
   schema: 1;
   id: string;
@@ -53,7 +62,7 @@ export interface DecisionRecord {
   decision: Decision;
   /** Checks screen at the time of saving. Absent on records saved before checks existed. */
   checks?: ChecksReport;
-  /** SHA-256 (hex) of the record without this field. Shows whether a record was altered. */
+  /** SHA-256 (hex) of the record without this field. Detects accidental changes; not tamper-proof (no key). */
   integrity: string;
 }
 

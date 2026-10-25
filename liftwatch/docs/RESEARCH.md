@@ -122,7 +122,8 @@ manufacturer's instructions were considered (CPA 4.4).
 
 **LiftWatch:** a wind log attached to the decision record. It shows the stop and
 wait states, counts resets, prompts about winding off after three, and keeps an
-append-only record with names and times. It never says a lift may go ahead.
+timestamped record with names and times, with an integrity check that detects
+accidental changes. It never says a lift may go ahead.
 
 ### 11. Plans change on the day
 

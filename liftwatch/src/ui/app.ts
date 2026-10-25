@@ -1,5 +1,6 @@
 import { APP_NAME, METHOD_PAGE_PATH } from '../config';
 import { createDefaultStore } from '../storage/indexeddb';
+import { requestPersistentStorage } from '../storage/persistence';
 import { clear, h, safeStorage } from './dom';
 import { assessmentScreen } from './screens/assessment';
 import { checksScreen } from './screens/checks';
@@ -39,6 +40,10 @@ export function startApp(root: HTMLElement): void {
 
   const { store, persistent } = createDefaultStore();
   const state = createState(store, persistent);
+  void requestPersistentStorage().then((answer) => {
+    state.persistState = persistent ? answer : 'unsupported';
+    if (state.screen === 'records') render();
+  });
 
   const ctx: Ctx = {
     state,

@@ -226,7 +226,7 @@ export function windLogView(ctx: Ctx, record: DecisionRecord, back: () => void):
       h('div', { class: 'inline' }, note, noteBtn),
       h('div', { class: 'field', style: 'margin-top:12px' }, h('label', null, 'Wait after the wind drops below the limit'), waitSel),
       h('div', { class: 'actions' }, windOff),
-      h('p', { class: 'small muted' }, 'Entries cannot be edited or deleted. The crane operator has the final decision to lift, continue or stop (CPA 6.4).'),
+      h('p', { class: 'small muted' }, 'The app has no way to edit or delete an entry. The crane operator has the final decision to lift, continue or stop (CPA 6.4).'),
     ),
   );
 
