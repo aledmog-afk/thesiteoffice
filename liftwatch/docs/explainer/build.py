@@ -165,10 +165,11 @@ T([
               'slinger/signaller see the briefing and wind log.'],
     ['Pilot scenario', 'Timber frame wall panels, floor cassettes and similar flat loads, lifted by a mobile crane on '
                        'a UK site.'],
-    ['Status', 'Working pilot, deployed on Cloudflare Pages, with an automated test suite. Not yet reviewed by a qualified AP.'],
-    ['Main outputs', 'A status per hour (Within limits / Near limit / Over limit), a permitted wind speed for each load, '
-                     'checks results, a read-only decision record, a full PDF, a one-page crew briefing sheet, '
-                     'and a lift-day wind log.'],
+    ['Status', 'Working pilot, deployed on Cloudflare Pages, with an automated test suite run in CI. Not yet reviewed '
+               'by a qualified AP; interim rules apply until it is (section 14).'],
+    ['Main outputs', 'A status per hour (Below / Near / Above permitted speed, with the % of the limit), a permitted '
+                     'wind speed for each load, checks results, a timestamped decision record with an integrity check '
+                     'that detects accidental changes, a full PDF, a one-page crew briefing sheet, and a lift-day wind log.'],
     ['Key sources', 'CPA/TCIG 2507 “Planning and Control of Lifting Operations in Wind” (July 2025); BS EN 13000; '
                     'BS 7121-1; EN 1991-1-4; LOLER 1998; LEEA guidance; Open-Meteo forecasts; postcodes.io.'],
     ['Technology', 'Vite + TypeScript (no framework), jsPDF, Vitest; IndexedDB on the device; optional Cloudflare '
@@ -224,7 +225,8 @@ H1('Scope of the pilot')
 T([
     ['In scope', 'Out of scope (for now)'],
     ['UK sites; timber frame panels, cassettes and similar flat loads; mobile crane; forecasts up to 7 days; '
-     'one or many loads per plan; checks for capacity, slings, ground bearing, examinations, cards; '
+     'one or many loads per plan; checks for examinations, cards, a checklist and crew sign-on (capacity, sling and '
+     'ground-bearing calculators built but switched off pending review); '
      'decision records on the phone; PDFs; offline use.',
      'Logins and accounts; sharing and approval between people; billing; alerts; lightning feeds; a crane library or '
      'manufacturer data; tower cranes (method not designed for them); tandem lifts; lifting people; drawing a site '
@@ -238,7 +240,8 @@ P('Five tabs along the bottom of the phone screen: Set-up, Assessment, Checks, D
 H2('5.1 Set-up')
 B([
     '<b>Site:</b> UK postcode (looked up with postcodes.io) or latitude/longitude.',
-    '<b>Terrain:</b> open country, town or city (changes how much the gust rises with height).',
+    '<b>Terrain:</b> open country, town or city. Recorded for information, not yet applied (pending AP review): '
+    'the highest of the three factors is used (section 6.2).',
     '<b>Lift:</b> date (today to 6 days ahead), optional planned start and finish time, crane description.',
     '<b>Crane wind limit:</b> the in-service limit from the load chart in m/s, <b>where that figure came from</b> '
     '(required, e.g. “Lift plan LP-014 / LTM 1090 load chart”), whether it is a gust or a mean, and the boom / jib '
@@ -247,25 +250,30 @@ B([
     'hook block and hoist rope), drag coefficient cw (default 1.2).',
     '<b>Other loads (optional):</b> typed in, or pasted from a supplier’s panel schedule.',
     '<b>Working:</b> the permitted wind speed and every step of the calculation update as you type, plus the gust '
-    'factor at height, the “near limit” threshold, and the same limit expressed as a 10 m forecast gust.',
+    'factor at height, the “near permitted speed” threshold, and the same limit expressed as a 10 m forecast gust.',
 ])
 H2('5.2 Assessment')
 B([
     'Fetches the 7-day forecast for the site and works out each hour of the lift day.',
-    '<b>Status banner</b> with only this wording: “Within limits / Near limit / Over limit — forecast assessment '
-    'against the limits you entered”. It shows the worst hour in the lift window.',
+    '<b>Status banner</b> with only this wording: “Below permitted speed (X % of limit) / Near permitted speed (X %) / '
+    'Above permitted speed (X %) — forecast assessment against the limits you entered”, X being the worst hour in the '
+    'lift window. Below is a neutral blue-grey with a plain circle, never green or a tick; near is amber, above is red.',
     'Gust at height vs permitted speed, % of the limit, wind direction, weather flags.',
     'The forecast source, model and fetch time, always shown.',
     'An hourly bar chart (gust at height against a dashed permitted line, night shaded) and an hour-by-hour table.',
-    'With several loads: the governing (most wind-sensitive) load, and a table of which loads are within limits in '
-    'each daylight hour.',
-    '“Planning guidance only”: daylight periods of 2+ hours within limits. “Outlook — planning guidance only”: a '
+    'Hours are labelled in UK time; on the October clock change the repeated hour shows as “01:00 BST” then '
+    '“01:00 GMT”.',
+    'With several loads: the governing (most wind-sensitive) load, and a table of which loads are below the permitted '
+    'speed in each daylight hour, with each load’s times labelled “planning guidance only”.',
+    '“Planning guidance only”: daylight periods of 2+ hours below the permitted speed. “Outlook — planning guidance only”: a '
     '7-day strip; tap a day to assess it.',
 ])
 H2('5.3 Checks')
-P(f'Crane capacity, slings, outrigger ground bearing, thorough examination dates, competence card expiry, a {len(CHECKLIST)}-item '
-  'pre-lift checklist and crew briefing sign-on. A summary shows how many items need attention and how many are '
-  'not done. Nothing here blocks a decision. Details in section 8.')
+P(f'Thorough examination dates, competence card expiry, a {len(CHECKLIST)}-item pre-lift checklist and crew briefing '
+  'sign-on. A summary shows how many items need attention and how many are not done, in neutral wording (“No items '
+  'flagged by these checks”, “All items marked done”). The crane capacity, sling and outrigger ground-bearing '
+  'calculators are switched off by a feature flag: each shows “Not available: awaiting review by a qualified Appointed '
+  'Person”. Nothing here blocks a decision. Details in section 8.')
 H2('5.4 Decision')
 B([
     'Shows the status, the worst hour and a summary of the checks.',
@@ -274,7 +282,7 @@ B([
     'Two confirmations, required for either kind of Proceed: “I have checked on-site wind with an anemometer or the '
     'crane’s jib anemometer before lifting” and “The crane operator retains the final decision to lift, continue '
     'or stop”.',
-    'Saving creates a timestamped, read-only record (section 10).',
+    'Saving creates a timestamped record with an integrity check that detects accidental changes (section 10).',
 ])
 H2('5.5 Records')
 B([
@@ -282,8 +290,13 @@ B([
     '<b>PDF</b>: the full record. <b>Briefing sheet</b>: one page for the crew and the cab.',
     '<b>Wind log on the day</b> (section 9).',
     '<b>Use as new set-up</b>: start a new lift from a saved one.',
-    'Export all records and wind logs as JSON; import them on another phone.',
+    'Export all records and wind logs as JSON; import them on another phone. The screen prompts an export when none '
+    'has been made for 7 days.',
+    'Shows whether the browser granted persistent storage (navigator.storage.persist()), which asks it not to clear '
+    'the records when space runs low.',
 ])
+P('Every screen has a footer linking the method page and a draft privacy notice and terms of use (marked DRAFT, with '
+  'controller and contact placeholders and items marked for a solicitor).')
 
 # ---------------------------------------------------------------- 6
 H1('The wind method in full')
@@ -298,6 +311,10 @@ CODE('t    = ln(h / h_lo) / ln(h_hi / h_lo)\nF(h) = F_lo + t × (F_hi − F_lo)\
 B(['Below 10 m: F = 1.0 (no reduction).', 'Above 150 m: refused, “outside method range”.',
    'Example: at 25 m, F = 1.103; at 30 m, F = 1.124.'])
 H2('6.2 Terrain: open country, town or city')
+P('<b>Interim rule (method LW-M1.2):</b> until the town and city factors have been checked against EN 1991-1-4 and the '
+  'UK National Annex by a qualified AP, the factor used is the <b>highest</b> of open country, town and city at that '
+  'height, whatever terrain is chosen (in practice the city factor above 10 m). The chosen terrain is recorded and shown '
+  'as “for information, not yet applied (pending AP review)”. The profiles below are kept for that review.')
 P('Wind near the ground is slowed more by rough terrain, so the gust rises more with height in towns and cities (CPA '
   'section 5.2 and Annex H). Town and city use the gust (peak velocity) profile of EN 1991-1-4, as a ratio to the gust '
   'at 10 m. The basic wind speed cancels out:')
@@ -348,13 +365,19 @@ P('The insulation pack is the one difference: the guide prints 11.1 × 0.198 = 2
 H2('6.5 The chart limit must be a gust')
 P('EN 13000 applies a 3-second gust to the crane at height, and CPA says decisions use gusts, not means (section 3.3). '
   'If the AP says the chart limit is a 10-minute mean, LiftWatch does not assess and asks for the gust figure.')
-H2('6.6 Step 4: hourly status')
+H2('6.6 What the forecast gust is (open item)')
+P('Open-Meteo’s published definition of wind_gusts_10m (open-meteo.com/en/docs): “Gusts at 10 meters above ground as a '
+  'maximum of the preceding hour”. It does not state an averaging period; EN 13000 assumes a 3-second gust. It is a '
+  'model value, not a measurement, so LiftWatch cannot show it equals a 3-second gust. The value stamped HH:00 covers '
+  'HH-1 to HH, but LiftWatch assesses it as HH to HH+1, so on a rising wind a gust can show an hour late. No maths '
+  'is changed for this; it is listed for AP review.')
+H2('6.7 Step 4: hourly status')
 CODE('ratio = gust at height / permitted wind speed')
-T([['Ratio', 'Status'], ['below 0.80', 'Within limits'], ['0.80 to 1.00 inclusive', 'Near limit'],
-   ['above 1.00', 'Over limit'], ['gust missing', 'No data (never a pass)']], [70, 100])
+T([['Ratio', 'Status'], ['below 0.80', 'Below permitted speed (X % of limit)'], ['0.80 to 1.00 inclusive', 'Near permitted speed (X %)'],
+   ['above 1.00', 'Above permitted speed (X %)'], ['gust missing', 'No data (never a pass)']], [70, 100])
 P('The 0.80 band is a LiftWatch pilot choice, not from CPA or any standard. The percentage shown never contradicts '
   'the status: near a threshold it shows one decimal place, or “&lt; 80 %” / “&gt; 100 %”.')
-H2('6.7 Weather flags (LiftWatch choices; never a pass)')
+H2('6.8 Weather flags (LiftWatch choices; never a pass)')
 T([
     ['Flag', 'Rule (Open-Meteo variable)'],
     ['Thunderstorm risk', 'CAPE above 500 J/kg'], ['Possible thunder', 'CAPE 100–500 J/kg'],
@@ -362,14 +385,17 @@ T([
     ['Frost / ice risk', 'temperature ≤ 1 °C'], ['Outside daylight', 'hour starts before sunrise or at/after sunset'],
     ['Data missing', 'any value used for a flag is missing'],
 ], [55, 115])
-H2('6.8 Lift window, planning periods and outlook')
+H2('6.9 Lift window, planning periods and outlook')
 B([
     'Lift window: the AP’s planned start–finish, or sunrise to sunset. The banner shows the worst hour in it (ranked '
-    'Over limit, No data, Near limit, Within limits; then highest ratio).',
-    'Planning periods: runs of 2+ consecutive daylight hours within limits, clipped to sunset.',
+    'Above, No data, Near, Below permitted speed; then highest ratio).',
+    'Planning periods: runs of 2+ consecutive daylight hours below the permitted speed, clipped to sunset.',
+    'Times: Open-Meteo returns exact instants (timeformat=unixtime). All time arithmetic uses instants; UK local time is '
+    'for display only. On the last Sunday of October the day has 25 hours (01:00 BST and 01:00 GMT); on the last '
+    'Sunday of March it has 23 (no 01:00), and a planned time in the gap moves forward an hour.',
     '7-day outlook: per day, the worst daylight status and the highest gust at height.',
 ])
-H2('6.9 Units')
+H2('6.10 Units')
 P('m/s first, mph second. 1 mph = 0.44704 m/s; 1 km/h = 1/3.6 m/s; 1 knot = 1852/3600 m/s.')
 
 # ---------------------------------------------------------------- 7
@@ -381,15 +407,16 @@ B([
     'Each load gets its own permitted speed (section 6.4).',
     'Every load sees the same gust, so the load with the lowest permitted speed is the worst in every hour. That '
     '<b>governing</b> load sets the banner and the record’s headline figures.',
-    'A table shows, for each daylight hour, which loads are within limits (✓ within, ! near, ✕ over), most '
-    'wind-sensitive first, with each load’s within-limit windows. This supports CPA’s advice to lift light, large '
+    'A table shows, for each daylight hour, which loads are below the permitted speed (○ below, ! near, ✕ above), most '
+    'wind-sensitive first, with each load’s times below its limit, labelled planning guidance only. This supports CPA’s advice to lift light, large '
     'loads in calm hours and heavy, compact ones in windier hours (page 22).',
 ])
 
 # ---------------------------------------------------------------- 8
 H1('The other checks')
 P('These sit beside the wind method. They are saved in the decision record and printed in the PDF, but they never '
-  'change the wind status and never block a decision.')
+  'change the wind status and never block a decision. <b>The capacity, sling and ground-bearing calculators are switched '
+  'off</b> (feature flag, off by default) until reviewed by a qualified AP; their rules are listed here for that review.')
 T([
     ['Check', 'Rule', 'Source / status'],
     ['Crane capacity', 'hook load = load + accessories + hook block and rope; utilisation = hook load ÷ rated '
@@ -422,22 +449,22 @@ P('Opened from a saved record. Readings from the crane’s anemometer (a gust at
   'because the anemometer is already at height. The pattern follows CPA section 6.4.3.')
 T([
     ['State', 'When'],
-    ['Within limit', 'the last reading is below 80 % of the permitted speed'],
-    ['Near limit', 'the last reading is 80 % to 100 % of it'],
+    ['Below permitted speed', 'the last reading is below 80 % of the permitted speed'],
+    ['Near permitted speed', 'the last reading is 80 % to 100 % of it'],
     ['Stop', 'a reading is above the permitted speed'],
     ['Waiting', 'after a stop, readings are back at or below the limit; the wait runs from the first such reading'],
-    ['Wait complete', 'readings have stayed below the limit for the wait time (default 30 minutes per CPA 6.4.3; 10 '
-                      'or 20 selectable; BS 7121-5 uses 10 for tower cranes). The crane operator decides whether '
-                      'to restart.'],
+    ['Wait period elapsed. The crane operator decides whether to restart',
+     'readings have stayed below the limit for the wait time (default 30 minutes per CPA 6.4.3; 10 or 20 selectable; '
+     'BS 7121-5 uses 10 for tower cranes).'],
     ['Winded off', 'logged as winded off for the day'],
 ], [32, 138])
 B([
     'A reading above the limit while waiting resets the wait. After three resets the log quotes CPA 6.4.3: the day may '
     'need to be declared winded off.',
-    'It shows which loads in the schedule are still within their own limit at the last reading.',
+    'It shows which loads in the schedule are below or above their own limit at the last reading (words, no ticks).',
     'For information only, each reading is compared with the forecast gust at height for that hour, and the average '
     'measured ÷ forecast ratio is shown (CPA 5.2.2: contractors are trialling forecast correction from site readings).',
-    'Entries are append-only (no edit or delete), with time and optional name, and are printed in the PDF.',
+    'The app has no way to edit or delete an entry. Each has a time and optional name, and is printed in the PDF.',
     'The log never says a lift may go ahead.',
 ])
 
@@ -450,15 +477,16 @@ B([
     'The raw forecast values used for the lift day, the forecast source, endpoint, model, grid point and fetch time.',
     'The decision, name, role, notes and the two confirmations.',
     'The checks with every result worked out.',
-    'The method version, the app name, a timestamp, and a SHA-256 hash of the whole record.',
+    'The method version, the app name, a timestamp, and a SHA-256 integrity check of the whole record.',
 ])
-P('Records are frozen when saved and can never be edited. The hash detects any later change: an edited record is '
-  'flagged on screen, in the PDF, and rejected on import.')
+P('A saved record is a timestamped record with an integrity check that detects accidental changes. The app has no edit '
+  'button; a record whose content no longer matches its check is flagged on screen, in the PDF, and rejected on import. '
+  'The check has no key, so it is not tamper-proof: anyone who edits a record can recompute it.')
 H2('PDF outputs')
 T([
     ['Output', 'Contents'],
     ['Full record PDF', 'Status, decision, lift, calculation, loads table, forecast details, hourly chart and table, '
-                        'planning guidance, checks, wind log, method summary, sources, integrity hash, and the '
+                        'planning guidance, checks, wind log, method summary, sources, integrity check, and the '
                         'disclaimer footer on every page.'],
     ['Briefing sheet (1 page)', 'Stop reading for every load in m/s, mph, km/h and knots; the restart rule; the '
                                 'operator’s final say; lift window and flags; checks needing attention; crew names '
@@ -473,14 +501,16 @@ H1('Data sources')
 H2('Forecast: Open-Meteo')
 CODE('hourly = wind_speed_10m, wind_gusts_10m, wind_direction_10m, wind_speed_80m,\n         wind_speed_120m, cape, '
      'precipitation_probability, visibility, temperature_2m\ndaily  = sunrise, sunset\nwind_speed_unit=ms  '
-     'timezone=Europe/London  forecast_days=7')
+     'timezone=Europe/London  timeformat=unixtime  forecast_days=7')
 B([
     'Model: Open-Meteo’s “best match” blend for the location. The response does not say which model run was used, so '
     'LiftWatch records the time it fetched the forecast.',
     'The free endpoint is for non-commercial use; a commercial endpoint and API key are configurable.',
     'Wind speed units are checked on every response, so a configuration slip cannot mix km/h into m/s.',
     'Coordinates are rounded to 2 decimal places (about 1 km). An optional Cloudflare Worker caches each site’s '
-    'forecast for 60 minutes so many users share one call; the pilot currently calls Open-Meteo directly.',
+    'forecast for 60 minutes so many users share one call; it only accepts browser calls from '
+    'https://liftwatch.pages.dev. The pilot currently calls Open-Meteo directly.',
+    'wind_gusts_10m is “a maximum of the preceding hour” with no stated averaging period (section 6.6).',
 ])
 H2('Location: postcodes.io')
 P('Free UK postcode lookup to latitude/longitude. Latitude/longitude can also be entered by hand. Only UK and Ireland '
@@ -503,18 +533,25 @@ T([
     ['Offline', 'A service worker keeps the app and PDF library on the phone. The last forecast per site (up to 48 h '
                 'old) is used with no signal, with a clear warning and its fetch time.'],
     ['Server', 'Optional Cloudflare Worker: forecast proxy with 60-minute cache. No other server.'],
-    ['Hosting', 'Cloudflare Pages (liftwatch.pages.dev), built from the repository on every push.'],
-    ['Tests', 'Vitest (npm test): CPA worked examples, factors, terrain, thresholds, invalid inputs, parsing, Worker, '
-              'records and integrity, export/import, checks, wind log, PDFs. Plus scripted browser runs.'],
+    ['Hosting', 'Cloudflare Pages (liftwatch.pages.dev), built from the repository on every push; other branches get '
+                'preview URLs.'],
+    ['Tests', 'Vitest (npm test): CPA worked examples, factors, terrain and the interim rule, clock changes (25 Oct and '
+              '29 Mar 2026), thresholds, wording and colours, invalid inputs, parsing, Worker, records and integrity, '
+              'export/import and reminders, checks and the calculator flag, wind log, PDFs, privacy and terms pages. '
+              'GitHub Actions runs npm test and npm run typecheck in liftwatch/ on every push. Plus scripted browser runs.'],
+    ['Feature flags', 'Capacity, sling and ground-bearing calculators: off (VITE_ENABLE_CALCULATORS=true for a review '
+                      'build).'],
     ['Dependencies', 'Vite, TypeScript, Vitest, jsPDF only.'],
 ], [30, 140])
 
 # ---------------------------------------------------------------- 13
 H1('Design and wording rules')
 B([
-    'The status banner uses only “Within limits / Near limit / Over limit — forecast assessment against the limits '
-    'you entered”. Never “safe”, “clear to lift” or “go”.',
-    'Status is never shown by colour alone: always an icon and a text label (green / amber / red).',
+    'The status banner uses only “Below permitted speed (X % of limit) / Near permitted speed (X %) / Above permitted '
+    'speed (X %) — forecast assessment against the limits you entered”. Never “safe”, “clear to lift” or “go”.',
+    'Status is never shown by colour alone: always an icon and a text label (blue-grey ○ / amber ! / red ✕). The below '
+    'state is never green and never a tick, in the app, chart, PDFs or wind log.',
+    'Records are never described as locked or tamper-proof.',
     'Weather flags never count as a pass. Missing data never counts as a pass.',
     'High contrast for bright daylight; large tap targets for gloves; light and dark themes; works one-handed.',
     'The forecast source and fetch time are always shown.',
@@ -527,24 +564,29 @@ H2('Known limitations')
 B([
     '<b>Forecast resolution:</b> a modelled forecast on a grid; it does not resolve the crane position.',
     '<b>Local funnelling</b> between buildings, around structures and over ridges is not modelled.',
-    '<b>Terrain</b> is a three-way choice with flat-terrain profiles; hills and the UK National Annex’s detailed '
-    'procedure are not used.',
+    '<b>Terrain</b> is recorded but not applied: the highest factor is used until reviewed. The profiles are flat-terrain; '
+    'hills and the UK National Annex’s detailed procedure are not used.',
+    '<b>Forecast gust definition:</b> a model maximum over the preceding hour, not a stated 3-second gust (section 6.6).',
     '<b>Single scenario:</b> flat loads, mobile crane, gust-based chart limit, up to 150 m.',
-    '<b>Records on the device only:</b> lost if site data is cleared or the phone is lost; export regularly.',
+    '<b>Records on the device only:</b> lost if site data is cleared or the phone is lost; the app asks for persistent '
+    'storage and prompts an export every 7 days.',
     '<b>Open-Meteo free tier</b> is non-commercial.',
-    '<b>Checks are simple calculations:</b> capacity uses the chart figure entered; the sling check assumes a '
-    'centred hook and equal legs; the bearing check assumes a stiff mat.',
+    '<b>Calculators switched off:</b> capacity, sling and bearing are simple calculations (chart figure entered; '
+    'centred hook and equal legs; stiff mat) and are off until reviewed.',
+    '<b>Privacy notice and terms are drafts</b> needing a controller, contact and a solicitor’s review.',
     '<b>Not yet reviewed by a qualified Appointed Person.</b>',
 ])
 H2('LiftWatch choices that need an AP’s review')
 T([
     ['Choice', 'Default', 'Basis'],
-    ['Near limit band', '80 % of permitted', 'Pilot choice'],
+    ['Near permitted speed band', '80 % of permitted', 'Pilot choice'],
     ['Capacity bands', '75 % and 90 %', 'Common contractor practice (not a standard)'],
-    ['Weather flag thresholds', 'Section 6.7', 'Pilot choice'],
+    ['Weather flag thresholds', 'Section 6.8', 'Pilot choice'],
     ['Restart wait', '30 minutes', 'CPA 6.4.3 “common practice”; 10 and 20 selectable'],
     ['Checklist items', '14 items', 'Common review failings, CPA, STA'],
-    ['Terrain mapping', 'II / III / IV', 'EN 1991-1-4 Table 4.1'],
+    ['Terrain mapping', 'II / III / IV', 'EN 1991-1-4 Table 4.1; not applied (highest factor used) until reviewed'],
+    ['Forecast gust vs 3-second gust', 'No correction', 'Open item: Open-Meteo gives a preceding-hour maximum'],
+    ['Calculators', 'Switched off', 'Awaiting review'],
 ], [50, 40, 80])
 
 # ---------------------------------------------------------------- 15
@@ -556,12 +598,13 @@ N([
     'What roughness or terrain do the Liebherr gust factors (1.181 / 1.272 / 1.329) assume?',
     'How does the UK National Annex to EN 1991-1-4 treat town and city terrain, and how different would its factors be '
     'from LiftWatch’s town/city values?',
-    'Open-Meteo describes its 10 m gust as the maximum gust over the preceding hour (to be confirmed). Is that '
-    'comparable with a crane anemometer’s 3-second gust, and should a correction be applied?',
+    'Open-Meteo describes its 10 m gust as “a maximum of the preceding hour” (confirmed from its documentation), with '
+    'no averaging period stated. Is that comparable with the 3-second gust EN 13000 assumes and a crane anemometer '
+    'reads, should a correction be applied, and should each hour also take the next hour’s value into account?',
     'Which weather model drives Open-Meteo’s “best match” for UK sites, and how accurate are its gust forecasts at '
     '1–3 days?',
     'What are the BS 7121 lift categories (basic / intermediate / complex) and their criteria?',
-    'Is 80 % a sensible “Near limit” band? What do contractors and crane hirers use?',
+    'Is 80 % a sensible “Near permitted speed” band? What do contractors and crane hirers use?',
     'Are the 75 % / 90 % capacity bands typical of UK principal contractors’ lifting procedures?',
     'What do manufacturers (Liebherr, Tadano, Grove) say about wind on panels, and do any give load-specific charts?',
 ])
