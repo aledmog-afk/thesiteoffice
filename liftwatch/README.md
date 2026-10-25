@@ -61,6 +61,12 @@ or crane library.
 It works offline: the app is kept on the phone, and the last forecast for the site
 is used, clearly labelled, when there is no signal.
 
+Every screen has a footer linking the method page, a **draft privacy notice**
+(`public/privacy.html`) and **draft terms of use** (`public/terms.html`). Both are
+marked DRAFT, with `CONFIG-CONTROLLER` and `CONFIG-CONTACT` placeholders, and with
+"SOLICITOR" and "CONFIG" markers on everything that needs legal advice or a fact
+filled in. They must be reviewed before the app is used outside the pilot.
+
 ## Run it locally
 
 Needs Node 20.19+ or 22.12+.

@@ -118,6 +118,8 @@ body {
 .brand small { display: block; font-weight: 500; font-size: 0.7rem; color: var(--muted); letter-spacing: 0; }
 
 main { flex: 1; width: 100%; max-width: 760px; margin: 0 auto; padding: 16px 16px 120px; }
+.site-footer { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 28px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 0.85rem; }
+.site-footer a { color: var(--accent); min-height: 44px; display: inline-flex; align-items: center; }
 
 .tabs {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;

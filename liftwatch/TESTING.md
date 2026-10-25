@@ -103,6 +103,16 @@ Tap **3 Checks**.
 6. Add a note, then go back to the record and tap **PDF**. **You should see** the
    **Wind log on the day** section with every entry.
 
+## 5a. Footer, privacy and terms (1 minute)
+
+1. Scroll to the bottom of any screen. **You should see** links to **Method**,
+   **Privacy (draft)** and **Terms (draft)**.
+2. Open each. **You should see** a DRAFT banner, the CONFIG-CONTROLLER and
+   CONFIG-CONTACT placeholders, and highlighted SOLICITOR / CONFIG items.
+3. On **Records**, **you should see** a line saying whether persistent storage was
+   granted. With records saved and no export in the last 7 days, **you should see**
+   an **Export reminder**. Tap **Export all (JSON)** and it goes away.
+
 ## 6. Offline (2 minutes)
 
 1. Open the app once with signal and run an assessment for your site.

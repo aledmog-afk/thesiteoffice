@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <meta name="description" content="Draft terms of use for LiftWatch, a decision-support tool for crane lifts in wind." />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <title>LiftWatch terms (draft)</title>
+  <style>
+    :root { color-scheme: light dark; --bg: #f7f8fa; --surface: #ffffff; --ink: #14171a; --muted: #4f5964; --line: #d5dae0; --accent: #3343a8; --flag-bg: #fff3d6; --flag-ink: #5c3d00; --flag-line: #e0a200; }
+    @media (prefers-color-scheme: dark) { :root:not([data-theme='light']) { --bg: #101215; --surface: #1a1d22; --ink: #f3f5f8; --muted: #9ea8b3; --line: #434b55; --accent: #9aa8ff; --flag-bg: #3a2d0c; --flag-ink: #ffe3a3; --flag-line: #c99400; } }
+    :root[data-theme='dark'] { --bg: #101215; --surface: #1a1d22; --ink: #f3f5f8; --muted: #9ea8b3; --line: #434b55; --accent: #9aa8ff; --flag-bg: #3a2d0c; --flag-ink: #ffe3a3; --flag-line: #c99400; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 17px/1.55 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+    main { max-width: 760px; margin: 0 auto; padding: 20px 16px 60px; overflow-wrap: anywhere; }
+    h1 { font-size: 1.6rem; margin: 0.4em 0 0.2em; }
+    h2 { font-size: 1.15rem; margin: 1.6em 0 0.4em; }
+    a { color: var(--accent); }
+    .draft { border: 2px solid var(--flag-line); background: var(--flag-bg); color: var(--flag-ink); border-radius: 10px; padding: 10px 14px; font-weight: 700; }
+    .todo { background: var(--flag-bg); color: var(--flag-ink); border-left: 4px solid var(--flag-line); padding: 2px 6px; font-weight: 600; }
+    .cfg { font-family: ui-monospace, Menlo, Consolas, monospace; font-weight: 700; background: var(--flag-bg); color: var(--flag-ink); padding: 0 4px; border-radius: 4px; }
+    table { border-collapse: collapse; width: 100%; font-size: 0.92rem; background: var(--surface); }
+    th, td { border: 1px solid var(--line); padding: 6px 8px; text-align: left; vertical-align: top; }
+    th { background: var(--bg); }
+    .scroll { overflow-x: auto; }
+    code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.9em; }
+    .muted { color: var(--muted); }
+    nav.back { margin-bottom: 8px; }
+  </style>
+  <script>
+    try { var t = localStorage.getItem('liftwatch.theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}
+  </script>
+</head>
+<body>
+<main>
+<nav class="back"><a href="/">&larr; Back to LiftWatch</a></nav>
+<h1>LiftWatch terms of use</h1>
+<p class="draft" role="note">DRAFT. Not yet reviewed by a solicitor. Items marked "SOLICITOR" need legal advice and items marked "CONFIG" need a fact filled in before these terms are relied on.</p>
+
+<h2>Who provides LiftWatch</h2>
+<p>LiftWatch is provided by <span class="cfg">CONFIG-CONTROLLER</span>. Contact: <span class="cfg">CONFIG-CONTACT</span>.</p>
+
+<h2>What LiftWatch is</h2>
+<p>LiftWatch is a pilot decision-support tool. It compares a modelled wind forecast with limits that you enter, for planned crane lifts of flat loads on a mobile crane in the UK, and keeps a record of the decision you make.</p>
+<ul>
+  <li><strong>It is never an authorisation to lift.</strong> It supports, and does not replace, the lift plan, the Appointed Person&rsquo;s judgement, manufacturer data, BS 7121 and on-site wind checks.</li>
+  <li>Forecasts are modelled estimates, not measurements. They do not resolve conditions at the crane, such as wind funnelling between buildings.</li>
+  <li>The crane operator has the final decision whether a lift starts, continues or stops (CPA guidance, section 6.4).</li>
+  <li>The method, its sources and its known limits, including the open items awaiting review by a qualified Appointed Person, are on the <a href="/method">method page</a>.</li>
+  <li>The capacity, sling and ground-bearing calculators are switched off until they have been reviewed.</li>
+</ul>
+
+<h2>Your responsibilities</h2>
+<ul>
+  <li>Check every figure you enter against the lift plan and the crane manufacturer&rsquo;s data.</li>
+  <li>Use the crane&rsquo;s anemometer on the day.</li>
+  <li>Keep your own copies of records: they are stored only in your browser and are lost if its data is cleared. Export them regularly.</li>
+</ul>
+<p><span class="todo">SOLICITOR: confirm these responsibilities and whether use is limited to competent persons (for example Appointed Persons under BS 7121).</span></p>
+
+<h2>Third-party data</h2>
+<ul>
+  <li>Weather data from <a href="https://open-meteo.com/">Open-Meteo</a>, used on its free, non-commercial tier. <span class="todo">CONFIG: a commercial plan is needed for any commercial use; confirm the plan and the attribution Open-Meteo requires.</span></li>
+  <li>Postcode lookups from <a href="https://postcodes.io/">postcodes.io</a>. <span class="todo">CONFIG: confirm the attribution wording its data sources require.</span></li>
+</ul>
+
+<h2>Availability</h2>
+<p><span class="todo">SOLICITOR: wording on availability, changes to the service and ending it.</span></p>
+
+<h2>Liability</h2>
+<p><span class="todo">SOLICITOR: limitation of liability, disclaimers and any consumer or business-user distinctions. Nothing is stated here until reviewed.</span></p>
+
+<h2>Law</h2>
+<p><span class="todo">SOLICITOR: governing law and jurisdiction.</span></p>
+
+<h2>Changes</h2>
+<p class="muted">Draft of 25 October 2026. <span class="todo">CONFIG: date of the reviewed version.</span></p>
+<p><a href="/privacy.html">Privacy notice (draft)</a> &middot; <a href="/method">How the numbers are worked out</a></p>
+
+</main>
+</body>
+</html>

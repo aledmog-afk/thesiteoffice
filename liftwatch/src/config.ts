@@ -54,6 +54,10 @@ export const DISCLAIMER =
 /** The method page (method.html, built from METHOD.md). */
 export const METHOD_PAGE_PATH = '/method';
 
+/** Draft privacy notice and terms (public/privacy.html, public/terms.html). */
+export const PRIVACY_PAGE_PATH = '/privacy.html';
+export const TERMS_PAGE_PATH = '/terms.html';
+
 /** Full address of the method page, for the PDF. Falls back to the path outside a browser. */
 export function methodPageUrl(): string {
   const origin = globalThis.location?.origin;

@@ -1,4 +1,4 @@
-import { APP_NAME, METHOD_PAGE_PATH } from '../config';
+import { APP_NAME, METHOD_PAGE_PATH, PRIVACY_PAGE_PATH, TERMS_PAGE_PATH } from '../config';
 import { createDefaultStore } from '../storage/indexeddb';
 import { requestPersistentStorage } from '../storage/persistence';
 import { clear, h, safeStorage } from './dom';
@@ -32,6 +32,17 @@ const TABS: { screen: Screen; n: string; label: string }[] = [
   { screen: 'decision', n: '4', label: 'Decision' },
   { screen: 'records', n: '☰', label: 'Records' },
 ];
+
+/** Footer links on every screen. The privacy notice and terms are drafts until reviewed. */
+export const FOOTER_LINKS: readonly { href: string; label: string }[] = [
+  { href: METHOD_PAGE_PATH, label: 'Method' },
+  { href: PRIVACY_PAGE_PATH, label: 'Privacy (draft)' },
+  { href: TERMS_PAGE_PATH, label: 'Terms (draft)' },
+];
+
+function siteFooter(): HTMLElement {
+  return h('footer', { class: 'site-footer' }, FOOTER_LINKS.map((l) => h('a', { href: l.href }, l.label)));
+}
 
 export function startApp(root: HTMLElement): void {
   document.title = APP_NAME;
@@ -92,7 +103,7 @@ export function startApp(root: HTMLElement): void {
         h('div', { class: 'brand' }, APP_NAME, h('small', null, 'Wind check for crane lifts · decision support')),
         h('div', { class: 'links' }, h('a', { href: METHOD_PAGE_PATH }, 'Method'), themeButton()),
       ),
-      h('main', null, screens[state.screen](ctx)),
+      h('main', null, screens[state.screen](ctx), siteFooter()),
       h(
         'nav',
         { class: 'tabs', 'aria-label': 'Screens' },
