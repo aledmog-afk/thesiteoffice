@@ -1,5 +1,3 @@
-import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { checksSections } from '../../src/checks/reportLines';
 import { buildChecksReport, emptyChecks } from '../../src/checks/model';
@@ -9,14 +7,10 @@ import { STATUS_ICON } from '../../src/ui/format';
 import { STATUS_LABEL } from '../../src/wind';
 import { STATE_LABEL } from '../../src/windlog/log';
 
-const root = join(__dirname, '..', '..');
-
-function sourceFiles(dir: string): string[] {
-  return readdirSync(dir).flatMap((f) => {
-    const p = join(dir, f);
-    return statSync(p).isDirectory() ? sourceFiles(p) : /\.(ts|css)$/.test(f) ? [p] : [];
-  });
-}
+const sources = {
+  ...import.meta.glob('../../src/**/*.ts', { query: '?raw', import: 'default', eager: true }),
+  ...import.meta.glob('../../src/**/*.css', { query: '?raw', import: 'default', eager: true }),
+} as Record<string, string>;
 
 describe('status wording', () => {
   it('names the result against the permitted speed', () => {
@@ -54,12 +48,13 @@ describe('no tick and no green for the below state', () => {
   });
 
   it('has no tick anywhere a user sees (app, chart, PDFs, wind log)', () => {
-    for (const f of sourceFiles(join(root, 'src'))) {
+    expect(Object.keys(sources).length).toBeGreaterThan(30);
+    for (const [f, raw] of Object.entries(sources)) {
       // pdfSafe strips ticks from text; that one regex is allowed to name it.
-      const text = readFileSync(f, 'utf8').replace("/[✓✕⚠↻→←]/g", '');
+      const text = raw.replace('/[✓✕⚠↻→←]/g', '');
       expect(text.includes('✓'), f).toBe(false);
     }
-    expect(readFileSync(join(root, 'src/ui/screens/windlog.ts'), 'utf8')).not.toMatch(/'✓'/);
+    expect(sources['../../src/ui/screens/windlog.ts']).toBeTruthy();
   });
 
   it('the PDF fill for below is blue-grey, not green', () => {
@@ -70,7 +65,7 @@ describe('no tick and no green for the below state', () => {
   });
 
   it('the app colours for below are blue-grey in light and dark themes', () => {
-    const css = readFileSync(join(root, 'src/styles.css'), 'utf8');
+    const css = sources['../../src/styles.css'];
     const values = [...css.matchAll(/--within-(?:bg|mark):\s*#([0-9a-f]{6})/gi)].map((m) => m[1]);
     expect(values.length).toBeGreaterThanOrEqual(6);
     for (const hex of values) {

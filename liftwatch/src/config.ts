@@ -33,6 +33,18 @@ export const FORECAST_CONFIG = Object.freeze({
   directApiKey: (env.VITE_OPEN_METEO_API_KEY as string | undefined) ?? '',
 });
 
+/**
+ * Feature flags. The capacity, sling and ground-bearing calculators are off until a
+ * qualified Appointed Person has reviewed them. The code and tests are kept. To turn
+ * them on for a review build, set VITE_ENABLE_CALCULATORS=true at build time.
+ */
+export const FEATURES = Object.freeze({
+  calculators: (env.VITE_ENABLE_CALCULATORS as string | undefined) === 'true',
+});
+
+/** Shown in place of a calculator while `FEATURES.calculators` is off. */
+export const CALCULATORS_UNAVAILABLE = 'Not available: awaiting review by a qualified Appointed Person';
+
 export const POSTCODE_API_URL = 'https://api.postcodes.io/postcodes/';
 
 /** Footer required on every PDF and shown under the assessment. */

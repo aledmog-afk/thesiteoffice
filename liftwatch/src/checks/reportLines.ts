@@ -1,3 +1,4 @@
+import { CALCULATORS_UNAVAILABLE } from '../config';
 import type { ChecksReport } from './model';
 
 const ANSWER: Record<string, string> = { yes: 'Yes', no: 'NO', na: 'N/A' };
@@ -29,6 +30,12 @@ export function checksSections(r: ChecksReport): { title: string; rows: [string,
     title: 'Pre-lift checklist',
     rows: r.checklist.map(({ item, answer }): [string, string] => [answer ? ANSWER[answer] : 'Not answered', item.text]),
   });
+  if (r.calculators === false) {
+    sections.push({
+      title: 'Capacity, slings and ground bearing',
+      rows: [['Calculators', CALCULATORS_UNAVAILABLE]],
+    });
+  }
   if (r.capacity.length) {
     sections.push({
       title: 'Crane capacity',

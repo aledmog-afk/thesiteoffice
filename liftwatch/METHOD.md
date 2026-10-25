@@ -317,6 +317,13 @@ optionally rigging and cw.
 These sit beside the wind method. They are saved with the decision record, but they
 never change the wind status and never block a decision.
 
+> **Switched off from LW-M1.2.** The crane capacity, sling and outrigger ground
+> bearing calculators are behind a feature flag (`FEATURES.calculators` in
+> `src/config.ts`), off by default. While off, each shows "Not available: awaiting
+> review by a qualified Appointed Person", and nothing is worked out, flagged or
+> stored for them. The rules below are kept, with their tests, for that review. A
+> review build can turn them on with `VITE_ENABLE_CALCULATORS=true`.
+
 | Check | Rule | Source |
 |---|---|---|
 | Crane capacity | hook load = load + accessories + hook block and rope; utilisation = hook load ÷ chart capacity at radius. Flagged above 75 % and 90 %; over 100 % is over the chart | Hook load as CPA Annex A. The 75 % and 90 % bands are company-rule settings (`src/checks/capacity.ts`), not legal limits |

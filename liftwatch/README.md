@@ -41,10 +41,12 @@ or crane library.
    guidance only. With several loads, the most wind-sensitive one governs, and a
    table shows which loads are below the permitted speed hour by hour (planning
    guidance only).
-3. **Checks**: crane capacity at radius, sling leg angle and rating, outrigger
-   mat bearing pressure, LOLER examination dates and card expiry against the lift
-   date, a pre-lift checklist and crew briefing sign-on. Saved with the record;
-   never blocks a decision.
+3. **Checks**: LOLER examination dates and card expiry against the lift date, a
+   pre-lift checklist and crew briefing sign-on. Saved with the record; never
+   blocks a decision. The crane capacity, sling and outrigger bearing calculators
+   are switched off ("Not available: awaiting review by a qualified Appointed
+   Person") until reviewed; `VITE_ENABLE_CALCULATORS=true` turns them on for a
+   review build.
 4. **Decision**: Proceed, Postpone or Proceed with conditions, with name, role,
    notes and the two confirmations. Saving creates a timestamped, read-only
    record. It holds every input, the full calculation, the forecast values used,
@@ -94,6 +96,7 @@ project settings):
 | `VITE_FORECAST_PROXY_URL` | empty | URL of the Worker's `/forecast` endpoint. Empty: call Open-Meteo directly. |
 | `VITE_OPEN_METEO_BASE_URL` | `https://api.open-meteo.com/v1/forecast` | Endpoint for direct calls only. |
 | `VITE_OPEN_METEO_API_KEY` | empty | Direct calls only. It ends up in the browser bundle, so put a commercial key in the Worker instead. |
+| `VITE_ENABLE_CALCULATORS` | empty (off) | `true` turns on the capacity, sling and ground-bearing calculators. Leave off until a qualified AP has reviewed them. |
 
 Worker (`worker/wrangler.toml` `[vars]`, plus secrets):
 

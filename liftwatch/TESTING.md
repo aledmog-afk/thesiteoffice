@@ -56,19 +56,24 @@ Tap **3 Checks**.
    a recent date and the line turns neutral grey (no tick, no green).
 2. **Pre-lift checklist:** answer a few items. Tap **No** on "Overhead power
    lines". **You should see** it listed under **Summary → need attention**.
-3. **Crane capacity:** tap **+ Add a capacity check**. Enter radius `24`, chart
+3. **Calculators switched off:** the **Crane capacity**, **Slings** and **Outrigger
+   ground bearing** cards each say "Not available: awaiting review by a qualified
+   Appointed Person". Steps 3a to 3c apply only to a review build made with
+   `VITE_ENABLE_CALCULATORS=true`.
+
+3a. **Crane capacity:** tap **+ Add a capacity check**. Enter radius `24`, chart
    capacity `1800` and hook block `250` (load and accessories fill in from the
    set-up). **You should see** "Hook load 1550 kg: 86 % of rated capacity: above
    75 %, justify in the plan."
-4. **Slings:** tap **+ Add a sling check**. Enter leg length `3`, between lifting
+3b. **Slings:** tap **+ Add a sling check**. Enter leg length `3`, between lifting
    points `3`, single-leg WLL `1000`. **You should see** "Leg angle 30° (0–45°
    band), mode factor 1.4: each leg needs a WLL of at least 929 kg". Change the
    spread to `5.5`. **You should see** over 60°, "Not permitted".
-5. **Outrigger ground bearing:** tap **+ Add an outrigger check**. Enter load `22`
+3c. **Outrigger ground bearing:** tap **+ Add an outrigger check**. Enter load `22`
    (tonnes), mat `1.2` × `1.2`, allowable `150`. **You should see** about
    150 kN/m², "100 %" or just over. Try a `1.5` × `1.5` mat and it drops to about
    96 kN/m².
-6. **Crew briefing sign-on:** add two names with roles and tap **Sign on** for
+4. **Crew briefing sign-on:** add two names with roles and tap **Sign on** for
    each. **You should see** them listed with the time.
 
 ## 4. Decision and records (3 minutes)
