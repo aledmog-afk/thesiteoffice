@@ -1,10 +1,11 @@
 import type { jsPDF as JsPdf } from 'jspdf';
 import { checksSections } from '../checks/reportLines';
-import { APP_NAME, BANNER_SUFFIX, DISCLAIMER, methodPageUrl } from '../config';
-import { percentLabel } from '../lift/display';
+import { APP_NAME, BANNER_SUFFIX, DISCLAIMER, methodPageUrl, TEST_VERSION_NOTICE } from '../config';
+import { GUST_TIMING_NOTE, heightFactorSource, percentLabel, statusText, terrainText, usesGustTiming } from '../lift/display';
+import { londonClock } from '../time/london';
 import { METHOD_SOURCES, METHOD_SUMMARY } from '../lift/methodSummary';
-import { CHECK_ANEMOMETER, CHECK_OPERATOR, DECISION_LABEL, tickLabel, type DecisionRecord } from '../lift/record';
-import { compassPoint, msToMph, STATUS_LABEL, TERRAIN, type HourAssessment, type Status } from '../wind';
+import { CHECK_ANEMOMETER, CHECK_OPERATOR, DECISION_OWNERSHIP, INTEGRITY_NOTE, recordedDecisionText, tickLabel, type DecisionRecord } from '../lift/record';
+import { compassPoint, factorTerrain, msToMph, STATUS_LABEL, type HourAssessment, type Status } from '../wind';
 import { allUnits, compareWithForecast, DEFAULT_WAIT_MINUTES, evaluateLog, STATE_LABEL, UNIT_LABEL, type LogEntry } from '../windlog/log';
 
 /**
@@ -25,11 +26,25 @@ export function pdfSafe(text: string): string {
 }
 
 export const STATUS_RGB: Record<Status, [number, number, number]> = {
-  within: [11, 110, 11],
+  within: [63, 95, 127],
   near: [250, 178, 25],
   over: [179, 33, 30],
   'no-data': [84, 94, 105],
 };
+/** Neutral grey strip for the test-version notice (not a status colour). */
+export const TEST_BANNER_RGB: [number, number, number] = [228, 231, 235];
+
+/** The test-version notice across the top of every page of a PDF. Call once all pages exist. */
+export function drawTestBanner(doc: JsPdf, left = 15, width = 180): void {
+  const pages = doc.getNumberOfPages();
+  for (let p = 1; p <= pages; p++) {
+    doc.setPage(p);
+    doc.setFillColor(...TEST_BANNER_RGB).rect(left, 4, width, 6, 'F');
+    doc.setFont('helvetica', 'bold').setFontSize(8.5).setTextColor(43, 49, 56);
+    doc.text(pdfSafe(TEST_VERSION_NOTICE), left + width / 2, 8.1, { align: 'center' });
+  }
+}
+
 export const STATUS_TEXT_RGB: Record<Status, [number, number, number]> = {
   within: [255, 255, 255],
   near: [17, 17, 17],
@@ -40,6 +55,8 @@ export const STATUS_TEXT_RGB: Record<Status, [number, number, number]> = {
 const n1 = (v: number | null | undefined) => (v === null || v === undefined ? '-' : v.toFixed(1));
 const spd = (v: number | null | undefined) => (v === null || v === undefined ? '-' : `${v.toFixed(1)} m/s (${msToMph(v).toFixed(0)} mph)`);
 const hm = (t: string) => t.slice(11, 16);
+/** Hour label from the instant when the record has one ("01:00 BST" / "01:00 GMT" on the October change). */
+const hourHm = (hr: { time: string; startMs?: number }) => (typeof hr.startMs === 'number' ? londonClock(hr.startMs) : hm(hr.time));
 const ukInstant = (iso: string) =>
   new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Europe/London',
@@ -55,11 +72,7 @@ const shortDate = (d: string) =>
 const longDate = (d: string) =>
   new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${d}T12:00:00Z`));
 
-/** Records saved before method LW-M1.1 have no terrain: they used the open-country factors. */
-export function terrainText(terrain: keyof typeof TERRAIN | undefined): string {
-  const t = TERRAIN[terrain ?? 'open'];
-  return terrain === 'open' || !terrain ? `${t.label} (published Liebherr factors)` : `${t.label} (EN 1991-1-4 category ${t.category})`;
-}
+export { terrainText };
 
 class Layout {
   y = 18;
@@ -116,12 +129,12 @@ class Layout {
   }
 }
 
-function statusBox(L: Layout, status: Status): void {
+function statusBox(L: Layout, status: Status, percent?: number | null): void {
   const { doc } = L;
   L.ensure(18);
   doc.setFillColor(...STATUS_RGB[status]).roundedRect(L.left, L.y, L.width, 15, 2, 2, 'F');
   doc.setTextColor(...STATUS_TEXT_RGB[status]);
-  doc.setFont('helvetica', 'bold').setFontSize(15).text(pdfSafe(STATUS_LABEL[status]), L.left + 5, L.y + 7);
+  doc.setFont('helvetica', 'bold').setFontSize(15).text(pdfSafe(statusText(status, percent)), L.left + 5, L.y + 7);
   doc.setFont('helvetica', 'normal').setFontSize(9.5).text(pdfSafe(`- ${BANNER_SUFFIX}`), L.left + 5, L.y + 12);
   L.y += 20;
 }
@@ -166,8 +179,12 @@ function chart(L: Layout, hours: HourAssessment[], permitted: number): void {
   doc.rect(x0 + w - tw - 2.5, y(permitted) - 4.6, tw + 2, 3.6, 'FD');
   doc.setTextColor(20, 20, 20).text(limitText, x0 + w - 1.5, y(permitted) - 1.9, { align: 'right' });
   L.y = base + 7;
-  L.para('Bars: gust at height (m/s), coloured by status (green within, amber near, red over). Dashed line: permitted limit. Shaded: night. Values in the table below.', 8, false, [90, 98, 108]);
+  L.para(CHART_CAPTION, 8, false, [90, 98, 108]);
 }
+
+/** Caption under the PDF chart. Colours named as they print: blue-grey, amber, red. */
+export const CHART_CAPTION =
+  'Bars: gust at height (m/s), coloured by status (blue-grey below, amber near, red above the permitted speed). Dashed line: permitted limit. Shaded: night. Values in the table below.';
 
 function hourTable(L: Layout, hours: HourAssessment[]): void {
   const { doc } = L;
@@ -199,7 +216,7 @@ function hourTable(L: Layout, hours: HourAssessment[]): void {
   for (const hr of hours) {
     row(
       [
-        hm(hr.time),
+        hourHm(hr),
         n1(hr.gust10mMs),
         n1(hr.gustAtHeightMs),
         percentLabel(hr.percentOfLimit, hr.status).replace('–', '-'),
@@ -211,7 +228,7 @@ function hourTable(L: Layout, hours: HourAssessment[]): void {
       !hr.daylight,
     );
   }
-  L.para('Speeds in m/s. Shaded rows: outside daylight.', 8, false, [90, 98, 108]);
+  L.para(`Speeds in m/s. Shaded rows: outside daylight.${usesGustTiming(hours) ? ` ${GUST_TIMING_NOTE}` : ''}`, 8, false, [90, 98, 108]);
 }
 
 /** Builds the PDF for a record. jsPDF is loaded on demand to keep the app quick to open. */
@@ -231,11 +248,12 @@ export async function buildRecordPdf(record: DecisionRecord, integrityOk: boolea
   L.para(`Record ${record.id} · saved ${ukInstant(record.createdAt)} · method ${record.methodVersion}`, 8.5, false, [90, 98, 108]);
   L.para('Decision support only. This record is not an authorisation to lift.', 9, true);
 
-  statusBox(L, a.overallStatus);
+  statusBox(L, a.overallStatus, a.worst?.percentOfLimit);
 
-  L.heading('Decision');
+  L.heading('Recorded decision');
   L.kv([
-    ['Decision', DECISION_LABEL[d.choice]],
+    ['Decision', recordedDecisionText(d)],
+    ['Whose decision', DECISION_OWNERSHIP],
     ['Name', d.name],
     ['Role', d.role],
     ['Notes / conditions', d.notes || '-'],
@@ -252,7 +270,7 @@ export async function buildRecordPdf(record: DecisionRecord, integrityOk: boolea
     ['Chart wind limit', `${spd(s.chartLimitMs)}, ${s.chartLimitType === 'gust' ? '3-second gust' : s.chartLimitType ?? '-'}`],
     ['Source of the limit', s.chartLimitSource],
     ['Boom / jib head height', `${s.heightM} m`],
-    ['Terrain', terrainText(s.terrain)],
+    ['Terrain', terrainText(s.terrain, record.methodVersion)],
     ['Load', `${s.loadDescription || 'Flat load'}: ${s.loadLengthM} m × ${s.loadHeightM} m, ${s.loadMassKg} kg + ${s.riggingMassKg} kg rigging, hook block and rope, cw ${s.dragCoefficient}`],
   ]);
 
@@ -260,8 +278,8 @@ export async function buildRecordPdf(record: DecisionRecord, integrityOk: boolea
   L.kv(a.load.steps.map((st) => [st.label, `${st.formula} = ${st.value.toFixed(st.unit === 'm/s' ? 2 : 3)} ${st.unit}`]));
   L.kv([
     ['Permitted (rounded)', spd(a.load.permittedMs)],
-    ['Gust factor at height', `${a.heightFactor.toFixed(3)} at ${a.heightM} m, ${terrainText(s.terrain).toLowerCase()}`],
-    ['Worst hour in window', w ? `${hm(w.time)}: gust at height ${spd(w.gustAtHeightMs)} (10 m gust ${n1(w.gust10mMs)} m/s) = ${percentLabel(w.percentOfLimit, w.status)} of permitted` : '-'],
+    ['Gust factor at height', `${a.heightFactor.toFixed(3)} at ${a.heightM} m, ${heightFactorSource(s.terrain, factorTerrain(a.heightM), record.methodVersion)}`],
+    ['Worst hour in window', w ? `${hourHm(w)}: gust at height ${spd(w.gustAtHeightMs)} (10 m gust ${n1(w.gust10mMs)} m/s) = ${percentLabel(w.percentOfLimit, w.status)} of permitted` : '-'],
     ['Direction (worst hour)', w?.windDirectionDeg != null ? `from ${compassPoint(w.windDirectionDeg)} (${Math.round(w.windDirectionDeg)}°)` : '-'],
   ]);
 
@@ -275,7 +293,7 @@ export async function buildRecordPdf(record: DecisionRecord, integrityOk: boolea
     L.kv(
       a.loads.map((o, i) => {
         const d = dims[i];
-        const within = o.periods.length ? `within limits ${o.periods.map((p) => `${hm(p.start)}-${hm(p.end)}`).join(', ')}` : 'no daylight hour within limits';
+        const within = o.periods.length ? `below permitted speed ${o.periods.map((p) => `${hm(p.start)}-${hm(p.end)}`).join(', ')} (planning guidance only)` : 'no daylight hour below permitted speed';
         return [
           o.ref + (o.ref === a.governingRef ? ' (governs)' : ''),
           `${d.l} × ${d.h} m, ${d.m} kg + ${d.r} kg, cw ${d.cw}; ${o.result.areaToMassRatio.toFixed(2)} m²/t; permitted ${spd(o.result.permittedMs)}. Window: ${STATUS_LABEL[o.windowStatus]} (${percentLabel(o.windowWorstPercent, o.windowStatus)}); ${within}.`,
@@ -300,11 +318,11 @@ export async function buildRecordPdf(record: DecisionRecord, integrityOk: boolea
   L.heading('Planning guidance only');
   L.para(
     a.periods.length
-      ? `Daylight periods within limits (2 h or more): ${a.periods.map((p) => `${hm(p.start)}-${hm(p.end)}`).join(', ')}.`
-      : 'No daylight period of 2 hours or more within limits on the lift day.',
+      ? `Daylight periods below permitted speed (2 h or more): ${a.periods.map((p) => `${hm(p.start)}-${hm(p.end)}`).join(', ')}.`
+      : 'No daylight period of 2 hours or more below the permitted speed on the lift day.',
   );
   L.para('Outlook - planning guidance only (worst daylight hour each day):', 9.5, true);
-  L.kv(a.outlook.map((o) => [shortDate(o.date), `${o.worstStatus ? STATUS_LABEL[o.worstStatus] : 'No daylight data'}, max ${spd(o.maxGustAtHeightMs)} at height, ${o.daylightHoursWithin} of ${o.daylightHours} daylight hours within`]));
+  L.kv(a.outlook.map((o) => [shortDate(o.date), `${o.worstStatus ? STATUS_LABEL[o.worstStatus] : 'No daylight data'}, max ${spd(o.maxGustAtHeightMs)} at height, ${o.daylightHoursWithin} of ${o.daylightHours} daylight hours below permitted speed`]));
 
   if (record.checks) {
     L.heading('Checks');
@@ -319,7 +337,7 @@ export async function buildRecordPdf(record: DecisionRecord, integrityOk: boolea
     const ev = evaluateLog(windLog, limit, DEFAULT_WAIT_MINUTES, new Date(windLog[windLog.length - 1].at));
     const t = (iso: string) => new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' }).format(new Date(iso));
     L.heading('Wind log on the day');
-    L.para(`Crane anemometer gust readings at the boom / jib head against the permitted ${allUnits(limit)}${a.loads && a.loads.length > 1 ? ` (governing load ${a.governingRef})` : ''}. Stop above the limit; wait ${DEFAULT_WAIT_MINUTES} minutes below it before restarting (CPA 6.4.3). Log entries cannot be edited.`, 8.5);
+    L.para(`Crane anemometer gust readings at the boom / jib head against the permitted ${allUnits(limit)}${a.loads && a.loads.length > 1 ? ` (governing load ${a.governingRef})` : ''}. Stop above the limit; wait ${DEFAULT_WAIT_MINUTES} minutes below it before restarting (CPA 6.4.3). The app has no way to edit or delete a log entry.`, 8.5);
     L.kv(
       ev.timeline.map(({ entry, state }): [string, string] => [
         t(entry.at),
@@ -338,9 +356,10 @@ export async function buildRecordPdf(record: DecisionRecord, integrityOk: boolea
   L.para(`Full method with sources: ${methodPageUrl()}`, 8.5, true);
   L.heading('Sources');
   METHOD_SOURCES.forEach((line) => L.para(`- ${line}`, 8.5));
-  L.heading('Record integrity');
+  L.heading('Integrity check');
   L.para(`SHA-256 ${record.integrity}`, 8);
-  L.para(integrityOk ? 'The record content matched this hash when the PDF was made.' : 'WARNING: the record content does NOT match its hash. It may have been altered after saving.', 8.5, !integrityOk);
+  L.para(integrityOk ? 'The record content matched this check when the PDF was made.' : 'WARNING: the record content does NOT match its check. It has changed since it was saved.', 8.5, !integrityOk);
+  L.para(INTEGRITY_NOTE, 8);
 
   // Footer on every page.
   const pages = doc.getNumberOfPages();
@@ -351,6 +370,7 @@ export async function buildRecordPdf(record: DecisionRecord, integrityOk: boolea
     doc.text(doc.splitTextToSize(pdfSafe(DISCLAIMER), L.width - 22) as string[], L.left, 281);
     doc.text(`Page ${p} of ${pages}`, L.left + L.width, 281, { align: 'right' });
   }
+  drawTestBanner(doc, L.left, L.width);
   return doc;
 }
 

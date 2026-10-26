@@ -1,12 +1,14 @@
-import type { HourAssessment } from '../wind';
+import { HOUR_MS } from '../time/london';
+import { hourStartMs, type HourAssessment } from '../wind';
 import { clear, h, s } from './dom';
 import { hhmm, ms } from './format';
 
 export interface ChartOptions {
   hours: HourAssessment[];
   permittedMs: number;
-  windowStart: string;
-  windowEnd: string;
+  /** The lift window as instants. */
+  windowStartMs: number;
+  windowEndMs: number;
   selected: string | null;
   onSelect: (time: string) => void;
 }
@@ -84,7 +86,9 @@ function build(width: number, o: ChartOptions): SVGElement {
   svg.append(s('text', { x: 2, y: 12 }, 'm/s'));
 
   // Planned window band along the top of the plot.
-  const inWindow = o.hours.map((hr, i) => ({ i, on: endOf(hr.time) > o.windowStart && hr.time < o.windowEnd })).filter((z) => z.on);
+  const inWindow = o.hours
+    .map((hr, i) => ({ i, on: hourStartMs(hr) + HOUR_MS > o.windowStartMs && hourStartMs(hr) < o.windowEndMs }))
+    .filter((z) => z.on);
   if (inWindow.length) {
     const a = inWindow[0].i;
     const b = inWindow[inWindow.length - 1].i;
@@ -148,8 +152,4 @@ function build(width: number, o: ChartOptions): SVGElement {
   });
 
   return svg;
-}
-
-function endOf(time: string): string {
-  return new Date(Date.parse(`${time}:00Z`) + 3_600_000).toISOString().slice(0, 16);
 }

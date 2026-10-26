@@ -1,6 +1,8 @@
 import { FLAG_THRESHOLDS, NEAR_LIMIT_RATIO, OVER_LIMIT_RATIO } from './constants';
 import { requirePositive, WindInputError } from './errors';
-import { terrainHeightFactor, type Terrain } from './terrain';
+import { hourGusts, type HourGust } from './gustTiming';
+import { hourStartMs, hourStarts, sunriseMs, sunsetMs } from './instants';
+import { appliedHeightFactor, type Terrain } from './terrain';
 import { FLAG_LABEL, type DaySun, type Flag, type FlagCode, type ForecastHour, type HourAssessment, type Status, type SunTimes } from './types';
 
 /**
@@ -18,10 +20,9 @@ export function classifyRatio(ratio: number): Status {
   return 'over';
 }
 
-/** True when the hour starts at or after sunrise and before sunset. */
-export function isDaylight(time: string, sun: SunTimes): boolean {
-  // Same "YYYY-MM-DDTHH:MM" local format on both sides, so a string compare is exact.
-  return time >= sun.sunrise && time < sun.sunset;
+/** True when the hour starts at or after sunrise and before sunset (compared as instants). */
+export function isDaylight(startMs: number, sun: SunTimes): boolean {
+  return startMs >= sunriseMs(sun) && startMs < sunsetMs(sun);
 }
 
 /**
@@ -34,7 +35,7 @@ export function isDaylight(time: string, sun: SunTimes): boolean {
  *   outside sunrise–sunset
  *   any of these values missing → "Data missing"
  */
-export function weatherFlags(hour: ForecastHour, sun: SunTimes | undefined): Flag[] {
+export function weatherFlags(hour: ForecastHour, sun: SunTimes | undefined, startMs: number = hourStartMs(hour)): Flag[] {
   const t = FLAG_THRESHOLDS;
   const codes: FlagCode[] = [];
   let missing = false;
@@ -53,7 +54,7 @@ export function weatherFlags(hour: ForecastHour, sun: SunTimes | undefined): Fla
   else if (hour.temperatureC <= t.frostTemperatureC) codes.push('frost');
 
   if (!sun) missing = true;
-  if (!sun || !isDaylight(hour.time, sun)) codes.push('night');
+  if (!sun || !isDaylight(startMs, sun)) codes.push('night');
 
   if (missing) codes.push('missing-data');
   return codes.map((code) => ({ code, label: FLAG_LABEL[code] }));
@@ -68,17 +69,29 @@ export interface AssessOptions {
   terrain?: Terrain;
 }
 
-/** Assess one hour: gust corrected to height, ratio to the permitted speed, status and flags. */
-export function assessHour(hour: ForecastHour, options: AssessOptions, sun: SunTimes | undefined): HourAssessment {
+/**
+ * Assess one hour: gust corrected to height, ratio to the permitted speed, status and flags.
+ * `timing` gives the gust for the hour under the LW-M1.3 rule (see gustTiming.ts);
+ * `assessHours` always passes it. Without it the hour's own stamped value is used.
+ */
+export function assessHour(
+  hour: ForecastHour,
+  options: AssessOptions,
+  sun: SunTimes | undefined,
+  startMs: number = hourStartMs(hour),
+  timing?: HourGust,
+): HourAssessment {
   requirePositive(options.permittedMs, 'Permitted wind speed');
-  const heightFactor = terrainHeightFactor(options.heightM, options.terrain ?? 'open');
-  const gust = hour.windGusts10mMs;
+  const heightFactor = appliedHeightFactor(options.heightM, options.terrain ?? 'open');
+  const gust = timing ? timing.assessedMs : hour.windGusts10mMs;
   const gustAtHeightMs = gust === null ? null : gust * heightFactor;
   const ratio = gustAtHeightMs === null ? null : gustAtHeightMs / options.permittedMs;
 
   return {
     time: hour.time,
+    startMs,
     gust10mMs: gust,
+    ...(timing ? { gustStamped10mMs: timing.stampedMs, gustNext10mMs: timing.nextMs } : {}),
     heightFactor,
     gustAtHeightMs,
     permittedMs: options.permittedMs,
@@ -86,13 +99,20 @@ export function assessHour(hour: ForecastHour, options: AssessOptions, sun: SunT
     percentOfLimit: ratio === null ? null : ratio * 100,
     status: ratio === null ? 'no-data' : classifyRatio(ratio),
     windDirectionDeg: hour.windDirectionDeg,
-    daylight: sun ? isDaylight(hour.time, sun) : false,
-    flags: weatherFlags(hour, sun),
+    daylight: sun ? isDaylight(startMs, sun) : false,
+    flags: weatherFlags(hour, sun, startMs),
   };
 }
 
-/** Assess every hour, using the sunrise and sunset of the hour's own date. */
+/**
+ * Assess every hour, using the sunrise and sunset of the hour's own date. Each hour's
+ * gust is the higher of the values stamped at its start and its end (LW-M1.3), so pass
+ * the whole forecast, including the hour after the last one you need.
+ */
 export function assessHours(hours: ForecastHour[], days: DaySun[], options: AssessOptions): HourAssessment[] {
   const byDate = new Map(days.map((d) => [d.date, d]));
-  return hours.map((h) => assessHour(h, options, byDate.get(h.time.slice(0, 10))));
+  const starts = hourStarts(hours);
+  const gusts = hourGusts(hours, starts);
+  // `time` is the UK local start, so its first 10 characters are the UK date.
+  return hours.map((h, i) => assessHour(h, options, byDate.get(h.time.slice(0, 10)), starts[i], gusts[i]));
 }

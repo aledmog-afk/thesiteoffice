@@ -4,6 +4,7 @@ import { AssessmentError, assessLift, type LiftAssessment } from '../lift/assess
 import { emptySetup, validateSetup, type LiftSetup } from '../lift/setup';
 import type { RecordStore } from '../storage/types';
 import { OutsideMethodRangeError, WindInputError } from '../wind';
+import type { PersistState } from '../storage/persistence';
 import { safeStorage } from './dom';
 import { ukToday } from './format';
 
@@ -31,6 +32,8 @@ export interface AppState {
   viewingLog: boolean;
   store: RecordStore;
   storePersistent: boolean;
+  /** Answer to navigator.storage.persist(), shown on the Records screen. */
+  persistState: PersistState;
 }
 
 const SETUP_KEY = 'liftwatch.setup.v1';
@@ -84,6 +87,7 @@ export function createState(store: RecordStore, persistent: boolean): AppState {
     viewingLog: false,
     store,
     storePersistent: persistent,
+    persistState: 'pending',
   };
 }
 

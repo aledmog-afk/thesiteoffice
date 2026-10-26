@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex, nofollow" />
+  <meta name="description" content="Draft privacy notice for LiftWatch: what is stored on your device and what is sent to postcodes.io, Open-Meteo and Cloudflare." />
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <title>LiftWatch privacy (draft)</title>
+  <style>
+    :root { color-scheme: light dark; --bg: #f7f8fa; --surface: #ffffff; --ink: #14171a; --muted: #4f5964; --line: #d5dae0; --accent: #3343a8; --flag-bg: #fff3d6; --flag-ink: #5c3d00; --flag-line: #e0a200; }
+    @media (prefers-color-scheme: dark) { :root:not([data-theme='light']) { --bg: #101215; --surface: #1a1d22; --ink: #f3f5f8; --muted: #9ea8b3; --line: #434b55; --accent: #9aa8ff; --flag-bg: #3a2d0c; --flag-ink: #ffe3a3; --flag-line: #c99400; } }
+    :root[data-theme='dark'] { --bg: #101215; --surface: #1a1d22; --ink: #f3f5f8; --muted: #9ea8b3; --line: #434b55; --accent: #9aa8ff; --flag-bg: #3a2d0c; --flag-ink: #ffe3a3; --flag-line: #c99400; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 17px/1.55 system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+    main { max-width: 760px; margin: 0 auto; padding: 20px 16px 60px; overflow-wrap: anywhere; }
+    h1 { font-size: 1.6rem; margin: 0.4em 0 0.2em; }
+    h2 { font-size: 1.15rem; margin: 1.6em 0 0.4em; }
+    a { color: var(--accent); }
+    .draft { border: 2px solid var(--flag-line); background: var(--flag-bg); color: var(--flag-ink); border-radius: 10px; padding: 10px 14px; font-weight: 700; }
+    .todo { background: var(--flag-bg); color: var(--flag-ink); border-left: 4px solid var(--flag-line); padding: 2px 6px; font-weight: 600; }
+    .cfg { font-family: ui-monospace, Menlo, Consolas, monospace; font-weight: 700; background: var(--flag-bg); color: var(--flag-ink); padding: 0 4px; border-radius: 4px; }
+    table { border-collapse: collapse; width: 100%; font-size: 0.92rem; background: var(--surface); }
+    th, td { border: 1px solid var(--line); padding: 6px 8px; text-align: left; vertical-align: top; }
+    th { background: var(--bg); }
+    .scroll { overflow-x: auto; }
+    code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.9em; }
+    .muted { color: var(--muted); }
+    nav.back { margin-bottom: 8px; }
+    .test-banner { background: #e4e7eb; color: #2b3138; border-bottom: 1px solid var(--line); font-size: 0.8rem; font-weight: 700; text-align: center; padding: 6px 16px; }
+    @media (prefers-color-scheme: dark) { :root:not([data-theme='light']) .test-banner { background: #2c3139; color: #dfe3e8; } }
+    :root[data-theme='dark'] .test-banner { background: #2c3139; color: #dfe3e8; }
+  </style>
+  <script>
+    try { var t = localStorage.getItem('liftwatch.theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}
+  </script>
+</head>
+<body>
+<div class="test-banner" role="note">Test version &ndash; not for operational use. Feedback only.</div>
+<main>
+<nav class="back"><a href="/">&larr; Back to LiftWatch</a></nav>
+<h1>LiftWatch privacy notice</h1>
+<p class="draft" role="note">DRAFT. Not yet reviewed by a solicitor. Items marked "SOLICITOR" need legal advice and items marked "CONFIG" need a fact filled in before this notice is relied on.</p>
+
+<h2>Who is responsible</h2>
+<p>The controller for LiftWatch is <span class="cfg">CONFIG-CONTROLLER</span>. Contact: <span class="cfg">CONFIG-CONTACT</span>.</p>
+<p><span class="todo">SOLICITOR: confirm who the controller is for data held only on a user's own device, and whether the user's employer is a controller for the records they make.</span></p>
+
+<h2>The short version</h2>
+<ul>
+  <li>Your lift records, wind log, drafts and settings are kept <strong>only on your device</strong>, in this browser. LiftWatch has no account, no sign-in and no server that receives them.</li>
+  <li>When you look up a postcode, the postcode is sent to <strong>postcodes.io</strong>.</li>
+  <li>To get the forecast, the site&rsquo;s coordinates, rounded to 2 decimal places (about 1 km), are sent to <strong>Open-Meteo</strong>. Your IP address goes with each request.</li>
+  <li>There are <strong>no analytics</strong>, no advertising and no tracking scripts. LiftWatch sets no cookies.</li>
+  <li><strong>Cloudflare</strong> hosts the site.</li>
+</ul>
+
+<h2>What is stored on your device</h2>
+<p>All of this stays in the browser you use LiftWatch in. Clearing the site&rsquo;s data in the browser deletes it. Exported files (JSON, PDF) are saved wherever you choose and are then outside LiftWatch.</p>
+<div class="scroll"><table>
+  <thead><tr><th>Where</th><th>Name</th><th>What it holds</th></tr></thead>
+  <tbody>
+    <tr><td>IndexedDB</td><td><code>liftwatch</code> &rarr; <code>records</code></td><td>Saved decision records: every set-up input (site postcode or coordinates and label, lift date and window, crane description, chart limit and its source, heights, load sizes and masses), the assessment and the forecast values used, the checks (examination dates, card holders&rsquo; names, card numbers and expiry dates, checklist answers, crew names, roles and sign-on times), the decision with the name, role and notes of the person recording it, the time saved, the method version and an integrity check.</td></tr>
+    <tr><td>IndexedDB</td><td><code>liftwatch</code> &rarr; <code>windlog</code></td><td>Wind log entries for a record: time, anemometer reading and unit, notes, and the name of the person logging it if given.</td></tr>
+    <tr><td>localStorage</td><td><code>liftwatch.setup.v1</code></td><td>The set-up you are working on, before it is saved in a record (same fields as above).</td></tr>
+    <tr><td>localStorage</td><td><code>liftwatch.checks.v1</code></td><td>The checks you are working on, before they are saved in a record (same fields as above).</td></tr>
+    <tr><td>localStorage</td><td><code>liftwatch.person.v1</code></td><td>The name last used on a decision, to fill in the next one. (Earlier test versions also stored the role here; the role is no longer filled in.)</td></tr>
+    <tr><td>localStorage</td><td><code>liftwatch.windlog.by</code></td><td>The name last used in the wind log.</td></tr>
+    <tr><td>localStorage</td><td><code>liftwatch.windlog.unit</code>, <code>liftwatch.windlog.wait</code></td><td>Wind log unit and wait time settings.</td></tr>
+    <tr><td>localStorage</td><td><code>liftwatch.forecast.v2.&lt;lat,lon&gt;</code></td><td>The last forecast for each site, keyed by coordinates rounded to 2 decimal places, for use without signal.</td></tr>
+    <tr><td>localStorage</td><td><code>liftwatch.lastExportAt</code></td><td>When records were last exported, for the export reminder.</td></tr>
+    <tr><td>localStorage</td><td><code>liftwatch.theme</code></td><td>Light, dark or automatic theme.</td></tr>
+    <tr><td>Cache storage</td><td><code>liftwatch-shell-v1</code></td><td>LiftWatch&rsquo;s own pages, scripts and styles, so it opens without signal. No personal data.</td></tr>
+  </tbody>
+</table></div>
+<p>LiftWatch also asks the browser to keep this storage rather than clear it when space runs low (<code>navigator.storage.persist()</code>). That request sends nothing anywhere.</p>
+
+<h2>What leaves your device</h2>
+<div class="scroll"><table>
+  <thead><tr><th>Sent to</th><th>When</th><th>What is sent</th></tr></thead>
+  <tbody>
+    <tr><td>postcodes.io (<code>api.postcodes.io</code>)</td><td>Only when you look up a postcode</td><td>The postcode you typed, plus your IP address and the usual details a browser sends with any web request (such as browser type).</td></tr>
+    <tr><td>Open-Meteo (<code>api.open-meteo.com</code>)</td><td>When the forecast is fetched or refreshed</td><td>The site&rsquo;s latitude and longitude rounded to 2 decimal places (about 1 km), the forecast fields requested, and your IP address and the usual browser request details. Not the postcode, names or records.</td></tr>
+    <tr><td>Cloudflare (hosting)</td><td>Whenever the site is loaded</td><td>Your IP address and the usual browser request details, as for any website.</td></tr>
+  </tbody>
+</table></div>
+<p>Nothing else is sent. Records, wind logs, names, notes and checks are never sent by LiftWatch. They leave your device only if you export, print or share a file yourself.</p>
+<p>Each of these services handles the data under its own privacy terms: <a href="https://postcodes.io/about">postcodes.io</a>, <a href="https://open-meteo.com/en/terms">Open-Meteo</a> and <a href="https://www.cloudflare.com/privacypolicy/">Cloudflare</a>.</p>
+<p><span class="todo">SOLICITOR: review the position of each of these services (processor or separate controller), any transfer of IP addresses outside the UK, and whether agreements are needed with them.</span></p>
+
+<h2>Analytics and cookies</h2>
+<p>LiftWatch includes no analytics, advertising or tracking scripts and sets no cookies.</p>
+<p><span class="todo">CONFIG: confirm Cloudflare Web Analytics and any other Cloudflare features that add scripts or cookies are switched off for the Pages project.</span></p>
+
+<h2>Why the data is used</h2>
+<p>The postcode and coordinates are used only to find the site and fetch its wind forecast. The data on your device is used only to show and record your lift assessments.</p>
+<p><span class="todo">SOLICITOR: state the lawful basis under UK GDPR for each use, if any applies to the controller.</span></p>
+
+<h2>How long it is kept</h2>
+<p>Data on your device stays until you or the browser delete it. LiftWatch does not delete records automatically.</p>
+<p><span class="todo">SOLICITOR / CONFIG: retention by postcodes.io, Open-Meteo and Cloudflare is set by them; confirm and state it here if required.</span></p>
+
+<h2>Your rights</h2>
+<p>You can see, export and delete everything LiftWatch keeps on your device yourself: export from the Records screen, and delete by clearing this site&rsquo;s data in your browser settings.</p>
+<p><span class="todo">SOLICITOR: set out the data protection rights that apply and how to use them with <span class="cfg">CONFIG-CONTROLLER</span>.</span></p>
+
+<h2>Complaints</h2>
+<p>Please contact <span class="cfg">CONFIG-CONTACT</span> first. You also have the right to complain to the Information Commissioner&rsquo;s Office (ICO), the UK data protection regulator: <a href="https://ico.org.uk/make-a-complaint/">ico.org.uk/make-a-complaint</a>.</p>
+
+<h2>Changes</h2>
+<p class="muted">Draft of 25 October 2026. <span class="todo">CONFIG: date of the reviewed version.</span></p>
+<p><a href="/terms.html">Terms of use (draft)</a> &middot; <a href="/method">How the numbers are worked out</a></p>
+
+</main>
+</body>
+</html>

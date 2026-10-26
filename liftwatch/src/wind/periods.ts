@@ -1,43 +1,46 @@
+import { HOUR_MS, londonLocal } from '../time/london';
 import { MIN_PERIOD_HOURS } from './constants';
+import { hourStartMs } from './instants';
 import type { HourAssessment, Status } from './types';
 
 export interface Period {
-  /** Start of the first hour, "YYYY-MM-DDTHH:MM" local. */
+  /** Start of the first hour, UK local "YYYY-MM-DDTHH:MM". */
   start: string;
-  /** End of the last hour (start of the hour after it). */
+  /** End of the last hour (start of the hour after it), UK local. */
   end: string;
+  /** The same two moments as instants. Absent on records saved before LW-M1.2. */
+  startMs?: number;
+  endMs?: number;
   hours: number;
-}
-
-const HOUR_MS = 3_600_000;
-
-// The local wall-clock strings are treated as UTC only to step them by one hour.
-function addHour(time: string): string {
-  return new Date(Date.parse(`${time}:00Z`) + HOUR_MS).toISOString().slice(0, 16);
 }
 
 /**
  * Planning guidance only: runs of at least `minHours` consecutive hours that are
- * within limits AND in daylight. A gap in the hourly data ends a run.
+ * below the permitted speed (status 'within') AND in daylight. A gap in the hourly data ends a run.
  */
 export function findWorkablePeriods(hours: HourAssessment[], minHours = MIN_PERIOD_HOURS): Period[] {
   const periods: Period[] = [];
-  let runStart: string | null = null;
-  let runEnd = '';
+  let runStart: number | null = null;
+  let runEnd = 0;
   let count = 0;
 
   const close = () => {
-    if (runStart !== null && count >= minHours) periods.push({ start: runStart, end: runEnd, hours: count });
+    if (runStart !== null && count >= minHours) {
+      periods.push({ start: londonLocal(runStart), end: londonLocal(runEnd), startMs: runStart, endMs: runEnd, hours: count });
+    }
     runStart = null;
     count = 0;
   };
 
+  // Hours join a run only when they follow each other exactly in time, so the
+  // repeated and skipped hours at the clock changes are counted correctly.
   for (const h of hours) {
     const ok = h.status === 'within' && h.daylight;
-    if (ok && runStart !== null && h.time !== runEnd) close();
+    const start = hourStartMs(h);
+    if (ok && runStart !== null && start !== runEnd) close();
     if (ok) {
-      if (runStart === null) runStart = h.time;
-      runEnd = addHour(h.time);
+      if (runStart === null) runStart = start;
+      runEnd = start + HOUR_MS;
       count++;
     } else {
       close();

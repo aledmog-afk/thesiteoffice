@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { heightFactorSource, terrainText, terrainWasApplied } from '../../src/lift/display';
 import {
+  appliedHeightFactor,
+  APPLY_CHOSEN_TERRAIN,
+  factorTerrain,
   gustHeightFactor,
   OutsideMethodRangeError,
   profileGustRatio,
@@ -64,5 +68,51 @@ describe('terrainHeightFactor', () => {
 
   it('still refuses above 150 m', () => {
     expect(() => terrainHeightFactor(151, 'city')).toThrow(OutsideMethodRangeError);
+  });
+});
+
+describe('interim terrain rule (LW-M1.2)', () => {
+  it('is in force: the chosen terrain is not applied', () => {
+    expect(APPLY_CHOSEN_TERRAIN).toBe(false);
+  });
+
+  it('uses the highest of open country, town and city at every height, whatever is chosen', () => {
+    for (const h of [3, 10, 20, 30, 50, 80, 100, 150]) {
+      const highest = Math.max(...(['open', 'town', 'city'] as Terrain[]).map((t) => terrainHeightFactor(h, t)));
+      for (const t of ['open', 'town', 'city'] as Terrain[]) expect(appliedHeightFactor(h, t)).toBe(highest);
+    }
+  });
+
+  it('is never below the factor of the terrain chosen', () => {
+    for (const h of [12, 40, 120]) for (const t of ['open', 'town', 'city'] as Terrain[]) expect(appliedHeightFactor(h, t)).toBeGreaterThanOrEqual(terrainHeightFactor(h, t));
+  });
+
+  it('says which terrain the factor came from', () => {
+    expect(factorTerrain(30, 'open')).toBe('city');
+    expect(factorTerrain(10, 'city')).toBe('open'); // all 1.0 at 10 m: first on a tie
+  });
+
+  it('can still apply the chosen terrain once reviewed (switch kept for the AP)', () => {
+    expect(appliedHeightFactor(30, 'open', true)).toBe(gustHeightFactor(30));
+    expect(factorTerrain(30, 'town', true)).toBe('town');
+  });
+
+  it('refuses heights above 150 m as before', () => {
+    expect(() => appliedHeightFactor(151, 'open')).toThrow(OutsideMethodRangeError);
+  });
+});
+
+describe('terrain wording', () => {
+  it('shows the choice as for information only under LW-M1.2 and in live assessments', () => {
+    expect(terrainText('town')).toBe('Town: for information, not yet applied (pending AP review)');
+    expect(terrainText('open', 'LW-M1.2')).toBe('Open country: for information, not yet applied (pending AP review)');
+    expect(heightFactorSource('open', 'city')).toBe('highest of open country, town and city (interim rule, city factor)');
+  });
+
+  it('keeps the old wording for LW-M1.1 records, which did apply the terrain', () => {
+    expect(terrainWasApplied('LW-M1.1')).toBe(true);
+    expect(terrainWasApplied('LW-M1.2')).toBe(false);
+    expect(terrainText('city', 'LW-M1.1')).toBe('City (EN 1991-1-4 category IV)');
+    expect(terrainText(undefined, 'LW-M1.0')).toBe('Open country (published Liebherr factors)');
   });
 });

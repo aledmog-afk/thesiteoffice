@@ -1,4 +1,5 @@
 import { percentLabel } from '../lift/display';
+import { londonClock } from '../time/london';
 import { compassPoint, msToMph, STATUS_LABEL, type Status } from '../wind';
 
 export function ms(v: number | null | undefined, dp = 1): string {
@@ -38,6 +39,15 @@ export function hhmm(localTime: string): string {
   return localTime.slice(11, 16);
 }
 
+/**
+ * Clock label for a forecast hour. Uses the hour's instant when it has one, so the
+ * repeated October hour reads "01:00 BST" then "01:00 GMT".
+ */
+export function hourLabel(hr: { time: string; startMs?: number; epochMs?: number }): string {
+  const ms = hr.startMs ?? hr.epochMs;
+  return typeof ms === 'number' ? londonClock(ms) : hhmm(hr.time);
+}
+
 const dateFmt = new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
 const dayFmt = new Intl.DateTimeFormat('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
 
@@ -69,8 +79,11 @@ export function statusLabel(s: Status | null): string {
   return s ? STATUS_LABEL[s] : 'No daylight data';
 }
 
-/** Icon that goes with every status colour, so colour never carries meaning alone. */
-export const STATUS_ICON: Record<Status, string> = { within: '✓', near: '!', over: '✕', 'no-data': '?' };
+/**
+ * Icon that goes with every status colour, so colour never carries meaning alone.
+ * Below the permitted speed has a plain circle, not a tick: it is not an approval.
+ */
+export const STATUS_ICON: Record<Status, string> = { within: '○', near: '!', over: '✕', 'no-data': '?' };
 
 /** Today's date in the UK, "YYYY-MM-DD". */
 export function ukToday(now = new Date()): string {

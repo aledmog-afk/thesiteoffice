@@ -32,6 +32,7 @@ describe('buildForecastUrl', () => {
     expect(url.searchParams.get('wind_speed_unit')).toBe('ms');
     expect(url.searchParams.get('timezone')).toBe('Europe/London');
     expect(url.searchParams.get('forecast_days')).toBe('7');
+    expect(url.searchParams.get('timeformat')).toBe('unixtime');
     expect(url.searchParams.has('apikey')).toBe(false);
     expect(HOURLY_VARIABLES).toHaveLength(9);
   });
@@ -64,7 +65,7 @@ describe('parseForecast', () => {
     const f = parseForecast(envelope);
     expect(f.hours).toHaveLength(48);
     expect(f.hours[0]).toMatchObject({ time: '2026-10-22T00:00', windGusts10mMs: 4, windDirectionDeg: 225 });
-    expect(f.days[1]).toEqual({ date: '2026-10-23', sunrise: '2026-10-23T07:40', sunset: '2026-10-23T17:50' });
+    expect(f.days[1]).toMatchObject({ date: '2026-10-23', sunrise: '2026-10-23T07:40', sunset: '2026-10-23T17:50' });
     expect(f.fetchedAt).toBe('2026-10-21T19:00:00.000Z');
     expect(f.source).toBe('Open-Meteo');
   });

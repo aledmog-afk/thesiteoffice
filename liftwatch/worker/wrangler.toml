@@ -8,5 +8,6 @@ compatibility_date = "2026-10-01"
 # OPEN_METEO_BASE_URL = "https://customer-api.open-meteo.com/v1/forecast"
 # and add the key as a secret: npx wrangler secret put OPEN_METEO_API_KEY
 OPEN_METEO_BASE_URL = "https://api.open-meteo.com/v1/forecast"
-# The Pages site origin, e.g. "https://liftwatch.pages.dev". "*" while piloting.
-ALLOWED_ORIGIN = "*"
+# The Pages site origin. Only this origin may call the Worker from a browser.
+# Preview deployments (https://<branch>.liftwatch.pages.dev) are a different origin.
+ALLOWED_ORIGIN = "https://liftwatch.pages.dev"

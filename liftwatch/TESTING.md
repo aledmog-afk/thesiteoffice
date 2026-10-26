@@ -43,8 +43,9 @@ load) should be highest at about **15.8 m/s**, close to the 17 m/s chart limit.
 4. Tap **Check against the forecast**.
 
 **You should see** "Governing load: G01" under the banner, and a **Loads hour by
-hour** table with ✓ ! ✕ for each load in each daylight hour, most wind-sensitive
-first.
+hour** table with ○ ! ✕ (below, near, above the permitted speed) for each load in
+each daylight hour, most wind-sensitive first. The banner reads, for example,
+"Below permitted speed (62 % of limit)" in blue-grey: never green, never a tick.
 
 ## 3. Checks (5 minutes)
 
@@ -52,43 +53,57 @@ Tap **3 Checks**.
 
 1. **Thorough examinations:** enter a crane examination date more than 12 months
    before the lift date. **You should see** a red "Out of date" line. Change it to
-   a recent date and it turns green.
+   a recent date and the line turns neutral grey (no tick, no green).
 2. **Pre-lift checklist:** answer a few items. Tap **No** on "Overhead power
    lines". **You should see** it listed under **Summary → need attention**.
-3. **Crane capacity:** tap **+ Add a capacity check**. Enter radius `24`, chart
+3. **Calculators switched off:** the **Crane capacity**, **Slings** and **Outrigger
+   ground bearing** cards each say "Not available: awaiting review by a qualified
+   Appointed Person". Steps 3a to 3c apply only to a review build made with
+   `VITE_ENABLE_CALCULATORS=true`.
+
+3a. **Crane capacity:** tap **+ Add a capacity check**. Enter radius `24`, chart
    capacity `1800` and hook block `250` (load and accessories fill in from the
    set-up). **You should see** "Hook load 1550 kg: 86 % of rated capacity: above
    75 %, justify in the plan."
-4. **Slings:** tap **+ Add a sling check**. Enter leg length `3`, between lifting
+3b. **Slings:** tap **+ Add a sling check**. Enter leg length `3`, between lifting
    points `3`, single-leg WLL `1000`. **You should see** "Leg angle 30° (0–45°
    band), mode factor 1.4: each leg needs a WLL of at least 929 kg". Change the
    spread to `5.5`. **You should see** over 60°, "Not permitted".
-5. **Outrigger ground bearing:** tap **+ Add an outrigger check**. Enter load `22`
+3c. **Outrigger ground bearing:** tap **+ Add an outrigger check**. Enter load `22`
    (tonnes), mat `1.2` × `1.2`, allowable `150`. **You should see** about
    150 kN/m², "100 %" or just over. Try a `1.5` × `1.5` mat and it drops to about
    96 kN/m².
-6. **Crew briefing sign-on:** add two names with roles and tap **Sign on** for
+4. **Crew briefing sign-on:** add two names with roles and tap **Sign on** for
    each. **You should see** them listed with the time.
 
 ## 4. Decision and records (3 minutes)
 
 1. Tap **4 Decision**. **You should see** a Checks summary card at the top.
-2. Choose **Proceed with conditions**, fill in your name and a condition, tick both
-   boxes, and tap **Save record**.
+2. Check the grey **Test version – not for operational use. Feedback only.** banner
+   is at the top of every screen. Check the **Role** field is empty, with the hint
+   "e.g. Appointed Person, Lift Supervisor, Crane Operator". Tap **Save record** with
+   it empty: **you should see** an error asking for your role, and nothing is saved.
+   Under **Your decision**, choose **Your decision: proceed with conditions**, fill in
+   your name, role and a condition, tick both boxes, and tap **Save record**. Every option
+   reads as your own decision, never as LiftWatch's.
 3. On the record, tap:
-   - **PDF**: the full record. Check it has the loads table, the terrain, the
-     **Checks** section and the method link at the end.
+   - **PDF**: the full record. Check it says "Decision recorded by <your name>
+     (<role>): proceed with conditions" and that it is not LiftWatch's decision, and
+     that it has the loads table, the terrain, the **Checks** section and the method
+     link at the end. Under the hourly table, check the note on how each hour's 10 m
+     gust is chosen (the higher of the values stamped at its start and end).
    - **Briefing sheet**: one page. Check the **STOP** table shows each load's
-     limit in m/s, mph, km/h and knots, the restart rule, and your crew names with
-     blank signature lines.
+     limit in m/s, mph, km/h and knots, the restart rule, your recorded decision
+     ("Not a LiftWatch decision"), and your crew names with blank signature lines.
+     With no checks flagged it says "No items flagged by these checks" in blue-grey.
 
 ## 5. Wind log on the day (4 minutes)
 
 1. On the record, tap **Wind log on the day**.
-2. Set the unit to **mph**. Log `5`. **You should see** a green "within" panel.
+2. Set the unit to **mph**. Log `5`. **You should see** a blue-grey "Last reading below the permitted speed" panel.
 3. Log `20` (above the G01 limit of about 9 mph). **You should see** a red
    **"Stop: reading above the permitted limit"**, and under **Loads at the last
-   reading**, ✓ for the loads whose own limit is still above 20 mph.
+   reading**, "below" for the loads whose own limit is still above 20 mph (no ticks).
 4. Log `6`. **You should see** an amber **"Waiting: below the limit since …"** with
    "0 of 30 minutes".
 5. Keep alternating `20` and `6`. Each `20` after a `6` resets the wait. On the
@@ -96,6 +111,16 @@ Tap **3 Checks**.
    winded off.
 6. Add a note, then go back to the record and tap **PDF**. **You should see** the
    **Wind log on the day** section with every entry.
+
+## 5a. Footer, privacy and terms (1 minute)
+
+1. Scroll to the bottom of any screen. **You should see** links to **Method**,
+   **Privacy (draft)** and **Terms (draft)**.
+2. Open each. **You should see** a DRAFT banner, the CONFIG-CONTROLLER and
+   CONFIG-CONTACT placeholders, and highlighted SOLICITOR / CONFIG items.
+3. On **Records**, **you should see** a line saying whether persistent storage was
+   granted. With records saved and no export in the last 7 days, **you should see**
+   an **Export reminder**. Tap **Export all (JSON)** and it goes away.
 
 ## 6. Offline (2 minutes)
 

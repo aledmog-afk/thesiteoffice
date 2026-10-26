@@ -1,9 +1,10 @@
 import type { jsPDF as JsPdf } from 'jspdf';
 import { APP_NAME, BANNER_SUFFIX, DISCLAIMER } from '../config';
-import { CHECK_OPERATOR, DECISION_LABEL, type DecisionRecord } from '../lift/record';
-import { STATUS_LABEL } from '../wind';
+import { CHECK_OPERATOR, recordedDecisionText, type DecisionRecord } from '../lift/record';
+import { statusText } from '../lift/display';
 import { DEFAULT_WAIT_MINUTES, fromMs, UNIT_LABEL, type SpeedUnit } from '../windlog/log';
-import { pdfSafe, STATUS_RGB, STATUS_TEXT_RGB, terrainText } from './recordPdf';
+import { NO_ITEMS_FLAGGED } from '../checks/reportLines';
+import { drawTestBanner, pdfSafe, STATUS_RGB, STATUS_TEXT_RGB, terrainText } from './recordPdf';
 
 const UNITS: SpeedUnit[] = ['ms', 'mph', 'kmh', 'kn'];
 const fmt = (ms: number, u: SpeedUnit) => fromMs(ms, u).toFixed(u === 'ms' ? 1 : 0);
@@ -33,14 +34,14 @@ export async function buildBriefingPdf(record: DecisionRecord): Promise<JsPdf> {
 
   text(`${APP_NAME} - lift briefing`, 18, true, [51, 67, 168]);
   text(`${new Intl.DateTimeFormat('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(`${a.liftDate}T12:00:00Z`))} · ${s.site?.label ?? ''}`, 11, true);
-  text(`Crane: ${s.craneDescription}. Boom / jib head ${s.heightM} m. Terrain: ${terrainText(s.terrain)}.`, 9.5);
-  text(`AP decision: ${DECISION_LABEL[record.decision.choice]} (${record.decision.name}, ${record.decision.role})${record.decision.notes ? ` - ${record.decision.notes}` : ''}`, 9.5, true);
+  text(`Crane: ${s.craneDescription}. Boom / jib head ${s.heightM} m. Terrain: ${terrainText(s.terrain, record.methodVersion)}.`, 9.5);
+  text(`${recordedDecisionText(record.decision)}${record.decision.notes ? ` - ${record.decision.notes}` : ''}. Not a LiftWatch decision.`, 9.5, true);
 
   // Forecast status strip.
   y += 1;
   doc.setFillColor(...STATUS_RGB[a.overallStatus]).roundedRect(left, y, width, 10, 2, 2, 'F');
   doc.setTextColor(...STATUS_TEXT_RGB[a.overallStatus]).setFont('helvetica', 'bold').setFontSize(11);
-  doc.text(pdfSafe(`Forecast: ${STATUS_LABEL[a.overallStatus]} - ${BANNER_SUFFIX}`), left + 4, y + 6.5);
+  doc.text(pdfSafe(`Forecast: ${statusText(a.overallStatus, a.worst?.percentOfLimit)} - ${BANNER_SUFFIX}`), left + 4, y + 6.5);
   y += 15;
 
   // The stop reading, large, in every unit.
@@ -80,7 +81,7 @@ export async function buildBriefingPdf(record: DecisionRecord): Promise<JsPdf> {
   for (const hr of a.windowHours) for (const f of hr.flags) flags.set(f.label, (flags.get(f.label) ?? 0) + 1);
   text(
     `Lift window ${hm(a.windowStart)}-${hm(a.windowEnd)}. Daylight ${a.liftDaySun ? `${hm(a.liftDaySun.sunrise)}-${hm(a.liftDaySun.sunset)}` : 'unknown'}. ` +
-      `Planning guidance: ${a.periods.length ? `within limits ${a.periods.map((p) => `${hm(p.start)}-${hm(p.end)}`).join(', ')}` : 'no 2-hour daylight period within limits for the governing load'}.`,
+      `Planning guidance: ${a.periods.length ? `below permitted speed ${a.periods.map((p) => `${hm(p.start)}-${hm(p.end)}`).join(', ')}` : 'no 2-hour daylight period below permitted speed for the governing load'}.`,
     9.5,
   );
   if (flags.size) text(`Weather flags in the window: ${[...flags].map(([k, n]) => `${k} (${n} h)`).join(', ')}.`, 9.5, true);
@@ -90,7 +91,7 @@ export async function buildBriefingPdf(record: DecisionRecord): Promise<JsPdf> {
   if (record.checks) {
     y += 1;
     const att = record.checks.attention;
-    text(att.length ? `Checks needing attention (${att.length}):` : 'Checks: nothing flagged.', 10, true, att.length ? [179, 33, 30] : [11, 110, 11]);
+    text(att.length ? `Checks needing attention (${att.length}):` : NO_ITEMS_FLAGGED, 10, true, att.length ? STATUS_RGB.over : STATUS_RGB.within);
     for (const line of att.slice(0, 8)) text(`- ${line}`, 8.5);
     // Results that passed. Flagged ones are already in the list above.
     const calc = [
@@ -128,5 +129,6 @@ export async function buildBriefingPdf(record: DecisionRecord): Promise<JsPdf> {
   }
 
   footer();
+  drawTestBanner(doc, left, width);
   return doc;
 }

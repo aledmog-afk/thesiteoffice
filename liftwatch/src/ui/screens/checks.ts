@@ -1,8 +1,10 @@
+import { ALL_ITEMS_DONE, NO_ITEMS_FLAGGED } from '../../checks/reportLines';
 import { CAPACITY_HIGH_UTILISATION, CAPACITY_REVIEW_UTILISATION, capacityCheck, type CapacityInput } from '../../checks/capacity';
 import { bearingCheck } from '../../checks/bearing';
 import { ACCESSORY_EXAM_MONTHS, CRANE_EXAM_MONTHS, examStatus, expiryStatus, type ExamStatus } from '../../checks/certificates';
 import { buildChecksReport, CHECKLIST, type Answer, type LabelledBearing, type LabelledSling } from '../../checks/model';
 import { slingCheck, type SlingLegs } from '../../checks/slings';
+import { CALCULATORS_UNAVAILABLE, FEATURES } from '../../config';
 import type { Ctx } from '../app';
 import { clear, h, readNumber } from '../dom';
 import { card } from '../fields';
@@ -12,9 +14,14 @@ import { saveChecks } from '../state';
 type Tone = 'ok' | 'attention' | 'incomplete';
 
 function chip(tone: Tone, text: string): HTMLElement {
-  const cls = tone === 'ok' ? 'st-within' : tone === 'attention' ? 'st-over' : 'st-no-data';
-  const icon = tone === 'ok' ? '✓' : tone === 'attention' ? '✕' : '…';
+  const cls = tone === 'ok' ? 'neutral' : tone === 'attention' ? 'st-over' : 'st-no-data';
+  const icon = tone === 'ok' ? '' : tone === 'attention' ? '✕' : '…';
   return h('span', { class: `pill ${cls}` }, h('span', { 'aria-hidden': 'true' }, icon), text);
+}
+
+/** In place of a calculator that is switched off (`FEATURES.calculators`). */
+function unavailable(title: string): HTMLElement {
+  return card(h('h2', null, title), h('p', { class: 'check-result unavailable', role: 'note' }, CALCULATORS_UNAVAILABLE));
 }
 
 function statusLine(s: ExamStatus): HTMLElement {
@@ -113,8 +120,8 @@ export function checksScreen(ctx: Ctx): HTMLElement {
       h(
         'div',
         { class: 'actions', style: 'margin:0 0 8px' },
-        r.attention.length ? chip('attention', `${r.attention.length} need attention`) : chip('ok', 'Nothing flagged'),
-        r.incomplete.length ? chip('incomplete', `${r.incomplete.length} not done`) : chip('ok', 'All done'),
+        r.attention.length ? chip('attention', `${r.attention.length} need attention`) : chip('ok', NO_ITEMS_FLAGGED),
+        r.incomplete.length ? chip('incomplete', `${r.incomplete.length} not done`) : chip('ok', ALL_ITEMS_DONE),
       ),
     );
     if (r.attention.length) summaryBox.append(h('ul', { class: 'attention-list' }, r.attention.map((a) => h('li', null, a))));
@@ -201,7 +208,7 @@ export function checksScreen(ctx: Ctx): HTMLElement {
 
   // ---------- Capacity ----------
   const s = state.setup;
-  const capacity = card(
+  const capacity = !FEATURES.calculators ? unavailable('Crane capacity') : card(
     h('h2', null, 'Crane capacity'),
     h(
       'p',
@@ -232,7 +239,7 @@ export function checksScreen(ctx: Ctx): HTMLElement {
   );
 
   // ---------- Slings ----------
-  const slings = card(
+  const slings = !FEATURES.calculators ? unavailable('Slings') : card(
     h('h2', null, 'Slings'),
     h('p', { class: 'small muted' }, 'Uniform load method (BS EN 818-4, 13414-1, 1492-1; LEEA). Leg angle from the leg length and the distance between lifting points: for 4 legs use the diagonal. Mode factor 2 legs 1.4 up to 45°, 1.0 to 60°; 3–4 legs 2.1 and 1.5; over 60° not permitted.'),
     rowList<LabelledSling>(c.slings, {
@@ -264,7 +271,7 @@ export function checksScreen(ctx: Ctx): HTMLElement {
   );
 
   // ---------- Ground bearing ----------
-  const bearing = card(
+  const bearing = !FEATURES.calculators ? unavailable('Outrigger ground bearing') : card(
     h('h2', null, 'Outrigger ground bearing'),
     h('p', { class: 'small muted' }, 'Pressure under the mat = (outrigger load + mat weight) ÷ mat area. The outrigger load comes from the crane manufacturer’s planning software; the allowable pressure from the ground assessment or temporary works designer. Assumes a stiff mat that spreads the load evenly.'),
     rowList<LabelledBearing>(c.bearing, {

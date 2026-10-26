@@ -5,7 +5,8 @@ import type { Forecast } from './openMeteo';
  * still opens with no signal on site. Shown with a clear "offline" warning and
  * its original fetch time; never refreshed silently.
  */
-const PREFIX = 'liftwatch.forecast.';
+// v2: hours carry their instant (epochMs) since LW-M1.2.
+const PREFIX = 'liftwatch.forecast.v2.';
 export const OFFLINE_MAX_AGE_HOURS = 48;
 
 export function saveForecast(key: string, forecast: Forecast): void {

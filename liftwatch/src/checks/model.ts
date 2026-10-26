@@ -1,3 +1,4 @@
+import { FEATURES } from '../config';
 import { bearingCheck, type BearingInput, type BearingResult } from './bearing';
 import { capacityCheck, type CapacityInput, type CapacityResult } from './capacity';
 import { ACCESSORY_EXAM_MONTHS, CRANE_EXAM_MONTHS, examStatus, expiryStatus, type ExamStatus } from './certificates';
@@ -98,18 +99,26 @@ export interface ChecksReport {
   slings: (LabelledSling & { result: SlingResult })[];
   bearing: (LabelledBearing & { result: BearingResult })[];
   checklist: { item: ChecklistItem; answer: Answer }[];
+  /**
+   * False when the capacity, sling and bearing calculators were switched off
+   * (`FEATURES.calculators`): those lists are then empty. Absent on older records,
+   * which always ran them.
+   */
+  calculators?: boolean;
   /** Short lines for summaries: what needs attention and what is not done. */
   attention: string[];
   incomplete: string[];
 }
 
-export function buildChecksReport(c: LiftChecks, liftDate: string): ChecksReport {
+export function buildChecksReport(c: LiftChecks, liftDate: string, calculators: boolean = FEATURES.calculators): ChecksReport {
   const craneExam = examStatus(c.craneExamDate, liftDate, CRANE_EXAM_MONTHS);
   const accessoriesExam = examStatus(c.accessoriesExamDate, liftDate, ACCESSORY_EXAM_MONTHS);
   const cards = c.cards.map((card) => ({ ...card, status: expiryStatus(card.expiry, liftDate) }));
-  const capacity = c.capacity.map((x) => ({ ...x, result: capacityCheck(x) }));
-  const slings = c.slings.map((x) => ({ ...x, result: slingCheck(x) }));
-  const bearing = c.bearing.map((x) => ({ ...x, result: bearingCheck(x) }));
+  // Switched off: nothing is worked out, flagged or stored for these three.
+  const capacity = calculators ? c.capacity.map((x) => ({ ...x, result: capacityCheck(x) })) : [];
+  const slings = calculators ? c.slings.map((x) => ({ ...x, result: slingCheck(x) })) : [];
+  const bearing = calculators ? c.bearing.map((x) => ({ ...x, result: bearingCheck(x) })) : [];
+  const inputs = calculators ? c : { ...c, capacity: [], slings: [], bearing: [] };
   const checklist = CHECKLIST.map((item) => ({ item, answer: c.answers[item.id] ?? null }));
 
   const attention: string[] = [];
@@ -143,5 +152,5 @@ export function buildChecksReport(c: LiftChecks, liftDate: string): ChecksReport
   }
   if (c.crew.length === 0) incomplete.push('Crew briefing: nobody signed on');
 
-  return { inputs: c, craneExam, accessoriesExam, cards, capacity, slings, bearing, checklist, attention, incomplete };
+  return { inputs, craneExam, accessoriesExam, cards, capacity, slings, bearing, checklist, calculators, attention, incomplete };
 }

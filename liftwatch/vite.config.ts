@@ -10,5 +10,7 @@ export default defineConfig({
   test: {
     include: ['tests/**/*.spec.ts'],
     environment: 'node',
+    // Let tests read styles.css as text (tests/lift/wording.spec.ts checks the status colours).
+    css: { include: [/styles\.css/] },
   },
 });

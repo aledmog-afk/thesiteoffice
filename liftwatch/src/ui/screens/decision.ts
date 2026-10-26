@@ -1,3 +1,4 @@
+import { NO_ITEMS_FLAGGED } from '../../checks/reportLines';
 import { buildChecksReport } from '../../checks/model';
 import { DISCLAIMER } from '../../config';
 import {
@@ -5,6 +6,9 @@ import {
   CHECK_OPERATOR,
   createRecord,
   DECISION_LABEL,
+  DECISION_OWNERSHIP,
+  newDecisionDraft,
+  ROLE_HINT,
   validateDecision,
   type Decision,
   type DecisionChoice,
@@ -12,20 +16,18 @@ import {
 import type { Ctx } from '../app';
 import { h, safeStorage } from '../dom';
 import { card, field, textInput, type FieldHandle } from '../fields';
-import { hhmm, longDate, pct, speed } from '../format';
+import { hourLabel, longDate, pct, speed } from '../format';
 import { saveChecks } from '../state';
 import { banner } from './assessment';
 
 const PERSON_KEY = 'liftwatch.person.v1';
 
 function freshDraft(): Decision {
-  let person = { name: '', role: 'Appointed Person' };
   try {
-    person = { ...person, ...JSON.parse(safeStorage.get(PERSON_KEY) ?? '{}') };
+    return newDecisionDraft(JSON.parse(safeStorage.get(PERSON_KEY) ?? '{}'));
   } catch {
-    /* ignore */
+    return newDecisionDraft();
   }
-  return { choice: 'postpone', name: person.name, role: person.role, notes: '', anemometerChecked: false, operatorRetainsDecision: false };
 }
 
 let draft: Decision | null = null;
@@ -43,7 +45,7 @@ function checksSummary(ctx: Ctx): HTMLElement {
     h(
       'p',
       null,
-      r.attention.length ? `${r.attention.length} item${r.attention.length === 1 ? ' needs' : 's need'} attention` : 'Nothing flagged',
+      r.attention.length ? `${r.attention.length} item${r.attention.length === 1 ? ' needs' : 's need'} attention` : NO_ITEMS_FLAGGED,
       ` · ${r.incomplete.length} not done · ${ctx.state.checks.crew.length} signed on.`,
     ),
     r.attention.length ? h('ul', { class: 'attention-list' }, r.attention.map((x) => h('li', null, x))) : h('span'),
@@ -106,8 +108,8 @@ export function decisionScreen(ctx: Ctx): HTMLElement {
   };
 
   const nameF = field('Your name', name);
-  const roleF = field('Role', role);
-  const notesF = field('Notes and conditions', notes, 'Required for "Proceed with conditions"');
+  const roleF = field('Role', role, ROLE_HINT);
+  const notesF = field('Notes and conditions', notes, 'Required if your decision is to proceed with conditions');
   handles.name = nameF;
   handles.role = roleF;
   handles.notes = notesF;
@@ -125,7 +127,7 @@ export function decisionScreen(ctx: Ctx): HTMLElement {
     try {
       const record = await createRecord(state.setup, state.forecast!, a, d, new Date(), crypto.randomUUID(), buildChecksReport(state.checks, a.liftDate));
       await state.store.add(record);
-      safeStorage.set(PERSON_KEY, JSON.stringify({ name: d.name, role: d.role }));
+      safeStorage.set(PERSON_KEY, JSON.stringify({ name: d.name }));
       draft = null;
       // Answers and sign-ons belong to this lift. Dates, cards and calculations carry over.
       state.checks.answers = {};
@@ -145,13 +147,13 @@ export function decisionScreen(ctx: Ctx): HTMLElement {
     null,
     title,
     h('p', { class: 'lede' }, `${longDate(a.liftDate)} · ${state.setup.site!.label}`),
-    banner(a.overallStatus),
+    banner(a.overallStatus, a.worst?.percentOfLimit),
     card(
-      h('p', null, `Worst hour ${w ? hhmm(w.time) : '–'}: gust at height ${speed(w?.gustAtHeightMs)} against a permitted ${speed(a.load.permittedMs)} (${pct(w?.percentOfLimit, w?.status)}).`),
-      h('p', { class: 'small muted' }, 'Saving stores every input, the full calculation, the forecast values used, the forecast fetch time and the method version. A saved record cannot be edited.'),
+      h('p', null, `Worst hour ${w ? hourLabel(w) : '–'}: gust at height ${speed(w?.gustAtHeightMs)} against a permitted ${speed(a.load.permittedMs)} (${pct(w?.percentOfLimit, w?.status)}).`),
+      h('p', { class: 'small muted' }, 'Saving stores every input, the full calculation, the forecast values used, the forecast fetch time and the method version, as a timestamped record with an integrity check that detects accidental changes. There is no edit button: to change a decision, save a new record.'),
     ),
     checksSummary(ctx),
-    card(h('h2', { id: 'dc-label' }, 'Decision'), choiceGroup),
+    card(h('h2', { id: 'dc-label' }, 'Your decision'), h('p', { class: 'small muted' }, DECISION_OWNERSHIP), choiceGroup),
     card(nameF.el, roleF.el, notesF.el),
     card(h('h2', null, 'Confirm'), tick('anemometerChecked', CHECK_ANEMOMETER), tick('operatorRetainsDecision', CHECK_OPERATOR), h('p', { class: 'small muted' }, 'Both are required to record a decision to proceed.')),
     save,

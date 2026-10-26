@@ -1,10 +1,13 @@
 /**
- * One forecast hour in the units the method uses. Times are local wall-clock
- * strings ("YYYY-MM-DDTHH:MM", Europe/London) as Open-Meteo returns them.
+ * One forecast hour in the units the method uses. `time` is the UK local wall-clock
+ * start of the hour ("YYYY-MM-DDTHH:MM", Europe/London), for display. `epochMs` is
+ * the exact instant; all arithmetic uses it (see src/time/london.ts). Data saved
+ * before instants were stored has no `epochMs` and is read from the local times.
  * Any value can be null when the source has no data for that hour.
  */
 export interface ForecastHour {
   time: string;
+  epochMs?: number;
   windSpeed10mMs: number | null;
   windGusts10mMs: number | null;
   windDirectionDeg: number | null;
@@ -17,8 +20,12 @@ export interface ForecastHour {
 }
 
 export interface SunTimes {
+  /** UK local times, for display. */
   sunrise: string;
   sunset: string;
+  /** Exact instants (absent on data saved before they were stored). */
+  sunriseMs?: number;
+  sunsetMs?: number;
 }
 
 export interface DaySun extends SunTimes {
@@ -43,8 +50,16 @@ export interface Flag {
 }
 
 export interface HourAssessment {
+  /** UK local start of the hour, for display. */
   time: string;
+  /** Exact start of the hour (ms since 1970, UTC). Absent on records saved before LW-M1.2. */
+  startMs?: number;
+  /** 10 m gust assessed for this hour: from LW-M1.3 the higher of the values stamped at its start and end. */
   gust10mMs: number | null;
+  /** Open-Meteo value stamped at the hour's start (max over the hour before). Absent before LW-M1.3. */
+  gustStamped10mMs?: number | null;
+  /** Open-Meteo value stamped at the hour's end (max over this hour). Absent before LW-M1.3. */
+  gustNext10mMs?: number | null;
   heightFactor: number;
   gustAtHeightMs: number | null;
   permittedMs: number;
@@ -59,9 +74,9 @@ export interface HourAssessment {
 
 /** Wording used everywhere a status is shown. Never "safe", "clear" or "go". */
 export const STATUS_LABEL: Readonly<Record<Status, string>> = Object.freeze({
-  within: 'Within limits',
-  near: 'Near limit',
-  over: 'Over limit',
+  within: 'Below permitted speed',
+  near: 'Near permitted speed',
+  over: 'Above permitted speed',
   'no-data': 'No data',
 });
 

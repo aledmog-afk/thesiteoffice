@@ -49,7 +49,7 @@ liftwatch/
 
 ## Rules for the wording
 
-- The status banner says only "Within limits", "Near limit" or "Over limit",
+- The status banner says only "Below permitted speed (X % of limit)", "Near permitted speed (X %)" or "Above permitted speed (X %)" (until LW-M1.1: "Within limits", "Near limit", "Over limit"),
   followed by "forecast assessment against the limits you entered".
 - Never "safe", "clear to lift" or "go".
 - Status always has a text label as well as a colour.

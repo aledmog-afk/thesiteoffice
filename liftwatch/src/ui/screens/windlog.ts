@@ -31,7 +31,7 @@ const TONE: Record<LogState, string> = {
   waited: 'st-no-data',
   'wound-off': 'st-no-data',
 };
-const ICON: Record<LogState, string> = { 'no-readings': '?', within: '✓', near: '!', stopped: '✕', waiting: '⏱', waited: '⏱', 'wound-off': '■' };
+const ICON: Record<LogState, string> = { 'no-readings': '?', within: '○', near: '!', stopped: '✕', waiting: '⏱', waited: '⏱', 'wound-off': '■' };
 
 function time(iso: string): string {
   return new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' }).format(new Date(iso));
@@ -78,7 +78,7 @@ export function windLogView(ctx: Ctx, record: DecisionRecord, back: () => void):
                 h(
                   'li',
                   null,
-                  `${g <= l.result.permittedMs ? '✓' : '✕'} ${l.ref}: limit ${fromMs(l.result.permittedMs, unit).toFixed(unit === 'ms' ? 1 : 0)} ${UNIT_LABEL[unit]}`,
+                  `${l.ref}: limit ${fromMs(l.result.permittedMs, unit).toFixed(unit === 'ms' ? 1 : 0)} ${UNIT_LABEL[unit]}, ${g <= l.result.permittedMs ? 'below' : 'above'}`,
                 ),
               ),
           ),
@@ -226,7 +226,7 @@ export function windLogView(ctx: Ctx, record: DecisionRecord, back: () => void):
       h('div', { class: 'inline' }, note, noteBtn),
       h('div', { class: 'field', style: 'margin-top:12px' }, h('label', null, 'Wait after the wind drops below the limit'), waitSel),
       h('div', { class: 'actions' }, windOff),
-      h('p', { class: 'small muted' }, 'Entries cannot be edited or deleted. The crane operator has the final decision to lift, continue or stop (CPA 6.4).'),
+      h('p', { class: 'small muted' }, 'The app has no way to edit or delete an entry. The crane operator has the final decision to lift, continue or stop (CPA 6.4).'),
     ),
   );
 

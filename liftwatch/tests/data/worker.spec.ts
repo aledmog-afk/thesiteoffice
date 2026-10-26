@@ -78,3 +78,12 @@ describe('forecast Worker', () => {
     expect(pre.headers.get('Access-Control-Allow-Origin')).toBe('*');
   });
 });
+
+describe('wrangler.toml', () => {
+  const toml = Object.values(import.meta.glob('../../worker/wrangler.toml', { query: '?raw', import: 'default', eager: true }))[0] as string;
+
+  it('allows only the LiftWatch Pages origin, not every site', () => {
+    expect(toml).toMatch(/^ALLOWED_ORIGIN = "https:\/\/liftwatch\.pages\.dev"$/m);
+    expect(toml).not.toMatch(/^ALLOWED_ORIGIN = "\*"$/m);
+  });
+});

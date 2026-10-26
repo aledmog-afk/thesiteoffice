@@ -1,14 +1,16 @@
 import { BANNER_SUFFIX, DISCLAIMER, FORECAST_CONFIG } from '../../config';
 import { fetchForecast, ForecastFetchError } from '../../data/forecast';
+import { londonLocalToEpoch } from '../../time/london';
 import { loadCachedForecast, saveForecast } from '../../data/forecastCache';
 import { ForecastFormatError } from '../../data/openMeteo';
 import type { LiftAssessment } from '../../lift/assessment';
-import { compassPoint, FLAG_LABEL, TERRAIN, STATUS_LABEL, type FlagCode, type HourAssessment, type Status } from '../../wind';
+import { compassPoint, factorTerrain, FLAG_LABEL, STATUS_LABEL, type FlagCode, type HourAssessment, type Status } from '../../wind';
+import { GUST_TIMING_NOTE, heightFactorSource, statusText, terrainText, usesGustTiming } from '../../lift/display';
 import type { Ctx } from '../app';
 import { hourlyChart } from '../chart';
 import { clear, h, type Child } from '../dom';
 import { card } from '../fields';
-import { direction, hhmm, instant, longDate, num, pct, shortDate, speed, STATUS_ICON, statusLabel } from '../format';
+import { direction, hhmm, hourLabel, instant, longDate, num, pct, shortDate, speed, STATUS_ICON, statusLabel } from '../format';
 import { recompute, saveSetup, setupReady, siteKey, type AppState } from '../state';
 
 export function statusPill(status: Status | null): HTMLElement {
@@ -16,12 +18,12 @@ export function statusPill(status: Status | null): HTMLElement {
   return h('span', { class: `pill st-${st}` }, h('span', { 'aria-hidden': 'true' }, STATUS_ICON[st]), statusLabel(status));
 }
 
-export function banner(status: Status): HTMLElement {
+export function banner(status: Status, percent?: number | null): HTMLElement {
   return h(
     'div',
     { class: `banner st-${status}`, role: 'status' },
     h('span', { class: 'icon', 'aria-hidden': 'true' }, STATUS_ICON[status]),
-    h('div', null, h('div', { class: 'label' }, STATUS_LABEL[status]), h('div', { class: 'sub' }, `— ${BANNER_SUFFIX}`)),
+    h('div', null, h('div', { class: 'label' }, statusText(status, percent)), h('div', { class: 'sub' }, `— ${BANNER_SUFFIX}`)),
   );
 }
 
@@ -125,7 +127,7 @@ export function assessmentScreen(ctx: Ctx): HTMLElement {
           `No connection, so this uses the forecast saved on this phone, fetched ${instant(state.forecast!.fetchedAt)}. Refresh when you have signal.`,
         )
       : null,
-    banner(a.overallStatus),
+    banner(a.overallStatus, a.worst?.percentOfLimit),
     a.loads && a.loads.length > 1
       ? h('p', { class: 'notice' }, h('strong', null, `Governing load: ${a.governingRef}`), ` — the most wind-sensitive of ${a.loads.length} loads (permitted ${speed(a.load.permittedMs)}).`)
       : null,
@@ -161,11 +163,11 @@ function summary(a: LiftAssessment): HTMLElement {
   return h(
     'div',
     null,
-    h('p', { class: 'small muted' }, `Worst hour in the window ${windowText(a)}${w ? `: ${hhmm(w.time)}` : ''}.`),
+    h('p', { class: 'small muted' }, `Worst hour in the window ${windowText(a)}${w ? `: ${hourLabel(w)}` : ''}.`),
     h(
       'div',
       { class: 'stats' },
-      stat('Gust at height', speed(w?.gustAtHeightMs), `at ${a.heightM} m, ${TERRAIN[a.terrain ?? 'open'].label.toLowerCase()} (10 m gust ${speed(w?.gust10mMs)} × ${num(a.heightFactor, 3)})`, true),
+      stat('Gust at height', speed(w?.gustAtHeightMs), `at ${a.heightM} m: 10 m gust ${speed(w?.gust10mMs)} × ${num(a.heightFactor, 3)}, ${heightFactorSource(a.terrain, factorTerrain(a.heightM))}. Terrain: ${terrainText(a.terrain)}.`, true),
       stat('Permitted', speed(a.load.permittedMs), a.load.reduced ? 'reduced for wind area' : 'chart limit', true),
       stat('% of limit', pct(w?.percentOfLimit, w?.status)),
       stat('Direction', w?.windDirectionDeg != null ? compassPoint(w.windDirectionDeg) : '–', w?.windDirectionDeg != null ? `Wind ${direction(w.windDirectionDeg)}` : undefined),
@@ -215,7 +217,7 @@ function forecastSource(ctx: Ctx): HTMLElement {
 function hourDetail(hr: HourAssessment | undefined): Child[] {
   if (!hr) return ['Tap a bar to see that hour.'];
   return [
-    h('strong', null, hhmm(hr.time)),
+    h('strong', null, hourLabel(hr)),
     ' · ',
     statusPill(hr.status),
     h('br'),
@@ -257,7 +259,7 @@ function dayChart(state: AppState, a: LiftAssessment): HTMLElement {
             h(
               'tr',
               { class: hr.daylight ? null : 'is-night' },
-              h('td', null, hhmm(hr.time)),
+              h('td', null, hourLabel(hr)),
               h('td', null, num(hr.gust10mMs, 1)),
               h('td', null, num(hr.gustAtHeightMs, 1)),
               h('td', null, pct(hr.percentOfLimit, hr.status)),
@@ -268,7 +270,7 @@ function dayChart(state: AppState, a: LiftAssessment): HTMLElement {
           ),
         ),
       ),
-      h('p', { class: 'small muted' }, 'Speeds in m/s. Gust at height = 10 m gust × height factor.'),
+      h('p', { class: 'small muted' }, `Speeds in m/s. Gust at height = 10 m gust × height factor.${usesGustTiming(a.liftDayHours) ? ` ${GUST_TIMING_NOTE}` : ''}`),
     ),
   );
 
@@ -277,9 +279,9 @@ function dayChart(state: AppState, a: LiftAssessment): HTMLElement {
     h(
       'div',
       { class: 'legend' },
-      h('span', null, h('i', { class: 'sw', style: 'background:var(--within-mark)' }), 'Within'),
+      h('span', null, h('i', { class: 'sw', style: 'background:var(--within-mark)' }), 'Below'),
       h('span', null, h('i', { class: 'sw', style: 'background:var(--near-mark)' }), 'Near'),
-      h('span', null, h('i', { class: 'sw', style: 'background:var(--over-mark)' }), 'Over'),
+      h('span', null, h('i', { class: 'sw', style: 'background:var(--over-mark)' }), 'Above'),
       h('span', null, h('i', { class: 'sw line' }), 'Permitted limit'),
       h('span', null, h('i', { class: 'sw night' }), 'Night'),
       h('span', null, h('i', { class: 'sw win' }), 'Lift window'),
@@ -287,8 +289,8 @@ function dayChart(state: AppState, a: LiftAssessment): HTMLElement {
     hourlyChart({
       hours: a.liftDayHours,
       permittedMs: a.load.permittedMs,
-      windowStart: a.windowStart,
-      windowEnd: a.windowEnd,
+      windowStartMs: a.windowStartMs ?? londonLocalToEpoch(a.windowStart),
+      windowEndMs: a.windowEndMs ?? londonLocalToEpoch(a.windowEnd, 'later'),
       selected: initial,
       onSelect: pick,
     }),
@@ -297,7 +299,7 @@ function dayChart(state: AppState, a: LiftAssessment): HTMLElement {
   );
 }
 
-/** Which loads are within limits in each daylight hour: helps sequence the day (CPA page 22). */
+/** Which loads are below the permitted speed in each daylight hour: helps sequence the day (CPA page 22). */
 export function loadsCard(a: LiftAssessment): HTMLElement {
   const loads = [...a.loads].sort((x, y) => x.result.permittedMs - y.result.permittedMs);
   const cols = a.liftDayHours.map((hr, i) => ({ hr, i })).filter(({ hr }) => hr.daylight);
@@ -318,7 +320,7 @@ export function loadsCard(a: LiftAssessment): HTMLElement {
         h(
           'thead',
           null,
-          h('tr', null, h('th', { class: 'l sticky' }, 'Load'), h('th', null, 'Permitted'), cols.map(({ hr }) => h('th', null, hhmm(hr.time).slice(0, 2)))),
+          h('tr', null, h('th', { class: 'l sticky' }, 'Load'), h('th', null, 'Permitted'), cols.map(({ hr }) => h('th', null, hourLabel(hr).replace(':00', '')))),
         ),
         h(
           'tbody',
@@ -335,7 +337,7 @@ export function loadsCard(a: LiftAssessment): HTMLElement {
         ),
       ),
     ),
-    h('p', { class: 'small muted' }, `Daylight hours only. Permitted in m/s. ${STATUS_ICON.within} within, ${STATUS_ICON.near} near, ${STATUS_ICON.over} over limit.`),
+    h('p', { class: 'small muted' }, `Daylight hours only. Permitted in m/s. ${STATUS_ICON.within} below, ${STATUS_ICON.near} near, ${STATUS_ICON.over} above the permitted speed.`),
     h(
       'ul',
       { class: 'periods' },
@@ -344,7 +346,7 @@ export function loadsCard(a: LiftAssessment): HTMLElement {
           'li',
           null,
           `${l.ref}: `,
-          h('span', { style: 'font-weight:400' }, l.periods.length ? `within limits ${l.periods.map((p) => `${hhmm(p.start)}–${hhmm(p.end)}`).join(', ')}` : 'no daylight hour within limits'),
+          h('span', { style: 'font-weight:400' }, l.periods.length ? `below permitted speed ${l.periods.map((p) => `${hhmm(p.start)}–${hhmm(p.end)}`).join(', ')}` : 'no daylight hour below permitted speed', ' ', h('span', { class: 'tag' }, 'Planning guidance only')),
         ),
       ),
     ),
@@ -353,10 +355,10 @@ export function loadsCard(a: LiftAssessment): HTMLElement {
 
 function periodsCard(a: LiftAssessment): HTMLElement {
   return card(
-    h('h2', null, 'Daylight periods within limits (2 h or more) ', h('span', { class: 'tag' }, 'Planning guidance only')),
+    h('h2', null, 'Daylight periods below permitted speed (2 h or more) ', h('span', { class: 'tag' }, 'Planning guidance only')),
     a.periods.length
       ? h('ul', { class: 'periods' }, a.periods.map((p) => h('li', null, `${hhmm(p.start)}–${hhmm(p.end)} · ${p.hours} h`)))
-      : h('p', { class: 'muted' }, 'No daylight period of 2 hours or more is within limits on this day.'),
+      : h('p', { class: 'muted' }, 'No daylight period of 2 hours or more is below the permitted speed on this day.'),
   );
 }
 
@@ -385,7 +387,7 @@ function outlookCard(ctx: Ctx, a: LiftAssessment): HTMLElement {
           h('div', { class: 'd' }, shortDate(d.date)),
           h('div', { style: 'margin-top:6px' }, statusPill(d.worstStatus)),
           h('div', { class: 'g' }, `Max ${speed(d.maxGustAtHeightMs, 1)}`),
-          h('div', { class: 'g' }, `${d.daylightHoursWithin} of ${d.daylightHours} daylight h within`),
+          h('div', { class: 'g' }, `${d.daylightHoursWithin} of ${d.daylightHours} daylight h below permitted speed`),
         ),
       ),
     ),

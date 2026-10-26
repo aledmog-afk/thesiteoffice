@@ -1,4 +1,9 @@
+import { CALCULATORS_UNAVAILABLE } from '../config';
 import type { ChecksReport } from './model';
+
+/** Neutral wording when the checks flag nothing, or everything is marked done. No tick, no green. */
+export const NO_ITEMS_FLAGGED = 'No items flagged by these checks';
+export const ALL_ITEMS_DONE = 'All items marked done';
 
 const ANSWER: Record<string, string> = { yes: 'Yes', no: 'NO', na: 'N/A' };
 
@@ -13,8 +18,8 @@ export function checksSections(r: ChecksReport): { title: string; rows: [string,
   sections.push({
     title: 'Summary',
     rows: [
-      ['Needs attention', r.attention.length ? r.attention.join('; ') : 'Nothing flagged'],
-      ['Not done', r.incomplete.length ? `${r.incomplete.length} item(s)` : 'All done'],
+      ['Needs attention', r.attention.length ? r.attention.join('; ') : NO_ITEMS_FLAGGED],
+      ['Not done', r.incomplete.length ? `${r.incomplete.length} item(s)` : ALL_ITEMS_DONE],
     ],
   });
   sections.push({
@@ -29,6 +34,12 @@ export function checksSections(r: ChecksReport): { title: string; rows: [string,
     title: 'Pre-lift checklist',
     rows: r.checklist.map(({ item, answer }): [string, string] => [answer ? ANSWER[answer] : 'Not answered', item.text]),
   });
+  if (r.calculators === false) {
+    sections.push({
+      title: 'Capacity, slings and ground bearing',
+      rows: [['Calculators', CALCULATORS_UNAVAILABLE]],
+    });
+  }
   if (r.capacity.length) {
     sections.push({
       title: 'Crane capacity',

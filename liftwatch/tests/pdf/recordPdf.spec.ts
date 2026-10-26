@@ -33,11 +33,12 @@ describe('buildRecordPdf', () => {
     // jsPDF splits long lines, so check a distinctive start of the footer once per page.
     const footerStart = DISCLAIMER.slice(0, 60);
     expect(raw.split(footerStart).length - 1).toBe(pages);
-    expect(raw).toContain('Within limits');
+    expect(raw).toMatch(/Below permitted speed \\\(\d+ % of limit\\\)/); // jsPDF escapes the brackets
+    expect(raw).not.toContain('Within limits');
     expect(raw).toContain('Method summary');
     expect(raw).toContain('Sources');
     expect(raw).toContain('Open-Meteo');
-    expect(raw).toContain('LW-M1.1');
+    expect(raw).toContain('LW-M1.3');
     expect(raw).toContain('Lift plan LP-014 / LTM 1090 load chart');
     expect(pdfFilename(record)).toBe('LiftWatch-2026-10-22-SW1A1AA-abcdef12.pdf');
   });

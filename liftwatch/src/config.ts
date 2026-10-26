@@ -33,6 +33,18 @@ export const FORECAST_CONFIG = Object.freeze({
   directApiKey: (env.VITE_OPEN_METEO_API_KEY as string | undefined) ?? '',
 });
 
+/**
+ * Feature flags. The capacity, sling and ground-bearing calculators are off until a
+ * qualified Appointed Person has reviewed them. The code and tests are kept. To turn
+ * them on for a review build, set VITE_ENABLE_CALCULATORS=true at build time.
+ */
+export const FEATURES = Object.freeze({
+  calculators: (env.VITE_ENABLE_CALCULATORS as string | undefined) === 'true',
+});
+
+/** Shown in place of a calculator while `FEATURES.calculators` is off. */
+export const CALCULATORS_UNAVAILABLE = 'Not available: awaiting review by a qualified Appointed Person';
+
 export const POSTCODE_API_URL = 'https://api.postcodes.io/postcodes/';
 
 /** Footer required on every PDF and shown under the assessment. */
@@ -42,10 +54,20 @@ export const DISCLAIMER =
 /** The method page (method.html, built from METHOD.md). */
 export const METHOD_PAGE_PATH = '/method';
 
+/** Draft privacy notice and terms (public/privacy.html, public/terms.html). */
+export const PRIVACY_PAGE_PATH = '/privacy.html';
+export const TERMS_PAGE_PATH = '/terms.html';
+
 /** Full address of the method page, for the PDF. Falls back to the path outside a browser. */
 export function methodPageUrl(): string {
   const origin = globalThis.location?.origin;
   return origin && origin !== 'null' ? `${origin}${METHOD_PAGE_PATH}` : METHOD_PAGE_PATH;
 }
+
+/**
+ * Shown on every screen and every page of both PDFs while LiftWatch is a test
+ * version. Neutral grey: it is a notice, not a status.
+ */
+export const TEST_VERSION_NOTICE = 'Test version – not for operational use. Feedback only.';
 
 export const BANNER_SUFFIX = 'forecast assessment against the limits you entered';

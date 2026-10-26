@@ -1,5 +1,5 @@
 /* LiftWatch. Mobile first, high contrast, large tap targets for gloved hands.
-   Status colours (green/amber/red) are reserved for status and always come with
+   Status colours (blue-grey/amber/red) are reserved for status and always come with
    an icon and a text label. The accent (indigo) is used for actions only. */
 
 :root {
@@ -18,8 +18,9 @@
   --night: rgba(30, 40, 80, 0.10);
   --grid: #dde1e6;
 
-  /* Status: banner fills (text sits on them) and chart marks. */
-  --within-bg: #0b6e0b;
+  /* Status: banner fills (text sits on them) and chart marks. Below the permitted
+     speed is a neutral blue-grey, not green: it is not an approval. */
+  --within-bg: #3f5f7f;
   --within-ink: #ffffff;
   --near-bg: #fab219;
   --near-ink: #111111;
@@ -27,10 +28,12 @@
   --over-ink: #ffffff;
   --nodata-bg: #545e69;
   --nodata-ink: #ffffff;
-  --within-mark: #0ca30c;
+  --within-mark: #6f8fae;
   --near-mark: #e09a00;
   --over-mark: #d03b3b;
   --nodata-mark: #8a939c;
+  --test-bg: #e4e7eb;
+  --test-ink: #2b3138;
 
   --radius: 12px;
   --tap: 52px;
@@ -53,14 +56,16 @@
     --focus: #b6c0ff;
     --night: rgba(150, 165, 255, 0.10);
     --grid: #2c3139;
-    --within-bg: #1f8f1f;
+    --within-bg: #4f7090;
     --near-bg: #fab219;
     --over-bg: #d03b3b;
     --nodata-bg: #5f6a75;
-    --within-mark: #2fbf2f;
+    --within-mark: #87a6c4;
     --near-mark: #fab219;
     --over-mark: #ef5b5b;
     --nodata-mark: #7d8792;
+    --test-bg: #2c3139;
+    --test-ink: #dfe3e8;
   }
 }
 
@@ -79,14 +84,16 @@
   --focus: #b6c0ff;
   --night: rgba(150, 165, 255, 0.10);
   --grid: #2c3139;
-  --within-bg: #1f8f1f;
+  --within-bg: #4f7090;
   --near-bg: #fab219;
   --over-bg: #d03b3b;
   --nodata-bg: #5f6a75;
-  --within-mark: #2fbf2f;
+  --within-mark: #87a6c4;
   --near-mark: #fab219;
   --over-mark: #ef5b5b;
   --nodata-mark: #7d8792;
+  --test-bg: #2c3139;
+  --test-ink: #dfe3e8;
 }
 
 * { box-sizing: border-box; }
@@ -111,12 +118,23 @@ body {
   background: var(--surface); border-bottom: 1px solid var(--line);
   position: sticky; top: 0; z-index: 5;
 }
+/* Test-version notice above the header on every screen. Neutral grey: a notice, not a status. */
+.top { position: sticky; top: 0; z-index: 5; }
+.top .topbar { position: static; }
+.test-banner {
+  background: var(--test-bg); color: var(--test-ink); border-bottom: 1px solid var(--line);
+  font-size: 0.8rem; font-weight: 700; text-align: center;
+  padding: 6px 16px; padding-top: max(6px, env(safe-area-inset-top));
+}
+.top .test-banner + .topbar { padding-top: 10px; }
 .brand { font-weight: 800; font-size: 1.1rem; letter-spacing: 0.01em; }
 .topbar .links { display: flex; align-items: center; gap: 8px; }
 .topbar .links a { font-weight: 700; color: var(--accent); min-height: 44px; display: inline-flex; align-items: center; padding: 0 6px; }
 .brand small { display: block; font-weight: 500; font-size: 0.7rem; color: var(--muted); letter-spacing: 0; }
 
 main { flex: 1; width: 100%; max-width: 760px; margin: 0 auto; padding: 16px 16px 120px; }
+.site-footer { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 28px; padding-top: 12px; border-top: 1px solid var(--line); font-size: 0.85rem; }
+.site-footer a { color: var(--accent); min-height: 44px; display: inline-flex; align-items: center; }
 
 .tabs {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
@@ -330,10 +348,11 @@ details.more > summary { cursor: pointer; font-weight: 700; color: var(--accent)
 
 /* ---------- Checks ---------- */
 
+/* Checks with no flagged items stay neutral: no tick, no green. */
+.pill.neutral { background: var(--surface-2); color: var(--ink); border: 1px solid var(--line); }
 .check-result { margin-top: 8px; font-size: 0.88rem; font-weight: 700; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); border-left: 5px solid var(--nodata-bg); }
-.check-result.tone-ok { border-left-color: var(--within-bg); }
+.check-result.tone-ok { border-left-color: var(--nodata-mark); }
 .check-result.tone-attention { border-left-color: var(--over-bg); }
-.check-result.tone-ok::before { content: '✓ '; }
 .check-result.tone-attention::before { content: '✕ '; }
 .mini.wide { grid-column: span 2; }
 .mini select { min-height: 46px; padding: 8px 10px; }

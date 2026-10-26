@@ -6,11 +6,33 @@ import type { LiftSetup } from './setup';
 
 export type DecisionChoice = 'proceed' | 'postpone' | 'proceed-with-conditions';
 
-export const DECISION_LABEL: Readonly<Record<DecisionChoice, string>> = Object.freeze({
-  proceed: 'Proceed',
-  postpone: 'Postpone',
-  'proceed-with-conditions': 'Proceed with conditions',
+/** The choice in plain words. Never shown on its own: always as the person's own decision (below). */
+export const DECISION_CHOICE_TEXT: Readonly<Record<DecisionChoice, string>> = Object.freeze({
+  proceed: 'proceed',
+  postpone: 'postpone',
+  'proceed-with-conditions': 'proceed with conditions',
 });
+
+/**
+ * Decision labels read as the user's own recorded decision, never as LiftWatch's:
+ * "Your decision: proceed with conditions". Used on the decision and records screens.
+ */
+export const DECISION_LABEL: Readonly<Record<DecisionChoice, string>> = Object.freeze({
+  proceed: `Your decision: ${DECISION_CHOICE_TEXT.proceed}`,
+  postpone: `Your decision: ${DECISION_CHOICE_TEXT.postpone}`,
+  'proceed-with-conditions': `Your decision: ${DECISION_CHOICE_TEXT['proceed-with-conditions']}`,
+});
+
+/** Shown with every recorded decision. */
+export const DECISION_OWNERSHIP = 'This is the decision of the person named, not of LiftWatch. LiftWatch does not make or approve lift decisions.';
+
+/**
+ * For PDFs and the briefing sheet, read by other people:
+ * "Decision recorded by A. Person (Appointed Person): proceed with conditions".
+ */
+export function recordedDecisionText(d: { choice: DecisionChoice; name: string; role: string }): string {
+  return `Decision recorded by ${d.name} (${d.role}): ${DECISION_CHOICE_TEXT[d.choice]}`;
+}
 
 export const CHECK_ANEMOMETER =
   "I have checked on-site wind with an anemometer or the crane's jib anemometer before lifting";
@@ -19,7 +41,19 @@ export const CHECK_OPERATOR = 'The crane operator retains the final decision to 
 /** Postponing does not need the confirmations, so an empty box is not a gap in the record. */
 export function tickLabel(ticked: boolean, choice: DecisionChoice): string {
   if (ticked) return 'Ticked';
-  return choice === 'postpone' ? 'Not ticked (not required for Postpone)' : 'Not ticked';
+  return choice === 'postpone' ? 'Not ticked (not required for a decision to postpone)' : 'Not ticked';
+}
+
+/** Hint under the Role field. The field itself starts empty: there is no default role. */
+export const ROLE_HINT = 'e.g. Appointed Person, Lift Supervisor, Crane Operator';
+
+/**
+ * A new decision draft. The name last used on this device is filled in; the role is
+ * always left empty so it is chosen each time. Saved records keep their own role.
+ */
+export function newDecisionDraft(stored: { name?: unknown } = {}): Decision {
+  const name = typeof stored.name === 'string' ? stored.name : '';
+  return { choice: 'postpone', name, role: '', notes: '', anemometerChecked: false, operatorRetainsDecision: false };
 }
 
 export interface Decision {
@@ -31,7 +65,16 @@ export interface Decision {
   operatorRetainsDecision: boolean;
 }
 
-/** A saved, read-only decision record. Holds everything needed to reproduce the assessment. */
+/**
+ * How the record's protection is described everywhere. The SHA-256 check has no
+ * key, so it detects accidental changes (a damaged file, a hand-edited export) but
+ * cannot prove nobody changed the record on purpose: whoever edits it can recompute
+ * the check. Never describe records as locked or as proof against tampering.
+ */
+export const INTEGRITY_NOTE =
+  'A timestamped record with an integrity check that detects accidental changes. It is not tamper-proof: anyone who edits a record can also recompute the check.';
+
+/** A saved decision record. Holds everything needed to reproduce the assessment. */
 export interface DecisionRecord {
   schema: 1;
   id: string;
@@ -53,7 +96,7 @@ export interface DecisionRecord {
   decision: Decision;
   /** Checks screen at the time of saving. Absent on records saved before checks existed. */
   checks?: ChecksReport;
-  /** SHA-256 (hex) of the record without this field. Shows whether a record was altered. */
+  /** SHA-256 (hex) of the record without this field. Detects accidental changes; not tamper-proof (no key). */
   integrity: string;
 }
 
@@ -62,7 +105,7 @@ export type DecisionErrors = Partial<Record<keyof Decision, string>>;
 export function validateDecision(d: Decision): DecisionErrors {
   const e: DecisionErrors = {};
   if (!d.name.trim()) e.name = 'Enter your name.';
-  if (!d.role.trim()) e.role = 'Enter your role, e.g. "Appointed Person".';
+  if (!d.role.trim()) e.role = `Enter your role (${ROLE_HINT}).`;
   if (d.choice === 'proceed-with-conditions' && !d.notes.trim()) e.notes = 'Write down the conditions.';
   if (d.choice !== 'postpone') {
     if (!d.anemometerChecked) e.anemometerChecked = 'Tick to confirm before recording a decision to proceed.';

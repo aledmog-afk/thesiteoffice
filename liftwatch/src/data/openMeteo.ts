@@ -3,6 +3,7 @@
  * Cloudflare Worker, so it must not touch the DOM or config that reads
  * import.meta.env.
  */
+import { epochsFromLocalSeries, londonLocal, londonLocalToEpoch } from '../time/london';
 import type { DaySun, ForecastHour } from '../wind';
 
 export const HOURLY_VARIABLES = [
@@ -52,6 +53,9 @@ export function buildForecastUrl({ baseUrl, latitude, longitude, apiKey }: Forec
   url.searchParams.set('wind_speed_unit', 'ms');
   url.searchParams.set('timezone', FORECAST_TIMEZONE);
   url.searchParams.set('forecast_days', String(FORECAST_DAYS));
+  // UNIX timestamps make every hour an exact instant, so the hours that repeat
+  // (October) or are skipped (March) at the UK clock changes are unambiguous.
+  url.searchParams.set('timeformat', 'unixtime');
   if (apiKey) url.searchParams.set('apikey', apiKey);
   return url.toString();
 }
@@ -110,6 +114,20 @@ function strings(block: Json, name: string): string[] {
   return values as string[];
 }
 
+/**
+ * Times as instants (ms). Open-Meteo sends UNIX seconds when asked for
+ * timeformat=unixtime. Older saved forecasts hold UK local strings, read here with
+ * the clock-change rules in src/time/london.ts.
+ */
+function instants(block: Json, name: string, series: boolean): number[] {
+  const values = block[name];
+  if (Array.isArray(values) && values.every((v) => typeof v === 'number' && Number.isFinite(v))) {
+    return (values as number[]).map((v) => v * 1000);
+  }
+  const local = strings(block, name);
+  return series ? epochsFromLocalSeries(local) : local.map((t) => londonLocalToEpoch(t));
+}
+
 /** Turns an envelope into hours and days, checking units so a config slip cannot mix km/h into m/s. */
 export function parseForecast(envelope: ForecastEnvelope): Forecast {
   const data = envelope.data as Json | null;
@@ -123,8 +141,8 @@ export function parseForecast(envelope: ForecastEnvelope): Forecast {
     if (units[v] !== 'm/s') throw new ForecastFormatError(`${v} is in "${String(units[v])}", expected m/s`);
   }
 
-  const times = strings(hourly, 'time');
-  const n = times.length;
+  const starts = instants(hourly, 'time', true);
+  const n = starts.length;
   const col = (name: string) => column(hourly, name, n);
   const speed10 = col('wind_speed_10m');
   const gust10 = col('wind_gusts_10m');
@@ -136,8 +154,9 @@ export function parseForecast(envelope: ForecastEnvelope): Forecast {
   const vis = col('visibility');
   const temp = col('temperature_2m');
 
-  const hours: ForecastHour[] = times.map((time, i) => ({
-    time,
+  const hours: ForecastHour[] = starts.map((ms, i) => ({
+    time: londonLocal(ms),
+    epochMs: ms,
     windSpeed10mMs: speed10[i],
     windGusts10mMs: gust10[i],
     windDirectionDeg: dir[i],
@@ -149,10 +168,17 @@ export function parseForecast(envelope: ForecastEnvelope): Forecast {
     temperatureC: temp[i],
   }));
 
-  const dates = strings(daily, 'time');
-  const sunrise = strings(daily, 'sunrise');
-  const sunset = strings(daily, 'sunset');
-  const days: DaySun[] = dates.map((date, i) => ({ date, sunrise: sunrise[i], sunset: sunset[i] }));
+  const sunrise = instants(daily, 'sunrise', false);
+  const sunset = instants(daily, 'sunset', false);
+  // The UK date of each day is the date of its sunrise (daily UNIX "time" values
+  // need an offset applied, so they are not used).
+  const days: DaySun[] = sunrise.map((rise, i) => ({
+    date: londonLocal(rise).slice(0, 10),
+    sunrise: londonLocal(rise),
+    sunset: londonLocal(sunset[i]),
+    sunriseMs: rise,
+    sunsetMs: sunset[i],
+  }));
 
   return {
     source: envelope.source,

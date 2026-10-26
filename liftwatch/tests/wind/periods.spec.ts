@@ -30,7 +30,7 @@ describe('findWorkablePeriods', () => {
       hour('2026-10-22T14:00', 'within'),
       hour('2026-10-22T15:00', 'within'),
     ];
-    expect(findWorkablePeriods(hours)).toEqual([
+    expect(findWorkablePeriods(hours)).toMatchObject([
       { start: '2026-10-22T08:00', end: '2026-10-22T10:00', hours: 2 },
       { start: '2026-10-22T13:00', end: '2026-10-22T16:00', hours: 3 },
     ]);
@@ -38,7 +38,7 @@ describe('findWorkablePeriods', () => {
 
   it('breaks a run on a gap in the hourly data', () => {
     const hours = [hour('2026-10-22T08:00', 'within'), hour('2026-10-22T10:00', 'within')];
-    expect(findWorkablePeriods(hours)).toEqual([]);
+    expect(findWorkablePeriods(hours)).toMatchObject([]);
   });
 });
 

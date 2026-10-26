@@ -1,3 +1,5 @@
+import { HOUR_MS, londonLocalToEpoch } from '../time/london';
+
 /**
  * Lift-day wind log: anemometer readings taken during the lift, checked against the
  * permitted limit, with the stop / wait / restart pattern from CPA/TCIG 2507
@@ -58,11 +60,11 @@ export type LogState = 'no-readings' | 'within' | 'near' | 'stopped' | 'waiting'
 
 export const STATE_LABEL: Readonly<Record<LogState, string>> = Object.freeze({
   'no-readings': 'No readings',
-  within: 'Within limit',
-  near: 'Near limit',
+  within: 'Below permitted speed',
+  near: 'Near permitted speed',
   stopped: 'Stop',
   waiting: 'Waiting',
-  waited: 'Wait complete',
+  waited: 'Wait period elapsed. The crane operator decides whether to restart',
   'wound-off': 'Winded off',
 });
 
@@ -138,16 +140,16 @@ export function evaluateLog(entries: LogEntry[], limitMs: number, waitMinutes: n
       : '';
   const texts: Record<LogState, [string, string]> = {
     'no-readings': ['No readings yet', 'Log the crane anemometer gust reading before the first lift and regularly during lifting.'],
-    within: ['Last reading within the permitted limit', 'Keep logging readings. The crane operator decides whether to lift, continue or stop.'],
-    near: ['Last reading near the permitted limit', 'At or above 80 % of the limit. Watch the trend and be ready to stop.'],
+    within: ['Last reading below the permitted speed', 'Keep logging readings. The crane operator decides whether to lift, continue or stop.'],
+    near: ['Last reading near the permitted speed', 'At or above 80 % of the limit. Watch the trend and be ready to stop.'],
     stopped: ['Stop: reading above the permitted limit', `Wait until readings stay below the limit for ${waitMinutes} minutes (CPA 6.4.3).${windOffHint}`],
     waiting: [
       `Waiting: below the limit since ${since}`,
       `${Math.floor(minutesWaited)} of ${waitMinutes} minutes. A reading above the limit resets the wait.${windOffHint}`,
     ],
     waited: [
-      `Below the limit for ${waitMinutes} minutes (since ${since})`,
-      `The crane operator decides whether to restart, with the lifting team (CPA 6.4).${windOffHint}`,
+      'Wait period elapsed. The crane operator decides whether to restart',
+      `Readings below the limit for ${waitMinutes} minutes, since ${since}. The decision is the crane operator's, with the lifting team (CPA 6.4).${windOffHint}`,
     ],
     'wound-off': ['Winded off for the day', 'Logged as winded off. Further readings are recorded but do not change this.'],
   };
@@ -180,18 +182,16 @@ export interface ForecastComparison {
  */
 export function compareWithForecast(
   entries: LogEntry[],
-  hours: { time: string; gustAtHeightMs: number | null }[],
+  hours: { time: string; startMs?: number; gustAtHeightMs: number | null }[],
 ): ForecastComparison {
-  const localHour = (iso: string) =>
-    new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23' })
-      .format(new Date(iso))
-      .replace(', ', 'T')
-      .slice(0, 13);
-  const byHour = new Map(hours.map((h) => [h.time.slice(0, 13), h.gustAtHeightMs]));
+  // Each reading is matched to the forecast hour whose start it follows, by instant.
+  const starts = hours.map((h) => h.startMs ?? londonLocalToEpoch(h.time));
   const pairs: ForecastComparison['pairs'] = [];
   for (const e of entries) {
     if (e.kind !== 'reading' || e.gustMs === undefined) continue;
-    const f = byHour.get(localHour(e.at));
+    const t = Date.parse(e.at);
+    const i = starts.findIndex((s) => t >= s && t < s + HOUR_MS);
+    const f = i >= 0 ? hours[i].gustAtHeightMs : undefined;
     if (f !== undefined && f !== null && f > 0) pairs.push({ entry: e, forecastMs: f, ratio: e.gustMs / f });
   }
   const meanRatio = pairs.length ? pairs.reduce((s, p) => s + p.ratio, 0) / pairs.length : null;

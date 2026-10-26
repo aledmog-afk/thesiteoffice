@@ -32,22 +32,31 @@ or crane library.
    boom / jib head height, and the main load's size, mass, rigging (with hook block
    and rope) mass and drag coefficient. Other loads can be added or pasted from a
    panel schedule. The permitted wind speed and the working update as you type.
-2. **Assessment**: status banner ("Within limits / Near limit / Over limit —
-   forecast assessment against the limits you entered"), gust at height against
+2. **Assessment**: status banner ("Below permitted speed (X % of limit) / Near
+   permitted speed (X %) / Above permitted speed (X %) — forecast assessment against
+   the limits you entered", in blue-grey, amber or red, always with the words), gust at height against
    the permitted speed, % of the limit, direction, weather flags, the forecast
    source and fetch time, an hourly chart and table, daylight periods within
    limits and a 7-day outlook. The periods and the outlook are labelled planning
    guidance only. With several loads, the most wind-sensitive one governs, and a
-   table shows which loads are within limits hour by hour.
-3. **Checks**: crane capacity at radius, sling leg angle and rating, outrigger
-   mat bearing pressure, LOLER examination dates and card expiry against the lift
-   date, a pre-lift checklist and crew briefing sign-on. Saved with the record;
-   never blocks a decision.
-4. **Decision**: Proceed, Postpone or Proceed with conditions, with name, role,
-   notes and the two confirmations. Saving creates a timestamped, read-only
-   record. It holds every input, the full calculation, the forecast values used,
-   the forecast fetch time, the method version, the checks and a SHA-256
-   integrity hash.
+   table shows which loads are below the permitted speed hour by hour. Each hour is
+   assessed on the higher of the two Open-Meteo gusts stamped at its start and end
+   (METHOD.md, gust timing rule), so a rising wind is not shown late (planning
+   guidance only).
+3. **Checks**: LOLER examination dates and card expiry against the lift date, a
+   pre-lift checklist and crew briefing sign-on. Saved with the record; never
+   blocks a decision. The crane capacity, sling and outrigger bearing calculators
+   are switched off ("Not available: awaiting review by a qualified Appointed
+   Person") until reviewed; `VITE_ENABLE_CALCULATORS=true` turns them on for a
+   review build.
+4. **Decision**: the user's own decision ("Your decision: proceed", "postpone" or
+   "proceed with conditions"; recorded in PDFs as "Decision recorded by <name>
+   (<role>)", never as LiftWatch's), with name, role,
+   notes and the two confirmations. Saving creates a timestamped record with an
+   integrity check that detects accidental changes. It holds every input, the full
+   calculation, the forecast values used, the forecast fetch time, the method
+   version, the checks and a SHA-256 integrity check. The check has no key, so it
+   is not tamper-proof: anyone who edits a record can recompute it.
 5. **Records**: list, view, full PDF, one-page crew **briefing sheet**, JSON
    export/import, "Use as new set-up", and the **wind log** for the day: crane
    anemometer readings with the stop / 30-minute wait / reset pattern from CPA
@@ -55,6 +64,22 @@ or crane library.
 
 It works offline: the app is kept on the phone, and the last forecast for the site
 is used, clearly labelled, when there is no signal.
+
+Every screen, both PDFs (on every page) and the method, privacy and terms pages carry
+a neutral grey banner: "Test version – not for operational use. Feedback only."
+(`TEST_VERSION_NOTICE` in `src/config.ts`). Every page has
+`<meta name="robots" content="noindex, nofollow">`, `public/robots.txt` disallows
+all crawling, and `public/_headers` sends `X-Robots-Tag: noindex, nofollow`.
+
+On the Decision screen the **Role** field starts empty every time (hint "e.g.
+Appointed Person, Lift Supervisor, Crane Operator") and must be filled in before a
+record can be saved. Saved records keep the role they were saved with.
+
+Every screen has a footer linking the method page, a **draft privacy notice**
+(`public/privacy.html`) and **draft terms of use** (`public/terms.html`). Both are
+marked DRAFT, with `CONFIG-CONTROLLER` and `CONFIG-CONTACT` placeholders, and with
+"SOLICITOR" and "CONFIG" markers on everything that needs legal advice or a fact
+filled in. They must be reviewed before the app is used outside the pilot.
 
 ## Run it locally
 
@@ -92,6 +117,7 @@ project settings):
 | `VITE_FORECAST_PROXY_URL` | empty | URL of the Worker's `/forecast` endpoint. Empty: call Open-Meteo directly. |
 | `VITE_OPEN_METEO_BASE_URL` | `https://api.open-meteo.com/v1/forecast` | Endpoint for direct calls only. |
 | `VITE_OPEN_METEO_API_KEY` | empty | Direct calls only. It ends up in the browser bundle, so put a commercial key in the Worker instead. |
+| `VITE_ENABLE_CALCULATORS` | empty (off) | `true` turns on the capacity, sling and ground-bearing calculators. Leave off until a qualified AP has reviewed them. |
 
 Worker (`worker/wrangler.toml` `[vars]`, plus secrets):
 
@@ -99,7 +125,7 @@ Worker (`worker/wrangler.toml` `[vars]`, plus secrets):
 |---|---|---|
 | `OPEN_METEO_BASE_URL` | `https://api.open-meteo.com/v1/forecast` | Free endpoint (non-commercial). Commercial: `https://customer-api.open-meteo.com/v1/forecast`. |
 | `OPEN_METEO_API_KEY` | unset | Commercial key: `npx wrangler secret put OPEN_METEO_API_KEY`. |
-| `ALLOWED_ORIGIN` | `*` | Set to the Pages site origin once deployed. |
+| `ALLOWED_ORIGIN` | `https://liftwatch.pages.dev` | The Pages site origin allowed to call the Worker (CORS). Preview deployments have their own origin. |
 
 Company-rule settings: capacity bands in `src/checks/capacity.ts`
 (`CAPACITY_REVIEW_UTILISATION` 0.75, `CAPACITY_HIGH_UTILISATION` 0.90), the wind
@@ -152,6 +178,11 @@ append-only: there is no update or delete. To move to Supabase later, write a
 `listLog`, and return it from `createDefaultStore()`. Drafts of the set-up and the
 checks are kept in `localStorage` until a record is saved.
 
+The app asks the browser for persistent storage (`navigator.storage.persist()`)
+when it starts and shows the answer on the Records screen. If records have never
+been exported from this browser, or the last export was 7 or more days ago, the
+Records screen prompts an export (`src/storage/persistence.ts`).
+
 Use **Records → Export all (JSON)** to back up or move records. Import skips
 records that already exist and rejects any record whose content no longer matches
 its integrity hash.
@@ -183,7 +214,7 @@ Dependencies: Vite, TypeScript, Vitest (dev) and jsPDF. The Worker is deployed w
   procedure are not modelled. The gust at height is an estimate.
 - **Some rules are LiftWatch's own.** The formula and factors come from CPA/TCIG 2507
   and EN 13000, and reproduce the CPA guide's worked examples (METHOD.md). The 80 %
-  "Near limit" band and the weather flags are pilot choices, not from CPA or a
+  "Near permitted speed" band and the weather flags are pilot choices, not from CPA or a
   standard. Wind direction is shown but not used to reduce the limit.
 - **Local funnelling between buildings.** Wind accelerating between buildings,
   around structures, over ridges or at the edges of tall buildings is not

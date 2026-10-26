@@ -40,7 +40,7 @@ describe('validateDecision', () => {
 
 describe('tickLabel', () => {
   it('explains an empty box on a Postpone', () => {
-    expect(tickLabel(false, 'postpone')).toBe('Not ticked (not required for Postpone)');
+    expect(tickLabel(false, 'postpone')).toBe('Not ticked (not required for a decision to postpone)');
     expect(tickLabel(false, 'proceed')).toBe('Not ticked');
     expect(tickLabel(true, 'postpone')).toBe('Ticked');
   });
@@ -50,10 +50,10 @@ describe('createRecord', () => {
   it('holds inputs, calculation, forecast values, fetch time and method version', async () => {
     const r = await makeRecord();
     expect(r.createdAt).toBe('2026-10-22T08:15:00.000Z');
-    expect(r.methodVersion).toBe('LW-M1.1');
+    expect(r.methodVersion).toBe('LW-M1.3');
     expect(r.setup.chartLimitSource).toBe('Lift plan LP-014 / LTM 1090 load chart');
     expect(r.assessment.load.permittedMs).toBeCloseTo(6.594, 3);
-    expect(r.assessment.liftDayForecast).toHaveLength(24);
+    expect(r.assessment.liftDayForecast).toHaveLength(25) // lift day + the next hour, for the gust timing rule;
     expect(r.forecast.fetchedAt).toBe('2026-10-21T19:00:00.000Z');
     expect(r.forecast.source).toBe('Open-Meteo');
     expect(r.integrity).toMatch(/^[0-9a-f]{64}$/);
