@@ -7,6 +7,8 @@ import {
   createRecord,
   DECISION_LABEL,
   DECISION_OWNERSHIP,
+  newDecisionDraft,
+  ROLE_HINT,
   validateDecision,
   type Decision,
   type DecisionChoice,
@@ -21,13 +23,11 @@ import { banner } from './assessment';
 const PERSON_KEY = 'liftwatch.person.v1';
 
 function freshDraft(): Decision {
-  let person = { name: '', role: 'Appointed Person' };
   try {
-    person = { ...person, ...JSON.parse(safeStorage.get(PERSON_KEY) ?? '{}') };
+    return newDecisionDraft(JSON.parse(safeStorage.get(PERSON_KEY) ?? '{}'));
   } catch {
-    /* ignore */
+    return newDecisionDraft();
   }
-  return { choice: 'postpone', name: person.name, role: person.role, notes: '', anemometerChecked: false, operatorRetainsDecision: false };
 }
 
 let draft: Decision | null = null;
@@ -108,7 +108,7 @@ export function decisionScreen(ctx: Ctx): HTMLElement {
   };
 
   const nameF = field('Your name', name);
-  const roleF = field('Role', role);
+  const roleF = field('Role', role, ROLE_HINT);
   const notesF = field('Notes and conditions', notes, 'Required if your decision is to proceed with conditions');
   handles.name = nameF;
   handles.role = roleF;
@@ -127,7 +127,7 @@ export function decisionScreen(ctx: Ctx): HTMLElement {
     try {
       const record = await createRecord(state.setup, state.forecast!, a, d, new Date(), crypto.randomUUID(), buildChecksReport(state.checks, a.liftDate));
       await state.store.add(record);
-      safeStorage.set(PERSON_KEY, JSON.stringify({ name: d.name, role: d.role }));
+      safeStorage.set(PERSON_KEY, JSON.stringify({ name: d.name }));
       draft = null;
       // Answers and sign-ons belong to this lift. Dates, cards and calculations carry over.
       state.checks.answers = {};

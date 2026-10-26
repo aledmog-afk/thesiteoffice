@@ -1,6 +1,6 @@
 import type { jsPDF as JsPdf } from 'jspdf';
 import { checksSections } from '../checks/reportLines';
-import { APP_NAME, BANNER_SUFFIX, DISCLAIMER, methodPageUrl } from '../config';
+import { APP_NAME, BANNER_SUFFIX, DISCLAIMER, methodPageUrl, TEST_VERSION_NOTICE } from '../config';
 import { GUST_TIMING_NOTE, heightFactorSource, percentLabel, statusText, terrainText, usesGustTiming } from '../lift/display';
 import { londonClock } from '../time/london';
 import { METHOD_SOURCES, METHOD_SUMMARY } from '../lift/methodSummary';
@@ -31,6 +31,20 @@ export const STATUS_RGB: Record<Status, [number, number, number]> = {
   over: [179, 33, 30],
   'no-data': [84, 94, 105],
 };
+/** Neutral grey strip for the test-version notice (not a status colour). */
+export const TEST_BANNER_RGB: [number, number, number] = [228, 231, 235];
+
+/** The test-version notice across the top of every page of a PDF. Call once all pages exist. */
+export function drawTestBanner(doc: JsPdf, left = 15, width = 180): void {
+  const pages = doc.getNumberOfPages();
+  for (let p = 1; p <= pages; p++) {
+    doc.setPage(p);
+    doc.setFillColor(...TEST_BANNER_RGB).rect(left, 4, width, 6, 'F');
+    doc.setFont('helvetica', 'bold').setFontSize(8.5).setTextColor(43, 49, 56);
+    doc.text(pdfSafe(TEST_VERSION_NOTICE), left + width / 2, 8.1, { align: 'center' });
+  }
+}
+
 export const STATUS_TEXT_RGB: Record<Status, [number, number, number]> = {
   within: [255, 255, 255],
   near: [17, 17, 17],
@@ -356,6 +370,7 @@ export async function buildRecordPdf(record: DecisionRecord, integrityOk: boolea
     doc.text(doc.splitTextToSize(pdfSafe(DISCLAIMER), L.width - 22) as string[], L.left, 281);
     doc.text(`Page ${p} of ${pages}`, L.left + L.width, 281, { align: 'right' });
   }
+  drawTestBanner(doc, L.left, L.width);
   return doc;
 }
 

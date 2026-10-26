@@ -79,8 +79,12 @@ Tap **3 Checks**.
 ## 4. Decision and records (3 minutes)
 
 1. Tap **4 Decision**. **You should see** a Checks summary card at the top.
-2. Under **Your decision**, choose **Your decision: proceed with conditions**, fill in
-   your name and a condition, tick both boxes, and tap **Save record**. Every option
+2. Check the grey **Test version – not for operational use. Feedback only.** banner
+   is at the top of every screen. Check the **Role** field is empty, with the hint
+   "e.g. Appointed Person, Lift Supervisor, Crane Operator". Tap **Save record** with
+   it empty: **you should see** an error asking for your role, and nothing is saved.
+   Under **Your decision**, choose **Your decision: proceed with conditions**, fill in
+   your name, role and a condition, tick both boxes, and tap **Save record**. Every option
    reads as your own decision, never as LiftWatch's.
 3. On the record, tap:
    - **PDF**: the full record. Check it says "Decision recorded by <your name>

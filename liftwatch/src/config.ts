@@ -64,4 +64,10 @@ export function methodPageUrl(): string {
   return origin && origin !== 'null' ? `${origin}${METHOD_PAGE_PATH}` : METHOD_PAGE_PATH;
 }
 
+/**
+ * Shown on every screen and every page of both PDFs while LiftWatch is a test
+ * version. Neutral grey: it is a notice, not a status.
+ */
+export const TEST_VERSION_NOTICE = 'Test version – not for operational use. Feedback only.';
+
 export const BANNER_SUFFIX = 'forecast assessment against the limits you entered';

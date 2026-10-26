@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="robots" content="noindex" />
+  <meta name="robots" content="noindex, nofollow" />
   <meta name="description" content="Draft terms of use for LiftWatch, a decision-support tool for crane lifts in wind." />
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <title>LiftWatch terms (draft)</title>
@@ -27,12 +27,16 @@
     code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.9em; }
     .muted { color: var(--muted); }
     nav.back { margin-bottom: 8px; }
+    .test-banner { background: #e4e7eb; color: #2b3138; border-bottom: 1px solid var(--line); font-size: 0.8rem; font-weight: 700; text-align: center; padding: 6px 16px; }
+    @media (prefers-color-scheme: dark) { :root:not([data-theme='light']) .test-banner { background: #2c3139; color: #dfe3e8; } }
+    :root[data-theme='dark'] .test-banner { background: #2c3139; color: #dfe3e8; }
   </style>
   <script>
     try { var t = localStorage.getItem('liftwatch.theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}
   </script>
 </head>
 <body>
+<div class="test-banner" role="note">Test version &ndash; not for operational use. Feedback only.</div>
 <main>
 <nav class="back"><a href="/">&larr; Back to LiftWatch</a></nav>
 <h1>LiftWatch terms of use</h1>

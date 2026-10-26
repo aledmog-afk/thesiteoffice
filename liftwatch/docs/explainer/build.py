@@ -297,6 +297,11 @@ B([
     'Shows whether the browser granted persistent storage (navigator.storage.persist()), which asks it not to clear '
     'the records when space runs low.',
 ])
+P('A neutral grey banner, “Test version – not for operational use. Feedback only.”, is on every screen, every page '
+  'of both PDFs and the method, privacy and terms pages. Every page carries robots noindex, nofollow; robots.txt '
+  'disallows all crawling and the headers send X-Robots-Tag: noindex, nofollow. The Role field on the Decision '
+  'screen starts empty every time (hint “e.g. Appointed Person, Lift Supervisor, Crane Operator”) and is required; '
+  'saved records keep their role.')
 P('Every screen has a footer linking the method page and a draft privacy notice and terms of use (marked DRAFT, with '
   'controller and contact placeholders and items marked for a solicitor).')
 

@@ -65,6 +65,16 @@ or crane library.
 It works offline: the app is kept on the phone, and the last forecast for the site
 is used, clearly labelled, when there is no signal.
 
+Every screen, both PDFs (on every page) and the method, privacy and terms pages carry
+a neutral grey banner: "Test version – not for operational use. Feedback only."
+(`TEST_VERSION_NOTICE` in `src/config.ts`). Every page has
+`<meta name="robots" content="noindex, nofollow">`, `public/robots.txt` disallows
+all crawling, and `public/_headers` sends `X-Robots-Tag: noindex, nofollow`.
+
+On the Decision screen the **Role** field starts empty every time (hint "e.g.
+Appointed Person, Lift Supervisor, Crane Operator") and must be filled in before a
+record can be saved. Saved records keep the role they were saved with.
+
 Every screen has a footer linking the method page, a **draft privacy notice**
 (`public/privacy.html`) and **draft terms of use** (`public/terms.html`). Both are
 marked DRAFT, with `CONFIG-CONTROLLER` and `CONFIG-CONTACT` placeholders, and with

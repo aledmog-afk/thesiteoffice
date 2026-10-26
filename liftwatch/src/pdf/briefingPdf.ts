@@ -4,7 +4,7 @@ import { CHECK_OPERATOR, recordedDecisionText, type DecisionRecord } from '../li
 import { statusText } from '../lift/display';
 import { DEFAULT_WAIT_MINUTES, fromMs, UNIT_LABEL, type SpeedUnit } from '../windlog/log';
 import { NO_ITEMS_FLAGGED } from '../checks/reportLines';
-import { pdfSafe, STATUS_RGB, STATUS_TEXT_RGB, terrainText } from './recordPdf';
+import { drawTestBanner, pdfSafe, STATUS_RGB, STATUS_TEXT_RGB, terrainText } from './recordPdf';
 
 const UNITS: SpeedUnit[] = ['ms', 'mph', 'kmh', 'kn'];
 const fmt = (ms: number, u: SpeedUnit) => fromMs(ms, u).toFixed(u === 'ms' ? 1 : 0);
@@ -129,5 +129,6 @@ export async function buildBriefingPdf(record: DecisionRecord): Promise<JsPdf> {
   }
 
   footer();
+  drawTestBanner(doc, left, width);
   return doc;
 }

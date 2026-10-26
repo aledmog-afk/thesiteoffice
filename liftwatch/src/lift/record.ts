@@ -44,6 +44,18 @@ export function tickLabel(ticked: boolean, choice: DecisionChoice): string {
   return choice === 'postpone' ? 'Not ticked (not required for a decision to postpone)' : 'Not ticked';
 }
 
+/** Hint under the Role field. The field itself starts empty: there is no default role. */
+export const ROLE_HINT = 'e.g. Appointed Person, Lift Supervisor, Crane Operator';
+
+/**
+ * A new decision draft. The name last used on this device is filled in; the role is
+ * always left empty so it is chosen each time. Saved records keep their own role.
+ */
+export function newDecisionDraft(stored: { name?: unknown } = {}): Decision {
+  const name = typeof stored.name === 'string' ? stored.name : '';
+  return { choice: 'postpone', name, role: '', notes: '', anemometerChecked: false, operatorRetainsDecision: false };
+}
+
 export interface Decision {
   choice: DecisionChoice;
   name: string;
@@ -93,7 +105,7 @@ export type DecisionErrors = Partial<Record<keyof Decision, string>>;
 export function validateDecision(d: Decision): DecisionErrors {
   const e: DecisionErrors = {};
   if (!d.name.trim()) e.name = 'Enter your name.';
-  if (!d.role.trim()) e.role = 'Enter your role, e.g. "Appointed Person".';
+  if (!d.role.trim()) e.role = `Enter your role (${ROLE_HINT}).`;
   if (d.choice === 'proceed-with-conditions' && !d.notes.trim()) e.notes = 'Write down the conditions.';
   if (d.choice !== 'postpone') {
     if (!d.anemometerChecked) e.anemometerChecked = 'Tick to confirm before recording a decision to proceed.';

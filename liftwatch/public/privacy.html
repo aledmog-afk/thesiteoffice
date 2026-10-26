@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="robots" content="noindex" />
+  <meta name="robots" content="noindex, nofollow" />
   <meta name="description" content="Draft privacy notice for LiftWatch: what is stored on your device and what is sent to postcodes.io, Open-Meteo and Cloudflare." />
   <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
   <title>LiftWatch privacy (draft)</title>
@@ -27,12 +27,16 @@
     code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.9em; }
     .muted { color: var(--muted); }
     nav.back { margin-bottom: 8px; }
+    .test-banner { background: #e4e7eb; color: #2b3138; border-bottom: 1px solid var(--line); font-size: 0.8rem; font-weight: 700; text-align: center; padding: 6px 16px; }
+    @media (prefers-color-scheme: dark) { :root:not([data-theme='light']) .test-banner { background: #2c3139; color: #dfe3e8; } }
+    :root[data-theme='dark'] .test-banner { background: #2c3139; color: #dfe3e8; }
   </style>
   <script>
     try { var t = localStorage.getItem('liftwatch.theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}
   </script>
 </head>
 <body>
+<div class="test-banner" role="note">Test version &ndash; not for operational use. Feedback only.</div>
 <main>
 <nav class="back"><a href="/">&larr; Back to LiftWatch</a></nav>
 <h1>LiftWatch privacy notice</h1>
@@ -60,7 +64,7 @@
     <tr><td>IndexedDB</td><td><code>liftwatch</code> &rarr; <code>windlog</code></td><td>Wind log entries for a record: time, anemometer reading and unit, notes, and the name of the person logging it if given.</td></tr>
     <tr><td>localStorage</td><td><code>liftwatch.setup.v1</code></td><td>The set-up you are working on, before it is saved in a record (same fields as above).</td></tr>
     <tr><td>localStorage</td><td><code>liftwatch.checks.v1</code></td><td>The checks you are working on, before they are saved in a record (same fields as above).</td></tr>
-    <tr><td>localStorage</td><td><code>liftwatch.person.v1</code></td><td>The name and role last used on a decision, to fill in the next one.</td></tr>
+    <tr><td>localStorage</td><td><code>liftwatch.person.v1</code></td><td>The name last used on a decision, to fill in the next one. (Earlier test versions also stored the role here; the role is no longer filled in.)</td></tr>
     <tr><td>localStorage</td><td><code>liftwatch.windlog.by</code></td><td>The name last used in the wind log.</td></tr>
     <tr><td>localStorage</td><td><code>liftwatch.windlog.unit</code>, <code>liftwatch.windlog.wait</code></td><td>Wind log unit and wait time settings.</td></tr>
     <tr><td>localStorage</td><td><code>liftwatch.forecast.v2.&lt;lat,lon&gt;</code></td><td>The last forecast for each site, keyed by coordinates rounded to 2 decimal places, for use without signal.</td></tr>
