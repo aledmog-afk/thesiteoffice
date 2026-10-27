@@ -32,6 +32,7 @@ const SNAG_PRIORITY_LABEL = extractConst("SNAG_PRIORITY_LABEL");
 const SNAG_PRIORITY_BADGE = extractConst("SNAG_PRIORITY_BADGE");
 const SNAG_STATUS_LABEL = extractConst("SNAG_STATUS_LABEL");
 const SNAG_STATUS_BADGE = extractConst("SNAG_STATUS_BADGE");
+const SNAG_ROOMS = extractConst("SNAG_ROOMS");
 
 function assertRenderedSafely(container, payload, fieldDescription) {
   assert.ok(
@@ -171,7 +172,7 @@ test("snag-list-edit.html: malicious snag description/location/trade render as i
     comparePlotNumbers: (a, b) => String(a).localeCompare(String(b)),
     categoriseSnag: () => ({ overdue: false, dueToday: false, dueSoon: false, highPriority: false }),
     assignSnag: async () => {}, verifySnag: async () => {}, unverifySnag: async () => {}, createActionFromSnag: async () => {},
-    SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_PRIORITY_BADGE, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE,
+    SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_PRIORITY_BADGE, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE, SNAG_ROOMS,
     showError: () => {}, clearError: () => {},
   });
   await wait(30);

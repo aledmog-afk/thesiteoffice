@@ -37,7 +37,11 @@
         </select>
       </div>
       <div class="form-grid">
-        <div class="field"><label for="location">Location *</label><input type="text" id="location" required placeholder="e.g. First floor bathroom, Kitchen"></div>
+        <div class="field">
+          <label for="location">Location / Room *</label>
+          <select id="location" required></select>
+          <input type="text" id="locationOther" style="display:none; margin-top:0.4rem;" placeholder="Specify location">
+        </div>
         <div class="field"><label for="trade">Trade responsible</label><input type="text" id="trade" placeholder="e.g. Plumbing"></div>
       </div>
       <div class="field"><label for="description">Description *</label><textarea id="description" rows="2" required placeholder="What's wrong and where exactly"></textarea></div>
@@ -117,7 +121,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, uploadImage, todayISO, comparePlotNumbers, SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_PRIORITY_BADGE, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE, categoriseSnag, assignSnag, verifySnag, unverifySnag, completeSnagWithPhoto, closeSnagWithEvidence, submitSnagForReview, approveSnagReview, rejectSnagReview, getSnagPhotos, addSnagPhoto, deleteSnagPhoto, getSnagCompletionPhotoCounts, createActionFromSnag, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, uploadImage, todayISO, comparePlotNumbers, SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_PRIORITY_BADGE, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE, SNAG_ROOMS, categoriseSnag, assignSnag, verifySnag, unverifySnag, completeSnagWithPhoto, closeSnagWithEvidence, submitSnagForReview, approveSnagReview, rejectSnagReview, getSnagPhotos, addSnagPhoto, deleteSnagPhoto, getSnagCompletionPhotoCounts, createActionFromSnag, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel } from "./js/app.js";
 
   await requireAuth();
   const listId = getParam("id");
@@ -153,10 +157,24 @@
   const photoInput = document.getElementById("photoInput");
   const prioritySelect = document.getElementById("priority");
   const assignedToSelect = document.getElementById("assignedTo");
+  const locationSelect = document.getElementById("location");
+  const locationOtherInput = document.getElementById("locationOther");
   let parties = [];
   let partyNames = []; // display only; the RPC already limits which companies the caller can see
 
   prioritySelect.innerHTML = SNAG_PRIORITIES.map((p) => `<option value="${p}">${SNAG_PRIORITY_LABEL[p]}</option>`).join("");
+  locationSelect.innerHTML = `<option value="">Choose a room…</option>` + SNAG_ROOMS.map((r) => `<option value="${r}">${r}</option>`).join("");
+
+  // "Other" reveals a free-text box for whatever room isn't in the
+  // list — location itself is still a plain text column, so this is
+  // the only place "Other" is handled specially; everything else just
+  // uses the chosen option's own text as the value.
+  locationSelect.addEventListener("change", () => {
+    const isOther = locationSelect.value === "Other";
+    locationOtherInput.style.display = isOther ? "block" : "none";
+    locationOtherInput.required = isOther;
+    if (!isOther) locationOtherInput.value = "";
+  });
 
   // Renders the current photo thumbnail plus, only when this session
   // still has the original File in memory (i.e. it was just uploaded,
@@ -214,6 +232,8 @@
     snagForm.reset();
     document.getElementById("editingId").value = "";
     if (isGeneralList) document.getElementById("itemPlot").value = "";
+    locationOtherInput.style.display = "none";
+    locationOtherInput.required = false;
     prioritySelect.value = "medium";
     assignedToSelect.value = "";
     document.getElementById("partyId").value = "";
@@ -231,7 +251,20 @@
   async function openForEdit(s) {
     document.getElementById("editingId").value = s.id;
     if (isGeneralList) document.getElementById("itemPlot").value = s.plot_id || "";
-    document.getElementById("location").value = s.location || "";
+    // A room typed before this dropdown existed (or anything that
+    // isn't an exact match to one of SNAG_ROOMS) pre-selects "Other"
+    // with its own real value shown, rather than silently losing it.
+    if (s.location && SNAG_ROOMS.includes(s.location) && s.location !== "Other") {
+      locationSelect.value = s.location;
+      locationOtherInput.style.display = "none";
+      locationOtherInput.required = false;
+      locationOtherInput.value = "";
+    } else {
+      locationSelect.value = "Other";
+      locationOtherInput.style.display = "block";
+      locationOtherInput.required = true;
+      locationOtherInput.value = s.location || "";
+    }
     document.getElementById("trade").value = s.trade || "";
     document.getElementById("description").value = s.description || "";
     prioritySelect.value = s.priority || "medium";
@@ -320,7 +353,7 @@
     clearError(errorBox);
     const editingId = document.getElementById("editingId").value;
     const payload = {
-      location: document.getElementById("location").value.trim(),
+      location: (locationSelect.value === "Other" ? locationOtherInput.value : locationSelect.value).trim(),
       trade: document.getElementById("trade").value.trim() || null,
       description: document.getElementById("description").value.trim(),
       photo_url: photoUrl,

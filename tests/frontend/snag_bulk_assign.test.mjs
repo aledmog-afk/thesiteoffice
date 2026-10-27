@@ -24,6 +24,7 @@ const SNAG_PRIORITY_LABEL = extractConst("SNAG_PRIORITY_LABEL");
 const SNAG_PRIORITY_BADGE = extractConst("SNAG_PRIORITY_BADGE");
 const SNAG_STATUS_LABEL = extractConst("SNAG_STATUS_LABEL");
 const SNAG_STATUS_BADGE = extractConst("SNAG_STATUS_BADGE");
+const SNAG_ROOMS = extractConst("SNAG_ROOMS");
 
 function makeStore(snags = []) {
   return {
@@ -77,7 +78,7 @@ async function run(store, overrides = {}) {
     uploadImage: async () => "",
     todayISO: () => "2026-01-01",
     comparePlotNumbers: (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true }),
-    SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_PRIORITY_BADGE, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE,
+    SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_PRIORITY_BADGE, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE, SNAG_ROOMS,
     categoriseSnag: () => ({ overdue: false, dueToday: false, dueSoon: false, highPriority: false }),
     assignSnag: overrides.assignSnag || (async (id, userId) => { store.calls = store.calls || []; store.calls.push([id, userId]); }),
     verifySnag: async () => {}, unverifySnag: async () => {},
