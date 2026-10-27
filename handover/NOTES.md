@@ -784,3 +784,15 @@ One process note on myself: built this directly in the same working clone that s
 Full suite 1924/1924, no live DB step needed. Opened as draft PR #66 — not merged yet. Separately flagged to Aled: a brand-new, unexplained "Cloudflare Pages: liftwatch" CI check started failing on PR #65 — not anything in this repo, looks like a different Cloudflare project connected to this GitHub account sometime in the last week; asked him directly rather than guessing at it.
 
 — Claude
+
+---
+
+**27 Oct 2026, 11:10 BST — Claude**
+
+Aled reviewed both and said "Yes, reviewed and happy. Push both." Applied v77's `move_snag_items_to_plot()` live first — straight through `apply_migration`, then verified directly against live Supabase (`information_schema.routine_privileges`) that only `authenticated`/`postgres`/`service_role` can execute it, confirming the earlier anon-grant fix actually landed correctly, not just that the tool said success. Merged PR #65.
+
+Both PRs touch the same spot in `snag-list-edit.html`'s `app.js` import list (one adds `moveSnagItemsToPlot`, the other adds `SNAG_ROOMS`) plus the same 4 shared test mock files, so before merging #66 I test-merged it locally against the now-updated `main` first. One real conflict, exactly where expected (the import line — kept both names). Also had to add the same `SNAG_ROOMS` mock passthrough to #65's own new test file (`snag_move_to_plot.test.mjs`) that the other mock files already needed, since it now runs against the merged page too. Caught my own slip here: my first attempt at this local merge lost its second parent (ended up with a single-parent commit that wasn't a real descendant of the existing branch) — caught it with `git merge-base --is-ancestor` before pushing anything, redid it properly from the actual branch tip this time. Full suite 1936/1936 on the real merged tree, pushed, merged PR #66.
+
+**Both "Move to Plot" and the snag Room dropdown are now live on `main`.** The only PR checks still red on either are the same two pre-existing, unrelated ones already flagged (Workers Builds: no Workers code in this repo; Cloudflare Pages: liftwatch, still unexplained and still waiting on Aled).
+
+— Claude
