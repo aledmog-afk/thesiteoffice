@@ -1139,6 +1139,25 @@ export const SNAG_STATUSES = ["open", "pending_review", "closed", "rejected"];
 export const SNAG_STATUS_LABEL = { open: "Open", pending_review: "Pending Review", closed: "Closed", rejected: "Rejected" };
 export const SNAG_STATUS_BADGE = { open: "badge-red", pending_review: "badge-amber", closed: "badge-green", rejected: "badge-grey" };
 
+// v78: a Room dropdown for a snag's own Location field, in place of a
+// fully free-text box. location itself stays a plain text column — no
+// schema change, this is a data-entry improvement only — so anything
+// typed under "Other" is stored exactly as before, and every snag
+// already on the database (whatever it says in that column) keeps
+// working, pre-selecting "Other" with its own existing text the first
+// time it's opened for edit. Built from what real snag lists on the
+// live database already use most, plus the standard UK house/flat
+// rooms that list didn't happen to need yet. "External / Engineering
+// Works" is the same literal string EXTERNAL_WORKS_TAG uses elsewhere
+// in this file, kept as a literal here (not a reference to it) since
+// that constant isn't declared until later in module evaluation order.
+export const SNAG_ROOMS = [
+  "Kitchen", "Living Area", "Bedroom 1", "Bedroom 2", "Bedroom 3", "Bathroom", "En-suite",
+  "WC / Cloakroom", "Hallway", "Stairs", "Entrance / Front Door", "Garage",
+  "Cupboard / Storage", "Plant Room / Cupboard", "Roof", "Front Garden", "Rear Garden",
+  "Throughout", "External / Engineering Works", "Other",
+];
+
 export function isSnagOutstanding(snag) {
   return !["closed", "rejected"].includes(snag.status);
 }
