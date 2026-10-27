@@ -56,6 +56,7 @@ function makeSupabase(store) {
       const api = {
         select() { return api; },
         eq(col, val) { api._eqId = table === "snag_items" ? val : api._eqId; return api; },
+        neq() { return api; },
         order() { return api; },
         in() { return api; },
         single: async () => (table === "snag_lists" ? { data: store.snagList, error: null } : { data: null, error: null }),

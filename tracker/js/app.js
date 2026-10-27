@@ -1201,6 +1201,17 @@ export async function assignSnag(snagId, userId) {
   return updateSnag(snagId, { assigned_to: userId });
 }
 
+// v77: transplants the given snag_items into the target plot's own
+// (already-existing, 1:1) snag list — the real authority on
+// permission and item renumbering is move_snag_items_to_plot() itself
+// (sql/schema.sql), a thin wrapper here for the same reason every
+// other RPC call in this file is.
+export async function moveSnagItemsToPlot(snagIds, plotId) {
+  const { data, error } = await supabase.rpc("move_snag_items_to_plot", { p_snag_ids: snagIds, p_target_plot_id: plotId });
+  if (error) throw error;
+  return data;
+}
+
 // v52: photos attached to a snag beyond the single legacy photo_url
 // column — both additional problem photos (several angles of the
 // defect) and completion evidence (one or more photos proving the

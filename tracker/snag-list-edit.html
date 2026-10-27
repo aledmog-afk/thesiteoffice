@@ -20,9 +20,27 @@
       <div class="page-sub" id="projectSub"></div>
     </div>
     <div class="btn-row">
+      <button class="btn btn-outline btn-sm" id="moveToPlotBtn" style="display:none;">Move to Plot</button>
       <button class="btn btn-danger btn-sm" id="deleteListBtn" style="display:none;">Delete List</button>
       <a class="btn btn-outline" id="viewLink" href="#" target="_blank">Download PDF</a>
       <button class="btn btn-amber" id="newSnagBtn">+ Add Item</button>
+    </div>
+  </div>
+
+  <!-- v77: a plot gets exactly one snag list (1:1), so a list added
+       under the wrong plot can't just be re-pointed — this moves every
+       item in it into the correct plot's own (already-existing) list,
+       then takes you there. Only shown for a plot-specific list; a
+       General/Site Visit list already lets you retag each item's own
+       Plot field instead. -->
+  <div class="card" id="movePlotCard" style="display:none; margin-bottom:1.5rem;">
+    <div class="field">
+      <label for="movePlotSelect">Move all items in this list to</label>
+      <select id="movePlotSelect"></select>
+    </div>
+    <div class="btn-row">
+      <button type="button" class="btn btn-amber btn-sm" id="movePlotConfirmBtn">Move</button>
+      <button type="button" class="btn btn-outline btn-sm" id="movePlotCancelBtn">Cancel</button>
     </div>
   </div>
 
@@ -121,7 +139,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, uploadImage, todayISO, comparePlotNumbers, SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_PRIORITY_BADGE, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE, SNAG_ROOMS, categoriseSnag, assignSnag, verifySnag, unverifySnag, completeSnagWithPhoto, closeSnagWithEvidence, submitSnagForReview, approveSnagReview, rejectSnagReview, getSnagPhotos, addSnagPhoto, deleteSnagPhoto, getSnagCompletionPhotoCounts, createActionFromSnag, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, uploadImage, todayISO, comparePlotNumbers, SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_PRIORITY_BADGE, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE, SNAG_ROOMS, categoriseSnag, assignSnag, verifySnag, unverifySnag, completeSnagWithPhoto, closeSnagWithEvidence, submitSnagForReview, approveSnagReview, rejectSnagReview, getSnagPhotos, addSnagPhoto, deleteSnagPhoto, getSnagCompletionPhotoCounts, createActionFromSnag, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel, moveSnagItemsToPlot } from "./js/app.js";
 
   await requireAuth();
   const listId = getParam("id");
@@ -325,6 +343,30 @@
     const { error } = await supabase.from("snag_lists").delete().eq("id", listId);
     if (error) { showError(errorBox, error); return; }
     window.location.href = `snagging.html?project=${snagList.project_id}`;
+  });
+
+  document.getElementById("moveToPlotBtn").addEventListener("click", () => {
+    document.getElementById("movePlotCard").style.display = "block";
+  });
+  document.getElementById("movePlotCancelBtn").addEventListener("click", () => {
+    document.getElementById("movePlotCard").style.display = "none";
+  });
+  document.getElementById("movePlotConfirmBtn").addEventListener("click", async () => {
+    clearError(errorBox);
+    const targetPlotId = document.getElementById("movePlotSelect").value;
+    const targetPlotLabel = document.getElementById("movePlotSelect").selectedOptions[0]?.textContent || "that plot";
+    if (!targetPlotId) return;
+    if (!confirm(`Move ${allSnags.length ? `all ${allSnags.length} item(s) in` : "this empty list into"} "${snagList.title}" to ${targetPlotLabel}'s own list?`)) return;
+    const btn = document.getElementById("movePlotConfirmBtn");
+    btn.disabled = true;
+    try {
+      await moveSnagItemsToPlot(allSnags.map((s) => s.id), targetPlotId);
+      const { data: targetList } = await supabase.from("snag_lists").select("id").eq("plot_id", targetPlotId).single();
+      window.location.href = `snag-list-edit.html?id=${targetList.id}`;
+    } catch (err) {
+      showError(errorBox, err);
+      btn.disabled = false;
+    }
   });
 
   photoInput.addEventListener("change", async () => {
@@ -748,6 +790,18 @@
       });
       document.getElementById("plotFieldWrap").style.display = "block";
       document.getElementById("deleteListBtn").style.display = "inline-block";
+    } else {
+      const { data: otherPlots } = await supabase
+        .from("plots")
+        .select("id, plot_number")
+        .eq("project_id", snagList.project_id)
+        .neq("id", snagList.plot_id);
+      const sortedOther = (otherPlots || []).slice().sort((a, b) => comparePlotNumbers(a.plot_number, b.plot_number));
+      if (sortedOther.length) {
+        const movePlotSelect = document.getElementById("movePlotSelect");
+        movePlotSelect.innerHTML = sortedOther.map((p) => `<option value="${p.id}">${escapeHtml(p.plot_number)}</option>`).join("");
+        document.getElementById("moveToPlotBtn").style.display = "inline-block";
+      }
     }
 
     const [{ data: memberRows }, { data: role }] = await Promise.all([
