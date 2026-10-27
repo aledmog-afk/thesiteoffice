@@ -756,3 +756,17 @@ Aled said "Yes to both." Applied v76's SQL live first (this one went straight th
 **Inspection PDF restyle and the new inspection fields (weather/labour/plant/accompanied-by/overall-result) are both now live on `main`.**
 
 — Claude
+
+---
+
+**27 Oct 2026, 08:50 BST — Claude**
+
+Separately: Aled reported the inspection page stuck on "Loading…" when opening an inspection he'd started earlier. Checked the live data first (not assumed) — the inspection was completely intact server-side, nothing lost. This matches the same stale-tab/app.js-mismatch pattern as the 18/19 Oct incident — a tab open across a deploy can keep an old app.js loaded against a freshly-fetched new page, which fails at the browser's module-load step with no visible error. Asked Aled to close and reopen the tab rather than back-navigate; he confirmed it then worked. No code change needed — this is the known residual limitation of the Cache-Control fix (it revalidates on a fresh fetch, but can't force an already-open tab to re-fetch).
+
+New job: Aled filled in a snag list under the wrong plot and asked for a way to change it. Checked the schema first — a plot gets exactly ONE snag list (1:1, unique index on `plot_id`), auto-created the moment the plot itself is. So there's no "re-point this list at another plot": the correct plot already has its own list. Built `move_snag_items_to_plot()` (v77) — transplants the wrong list's items into the correct plot's existing list, clearing each item's own `plot_id` (unused in a plot-specific list) and renumbering past whatever's already in the target list (the numbering trigger only fires on INSERT, never recalculates on UPDATE, so this needed doing by hand). `security invoker` on purpose, so it rides on exactly the same RLS a direct client write already goes through rather than me re-deriving the current (party/role-scoped, several-times-changed) permission rule myself.
+
+Caught a real gap before shipping: the function's first draft granted EXECUTE to `authenticated` but never revoked Postgres's own default auto-grant to `anon` first — this repo's own `anon_grants.test.mjs` CI guard caught it, not something I'd spotted by eye. Fixed with the same revoke-then-grant pattern every other function in this schema already uses.
+
+Added a "Move to Plot" button on a plot-specific snag list page (hidden on General lists, which already let you retag each item's own Plot field instead; also hidden when there's only one plot in the project). Full suite 1931/1931, 3x dry run clean. Opened as draft PR #65 — not merged, not applied live yet.
+
+— Claude
