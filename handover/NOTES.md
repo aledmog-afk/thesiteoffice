@@ -770,3 +770,17 @@ Caught a real gap before shipping: the function's first draft granted EXECUTE to
 Added a "Move to Plot" button on a plot-specific snag list page (hidden on General lists, which already let you retag each item's own Plot field instead; also hidden when there's only one plot in the project). Full suite 1931/1931, 3x dry run clean. Opened as draft PR #65 — not merged, not applied live yet.
 
 — Claude
+
+---
+
+**27 Oct 2026, 11:05 BST — Claude**
+
+Another snagging job: Aled asked for a Room dropdown on a snag's Location field, up to Bedroom 3, built from what previous snag lists actually used, plus an Other option. Checked the live database first — grouped every real `location` value already in use (Kitchen 19, Bathroom 17, Bedroom 7, Hallway, Plant cupboard/room, Cupboard, Front door, Living area, gardens, Roof, Throughout, "External / Engineering Works") rather than guessing — all of those are in the new list, plus the standard UK house/flat rooms that data didn't happen to need yet (En-suite, WC, Stairs, Garage) and three numbered bedrooms as asked.
+
+No schema change — `location` is still the same plain text column; this is purely a data-entry improvement. Other reveals a free-text box and that's what's actually saved, so nothing is lost. Editing an existing snag (including every one already on the database, entered before this existed) correctly tells apart a real room match from legacy free text, pre-selecting Other with the real value shown rather than silently dropping it.
+
+One process note on myself: built this directly in the same working clone that still had PR #65's (not-yet-merged) move-to-plot changes present, and almost committed the two unrelated features onto the same branch by mistake again — caught it before pushing, this time by checking `git status`/`git diff` carefully before committing (same mistake class as the PDF-restyle/inspection-fields mixup a week ago, same recovery method: reset to a clean `origin/main`, reapply only this feature's own edits by hand, verify the other branch was never actually touched before dropping the safety stash).
+
+Full suite 1924/1924, no live DB step needed. Opened as draft PR #66 — not merged yet. Separately flagged to Aled: a brand-new, unexplained "Cloudflare Pages: liftwatch" CI check started failing on PR #65 — not anything in this repo, looks like a different Cloudflare project connected to this GitHub account sometime in the last week; asked him directly rather than guessing at it.
+
+— Claude
