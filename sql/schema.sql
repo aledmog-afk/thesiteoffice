@@ -16767,3 +16767,79 @@ alter table public.inspections add column if not exists overall_result text;
 alter table public.inspections drop constraint if exists inspections_overall_result_check;
 alter table public.inspections add constraint inspections_overall_result_check
   check (overall_result is null or overall_result in ('satisfactory', 'satisfactory_with_observations', 'unsatisfactory'));
+
+-- ─── v77 ADDITIONS: Move a snag list's items to a different plot ────
+-- A plot gets exactly ONE snag list, auto-created the moment the plot
+-- itself is (seed_plot_defaults(), unique index snag_lists_plot_id_uidx)
+-- — there is no "re-point this list at another plot" operation,
+-- because the target plot already has its own list and the unique
+-- index would reject a second one. A client who added snags under the
+-- wrong plot needs their items transplanted into the correct plot's
+-- own (already-existing) list instead.
+--
+-- No new table, no new column — just an RPC doing exactly what a
+-- client-side UPDATE already could, one row at a time: move each
+-- selected snag_items row's snag_list_id to the target plot's list,
+-- clear its own plot_id (unused/implied by a plot-specific list, same
+-- as every other item in one — see v18's own comment on snag_items.
+-- plot_id), and renumber item_no to continue after the target list's
+-- own highest number (trg_snag_item_no only ever assigns item_no on
+-- INSERT, never recalculates it on UPDATE, so without this a moved
+-- item would keep its old number and could collide with a number
+-- already used in the target list).
+--
+-- security invoker, deliberately: every read and write inside runs
+-- under the caller's own RLS exactly as a direct client UPDATE would
+-- (snag_items' write policy is party/role-scoped and has changed
+-- shape several times — v61's "Assigned company" among them — so this
+-- defers to whatever that policy currently says rather than
+-- duplicating it here and risking drift). A row RLS silently wouldn't
+-- let this caller touch just doesn't move — counted, not errored,
+-- exactly like the page's own existing bulk-assign already tolerates
+-- partial failure.
+create or replace function public.move_snag_items_to_plot(p_snag_ids uuid[], p_target_plot_id uuid)
+returns integer
+language plpgsql
+security invoker
+set search_path = public
+as $$
+declare
+  v_target_list_id uuid;
+  v_target_project_id uuid;
+  v_next_no integer;
+  v_id uuid;
+  v_moved integer := 0;
+begin
+  if p_snag_ids is null or array_length(p_snag_ids, 1) is null or p_target_plot_id is null then
+    return 0;
+  end if;
+
+  select sl.id, sl.project_id into v_target_list_id, v_target_project_id
+    from public.snag_lists sl
+   where sl.plot_id = p_target_plot_id;
+  if v_target_list_id is null then
+    raise exception 'The target plot has no snag list';
+  end if;
+
+  select coalesce(max(item_no), 0) into v_next_no
+    from public.snag_items where snag_list_id = v_target_list_id;
+
+  for v_id in
+    select si.id from public.snag_items si
+     where si.id = any(p_snag_ids)
+       and si.snag_list_id is distinct from v_target_list_id
+       and si.project_id = v_target_project_id
+     order by si.item_no, si.created_at
+  loop
+    v_next_no := v_next_no + 1;
+    update public.snag_items
+       set snag_list_id = v_target_list_id, plot_id = null, item_no = v_next_no
+     where id = v_id;
+    if found then v_moved := v_moved + 1; end if;
+  end loop;
+
+  return v_moved;
+end;
+$$;
+revoke all on function public.move_snag_items_to_plot(uuid[], uuid) from public, anon, authenticated;
+grant execute on function public.move_snag_items_to_plot(uuid[], uuid) to authenticated;
