@@ -1158,6 +1158,20 @@ export const SNAG_ROOMS = [
   "Throughout", "External / Engineering Works", "Other",
 ];
 
+// Same dropdown-plus-Other treatment as SNAG_ROOMS, for the "Trade
+// responsible" field — trade itself stays the same optional plain
+// text column, so Other's own free-text value is what's saved, and a
+// snag already on the database (whatever it says here) keeps working,
+// pre-selecting Other with its own existing text. Not invented fresh:
+// these are the same 9 trades already offered (as a free-text
+// datalist, singularised here to match "Trade responsible") on
+// inspection-detail.html and weekly-report-form.html, kept consistent
+// with that existing list rather than a second, different one.
+export const SNAG_TRADES = [
+  "Bricklayer", "Carpenter", "Plumber", "Electrician", "Groundworker",
+  "Roofer", "Scaffolder", "Painter & Decorator", "Plasterer", "Other",
+];
+
 export function isSnagOutstanding(snag) {
   return !["closed", "rejected"].includes(snag.status);
 }
