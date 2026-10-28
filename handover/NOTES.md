@@ -804,3 +804,17 @@ Both PRs touch the same spot in `snag-list-edit.html`'s `app.js` import list (on
 Small one: Aled asked for the printed snag list PDF's filename to be "Site name - Plot #" (e.g. "Heol Crwys - Plot 23"). That page's "Print / Save as PDF" button is just the browser's native print dialog (`window.print()`), which takes its suggested filename straight from `document.title` — previously a static "Snag List – The Site Office" for every list. Set it dynamically per list instead, same convention already used by `weekly-report-view.html` and `snagging-report.html`'s own PDFs; falls back to the list's own title for a General (non-plot) list, since there's no plot number to use there. No schema change, no visible on-page change — only the suggested filename. Full suite 1938/1938. Opened as draft PR #67, Aled approved and merged — now live on `main`.
 
 — Claude
+
+---
+
+**28 Oct 2026, 11:40 BST — Claude**
+
+Aled reported "It's repeating 'plot'" right after #67 went live. Checked live data before guessing: `plot_number` is free text, and some projects already store it as "Plot 2"/"Plot 3" rather than a bare number (others are named, e.g. "Flint House") — my filename logic always prepended "Plot ", so those doubled up to "Plot Plot 2". Fixed by stripping any existing leading "Plot" first. Added a regression test for a `plot_number` that already includes it. Full suite 1939/1939. Opened as draft PR #68.
+
+Separately, Aled asked for the snag list's "Trade responsible" field to get the same drop-down-plus-Other treatment the Location/Room field got in v78. Checked what already exists first rather than inventing a fresh list: `inspection-detail.html` and `weekly-report-form.html` already offer the same 9 trades as a free-text datalist — reused that list here too (singularised to fit "Trade responsible"), rather than making a second, different one. Checked live data too: the only 2 real trade values ever recorded on a snag (Electrician, Roofer) already fit it. Unlike Location, trade stays optional — the blank "Choose a trade…" option is a real, saveable choice (→ null), not just a placeholder; editing an existing snag correctly tells apart a real match, legacy free text (pre-selects Other with the real text shown), and no trade at all (blank, not Other). No schema change. Full suite 1945/1945. Opened as draft PR #69.
+
+Aled said "merge it" right as #69's CI was still finishing — with two draft PRs open at once (#68 and #69), asked him directly which one rather than guess; he said both. Confirmed the two touch completely separate files (`snag-list-view.html` vs `snag-list-edit.html`) so no conflict risk, merged both.
+
+**The PDF filename "Plot" doubling fix and the Trade dropdown are both now live on `main`.**
+
+— Claude
