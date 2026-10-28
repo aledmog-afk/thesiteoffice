@@ -143,7 +143,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, uploadImage, todayISO, comparePlotNumbers, SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_PRIORITY_BADGE, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE, SNAG_ROOMS, SNAG_TRADES, categoriseSnag, assignSnag, verifySnag, unverifySnag, completeSnagWithPhoto, closeSnagWithEvidence, submitSnagForReview, approveSnagReview, rejectSnagReview, getSnagPhotos, addSnagPhoto, deleteSnagPhoto, getSnagCompletionPhotoCounts, createActionFromSnag, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel, moveSnagItemsToPlot } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, uploadImage, todayISO, comparePlotNumbers, SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_PRIORITY_BADGE, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE, SNAG_ROOMS, SNAG_TRADES, getOrgCustomTrades, addOrgCustomTrade, categoriseSnag, assignSnag, verifySnag, unverifySnag, completeSnagWithPhoto, closeSnagWithEvidence, submitSnagForReview, approveSnagReview, rejectSnagReview, getSnagPhotos, addSnagPhoto, deleteSnagPhoto, getSnagCompletionPhotoCounts, createActionFromSnag, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel, moveSnagItemsToPlot } from "./js/app.js";
 
   await requireAuth();
   const listId = getParam("id");
@@ -171,6 +171,8 @@
   let completionPhotoCounts = {}; // snag id -> number of completion-kind snag_photos, bulk-loaded once per list load
   let extraPhotos = { problem: [], completion: [] }; // the CURRENTLY-EDITED snag's snag_photos rows, split by kind
   let selectedIds = new Set(); // bulk-assign selection, cleared on every load/assign
+  let orgId = null; // resolved in init(), needed for custom-trade lookups/saves
+  let customTrades = []; // org_custom_trades, merged into the Trade dropdown alongside SNAG_TRADES
 
   const errorBox = document.getElementById("errorBox");
   const snagCard = document.getElementById("snagCard");
@@ -188,7 +190,8 @@
 
   prioritySelect.innerHTML = SNAG_PRIORITIES.map((p) => `<option value="${p}">${SNAG_PRIORITY_LABEL[p]}</option>`).join("");
   locationSelect.innerHTML = `<option value="">Choose a room…</option>` + SNAG_ROOMS.map((r) => `<option value="${r}">${r}</option>`).join("");
-  tradeSelect.innerHTML += SNAG_TRADES.map((t) => `<option value="${t}">${t}</option>`).join("");
+  tradeSelect.innerHTML += SNAG_TRADES.map((t) => `<option value="${t}">${t}</option>`).join("") +
+    `<option value="__add_trade__">+ Add new trade…</option>`;
 
   // "Other" reveals a free-text box for whatever room/trade isn't in
   // the list — location and trade are both still plain text columns,
@@ -200,7 +203,44 @@
     locationOtherInput.required = isOther;
     if (!isOther) locationOtherInput.value = "";
   });
-  tradeSelect.addEventListener("change", () => {
+
+  // v80: "+ Add new trade…" prompts once for a new trade, saves it
+  // company-wide (add_org_custom_trade — org-scoped, not per-project,
+  // so the same subcontractor trades don't need re-adding on every
+  // site), inserts it as a real option ahead of Other/+Add new trade
+  // so it's immediately available again for the rest of this list, and
+  // selects it. prompt() blocks the main thread, so there's no risk of
+  // the form being submitted mid-prompt with "__add_trade__" as the
+  // stored value.
+  function addTradeOption(trade) {
+    const opt = document.createElement("option");
+    opt.value = trade;
+    opt.textContent = trade;
+    tradeSelect.insertBefore(opt, tradeSelect.querySelector('option[value="Other"]'));
+  }
+  tradeSelect.addEventListener("change", async () => {
+    if (tradeSelect.value === "__add_trade__") {
+      const typed = (prompt("New trade name:", "") || "").trim();
+      if (!typed) {
+        tradeSelect.value = "";
+      } else {
+        try {
+          const saved = await addOrgCustomTrade(orgId, typed);
+          if (saved) {
+            if (!customTrades.includes(saved)) {
+              customTrades.push(saved);
+              addTradeOption(saved);
+            }
+            tradeSelect.value = saved;
+          } else {
+            tradeSelect.value = "";
+          }
+        } catch (err) {
+          alert("Couldn't save that trade: " + err.message);
+          tradeSelect.value = "";
+        }
+      }
+    }
     const isOther = tradeSelect.value === "Other";
     tradeOtherInput.style.display = isOther ? "block" : "none";
     tradeOtherInput.required = isOther;
@@ -299,10 +339,15 @@
       locationOtherInput.value = s.location || "";
     }
     // A trade typed before this dropdown existed (or anything that
-    // isn't an exact match to one of SNAG_TRADES) pre-selects "Other"
-    // with its own real value shown; no trade at all leaves the blank
-    // option selected, since trade stays optional.
-    if (s.trade && SNAG_TRADES.includes(s.trade) && s.trade !== "Other") {
+    // isn't an exact match to one of SNAG_TRADES or a saved custom
+    // trade) pre-selects "Other" with its own real value shown; no
+    // trade at all leaves the blank option selected, since trade stays
+    // optional. Checked against the dropdown's own actual <option>s
+    // (not just the SNAG_TRADES constant) so a custom trade already
+    // merged in by init() is recognised too.
+    const isKnownTrade = s.trade && s.trade !== "Other" && s.trade !== "__add_trade__" &&
+      [...tradeSelect.options].some((o) => o.value === s.trade);
+    if (isKnownTrade) {
       tradeSelect.value = s.trade;
       tradeOtherInput.style.display = "none";
       tradeOtherInput.required = false;
@@ -807,6 +852,17 @@
       { label: "Snagging", href: `snagging.html?project=${project.id}` },
       { label: plotLabel },
     ]);
+
+    // v80: merge in any trades this organisation has already added via
+    // "+ Add new trade…" on a previous snag, ahead of Other/+Add new
+    // trade. Tolerates a database without v80 yet (missing table ->
+    // caught, customTrades stays empty) the same way get_project_parties
+    // already does below for v61.
+    orgId = project.org_id;
+    try {
+      customTrades = await getOrgCustomTrades(orgId);
+      customTrades.forEach(addTradeOption);
+    } catch { customTrades = []; }
 
     if (isGeneralList) {
       const { data: plots } = await supabase
