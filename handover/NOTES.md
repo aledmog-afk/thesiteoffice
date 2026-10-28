@@ -796,3 +796,11 @@ Both PRs touch the same spot in `snag-list-edit.html`'s `app.js` import list (on
 **Both "Move to Plot" and the snag Room dropdown are now live on `main`.** The only PR checks still red on either are the same two pre-existing, unrelated ones already flagged (Workers Builds: no Workers code in this repo; Cloudflare Pages: liftwatch, still unexplained and still waiting on Aled).
 
 — Claude
+
+---
+
+**28 Oct 2026, 11:20 BST — Claude**
+
+Small one: Aled asked for the printed snag list PDF's filename to be "Site name - Plot #" (e.g. "Heol Crwys - Plot 23"). That page's "Print / Save as PDF" button is just the browser's native print dialog (`window.print()`), which takes its suggested filename straight from `document.title` — previously a static "Snag List – The Site Office" for every list. Set it dynamically per list instead, same convention already used by `weekly-report-view.html` and `snagging-report.html`'s own PDFs; falls back to the list's own title for a General (non-plot) list, since there's no plot number to use there. No schema change, no visible on-page change — only the suggested filename. Full suite 1938/1938. Opened as draft PR #67, Aled approved and merged — now live on `main`.
+
+— Claude
