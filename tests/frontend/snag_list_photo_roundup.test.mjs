@@ -202,3 +202,13 @@ test("document.title falls back to the list's own title for a General (non-plot)
   await wait(30);
   assert.equal(document.title, "Test Site - Site Walk");
 });
+
+// Some projects already store plot_number as "Plot 2" rather than a
+// bare "2" (confirmed against real production data) — the filename
+// must not double up to "Plot Plot 2".
+test("document.title doesn't double up 'Plot' when plot_number already includes it", async () => {
+  const snagList = { ...makeSnagList(), plots: { id: "plotA", plot_number: "Plot 23" } };
+  const { document } = await run([snagWithPhoto("s1", 1)], snagList);
+  await wait(30);
+  assert.equal(document.title, "Test Site - Plot 23");
+});

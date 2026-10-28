@@ -48,7 +48,11 @@
     // branded page heading (unlike every other tracker/*.html page's
     // title) — same convention as weekly-report-view.html and
     // snagging-report.html's own document.title lines.
-    document.title = list.plots ? `${project.name} - Plot ${list.plots.plot_number}` : `${project.name} - ${list.title}`;
+    // plot_number is free text and some projects already store it as
+    // "Plot 2" rather than a bare "2" (confirmed against live data) —
+    // strip any existing "Plot" prefix first so it's never doubled.
+    const plotNum = list.plots ? String(list.plots.plot_number).replace(/^\s*plot\s*/i, "").trim() : null;
+    document.title = list.plots ? `${project.name} - Plot ${plotNum}` : `${project.name} - ${list.title}`;
 
     renderHeader([
       { label: "Dashboard", href: "dashboard.html" },
