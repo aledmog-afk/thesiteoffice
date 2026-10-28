@@ -16843,3 +16843,69 @@ end;
 $$;
 revoke all on function public.move_snag_items_to_plot(uuid[], uuid) from public, anon, authenticated;
 grant execute on function public.move_snag_items_to_plot(uuid[], uuid) to authenticated;
+
+-- ─── v80 ADDITIONS: "Add trade" — custom, company-wide snag trades ──
+-- Aled asked for a dropdown "Add trade" option on the snag Trade
+-- field: type it once, and it's saved for next time instead of
+-- re-typing it via Other on every future snag. Company-wide
+-- (organisation-level), confirmed with him directly — the same
+-- subcontractor trades recur across every site a company works, not
+-- just one project. SNAG_TRADES in app.js stays the fixed baseline
+-- list; this table only ever ADDS options on top of it, deduplicated
+-- case/whitespace-insensitively (a functional unique index) so
+-- "Glazier" and "glazier " never create two separate entries.
+create table if not exists public.org_custom_trades (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.organisations(id) on delete cascade,
+  trade text not null,
+  created_by uuid references auth.users(id),
+  created_at timestamptz not null default now()
+);
+create unique index if not exists org_custom_trades_org_trade_uidx
+  on public.org_custom_trades (org_id, lower(btrim(trade)));
+create index if not exists org_custom_trades_org_idx on public.org_custom_trades (org_id);
+
+alter table public.org_custom_trades enable row level security;
+revoke all on table public.org_custom_trades from anon;
+drop policy if exists "org members read org_custom_trades" on public.org_custom_trades;
+create policy "org members read org_custom_trades" on public.org_custom_trades for select to authenticated
+  using (public.is_org_member(org_id));
+drop policy if exists "org members insert org_custom_trades" on public.org_custom_trades;
+create policy "org members insert org_custom_trades" on public.org_custom_trades for insert to authenticated
+  with check (public.is_org_member(org_id));
+-- No update/delete policy — Aled asked to ADD a trade, not manage or
+-- remove one; add a policy for that later if it's ever wanted.
+
+-- Normalises and dedupes — the only way in (the insert policy above
+-- is the real permission gate, same as every other insert in this
+-- schema; security invoker rides on it rather than re-deriving it).
+-- on conflict do nothing + a final select (rather than relying on the
+-- insert's own RETURNING) makes a genuine race between two users
+-- adding the identical trade at once resolve to one shared row
+-- either way, instead of one of them erroring.
+create or replace function public.add_org_custom_trade(p_org_id uuid, p_trade text)
+returns text
+language plpgsql
+security invoker
+set search_path = public
+as $$
+declare
+  v_trade text := nullif(btrim(p_trade), '');
+  v_existing text;
+begin
+  if v_trade is null then
+    return null;
+  end if;
+
+  insert into public.org_custom_trades (org_id, trade, created_by)
+  values (p_org_id, v_trade, auth.uid())
+  on conflict (org_id, (lower(btrim(trade)))) do nothing;
+
+  select trade into v_existing
+    from public.org_custom_trades
+   where org_id = p_org_id and lower(btrim(trade)) = lower(v_trade);
+  return v_existing;
+end;
+$$;
+revoke all on function public.add_org_custom_trade(uuid, text) from public, anon, authenticated;
+grant execute on function public.add_org_custom_trade(uuid, text) to authenticated;

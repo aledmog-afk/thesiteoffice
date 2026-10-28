@@ -1172,6 +1172,24 @@ export const SNAG_TRADES = [
   "Roofer", "Scaffolder", "Painter & Decorator", "Plasterer", "Other",
 ];
 
+// v80: "+ Add new trade…" on the Trade dropdown — a trade typed once
+// is remembered company-wide (organisation-level, not per-project; see
+// add_org_custom_trade()'s own comment in sql/schema.sql for why) so
+// it doesn't need re-typing via Other on every future snag. These are
+// ADDITIONS on top of SNAG_TRADES, never a replacement for it.
+export async function getOrgCustomTrades(orgId) {
+  if (!orgId) return [];
+  const { data, error } = await supabase.from("org_custom_trades").select("trade").eq("org_id", orgId).order("trade");
+  if (error) throw error;
+  return (data || []).map((r) => r.trade);
+}
+
+export async function addOrgCustomTrade(orgId, trade) {
+  const { data, error } = await supabase.rpc("add_org_custom_trade", { p_org_id: orgId, p_trade: trade });
+  if (error) throw error;
+  return data;
+}
+
 export function isSnagOutstanding(snag) {
   return !["closed", "rejected"].includes(snag.status);
 }
