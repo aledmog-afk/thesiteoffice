@@ -43,6 +43,13 @@
     const project = list.projects;
     const plotLabel = list.plots ? `${list.plots.plot_number} – Snag List` : list.title;
 
+    // Browsers take their "Save as PDF" filename straight from
+    // document.title, so this is deliberately a filename, not a
+    // branded page heading (unlike every other tracker/*.html page's
+    // title) — same convention as weekly-report-view.html and
+    // snagging-report.html's own document.title lines.
+    document.title = list.plots ? `${project.name} - Plot ${list.plots.plot_number}` : `${project.name} - ${list.title}`;
+
     renderHeader([
       { label: "Dashboard", href: "dashboard.html" },
       { label: project.name, href: `project.html?id=${project.id}` },

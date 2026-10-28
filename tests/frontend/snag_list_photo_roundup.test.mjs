@@ -32,6 +32,14 @@ function makeSnagList() {
   };
 }
 
+function makeGeneralSnagList() {
+  return {
+    id: "l1", plot_id: null, title: "Site Walk",
+    projects: { id: "p1", name: "Test Site", org_id: "org1", main_contractor_email: null, main_contractor_name: null, contract_ref: null },
+    plots: null,
+  };
+}
+
 function makeSupabase(store) {
   return {
     from(table) {
@@ -50,10 +58,10 @@ function makeSupabase(store) {
   };
 }
 
-async function run(snags) {
+async function run(snags, snagList = makeSnagList()) {
   return runPage(HTML, extractScript(HTML), {
     __url: "https://example.com/snag-list-view.html?id=l1",
-    supabase: makeSupabase({ snagList: makeSnagList(), snags }),
+    supabase: makeSupabase({ snagList, snags }),
     requireAuth: async () => ({ id: "u1" }),
     renderHeader: () => {},
     getParam: () => "l1",
@@ -64,6 +72,10 @@ async function run(snags) {
     isSnagOutstanding: (s) => !["closed", "rejected"].includes(s.status),
     SNAG_STATUS_LABEL, SNAG_STATUS_BADGE,
   });
+}
+
+async function runGeneral(snags) {
+  return run(snags, makeGeneralSnagList());
 }
 
 function snagWithPhoto(id, item_no, overrides = {}) {
@@ -174,4 +186,19 @@ test("each round-up card shows the snag's status badge and description", async (
   const card = document.querySelector(".photo-roundup-group .photo-card");
   assert.match(card.querySelector(".badge").textContent, /Pending Review|pending_review/i);
   assert.equal(card.querySelector(".photo-card-caption").textContent, "Cracked tile");
+});
+
+// The page's <title> is what a browser's "Print / Save as PDF" dialog
+// suggests as the filename — proving the page's actual document.title
+// at runtime, not just the static <title> tag in the HTML source.
+test("document.title is 'Site name - Plot #' for a plot-specific list, so Save as PDF suggests that filename", async () => {
+  const { document } = await run([snagWithPhoto("s1", 1)]);
+  await wait(30);
+  assert.equal(document.title, "Test Site - Plot 5");
+});
+
+test("document.title falls back to the list's own title for a General (non-plot) snag list", async () => {
+  const { document } = await runGeneral([snagWithPhoto("s1", 1)]);
+  await wait(30);
+  assert.equal(document.title, "Test Site - Site Walk");
 });
