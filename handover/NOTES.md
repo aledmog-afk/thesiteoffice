@@ -818,3 +818,17 @@ Aled said "merge it" right as #69's CI was still finishing — with two draft PR
 **The PDF filename "Plot" doubling fix and the Trade dropdown are both now live on `main`.**
 
 — Claude
+
+---
+
+**29 Oct 2026, 11:50 BST — Claude**
+
+Aled also asked for a way to save typing when a snag needs a trade that isn't in the fixed list — "+ Add new trade…" on the dropdown, saving it for next time. Confirmed scope with him directly before building anything: company-wide (organisation-level), not per-project, since the same subcontractor trades recur across every site he works, not just one.
+
+v80: `org_custom_trades` + `add_org_custom_trade()` — a thin, normalised upsert (trim + case-insensitive dedup via a functional unique index) gated by a standard `is_org_member()` RLS insert policy, same shape as every other org-scoped table in this schema. `SNAG_TRADES` in app.js stays the fixed baseline; this table only ever adds on top of it. Picking "+ Add new trade…" prompts once, saves it, inserts it as a real option ahead of Other so it's immediately reusable for the rest of the current list, and selects it. A database without v80 degrades gracefully rather than breaking the page (same tolerance already used for the v61 `get_project_parties` RPC).
+
+Aled said "merge it" mid-CI-run; test suite finished green right after, merged PR #70. The live SQL apply hit the tool's own permission prompt twice in a row with no answer coming through in time — rather than keep retrying blind, sent Aled the SQL file directly with the Supabase SQL editor link and had him run it himself, same fallback used several times earlier in this project. He ran it, reported "success"; verified directly against live Supabase afterwards (table and function both exist, grants are exactly `authenticated`/`postgres`/`service_role` — no `anon`) before telling him it's confirmed live, not just trusting his "success" at face value.
+
+**"+ Add new trade…" is now live on `main`.**
+
+— Claude
