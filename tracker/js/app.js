@@ -1190,6 +1190,23 @@ export async function addOrgCustomTrade(orgId, trade) {
   return data;
 }
 
+// v81: "Save as quick-add" on a snag's Description field — the same
+// company-wide, no-fixed-baseline pattern as the trade helpers above
+// (see add_org_custom_snag_description()'s own comment in
+// sql/schema.sql for why).
+export async function getOrgCustomSnagDescriptions(orgId) {
+  if (!orgId) return [];
+  const { data, error } = await supabase.from("org_custom_snag_descriptions").select("description").eq("org_id", orgId).order("description");
+  if (error) throw error;
+  return (data || []).map((r) => r.description);
+}
+
+export async function addOrgCustomSnagDescription(orgId, description) {
+  const { data, error } = await supabase.rpc("add_org_custom_snag_description", { p_org_id: orgId, p_description: description });
+  if (error) throw error;
+  return data;
+}
+
 export function isSnagOutstanding(snag) {
   return !["closed", "rejected"].includes(snag.status);
 }

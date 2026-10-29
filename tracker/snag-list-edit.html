@@ -66,7 +66,14 @@
           <input type="text" id="tradeOther" style="display:none; margin-top:0.4rem;" placeholder="Specify trade">
         </div>
       </div>
-      <div class="field"><label for="description">Description *</label><textarea id="description" rows="2" required placeholder="What's wrong and where exactly"></textarea></div>
+      <div class="field">
+        <label for="description">Description *</label>
+        <div class="btn-row" style="margin-bottom:0.3rem; flex-wrap:wrap;">
+          <select id="quickAddDescription" class="auto-width"><option value="">Quick-add a recurring issue…</option></select>
+          <button type="button" class="btn btn-outline btn-sm" id="saveDescriptionBtn">+ Save as quick-add</button>
+        </div>
+        <textarea id="description" rows="2" required placeholder="What's wrong and where exactly"></textarea>
+      </div>
       <div class="form-grid">
         <div class="field">
           <label for="priority">Priority</label>
@@ -143,7 +150,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, uploadImage, todayISO, comparePlotNumbers, SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_PRIORITY_BADGE, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE, SNAG_ROOMS, SNAG_TRADES, getOrgCustomTrades, addOrgCustomTrade, categoriseSnag, assignSnag, verifySnag, unverifySnag, completeSnagWithPhoto, closeSnagWithEvidence, submitSnagForReview, approveSnagReview, rejectSnagReview, getSnagPhotos, addSnagPhoto, deleteSnagPhoto, getSnagCompletionPhotoCounts, createActionFromSnag, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel, moveSnagItemsToPlot } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, uploadImage, todayISO, comparePlotNumbers, SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_PRIORITY_BADGE, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE, SNAG_ROOMS, SNAG_TRADES, getOrgCustomTrades, addOrgCustomTrade, getOrgCustomSnagDescriptions, addOrgCustomSnagDescription, categoriseSnag, assignSnag, verifySnag, unverifySnag, completeSnagWithPhoto, closeSnagWithEvidence, submitSnagForReview, approveSnagReview, rejectSnagReview, getSnagPhotos, addSnagPhoto, deleteSnagPhoto, getSnagCompletionPhotoCounts, createActionFromSnag, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel, moveSnagItemsToPlot } from "./js/app.js";
 
   await requireAuth();
   const listId = getParam("id");
@@ -173,6 +180,7 @@
   let selectedIds = new Set(); // bulk-assign selection, cleared on every load/assign
   let orgId = null; // resolved in init(), needed for custom-trade lookups/saves
   let customTrades = []; // org_custom_trades, merged into the Trade dropdown alongside SNAG_TRADES
+  let customDescriptions = []; // org_custom_snag_descriptions, for the Description field's "Quick-add" picker
 
   const errorBox = document.getElementById("errorBox");
   const snagCard = document.getElementById("snagCard");
@@ -185,6 +193,9 @@
   const locationOtherInput = document.getElementById("locationOther");
   const tradeSelect = document.getElementById("trade");
   const tradeOtherInput = document.getElementById("tradeOther");
+  const descriptionTextarea = document.getElementById("description");
+  const quickAddDescriptionSelect = document.getElementById("quickAddDescription");
+  const saveDescriptionBtn = document.getElementById("saveDescriptionBtn");
   let parties = [];
   let partyNames = []; // display only; the RPC already limits which companies the caller can see
 
@@ -218,6 +229,15 @@
     opt.textContent = trade;
     tradeSelect.insertBefore(opt, tradeSelect.querySelector('option[value="Other"]'));
   }
+  // Long descriptions are truncated for the dropdown's own display
+  // text only — opt.value (what actually fills the textarea on
+  // selection) always keeps the full, untruncated text.
+  function addDescriptionOption(description) {
+    const opt = document.createElement("option");
+    opt.value = description;
+    opt.textContent = description.length > 60 ? description.slice(0, 57) + "…" : description;
+    quickAddDescriptionSelect.appendChild(opt);
+  }
   tradeSelect.addEventListener("change", async () => {
     if (tradeSelect.value === "__add_trade__") {
       const typed = (prompt("New trade name:", "") || "").trim();
@@ -245,6 +265,37 @@
     tradeOtherInput.style.display = isOther ? "block" : "none";
     tradeOtherInput.required = isOther;
     if (!isOther) tradeOtherInput.value = "";
+  });
+
+  // v81: "Quick-add a recurring issue…" fills the Description textarea
+  // from a previously-saved org_custom_snag_descriptions entry —
+  // unlike Location/Trade there's no fixed baseline list and no
+  // "Other" concept, since Description stays fully free text; this is
+  // purely an optional fill-in aid. Reset back to the blank placeholder
+  // afterward so the select behaves like a one-shot action, not a
+  // persistent selection the free text could then drift out of sync
+  // with.
+  quickAddDescriptionSelect.addEventListener("change", () => {
+    if (quickAddDescriptionSelect.value) {
+      descriptionTextarea.value = quickAddDescriptionSelect.value;
+      quickAddDescriptionSelect.value = "";
+    }
+  });
+  saveDescriptionBtn.addEventListener("click", async () => {
+    const typed = descriptionTextarea.value.trim();
+    if (!typed) {
+      alert("Type a description first.");
+      return;
+    }
+    try {
+      const saved = await addOrgCustomSnagDescription(orgId, typed);
+      if (saved && !customDescriptions.includes(saved)) {
+        customDescriptions.push(saved);
+        addDescriptionOption(saved);
+      }
+    } catch (err) {
+      alert("Couldn't save that description: " + err.message);
+    }
   });
 
   // Renders the current photo thumbnail plus, only when this session
@@ -863,6 +914,10 @@
       customTrades = await getOrgCustomTrades(orgId);
       customTrades.forEach(addTradeOption);
     } catch { customTrades = []; }
+    try {
+      customDescriptions = await getOrgCustomSnagDescriptions(orgId);
+      customDescriptions.forEach(addDescriptionOption);
+    } catch { customDescriptions = []; }
 
     if (isGeneralList) {
       const { data: plots } = await supabase
