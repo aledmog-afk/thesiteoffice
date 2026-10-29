@@ -846,3 +846,17 @@ Live SQL apply hit the same tool permission-prompt timeout as v80 did — sent h
 **"+ Save as quick-add" for recurring snag descriptions is now live on `main`.**
 
 — Claude
+
+---
+
+**29 Oct 2026, 18:10 BST — Claude**
+
+Aled asked for a snag report, customisable per plot/site/multiple plots, showing trends, and — his own instruction — wanted to see an example before anything got built. Checked the existing "Site Snag Sheet" first (`snagging-report.html`) to avoid duplicating it: that one is a single-project operational list with a status filter only, no trends, no multi-plot scope — this is genuinely a new, separate report, not an extension of it.
+
+Built a full interactive mockup first, as an Artifact with clearly-labelled sample data (real trades/rooms/plot names from Heol Crwys, fabricated numbers) — scope chips, date range, trend chart, trade/room breakdowns, status/priority, a ranked plot table, and a "Most Common Issues" section. Aled approved it, then asked for a "Print / Save as PDF" option too, so built the real thing against live data, matching the approved mockup exactly plus that: same `window.print()` + document.title-as-filename + mailto convention every other report in this app already uses. Average days to close reads the server-maintained `closed_date` column (a trigger-set field on the status transition) rather than being computed/guessed. A genuinely site-wide snag (no plot tag) counts in Whole Site totals but is correctly excluded once a specific plot is selected. Linked from `snagging.html` next to the existing Site Snag Sheet button.
+
+No schema change. 11 new frontend tests (scope/date filtering, the overdue and avg-days-to-close math, the above-average plot flag, repeat-only issue filtering, the PDF filename, XSS). Full suite 1982/1982. Opened as draft PR #72, Aled approved, merged.
+
+**The Snag Report is now live on `main`.**
+
+— Claude
