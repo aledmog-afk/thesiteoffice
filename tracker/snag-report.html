@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="js/theme-init.js"></script>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Snag Report – The Site Office</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+<style>
+  /* v82: chart/filter pieces this report needs that app.css's shared
+     .doc/.badge classes don't already cover. Everything else (doc-head,
+     doc-facts, doc-section, print rules) reuses the existing report
+     convention used by snagging-report.html and friends. */
+  .chip-row { display: flex; flex-wrap: wrap; gap: 0.4rem; max-width: 420px; }
+  .chip {
+    font-size: 0.82rem; font-weight: 600; padding: 0.3rem 0.75rem; border-radius: 999px;
+    border: 1px solid var(--rule); background: var(--off); color: var(--ink-soft);
+    cursor: pointer; user-select: none; white-space: nowrap;
+  }
+  .chip[aria-pressed="true"] { background: var(--amber); border-color: var(--amber); color: #1a1406; }
+  .seg-row { display: flex; gap: 2px; background: var(--off); border: 1px solid var(--rule); border-radius: 6px; padding: 2px; }
+  .seg-btn { font-size: 0.82rem; font-weight: 600; padding: 0.3rem 0.65rem; border-radius: 4px; border: none; background: transparent; color: var(--ink-soft); cursor: pointer; }
+  .seg-btn[aria-pressed="true"] { background: var(--white); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,0.08); }
+
+  .hbar-row { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.5rem; }
+  .hbar-label { width: 150px; flex: none; font-size: 0.8rem; color: var(--ink-soft); text-align: right; }
+  .hbar-track { flex: 1; height: 14px; background: var(--rule); border-radius: 4px; overflow: hidden; min-width: 0; }
+  .hbar-fill { height: 100%; border-radius: 4px; }
+  .hbar-val { width: 26px; flex: none; font-size: 0.8rem; font-weight: 600; }
+
+  .stack-bar { display: flex; height: 20px; border-radius: 5px; overflow: hidden; }
+  .stack-seg { height: 100%; }
+  .stack-legend { display: flex; flex-wrap: wrap; gap: 0.9rem; font-size: 0.8rem; color: var(--ink-soft); margin-top: 0.5rem; }
+  .stack-legend .item { display: flex; align-items: center; gap: 0.35rem; }
+  .stack-legend .sw { width: 9px; height: 9px; border-radius: 2px; flex: none; }
+
+  .issue-row { display: flex; align-items: center; gap: 0.6rem; padding: 0.4rem 0; border-bottom: 1px solid var(--rule); }
+  .issue-row:last-child { border-bottom: none; }
+  .issue-rank { width: 18px; flex: none; font-family: var(--font-display); font-weight: 700; color: var(--ink-soft); font-size: 0.85rem; text-align: center; }
+  .issue-text { flex: 1; min-width: 0; font-size: 0.85rem; }
+  .issue-count { flex: none; font-size: 0.78rem; font-weight: 600; color: var(--ink-soft); }
+
+  .row-flag { font-size: 0.68rem; font-weight: 700; padding: 0.1rem 0.4rem; border-radius: 999px; display: inline-block; }
+  svg.chart text { font-family: var(--font-body); fill: var(--ink-soft); }
+</style>
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page page-900">
+  <div class="doc-toolbar no-print">
+    <label class="flex-row hint-text" style="gap:0.5rem;">
+      Scope
+      <span class="chip-row" id="plotChips"></span>
+    </label>
+    <label class="flex-row hint-text" style="gap:0.5rem;">
+      Range
+      <span class="seg-row" id="rangeSeg">
+        <button class="seg-btn" data-range="30">30 days</button>
+        <button class="seg-btn" data-range="90" aria-pressed="true">90 days</button>
+        <button class="seg-btn" data-range="all">All time</button>
+      </span>
+    </label>
+    <button class="btn btn-outline btn-sm" id="printBtn">Print / Save as PDF</button>
+    <a class="btn btn-amber btn-sm" id="emailLink" href="#">Email to Main Contractor</a>
+  </div>
+
+  <div class="doc" id="doc" style="max-width:1000px;">Loading…</div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, todayISO, getOrgLogoUrl, comparePlotNumbers, SNAG_STATUS_LABEL } from "./js/app.js";
+
+  await requireAuth();
+  const projectId = getParam("project");
+  if (!projectId) window.location.href = "dashboard.html";
+
+  document.getElementById("printBtn").addEventListener("click", () => window.print());
+
+  const STATUS_COLOR = { open: "var(--red)", pending_review: "var(--amber)", closed: "var(--green)", rejected: "var(--ink-soft)" };
+  const PRIORITY_COLOR = { high: "var(--red)", medium: "var(--amber)", low: "var(--green)" };
+  const PRIORITY_LABEL = { high: "High", medium: "Medium", low: "Low" };
+
+  function fileDate(d) {
+    return `${d.getDate()}.${d.getMonth() + 1}.${String(d.getFullYear()).slice(-2)}`;
+  }
+
+  let project = null;
+  let plots = []; // [{id, plot_number}], sorted
+  let plotById = {};
+  let allSnags = [];
+  let logoUrl = null;
+
+  let selectedPlots = new Set(["__all__"]);
+  let rangeDays = 90;
+
+  function resolvePlotNumber(s) {
+    const plotId = s.plot_id || s.snag_lists?.plot_id;
+    return plotId ? (plotById[plotId] || null) : null;
+  }
+  function inRange(s) {
+    if (rangeDays === "all") return true;
+    const days = Math.round((new Date() - new Date(s.raised_date)) / 86400000);
+    return days <= rangeDays;
+  }
+  function inScope(s) {
+    if (selectedPlots.has("__all__")) return true;
+    const p = resolvePlotNumber(s);
+    return p && selectedPlots.has(p);
+  }
+  function filtered() { return allSnags.filter((s) => inRange(s) && inScope(s)); }
+
+  function scopeLabel() {
+    const scope = selectedPlots.has("__all__") ? "Whole Site" : [...selectedPlots].sort((a, b) => comparePlotNumbers(a, b)).join(", ");
+    const range = rangeDays === "all" ? "All Time" : `Last ${rangeDays} Days`;
+    return `${scope} — ${range}`;
+  }
+
+  function renderChips() {
+    const row = document.getElementById("plotChips");
+    row.innerHTML = "";
+    const all = document.createElement("button");
+    all.type = "button"; all.className = "chip"; all.textContent = "Whole Site";
+    all.setAttribute("aria-pressed", String(selectedPlots.has("__all__")));
+    all.addEventListener("click", () => { selectedPlots = new Set(["__all__"]); render(); });
+    row.appendChild(all);
+    plots.forEach((p) => {
+      const c = document.createElement("button");
+      c.type = "button"; c.className = "chip"; c.textContent = p.plot_number;
+      c.setAttribute("aria-pressed", String(!selectedPlots.has("__all__") && selectedPlots.has(p.plot_number)));
+      c.addEventListener("click", () => {
+        selectedPlots.delete("__all__");
+        if (selectedPlots.has(p.plot_number)) selectedPlots.delete(p.plot_number); else selectedPlots.add(p.plot_number);
+        if (selectedPlots.size === 0) selectedPlots.add("__all__");
+        render();
+      });
+      row.appendChild(c);
+    });
+  }
+  document.getElementById("rangeSeg").addEventListener("click", (e) => {
+    const btn = e.target.closest(".seg-btn"); if (!btn) return;
+    [...document.querySelectorAll("#rangeSeg .seg-btn")].forEach((b) => b.setAttribute("aria-pressed", "false"));
+    btn.setAttribute("aria-pressed", "true");
+    rangeDays = btn.dataset.range === "all" ? "all" : Number(btn.dataset.range);
+    render();
+  });
+
+  function hbars(data, keyFn) {
+    const counts = {};
+    data.forEach((s) => { const k = keyFn(s); if (k) counts[k] = (counts[k] || 0) + 1; });
+    return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  }
+  function renderHBarsHtml(entries, color) {
+    if (!entries.length) return `<p class="hint-text">No snags in this scope.</p>`;
+    const max = entries[0][1];
+    return entries.map(([label, n]) => `
+      <div class="hbar-row">
+        <div class="hbar-label">${escapeHtml(label)}</div>
+        <div class="hbar-track"><div class="hbar-fill" style="width:${(n / max * 100).toFixed(1)}%; background:${color};"></div></div>
+        <div class="hbar-val">${n}</div>
+      </div>
+    `).join("");
+  }
+
+  function renderStackHtml(data, field, meta) {
+    const total = data.length || 1;
+    const counts = {}; data.forEach((s) => { counts[s[field]] = (counts[s[field]] || 0) + 1; });
+    const bar = `<div class="stack-bar">${meta.map((m) => {
+      const n = counts[m.key] || 0; const pct = (n / total * 100).toFixed(1);
+      return n ? `<div class="stack-seg" style="width:${pct}%; background:${m.color};"></div>` : "";
+    }).join("")}</div>`;
+    const legend = `<div class="stack-legend">${meta.map((m) => `<span class="item"><span class="sw" style="background:${m.color}"></span>${escapeHtml(m.label)} (${counts[m.key] || 0})</span>`).join("")}</div>`;
+    return bar + legend;
+  }
+
+  // SVG line chart, weekly raised vs closed — no page-break issue since
+  // the whole doc-section it's inside keeps to one printed block via
+  // the existing break-inside rule on .doc table rows/.photo-card; a
+  // chart this short never spans a page boundary in practice.
+  function renderTrendHtml(data, weeks) {
+    const raisedByWeek = new Array(weeks).fill(0);
+    const closedByWeek = new Array(weeks).fill(0);
+    const now = new Date();
+    data.forEach((s) => {
+      const raisedDaysAgo = Math.round((now - new Date(s.raised_date)) / 86400000);
+      const w = Math.min(weeks - 1, Math.max(0, Math.floor(raisedDaysAgo / 7)));
+      raisedByWeek[weeks - 1 - w]++;
+      if (s.closed_date) {
+        const closedDaysAgo = Math.round((now - new Date(s.closed_date)) / 86400000);
+        if (closedDaysAgo >= 0 && closedDaysAgo / 7 < weeks) {
+          const cw = Math.min(weeks - 1, Math.floor(closedDaysAgo / 7));
+          closedByWeek[weeks - 1 - cw]++;
+        }
+      }
+    });
+    const w = 900, h = 190, padL = 26, padR = 8, padT = 10, padB = 10;
+    const maxV = Math.max(1, ...raisedByWeek, ...closedByWeek);
+    const x = (i) => padL + (i / (weeks - 1 || 1)) * (w - padL - padR);
+    const y = (v) => padT + (1 - v / maxV) * (h - padT - padB);
+    const line = (arr) => arr.map((v, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+    const gridLines = [0, 0.5, 1].map((f) => {
+      const gy = padT + f * (h - padT - padB);
+      const val = Math.round(maxV * (1 - f));
+      return `<line x1="${padL}" x2="${w - padR}" y1="${gy}" y2="${gy}" stroke="var(--rule)" stroke-width="1"/><text x="${padL - 6}" y="${gy + 3}" font-size="9" text-anchor="end">${val}</text>`;
+    }).join("");
+    return `<svg class="chart" viewBox="0 0 ${w} ${h}" width="100%" style="display:block; height:auto;">
+      ${gridLines}
+      <path d="${line(raisedByWeek)}" fill="none" stroke="var(--red)" stroke-width="2"/>
+      <path d="${line(closedByWeek)}" fill="none" stroke="var(--green)" stroke-width="2"/>
+    </svg>
+    <div class="stack-legend">
+      <span class="item"><span class="sw" style="background:var(--red)"></span>Raised</span>
+      <span class="item"><span class="sw" style="background:var(--green)"></span>Closed</span>
+    </div>`;
+  }
+
+  function plotTableHtml(data) {
+    const byPlot = {};
+    plots.forEach((p) => { byPlot[p.plot_number] = []; });
+    data.forEach((s) => { const p = resolvePlotNumber(s); if (p && byPlot[p]) byPlot[p].push(s); });
+    const rows = Object.entries(byPlot).map(([plot, items]) => {
+      const open = items.filter((s) => s.status === "open").length;
+      const overdue = items.filter((s) => s.status === "open" && s.due_date && s.due_date < todayISO()).length;
+      const closed = items.filter((s) => s.status === "closed" && s.closed_date);
+      const avg = closed.length ? closed.reduce((a, s) => a + Math.round((new Date(s.closed_date) - new Date(s.raised_date)) / 86400000), 0) / closed.length : null;
+      return { plot, total: items.length, open, overdue, avg };
+    }).filter((r) => r.total > 0).sort((a, b) => b.open - a.open);
+    if (rows.length <= 1) return "";
+    const avgOpen = rows.reduce((a, r) => a + r.open, 0) / (rows.length || 1);
+    return `
+      <div class="doc-section">
+        <h3>By Plot</h3>
+        <div class="table-wrap">
+          <table class="snag-table">
+            <thead><tr><th>Plot</th><th>Total</th><th>Open</th><th>Overdue</th><th>Avg. Days to Close</th><th></th></tr></thead>
+            <tbody>
+              ${rows.map((r) => `
+                <tr>
+                  <td><strong>${escapeHtml(r.plot)}</strong></td>
+                  <td>${r.total}</td>
+                  <td>${r.open}</td>
+                  <td>${r.overdue || "—"}</td>
+                  <td>${r.avg !== null ? r.avg.toFixed(1) : "—"}</td>
+                  <td>${r.open > avgOpen * 1.5 && r.open >= 3 ? `<span class="row-flag" style="background:var(--red-light); color:var(--red);">Above average</span>` : ""}</td>
+                </tr>
+              `).join("")}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+  }
+
+  function issuesHtml(data) {
+    const counts = {};
+    data.forEach((s) => { if (s.description) counts[s.description] = (counts[s.description] || 0) + 1; });
+    const entries = Object.entries(counts).filter(([, n]) => n > 1).sort((a, b) => b[1] - a[1]).slice(0, 6);
+    if (!entries.length) return `<p class="hint-text">No repeated issue descriptions in this scope.</p>`;
+    return entries.map(([text, n], i) => `
+      <div class="issue-row">
+        <div class="issue-rank">${i + 1}</div>
+        <div class="issue-text">${escapeHtml(text)}</div>
+        <div class="issue-count">${n} times</div>
+      </div>
+    `).join("");
+  }
+
+  function render() {
+    renderChips();
+    const data = filtered();
+    const total = data.length;
+    const open = data.filter((s) => s.status === "open").length;
+    const overdue = data.filter((s) => s.status === "open" && s.due_date && s.due_date < todayISO()).length;
+    const closed = data.filter((s) => s.status === "closed" && s.closed_date);
+    const avgClose = closed.length
+      ? (closed.reduce((a, s) => a + Math.round((new Date(s.closed_date) - new Date(s.raised_date)) / 86400000), 0) / closed.length).toFixed(1)
+      : "—";
+
+    const label = scopeLabel();
+    document.title = `Snag Report - ${project.name} - ${label} - ${fileDate(new Date())}`;
+    document.getElementById("emailLink").href = buildEmailHref(label, total);
+
+    const weeks = rangeDays === "all" ? 17 : Math.ceil(rangeDays / 7);
+
+    document.getElementById("doc").innerHTML = `
+      <div class="doc-head">
+        <div>
+          ${logoUrl ? `<img class="doc-logo" src="${logoUrl}" alt="">` : ""}
+          <h1>Snag Report</h1>
+          <div style="color:var(--ink-soft); font-size:0.9rem; margin-top:0.2rem;">${escapeHtml(project.name)} — ${escapeHtml(label)}</div>
+        </div>
+        <div class="doc-meta">
+          ${project.contract_ref ? "Ref: " + escapeHtml(project.contract_ref) + "<br>" : ""}
+          To: ${escapeHtml(project.main_contractor_name) || "Main Contractor"}<br>
+          Generated: ${formatDate(todayISO())}
+        </div>
+      </div>
+
+      <dl class="doc-facts">
+        <div><dt>Total Snags</dt><dd>${total}</dd></div>
+        <div><dt>Currently Open</dt><dd>${open}</dd></div>
+        <div><dt>Overdue</dt><dd style="${overdue ? "color:var(--red);" : ""}">${overdue}</dd></div>
+        <div><dt>Avg. Days to Close</dt><dd>${avgClose}</dd></div>
+      </dl>
+
+      <div class="doc-section">
+        <h3>Snags Raised vs. Closed</h3>
+        ${renderTrendHtml(data, weeks)}
+      </div>
+
+      <div class="doc-grid-2">
+        <div class="doc-section">
+          <h3>By Trade</h3>
+          ${renderHBarsHtml(hbars(data, (s) => s.trade), "var(--blue)")}
+        </div>
+        <div class="doc-section">
+          <h3>By Room</h3>
+          ${renderHBarsHtml(hbars(data, (s) => s.location), "var(--amber)")}
+        </div>
+      </div>
+
+      <div class="doc-grid-2">
+        <div class="doc-section">
+          <h3>Status</h3>
+          ${renderStackHtml(data, "status", [
+            { key: "open", label: "Open", color: STATUS_COLOR.open },
+            { key: "pending_review", label: "Pending Review", color: STATUS_COLOR.pending_review },
+            { key: "closed", label: "Closed", color: STATUS_COLOR.closed },
+            { key: "rejected", label: "Rejected", color: STATUS_COLOR.rejected },
+          ])}
+        </div>
+        <div class="doc-section">
+          <h3>Priority</h3>
+          ${renderStackHtml(data, "priority", [
+            { key: "high", label: "High", color: PRIORITY_COLOR.high },
+            { key: "medium", label: "Medium", color: PRIORITY_COLOR.medium },
+            { key: "low", label: "Low", color: PRIORITY_COLOR.low },
+          ])}
+        </div>
+      </div>
+
+      ${plotTableHtml(data)}
+
+      <div class="doc-section">
+        <h3>Most Common Issues</h3>
+        ${issuesHtml(data)}
+      </div>
+    `;
+  }
+
+  function buildEmailHref(label, count) {
+    const subject = encodeURIComponent(`Snag Report – ${project.name} – ${label}`);
+    const body = encodeURIComponent(
+      `Hi,\n\nPlease find attached the snag report for ${project.name} (${label}), generated ${formatDate(todayISO())}.\n\n` +
+      `${count} item(s) covered.\n\n(Use "Print / Save as PDF" on this page and attach it here.)\n\nRegards,`
+    );
+    return `mailto:${project.main_contractor_email || ""}?subject=${subject}&body=${body}`;
+  }
+
+  async function load() {
+    const { data: proj } = await supabase.from("projects").select("*").eq("id", projectId).single();
+    if (!proj) { document.getElementById("doc").textContent = "Project not found."; return; }
+    project = proj;
+
+    renderHeader([
+      { label: "Dashboard", href: "dashboard.html" },
+      { label: project.name, href: `project.html?id=${projectId}` },
+      { label: "Snagging", href: `snagging.html?project=${projectId}` },
+      { label: "Snag Report" },
+    ]);
+
+    const { data: plotRows } = await supabase.from("plots").select("id, plot_number").eq("project_id", projectId);
+    plots = (plotRows || []).slice().sort((a, b) => comparePlotNumbers(a.plot_number, b.plot_number));
+    plotById = {}; plots.forEach((p) => { plotById[p.id] = p.plot_number; });
+
+    const { data: items, error } = await supabase
+      .from("snag_items")
+      .select("*, snag_lists(plot_id)")
+      .eq("project_id", projectId)
+      .order("raised_date", { ascending: true });
+    if (error) { document.getElementById("doc").textContent = "Could not load snags."; return; }
+    allSnags = items || [];
+
+    logoUrl = await getOrgLogoUrl(project.org_id);
+    render();
+  }
+
+  load();
+</script>
+</body>
+</html>
