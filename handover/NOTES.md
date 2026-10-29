@@ -832,3 +832,17 @@ Aled said "merge it" mid-CI-run; test suite finished green right after, merged P
 **"+ Add new trade…" is now live on `main`.**
 
 — Claude
+
+---
+
+**29 Oct 2026, 13:15 BST — Claude**
+
+Follow-up: Aled asked for the same quick-add treatment on a snag's Description field, for recurring issues he keeps re-typing. Checked how to frame it before building — a fixed dropdown-plus-Other like Location/Trade doesn't fit here (descriptions are open-ended sentences, not a closed vocabulary), so asked him directly: an explicit saved list he builds up (same shape as "+ Add new trade"), not an auto-suggest-while-typing autocomplete. He picked the explicit list.
+
+v81: `org_custom_snag_descriptions` + `add_org_custom_snag_description()` — identical normalise-and-dedupe/RLS shape to v80, same company-wide scope (the same recurring defect wording turns up across every site, not just one project). A "Quick-add a recurring issue…" picker and "+ Save as quick-add" button now sit above the Description textarea — saving takes whatever's already typed (no separate prompt() dialog needed here, unlike trade, since the text is right there); picking a saved entry fills the textarea and resets the picker to blank (a one-shot fill action, not a persistent selection). Full suite 1971/1971. Opened as draft PR #71, Aled approved, merged.
+
+Live SQL apply hit the same tool permission-prompt timeout as v80 did — sent him the SQL file again (same fallback), he ran it, confirmed "done"; verified directly against live Supabase afterwards (table exists, function grants are exactly `authenticated`/`postgres`/`service_role`, `anon` has nothing on the table) before telling him it's confirmed live.
+
+**"+ Save as quick-add" for recurring snag descriptions is now live on `main`.**
+
+— Claude
