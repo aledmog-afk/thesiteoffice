@@ -16909,3 +16909,67 @@ end;
 $$;
 revoke all on function public.add_org_custom_trade(uuid, text) from public, anon, authenticated;
 grant execute on function public.add_org_custom_trade(uuid, text) to authenticated;
+
+-- ─── v81 ADDITIONS: "Save as quick-add" — reusable snag descriptions ─
+-- Aled asked for a way to re-use a snag's Description text for
+-- recurring issues without re-typing it from scratch every time —
+-- same request shape as v80's custom trades, so this mirrors it
+-- exactly: company-wide (organisation-level), confirmed with him
+-- directly, since the same recurring defect wording ("Skirting gap at
+-- external corner" etc.) turns up across every site a company works,
+-- not just one project. Unlike SNAG_TRADES/SNAG_ROOMS there's no fixed
+-- baseline list to seed this with — purely user-built from nothing,
+-- so there's no "Other" concept here either: Description stays a
+-- free-text field, this table is only ever an optional quick-fill aid
+-- on top of it, never a constraint on what can be typed.
+create table if not exists public.org_custom_snag_descriptions (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.organisations(id) on delete cascade,
+  description text not null,
+  created_by uuid references auth.users(id),
+  created_at timestamptz not null default now()
+);
+create unique index if not exists org_custom_snag_descriptions_org_desc_uidx
+  on public.org_custom_snag_descriptions (org_id, lower(btrim(description)));
+create index if not exists org_custom_snag_descriptions_org_idx on public.org_custom_snag_descriptions (org_id);
+
+alter table public.org_custom_snag_descriptions enable row level security;
+revoke all on table public.org_custom_snag_descriptions from anon;
+drop policy if exists "org members read org_custom_snag_descriptions" on public.org_custom_snag_descriptions;
+create policy "org members read org_custom_snag_descriptions" on public.org_custom_snag_descriptions for select to authenticated
+  using (public.is_org_member(org_id));
+drop policy if exists "org members insert org_custom_snag_descriptions" on public.org_custom_snag_descriptions;
+create policy "org members insert org_custom_snag_descriptions" on public.org_custom_snag_descriptions for insert to authenticated
+  with check (public.is_org_member(org_id));
+-- No update/delete policy — Aled asked to ADD a quick-fill, not manage
+-- or remove one; add a policy for that later if it's ever wanted.
+
+-- Same normalise-and-dedupe shape as add_org_custom_trade() — see its
+-- own comment above for why security invoker + the insert policy
+-- above (not a manual check here) is the real permission gate.
+create or replace function public.add_org_custom_snag_description(p_org_id uuid, p_description text)
+returns text
+language plpgsql
+security invoker
+set search_path = public
+as $$
+declare
+  v_description text := nullif(btrim(p_description), '');
+  v_existing text;
+begin
+  if v_description is null then
+    return null;
+  end if;
+
+  insert into public.org_custom_snag_descriptions (org_id, description, created_by)
+  values (p_org_id, v_description, auth.uid())
+  on conflict (org_id, (lower(btrim(description)))) do nothing;
+
+  select description into v_existing
+    from public.org_custom_snag_descriptions
+   where org_id = p_org_id and lower(btrim(description)) = lower(v_description);
+  return v_existing;
+end;
+$$;
+revoke all on function public.add_org_custom_snag_description(uuid, text) from public, anon, authenticated;
+grant execute on function public.add_org_custom_snag_description(uuid, text) to authenticated;
