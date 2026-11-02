@@ -860,3 +860,17 @@ No schema change. 11 new frontend tests (scope/date filtering, the overdue and a
 **The Snag Report is now live on `main`.**
 
 — Claude
+
+---
+
+**2 Nov 2026, 20:55 GMT — Claude**
+
+Aled asked for a public marketing website to gauge interest. Worked through this one in stages since it had real architectural tension: first discovered Claude Artifacts' `db`/`user` capabilities don't resolve for genuinely anonymous public visitors (only the owner's org and invited guests), which rules out an Artifact-based lead-capture form for this audience — flagged it rather than building something that would silently fail. Aled chose to build it properly in Claude Code instead. Then found the public root pages (`index.html` and friends) are deliberately 100% script-free with a locked CSP, enforced by `tests/frontend/landing_page.test.mjs` — and that a plain scriptless HTML form has no way to carry the `apikey` header Supabase's REST API needs on every request regardless of CSP. Asked Aled: script on the page, or a small server-side endpoint? He chose the server-side endpoint.
+
+v83: added a "Register your interest" form to the front page (name/email required, company/message optional, an off-screen honeypot) — still zero `<script>` tags anywhere on the page. It posts as a plain `<form method="POST">` straight to a new Supabase Edge Function, `register-interest` — the **second** deliberate, disclosed exception to this app's "no custom backend" architecture (the first is `commercial-approval-evidence`). The function validates input, checks the honeypot, writes with the service-role key (never exposed to the browser), and 303-redirects back to the front page's own `#interest-sent`/`#interest-error` notice banners (same `.notice:target` pattern as `#shop-closed`). New table `public.interest_signups`: RLS enabled with zero policies at all, so only the edge function or Aled (via the SQL editor) can ever touch it — not even an authenticated user can read or write it. `_headers` widens `form-action` (only) to the function's origin, scoped to exactly `/` and `/index.html` — every other root page keeps the stricter original policy; confirmed via `pages_rules.mjs`'s exact-path matching that this can't leak to `/privacy`, `/terms`, `/404`.
+
+6 new tests (3 database: anon/authenticated both fully locked out, a privileged connection writes correctly and the email check constraint holds; 3 frontend: form markup/required fields/honeypot, the new notice banners, the narrowly-scoped CSP). Full suite 1988/1988. Opened as draft PR #73; Aled approved. Applied the migration and deployed the edge function live (verified via the Supabase API: RLS on, zero `anon`/`authenticated` grants, function status ACTIVE) before merging — couldn't fire a real end-to-end POST from this sandbox (outbound proxy blocks it), so a real live submission is still worth Aled checking once deployed.
+
+**The "Register your interest" form is now live on `main`.**
+
+— Claude
