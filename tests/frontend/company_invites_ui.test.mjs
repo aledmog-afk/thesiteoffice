@@ -135,8 +135,12 @@ test("invite.html: when signed out, it sends you to sign in and keeps the token 
 test("login.html: next=invite.html always returns to the invite, even for a user with no company yet", async () => {
   const fs = await import("node:fs");
   const src = fs.readFileSync(new URL("../../tracker/login.html", import.meta.url).pathname, "utf8");
+  // landingPageFor() checks this before the organisation-membership
+  // check below it, so a sign-in with next=invite.html always returns
+  // to the invite regardless of whether that signed-in user has an
+  // organisation yet (v84: self-service sign-up is gone, so this is
+  // now the ONLY path that reaches landingPageFor() at all).
   assert.match(src, /if \(next === "invite\.html"\) return next;/);
-  assert.match(src, /next === "invite\.html" \? "invite\.html" : "onboarding\.html"/);
 });
 
 test("invite.html: no token in the link → a clear message, no sign-in loop", async () => {
@@ -179,8 +183,9 @@ function companiesCtx({ role = "owner", parties = [], invites = [], partiesError
       ? [{ user_id: "u1", email: "aled@tai.test" }, { user_id: "u9", email: "staff@tai.test" }]
       : [{ user_id: "u1", email: "dave@almo.test" }, { user_id: "u5", email: "sam@almo.test" }]),
     createPartyInvite: async (...a) => { calls.push(["invite", ...a]); return { invite_id: "i9", token: "b".repeat(64) }; },
-    resendPartyInvite: async (id) => { calls.push(["resend", id]); return { token: "c".repeat(64) }; },
+    resendPartyInvite: async (id) => { calls.push(["resend", id]); return { invite_id: id, token: "c".repeat(64) }; },
     cancelPartyInvite: async (id) => { calls.push(["cancel", id]); },
+    sendPartyInviteAccountEmail: async (...a) => { calls.push(["email", ...a]); return { sent: true }; },
     setPartyRole: async (...a) => { calls.push(["role", ...a]); },
     removeParty: async (id) => { calls.push(["removeParty", id]); },
     addPartyMember: async (...a) => { calls.push(["addMember", ...a]); },
@@ -266,6 +271,68 @@ test("companies.html: a sub-subcontractor invite is created under the sub's own 
   await wait(30);
   assert.deepEqual(calls[0], ["invite", "p1", "cee@cee.test", "subcontractor", "Fixings", "pa"]);
   assert.match(f.querySelector("[data-subsub-link] input").value, /invite\.html#t=b{64}/);
+});
+
+// ─── v84: the account-invite email sent alongside the manual link ────
+test("companies.html (v84): creating an invite also fires the account-invite email, and reports success in the hint", async () => {
+  const { ctx, calls } = companiesCtx();
+  const { document } = await runPage(COMPANIES, extractScript(COMPANIES), ctx);
+  await wait(30);
+  document.getElementById("inviteEmail").value = "dave@almo.test";
+  document.getElementById("inviteTrade").value = "Carpentry";
+  fireEvent(document.getElementById("inviteForm"), "submit");
+  await wait(30);
+  assert.deepEqual(calls.find((c) => c[0] === "email"), ["email", "i9", "b".repeat(64)]);
+  assert.equal(document.getElementById("newLinkHint").style.display, "block");
+  assert.match(document.getElementById("newLinkHint").textContent, /emailed them a link/);
+});
+
+test("companies.html (v84): when the invited address already has an account, the hint says so instead of claiming an email went out", async () => {
+  const { ctx } = companiesCtx();
+  ctx.sendPartyInviteAccountEmail = async () => ({ sent: false, reason: "existing_user" });
+  const { document } = await runPage(COMPANIES, extractScript(COMPANIES), ctx);
+  await wait(30);
+  document.getElementById("inviteEmail").value = "dave@almo.test";
+  document.getElementById("inviteTrade").value = "Carpentry";
+  fireEvent(document.getElementById("inviteForm"), "submit");
+  await wait(30);
+  assert.match(document.getElementById("newLinkHint").textContent, /already have an account/);
+});
+
+test("companies.html (v84): a failure sending the account-invite email is non-fatal — the manual link still shows, with a soft hint instead of a page error", async () => {
+  const { ctx } = companiesCtx();
+  ctx.sendPartyInviteAccountEmail = async () => { throw new Error("network down"); };
+  const { document } = await runPage(COMPANIES, extractScript(COMPANIES), ctx);
+  await wait(30);
+  document.getElementById("inviteEmail").value = "dave@almo.test";
+  document.getElementById("inviteTrade").value = "Carpentry";
+  fireEvent(document.getElementById("inviteForm"), "submit");
+  await wait(30);
+  assert.equal(document.getElementById("errorBox").textContent, "", "a failed account-invite email must never show as a page error");
+  assert.equal(document.getElementById("newLinkRow").style.display, "flex", "the manually-shared link must still appear regardless");
+  assert.match(document.getElementById("newLinkHint").textContent, /share the link above yourself/);
+});
+
+test("companies.html (v84): resend also fires the account-invite email, for the same invite id", async () => {
+  const { ctx, calls } = companiesCtx({ parties: [ALMO], invites: [{ id: "i1", invited_email: "x@y.test", party_role: "client", trade: null, expires_at: "2099-01-01T00:00:00Z" }] });
+  const { document } = await runPage(COMPANIES, extractScript(COMPANIES), ctx);
+  await wait(30);
+  document.querySelector("[data-resend]").click();
+  await wait(30);
+  assert.deepEqual(calls.find((c) => c[0] === "email"), ["email", "i1", "c".repeat(64)]);
+});
+
+test("companies.html (v84): a sub-subcontractor invite also fires its own account-invite email, with its own hint element", async () => {
+  const { ctx, calls } = companiesCtx({ role: "snagging", parties: [{ ...ALMO, i_admin: true }] });
+  const { document } = await runPage(COMPANIES, extractScript(COMPANIES), ctx);
+  await wait(30);
+  const f = document.querySelector('[data-subsub-form="pa"]');
+  f.elements.email.value = "cee@cee.test";
+  f.elements.trade.value = "Fixings";
+  fireEvent(f, "submit");
+  await wait(30);
+  assert.deepEqual(calls.find((c) => c[0] === "email"), ["email", "i9", "b".repeat(64)]);
+  assert.match(f.querySelector("[data-subsub-hint]").textContent, /emailed them a link/);
 });
 
 test("companies.html: on a database without v61 it says so instead of erroring", async () => {

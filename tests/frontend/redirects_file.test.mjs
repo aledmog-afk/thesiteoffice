@@ -46,17 +46,15 @@ test("_redirects: nothing under /tracker is redirected, so approval links, invit
   }
 });
 
-test("_redirects: every old shop page, pretty and .html, is a permanent 301 to the home page's shop-closed notice", () => {
+test("_redirects: every old shop page, pretty and .html, is a permanent 301 to the home page", () => {
   for (const page of OLD_SHOP_PAGES) {
     for (const path of [`/${page}`, `/${page}.html`]) {
       const r = matchRedirect(rules, path);
       assert.ok(r, `${path} has no redirect`);
       assert.equal(r.code, 301, `${path} should be permanent`);
-      assert.equal(r.destination, "/#shop-closed");
+      assert.equal(r.destination, "/");
     }
   }
-  const home = fs.readFileSync(new URL("index.html", ROOT), "utf8");
-  assert.match(home, /id="shop-closed"/, "the redirect target's notice must exist on the home page");
 });
 
 test("_redirects: the removed shop files are really gone (a redirect would hide them anyway, but they should not linger)", () => {

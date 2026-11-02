@@ -9,29 +9,32 @@
 # app's files stay exactly where they are. tests/frontend/redirects_file
 # .test.mjs enforces this.
 
-# Old Site Office template pages -> home page, with the "shop has closed"
-# notice shown. Both the pretty URL and the .html form are listed because
-# Pages matches the request path before it resolves pretty URLs.
-/Rams                     /#shop-closed 301
-/Rams.html                /#shop-closed 301
-/rams                     /#shop-closed 301
-/rams.html                /#shop-closed 301
-/cdm                      /#shop-closed 301
-/cdm.html                 /#shop-closed 301
-/commercial               /#shop-closed 301
-/commercial.html          /#shop-closed 301
-/contracts                /#shop-closed 301
-/contracts.html           /#shop-closed 301
-/health-safety            /#shop-closed 301
-/health-safety.html       /#shop-closed 301
-/hr                       /#shop-closed 301
-/hr.html                  /#shop-closed 301
-/quality                  /#shop-closed 301
-/quality.html             /#shop-closed 301
-/site-management          /#shop-closed 301
-/site-management.html     /#shop-closed 301
-/free-starter-pack        /#shop-closed 301
-/free-starter-pack.html   /#shop-closed 301
+# Old Site Office template pages -> home page. (v84: the "shop has
+# closed" notice itself was removed from the front page - it had done
+# its job and the only new entry point there now is "Register your
+# interest" - so these just land on the plain home page.) Both the
+# pretty URL and the .html form are listed because Pages matches the
+# request path before it resolves pretty URLs.
+/Rams                     / 301
+/Rams.html                / 301
+/rams                     / 301
+/rams.html                / 301
+/cdm                      / 301
+/cdm.html                 / 301
+/commercial               / 301
+/commercial.html          / 301
+/contracts                / 301
+/contracts.html           / 301
+/health-safety            / 301
+/health-safety.html       / 301
+/hr                       / 301
+/hr.html                  / 301
+/quality                  / 301
+/quality.html             / 301
+/site-management          / 301
+/site-management.html     / 301
+/free-starter-pack        / 301
+/free-starter-pack.html   / 301
 
 # Short sign-in addresses. 302 (not 301) so they can change later
 # without browsers caching them for good.
