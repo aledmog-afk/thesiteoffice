@@ -16,6 +16,22 @@
   Strict-Transport-Security: max-age=31536000
   Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
 
+# v83: the front page's "Register your interest" form posts straight
+# to a Supabase Edge Function (no script on this page at all — see
+# register-interest's own comment for why a plain scriptless form has
+# to work this way). form-action is the only directive narrowed here:
+# everything else (script-src, connect-src, img-src...) stays exactly
+# the default /* policy, so this page still cannot load or run a
+# script from anywhere, and still cannot exfiltrate anything via
+# fetch/XHR — only submit a normal <form> POST, to this one named
+# origin, same as every <a href> on the public pages already could.
+/
+  ! Content-Security-Policy
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self' https://nkrgzmxwvydoridmiskl.supabase.co; frame-ancestors 'none'
+/index.html
+  ! Content-Security-Policy
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self' https://nkrgzmxwvydoridmiskl.supabase.co; frame-ancestors 'none'
+
 # The Site Office itself (/tracker/*). Unchanged by the domain move.
 #
 # script-src includes 'unsafe-inline': every one of The Site Office's pages

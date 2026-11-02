@@ -16973,3 +16973,46 @@ end;
 $$;
 revoke all on function public.add_org_custom_snag_description(uuid, text) from public, anon, authenticated;
 grant execute on function public.add_org_custom_snag_description(uuid, text) to authenticated;
+
+-- ─── v83 ADDITIONS: "Register your interest" on the public front page ─
+-- Aled asked for a public marketing page to gauge interest. The root
+-- pages (index.html and friends) are deliberately script-free with a
+-- locked-down CSP (see _headers' own comment and
+-- tests/frontend/landing_page.test.mjs's "no scripts at all" test) —
+-- there is no client capable of carrying the Supabase apikey header a
+-- direct table/RPC call needs, so the plain HTML form on the front
+-- page posts to a Supabase Edge Function
+-- (supabase/functions/register-interest/) instead, which holds the
+-- service-role key server-side and never exposes it to the browser.
+-- This is the SECOND deliberate, disclosed exception to this app's
+-- otherwise-total "no custom backend" architecture — see
+-- commercial-approval-evidence's own comment for the first and the
+-- same reasoning: a genuinely public, unauthenticated submission with
+-- no Supabase Auth session has no other way to reach this project at
+-- all (every other table/RPC in this schema assumes at minimum an
+-- anon client carrying the project's own apikey header, which a plain
+-- scriptless form cannot send).
+--
+-- RLS is enabled with NO policies for anon or authenticated at all —
+-- not even insert. Only the edge function's own service-role client
+-- (which bypasses RLS entirely, same as every other admin operation in
+-- this schema) ever touches this table; Aled reads submissions via the
+-- Supabase SQL editor (also bypasses RLS, as the project owner), the
+-- same place he already runs every other manual SQL step.
+create table if not exists public.interest_signups (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  email text not null check (email ~ '^[^@\s]+@[^@\s]+\.[^@\s]+$'),
+  company text,
+  message text,
+  source text not null default 'landing_page',
+  created_at timestamptz not null default now()
+);
+create index if not exists interest_signups_created_idx on public.interest_signups (created_at desc);
+
+alter table public.interest_signups enable row level security;
+revoke all on table public.interest_signups from anon, authenticated;
+-- No policies at all — RLS with zero policies denies every operation
+-- to every role it applies to (anon, authenticated); only service_role
+-- and the table owner (used by the SQL editor / this migration itself)
+-- bypass RLS by definition and are unaffected.
