@@ -148,6 +148,54 @@ test("_headers: Cache-Control is scoped to the app's JS/CSS only - HTML pages an
   }
 });
 
+test("landing: the register-interest form posts to the edge function with the required fields and a honeypot a real visitor never sees", () => {
+  const doc = load("index.html");
+  const form = doc.querySelector(".landing-interest form");
+  assert.ok(form, "no register-interest form found");
+  assert.equal(form.getAttribute("method").toUpperCase(), "POST");
+  assert.equal(form.getAttribute("action"), "https://nkrgzmxwvydoridmiskl.supabase.co/functions/v1/register-interest");
+
+  const name = form.querySelector('input[name="name"]');
+  const email = form.querySelector('input[name="email"]');
+  assert.ok(name && name.hasAttribute("required"), "name must be required");
+  assert.equal(email?.getAttribute("type"), "email");
+  assert.ok(email.hasAttribute("required"), "email must be required");
+
+  const honeypot = form.querySelector('input[name="website"]');
+  assert.ok(honeypot, "no honeypot field");
+  assert.equal(honeypot.getAttribute("tabindex"), "-1");
+  assert.equal(honeypot.getAttribute("autocomplete"), "off");
+  assert.ok(honeypot.classList.contains("hp-field"), "honeypot must use the off-screen hp-field class, not display:none (some bots skip hidden fields)");
+});
+
+test("landing: the register-interest success/error notices follow the same #target convention as #shop-closed, and don't collide with it", () => {
+  const doc = load("index.html");
+  const html = fs.readFileSync(new URL("index.html", ROOT), "utf8");
+  for (const id of ["interest-sent", "interest-error"]) {
+    const notice = doc.getElementById(id);
+    assert.ok(notice, `#${id} notice missing`);
+    assert.ok(notice.classList.contains("notice"), `#${id} must use the .notice:target convention`);
+  }
+  assert.match(html, /\.notice-success \{[^}]*\}/, "no notice-success styling");
+  assert.match(html, /\.notice-error \{[^}]*\}/, "no notice-error styling");
+});
+
+test("_headers: form-action is widened to the Supabase edge function only on / and /index.html, never on the other root pages", () => {
+  const rules = parseHeaders(readRootFile("_headers"));
+  for (const p of ["/", "/index.html"]) {
+    assert.match(resolveHeaders(rules, p)["Content-Security-Policy"], /form-action 'self' https:\/\/nkrgzmxwvydoridmiskl\.supabase\.co;/, p);
+  }
+  for (const p of ["/404", "/404.html", "/privacy", "/privacy.html", "/terms", "/terms.html", "/no-such-page"]) {
+    const csp = resolveHeaders(rules, p)["Content-Security-Policy"];
+    assert.match(csp, /form-action 'self';/, p);
+    assert.doesNotMatch(csp, /supabase\.co/, `${p}: must not pick up the widened form-action`);
+  }
+  // script-src and everything else stay exactly the default /* policy on / too - only form-action differs.
+  const rootCsp = resolveHeaders(rules, "/")["Content-Security-Policy"];
+  assert.match(rootCsp, /script-src 'self';/, "/ must still allow no script beyond 'self'");
+  assert.match(rootCsp, /connect-src 'self';/, "/ must still block fetch/XHR to any other origin");
+});
+
 test("robots and sitemap: the front page is listed, the app itself is kept out of search", () => {
   const robots = readRootFile("robots.txt");
   assert.match(robots, /^Disallow: \/tracker\/$/m);

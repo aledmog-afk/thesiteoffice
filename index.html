@@ -24,10 +24,24 @@
   .landing-foot nav { display: flex; gap: 1rem; }
   .notice { display: none; background: var(--amber-light); border: 1px solid var(--amber); border-radius: 8px; padding: 0.8rem 1rem; margin-bottom: 1.2rem; font-size: 0.9rem; }
   .notice:target { display: block; }
+  .notice-success { background: var(--green-light); border-color: var(--green); color: var(--green); }
+  .notice-error { background: var(--red-light); border-color: var(--red); color: var(--red); }
+  .landing-interest { border: 1px solid var(--rule); border-radius: 8px; padding: 1.6rem; margin-top: 2.5rem; }
+  .landing-interest h2 { font-family: var(--font-display); font-size: 1.3rem; margin-bottom: 0.3rem; }
+  .landing-interest .landing-interest-sub { color: var(--ink-soft); font-size: 0.88rem; margin-bottom: 1.2rem; }
+  .landing-interest-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.9rem; margin-bottom: 0.9rem; }
+  .landing-interest label { display: block; font-size: 0.8rem; font-weight: 600; color: var(--ink-soft); margin-bottom: 0.3rem; }
+  .landing-interest input, .landing-interest textarea {
+    width: 100%; font-family: var(--font-body); font-size: 0.95rem; padding: 0.55rem 0.7rem;
+    border: 1px solid var(--rule); border-radius: 6px; background: var(--white); color: var(--ink);
+  }
+  .landing-interest textarea { resize: vertical; min-height: 4.5rem; }
+  .hp-field { position: absolute; left: -9999px; top: -9999px; }
   @media (max-width: 760px) {
     .landing-hero { grid-template-columns: 1fr; }
     .landing-hero h1 { font-size: 2rem; }
     .landing-features { grid-template-columns: 1fr; }
+    .landing-interest-grid { grid-template-columns: 1fr; }
   }
 </style>
 </head>
@@ -43,6 +57,12 @@
 <main class="page landing">
   <div id="shop-closed" class="notice" role="status">
     Our old document template shop has closed. This address is now home to The Site Office, our site-tracking app for construction teams.
+  </div>
+  <div id="interest-sent" class="notice notice-success" role="status">
+    Thanks — we've got your details and will be in touch.
+  </div>
+  <div id="interest-error" class="notice notice-error" role="status">
+    Something went wrong sending that. Please check your email address and try again.
   </div>
 
   <section class="landing-hero">
@@ -86,6 +106,40 @@
       <h2>Documents and drawings</h2>
       <p>Current drawings and site documents, kept together with the programme.</p>
     </div>
+  </section>
+
+  <section class="landing-interest" aria-labelledby="registerInterestHeading">
+    <h2 id="registerInterestHeading">Not ready to sign up?</h2>
+    <p class="landing-interest-sub">Tell us a bit about your sites and we'll be in touch — no account needed yet.</p>
+    <form method="POST" action="https://nkrgzmxwvydoridmiskl.supabase.co/functions/v1/register-interest">
+      <!-- Hidden from real visitors (off-screen, not display:none — a
+           blank-form-field bot check that real users never see or
+           interact with; see register-interest's own comment). -->
+      <label class="hp-field" for="website">Leave this field blank</label>
+      <input class="hp-field" type="text" id="website" name="website" tabindex="-1" autocomplete="off">
+
+      <div class="landing-interest-grid">
+        <div>
+          <label for="interestName">Name</label>
+          <input type="text" id="interestName" name="name" required maxlength="120" autocomplete="name">
+        </div>
+        <div>
+          <label for="interestEmail">Email</label>
+          <input type="email" id="interestEmail" name="email" required maxlength="254" autocomplete="email">
+        </div>
+      </div>
+      <div class="landing-interest-grid">
+        <div>
+          <label for="interestCompany">Company</label>
+          <input type="text" id="interestCompany" name="company" maxlength="160" autocomplete="organization">
+        </div>
+        <div>
+          <label for="interestMessage">Anything you'd like us to know</label>
+          <input type="text" id="interestMessage" name="message" maxlength="1000">
+        </div>
+      </div>
+      <button type="submit" class="btn btn-amber">Register interest</button>
+    </form>
   </section>
 
   <footer class="landing-foot">
