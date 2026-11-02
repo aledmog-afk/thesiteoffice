@@ -56,6 +56,7 @@
         <input type="text" id="newLinkInput" readonly style="flex:1; min-width:220px;">
         <button type="button" class="btn btn-outline btn-sm" id="copyNewLinkBtn">Copy Link</button>
       </div>
+      <p class="hint" id="newLinkHint" style="display:none; margin-top:0.4rem;"></p>
     </div>
 
     <div class="card" style="margin-top:1.2rem;">
@@ -82,7 +83,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, PARTY_ROLES, partyRoleText, partyInviteLink, isMissingRpcError, getProjectParties, createPartyInvite, resendPartyInvite, cancelPartyInvite, getPendingPartyInvites, setPartyRole, removeParty, addPartyMember, removePartyMember, addOrgMemberToProject, getOrganisationMembers, partyRoleAccessText, setMainContractorAccess } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, PARTY_ROLES, partyRoleText, partyInviteLink, isMissingRpcError, getProjectParties, createPartyInvite, resendPartyInvite, cancelPartyInvite, getPendingPartyInvites, setPartyRole, removeParty, addPartyMember, removePartyMember, addOrgMemberToProject, getOrganisationMembers, partyRoleAccessText, setMainContractorAccess, sendPartyInviteAccountEmail } from "./js/app.js";
 
   const me = await requireAuth();
   const projectId = getParam("project");
@@ -104,6 +105,22 @@
     document.getElementById("newLinkRow").style.display = "flex";
   }
   document.getElementById("copyNewLinkBtn").addEventListener("click", () => copy(document.getElementById("newLinkInput").value));
+
+  // v84: fires the real account-invite email alongside the manually-
+  // shared link above (sign-up is off, so a brand-new recipient has no
+  // other way to get an account). Never blocks or fails the main
+  // invite flow — `hintEl` just reports what happened.
+  async function sendInviteEmail(inviteId, token, hintEl) {
+    hintEl.style.display = "block";
+    try {
+      const result = await sendPartyInviteAccountEmail(inviteId, token);
+      hintEl.textContent = result && result.sent === false
+        ? "They already have an account on The Site Office — the link above signs them straight in."
+        : "We've also emailed them a link to set up their account.";
+    } catch {
+      hintEl.textContent = "Couldn't send the account-setup email automatically — share the link above yourself.";
+    }
+  }
 
   let project = null;
   let parties = [];
@@ -187,6 +204,7 @@
                 <button type="submit" class="btn btn-outline btn-sm">Create Invite Link</button>
               </div>
               <div class="btn-row" data-subsub-link style="display:none; margin-top:0.5rem;"><input type="text" readonly style="flex:1;"><button type="button" class="btn btn-outline btn-sm" data-copy-subsub>Copy Link</button></div>
+              <p class="hint" data-subsub-hint style="display:none; margin-top:0.4rem;"></p>
             </form>` : ""}
         </div>`);
     }
@@ -250,6 +268,7 @@
     try {
       const inv = await createPartyInvite(projectId, document.getElementById("inviteEmail").value.trim(), roleVal, roleVal === "subcontractor" ? trade : null);
       showLink(inv.token);
+      sendInviteEmail(inv.invite_id, inv.token, document.getElementById("newLinkHint"));
       e.target.reset();
       tradeWrap.style.display = "block";
       await load();
@@ -274,7 +293,12 @@
       if (window.confirm(`Remove ${t.dataset.name} from this job? Their people (and any sub-subcontractors they brought in) lose access straight away.`)) run(() => removeParty(t.dataset.removeParty));
     } else if (t.dataset.resend) {
       clearError(errorBox);
-      try { const inv = await resendPartyInvite(t.dataset.resend); showLink(inv.token); await load(); } catch (err) { showError(errorBox, err); }
+      try {
+        const inv = await resendPartyInvite(t.dataset.resend);
+        showLink(inv.token);
+        sendInviteEmail(t.dataset.resend, inv.token, document.getElementById("newLinkHint"));
+        await load();
+      } catch (err) { showError(errorBox, err); }
     } else if (t.dataset.cancel) {
       run(() => cancelPartyInvite(t.dataset.cancel));
     } else if (t.dataset.teamAdd) {
@@ -296,6 +320,7 @@
       const row = f.querySelector("[data-subsub-link]");
       row.querySelector("input").value = partyInviteLink(inv.token);
       row.style.display = "flex";
+      sendInviteEmail(inv.invite_id, inv.token, f.querySelector("[data-subsub-hint]"));
     } catch (err) { showError(errorBox, err); }
   });
 

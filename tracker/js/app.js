@@ -802,6 +802,20 @@ export async function getPartyInvite(token) {
   return (Array.isArray(rows) ? rows[0] : rows) || null;
 }
 export const acceptPartyInvite = (token, orgId) => rpcOrThrow("accept_party_invite", { p_token: token, p_org_id: orgId });
+// v84: fires the real Supabase account-invite email for a party-invite
+// recipient who may not have an account yet (see
+// supabase/functions/invite-party-user/ for the why and the
+// authorization it re-checks server-side). Deliberately non-fatal by
+// design from the caller's side — the manually-shared invite link
+// (createPartyInvite/resendPartyInvite's own `token`) still works
+// regardless of whether this email could be sent, so a thrown error
+// here is something the caller catches and shows as a soft hint, never
+// a page-breaking failure.
+export async function sendPartyInviteAccountEmail(inviteId, token) {
+  const { data, error } = await supabase.functions.invoke("invite-party-user", { body: { invite_id: inviteId, token } });
+  if (error) throw error;
+  return data;
+}
 export const addPartyMember = (partyId, userId) => rpcOrThrow("add_party_member", { p_party_id: partyId, p_user_id: userId });
 export const removePartyMember = (partyId, userId) => rpcOrThrow("remove_party_member", { p_party_id: partyId, p_user_id: userId });
 export const setPartyRole = (partyId, role, trade = null) => rpcOrThrow("set_party_role", { p_party_id: partyId, p_party_role: role, p_trade: trade });

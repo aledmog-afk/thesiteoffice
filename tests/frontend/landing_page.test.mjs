@@ -23,11 +23,10 @@ function servedFile(href) {
   return undefined;
 }
 
-test("landing: a plain The Site Office front page whose sign-in and sign-up links reach the real login page", () => {
+test("landing: a plain The Site Office front page whose sign-in link reaches the real login page", () => {
   const doc = load("index.html");
   assert.match(doc.title, /The Site Office/);
   assert.equal(doc.getElementById("signInLink").getAttribute("href"), "/tracker/login.html");
-  assert.equal(doc.getElementById("signUpLink").getAttribute("href"), "/tracker/login.html?mode=signup");
   assert.equal(doc.querySelector('link[rel="canonical"]').getAttribute("href"), "https://thesiteoffice.uk/");
   assert.ok(doc.querySelector('link[rel="stylesheet"][href="/tracker/css/app.css"]'), "uses the app's shared stylesheet");
 });
@@ -41,13 +40,18 @@ test("landing: no personal branding, no shop and no contact email on the public 
   }
 });
 
-test("landing: the shop-closed notice is hidden unless a redirected visitor lands on #shop-closed", () => {
+test("landing: the old shop-closed notice is gone (v84) - the interest-sent/error notices still use the same .notice:target convention", () => {
   const html = fs.readFileSync(new URL("index.html", ROOT), "utf8");
   const doc = load("index.html");
-  const notice = doc.getElementById("shop-closed");
-  assert.ok(notice);
+  assert.equal(doc.getElementById("shop-closed"), null, "the shop-closed notice should have been removed");
   assert.match(html, /\.notice \{ display: none;/);
   assert.match(html, /\.notice:target \{ display: block; \}/);
+});
+
+test("landing (v84): no self-service sign-up anywhere - the front page offers only sign-in and the interest form", () => {
+  const doc = load("index.html");
+  assert.equal(doc.getElementById("signUpLink"), null, "no sign-up link on the front page");
+  assert.equal(doc.querySelector('a[href*="mode=signup"]'), null, "no link opens login.html in sign-up mode");
 });
 
 test("public pages: no scripts at all, so the strict root CSP (script-src 'self') can never block them", () => {

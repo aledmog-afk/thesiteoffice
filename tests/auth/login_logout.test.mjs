@@ -211,41 +211,6 @@ test("4. login.html: a user belonging to MULTIPLE organisations still goes strai
   assert.equal(window.location.href, "dashboard.html", "belonging to several organisations is still 'has access' — must never be treated as needing onboarding");
 });
 
-test("login.html: a successful signup with an immediate session goes to onboarding.html, not straight to the dashboard", async () => {
-  const supabase = {
-    auth: {
-      getSession: async () => ({ data: { session: null } }),
-      signUp: async () => ({ data: { session: { user: { id: "new-user" } } }, error: null }),
-    },
-  };
-  const { document, window, jsdomWindow } = await runLogin(supabase);
-  document.getElementById("toggleBtn").dispatchEvent(new jsdomWindow.Event("click"));
-  document.getElementById("email").value = "newuser@example.com";
-  document.getElementById("password").value = "correct-horse";
-  document.getElementById("authForm").dispatchEvent(new jsdomWindow.Event("submit", { cancelable: true }));
-  await new Promise((r) => setTimeout(r, 20));
-
-  assert.equal(window.location.href, "onboarding.html", "a brand-new account must be routed to the organisation choice, not straight to the dashboard");
-});
-
-test("login.html: a signup that requires email confirmation shows a message and does not navigate anywhere (existing behaviour, unchanged)", async () => {
-  const supabase = {
-    auth: {
-      getSession: async () => ({ data: { session: null } }),
-      signUp: async () => ({ data: { session: null }, error: null }),
-    },
-  };
-  const { document, window, jsdomWindow } = await runLogin(supabase);
-  document.getElementById("toggleBtn").dispatchEvent(new jsdomWindow.Event("click"));
-  document.getElementById("email").value = "newuser@example.com";
-  document.getElementById("password").value = "correct-horse";
-  document.getElementById("authForm").dispatchEvent(new jsdomWindow.Event("submit", { cancelable: true }));
-  await new Promise((r) => setTimeout(r, 20));
-
-  assert.equal(window.location.href, "", "no navigation should happen until the user actually has a session");
-  assert.ok(document.getElementById("infoBox").textContent.includes("Check your email"));
-});
-
 test("2. login.html: an ordinary sign-in (existing user with an approved organisation) still goes straight to the dashboard, never onboarding", async () => {
   const supabase = {
     auth: {
@@ -298,4 +263,15 @@ test("5. login.html: an anonymous (no session) visitor sees the ordinary sign-in
   const { window, document } = await runLogin(supabase);
   assert.equal(window.location.href, "", "no session at all must never trigger any redirect — the sign-in form is what an anonymous visitor should see");
   assert.ok(document.getElementById("authForm"), "the sign-in form itself must still be present");
+});
+
+test("login.html (v84): no self-service sign-up - no toggle button/link, and the page script never calls supabase.auth.signUp", async () => {
+  const src = fs.readFileSync(new URL("../../tracker/login.html", import.meta.url).pathname, "utf8");
+  assert.doesNotMatch(src, /\.signUp\s*\(/, "login.html must never call supabase.auth.signUp");
+  assert.doesNotMatch(src, /mode=signup|mode === "signup"|"signup"/, "no sign-up mode of any kind");
+  const supabase = { auth: { getSession: async () => ({ data: { session: null } }) } };
+  const { document } = await runLogin(supabase);
+  assert.equal(document.getElementById("toggleBtn"), null, "no 'Create one' toggle button");
+  assert.equal(document.getElementById("signupToggleRow"), null);
+  assert.equal(document.getElementById("submitBtn").textContent, "Sign In", "the only mode is sign-in (plus forgot-password)");
 });
