@@ -874,3 +874,25 @@ v83: added a "Register your interest" form to the front page (name/email require
 **The "Register your interest" form is now live on `main`.**
 
 — Claude
+
+---
+
+**3 Nov 2026, 21:40 GMT — Claude**
+
+Aled asked to remove self-service sign-up ahead of turning it off in Supabase, and to check whether accepting a company invite would break once that happens. It would have: a brand-new lead person opening a party invite (`tracker/invite.html`) relied on signing themselves up via `login.html`'s sign-up toggle (`supabase.auth.signUp()`), which fails outright on a never-registered address once sign-up is off.
+
+Removed every self-service sign-up entry point: the front page's "Create one" link, `login.html`'s sign-up toggle/`mode=signup`/`signUp()` call, and (asked for alongside this) the old "shop has closed" notice — the old shop redirects now just land on the plain home page.
+
+v84: fixed the invite path with a new Supabase Edge Function, `invite-party-user` — the **third** disclosed exception to this app's "no custom backend" rule (after `commercial-approval-evidence` and `register-interest`). When an org admin creates or resends a party invite, this now also fires a real `auth.admin.inviteUserByEmail()` for the invited address. Authorization is checked server-side every call by re-deriving it from the real table, never trusted from the caller: the function SELECTs the named `project_party_invites` row through a client scoped to the **caller's own forwarded JWT**, and that table's existing RLS policy (`can_manage_party_invite()`) is the exact same rule already gating every other invite action — no row back means not authorized, full stop. Only after that passes does it touch the service-role key, and only for that one address. An existing user's invite just errors as "already registered" inside the function, treated as a normal non-fatal outcome (they still have the unchanged manually-shared link).
+
+New page `tracker/invite-password.html` (mirrors `reset-password.html`'s pattern): the invite email's link signs the recipient in and lands them here to set a password, then hands the same party-invite token already used for the manual link to `invite.html` via `sessionStorage` — one email now carries a brand-new recipient through **invite → set password → accept the job → the project**, no second link needed. No schema change — this reuses `project_party_invites`/`can_manage_party_invite()` exactly as-is.
+
+16 new/updated tests (5 new DB/security proving the edge function's authorization dependency rejects a stranger and an unrelated org admin but not the real admin; 6 new for `invite-password.html`; 5 new for the `companies.html` wiring including the non-fatal failure case; a new sitewide "no sign-up anywhere" regression guard; removed the now-obsolete `signup_redirect.test.mjs`). Full suite 2005/2005. Opened as draft PR #74, Aled approved, merged.
+
+Deployed `invite-party-user` live (confirmed via the Supabase API: status ACTIVE, `verify_jwt: true`) once Aled asked for it, same pattern as v83 — couldn't fire a real end-to-end invite from this sandbox (same outbound-proxy limitation as v83), so a real live company invite is worth Aled testing once he's ready.
+
+**Aled still needs to do the actual Supabase dashboard step himself — not done by Claude, per the standing rule on live changes needing his explicit yes each time**: Authentication → turn OFF "Allow new users to sign up", only after he's confirmed a real invite round-trip works end to end. Link: https://supabase.com/dashboard/project/nkrgzmxwvydoridmiskl/auth/providers
+
+**The invite-based account-creation flow is now live on `main`, with the edge function deployed. Sign-up itself is NOT yet turned off in Supabase — that's Aled's own step, still pending.**
+
+— Claude
