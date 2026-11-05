@@ -17766,3 +17766,21 @@ begin
     execute format('revoke execute on function %s from public, anon, authenticated', f);
   end loop;
 end $$;
+
+-- ─── v86 ADDITIONS: Raise an Action from a site-assigned diary entry ───
+-- Reuses the shared Actions engine — mirrors actions.source_meeting_note_id
+-- (v85, above) exactly, not a new "assignee/due/status" shape bolted onto
+-- personal_diary_entries itself. Deliberately inert metadata only, per
+-- Stuart's privacy requirement: nothing from the diary note is copied
+-- onto the Action (the UI leaves title blank and description null unless
+-- the user types one — see tracker/my-diary.html/site-diary.html).
+-- source_diary_entry_id itself carries no diary CONTENT — it's useless
+-- without a separate read of personal_diary_entries, which keeps its own
+-- tighter RLS (author/contractor-side-editor only, see v85). Actions keep
+-- their EXISTING RLS unchanged ("editors read/insert/update/delete
+-- actions", is_project_editor()-gated) — this column adds no new way to
+-- reach diary content through an Action, and no page queries diary body
+-- through one. ON DELETE SET NULL, same as source_meeting_note_id:
+-- deleting the diary entry never deletes the Action it raised.
+alter table public.actions add column if not exists source_diary_entry_id uuid references public.personal_diary_entries(id) on delete set null;
+create index if not exists actions_source_diary_entry_idx on public.actions (source_diary_entry_id) where source_diary_entry_id is not null;

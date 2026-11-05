@@ -62,7 +62,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, escapeHtml, formatDate, showError, clearError, getMyDiaryEntries, createDiaryEntry, updateDiaryEntry, deleteDiaryEntry, uploadPhoto, getSitePhotoUrls } from "./js/app.js";
+  import { requireAuth, renderHeader, escapeHtml, formatDate, showError, clearError, getMyDiaryEntries, createDiaryEntry, updateDiaryEntry, deleteDiaryEntry, uploadPhoto, getSitePhotoUrls, getActionsForDiaryEntry, createAction } from "./js/app.js";
 
   const me = await requireAuth();
   renderHeader([{ label: "Dashboard", href: "dashboard.html" }, { label: "My Diary" }]);
@@ -135,7 +135,14 @@
     const { data: projects } = await supabase.from("projects").select("id, name");
     const projectName = Object.fromEntries((projects || []).map((p) => [p.id, p.name]));
     document.getElementById("noEntries").style.display = entries.length ? "none" : "block";
-    document.getElementById("entryList").innerHTML = entries.map((e) => `
+    const rows = await Promise.all(entries.map(async (e) => {
+      // Follow-up actions only apply to a site-assigned entry — Actions
+      // require a project_id, same reason site meeting notes' own
+      // follow-ups do (see v85). Actions never carry diary content —
+      // just this FK id, which is useless without a separate read of
+      // personal_diary_entries (gated by its own tighter RLS).
+      const actions = e.project_id ? await getActionsForDiaryEntry(e.id).catch(() => []) : null;
+      return `
       <div class="card" style="margin-top:0.6rem;" data-entry="${e.id}">
         <div class="btn-row" style="justify-content:space-between; align-items:flex-start;">
           <div>
@@ -150,7 +157,18 @@
         ${e.body ? `<p style="margin-top:0.5rem;">${escapeHtml(e.body)}</p>` : ""}
         <p class="hint">${[e.weather, e.labour_count != null ? `${e.labour_count} on site` : null, e.visitors ? `Visitors: ${escapeHtml(e.visitors)}` : null, e.delay_flag ? `⚠ Delay: ${escapeHtml(e.delay_reason || "")}` : null].filter(Boolean).join(" · ")}</p>
         ${(e.photos || []).length ? `<div class="btn-row" data-photos="${e.id}"></div>` : ""}
-      </div>`).join("");
+        ${actions !== null ? `
+        <div style="margin-top:0.6rem;">
+          <strong style="font-size:0.85rem;">Follow-ups</strong>
+          <ul style="margin-top:0.3rem;">${actions.map((a) => `<li>${escapeHtml(a.title)} <span class="badge badge-${a.status === "completed" ? "green" : "amber"}">${escapeHtml(a.status)}</span></li>`).join("") || `<li class="hint">None yet</li>`}</ul>
+          <div class="btn-row" style="margin-top:0.4rem;" data-followup-form="${e.id}">
+            <input type="text" placeholder="Add a follow-up action…" style="flex:1;">
+            <button type="button" class="btn btn-outline btn-sm" data-add-followup="${e.id}">Add</button>
+          </div>
+        </div>` : ""}
+      </div>`;
+    }));
+    document.getElementById("entryList").innerHTML = rows.join("");
 
     for (const e of entries) {
       if ((e.photos || []).length) {
@@ -171,6 +189,18 @@
     } else if (t.dataset.delete) {
       if (!window.confirm("Delete this diary entry?")) return;
       try { await deleteDiaryEntry(t.dataset.delete); await loadEntries(); } catch (err) { showError(errorBox, err); }
+    } else if (t.dataset.addFollowup) {
+      const entries = await getMyDiaryEntries();
+      const entry = entries.find((x) => x.id === t.dataset.addFollowup);
+      if (!entry || !entry.project_id) return;
+      const wrap = document.querySelector(`[data-followup-form="${t.dataset.addFollowup}"]`);
+      const input = wrap.querySelector("input");
+      const title = input.value.trim();
+      if (!title) return;
+      try {
+        await createAction(entry.project_id, { title, sourceDiaryEntryId: t.dataset.addFollowup });
+        await loadEntries();
+      } catch (err) { showError(errorBox, err); }
     }
   });
 

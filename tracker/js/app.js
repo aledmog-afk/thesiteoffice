@@ -902,7 +902,7 @@ export async function getAction(actionId) {
 // tracker/README.md). Every "Create Action from X" helper below DOES
 // pass one, inherited automatically from its source entity's own
 // already-known plot — never asked of the user a second time.
-export async function createAction(projectId, { title, description = null, priority = "medium", assignedTo = null, dueDate = null, plotId = null, sourceMeetingNoteId = null }) {
+export async function createAction(projectId, { title, description = null, priority = "medium", assignedTo = null, dueDate = null, plotId = null, sourceMeetingNoteId = null, sourceDiaryEntryId = null }) {
   const { data, error } = await supabase.from("actions").insert({
     project_id: projectId,
     title,
@@ -912,6 +912,7 @@ export async function createAction(projectId, { title, description = null, prior
     due_date: dueDate,
     plot_id: plotId,
     source_meeting_note_id: sourceMeetingNoteId,
+    source_diary_entry_id: sourceDiaryEntryId,
   }).select().single();
   if (error) throw error;
   return data;
@@ -7758,6 +7759,16 @@ export async function deleteProjectMeetingNote(id) {
 // Actions raised from a specific site meeting note.
 export async function getActionsForMeetingNote(meetingNoteId) {
   const { data, error } = await supabase.from("actions").select("*").eq("source_meeting_note_id", meetingNoteId).order("created_at");
+  if (error) throw error;
+  return data || [];
+}
+
+// v86: Actions raised from a specific site-assigned diary entry. Same
+// shape as getActionsForMeetingNote() — a plain query against
+// actions' own existing RLS (editors only), never a join back into
+// personal_diary_entries, so this never carries diary content.
+export async function getActionsForDiaryEntry(diaryEntryId) {
+  const { data, error } = await supabase.from("actions").select("*").eq("source_diary_entry_id", diaryEntryId).order("created_at");
   if (error) throw error;
   return data || [];
 }
