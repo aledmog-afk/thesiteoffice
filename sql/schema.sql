@@ -17028,19 +17028,64 @@ revoke all on table public.interest_signups from anon, authenticated;
 -- and other project members only ever see diary content once it has
 -- been copied onto an ISSUED weekly report.
 --
--- "Owner-side" and "client" are mapped onto the two real, existing
--- concepts that already distinguish them: is_owner_side_user()
--- (member of the organisation that owns/created the project record
--- itself, projects.org_id) and a project_parties row whose party_role
--- is literally 'client'. Flagging this mapping explicitly: on a
--- project with no invited parties at all (a single company using The
--- Site Office purely for its own site, nothing else), EVERY user on it
--- is owner-side by this definition, so is_contractor_side_editor()
--- below is false for everyone and a site-assigned diary entry is only
--- ever visible to its own author — no sharing happens at all until
--- the project actually has a separate contractor party on it. If
--- that's not the intended behaviour for a simple single-company
--- project, this mapping is the one line to revisit.
+-- "Client" is NOT simply "owner-side" — checked against the live v67
+-- Dayworks/Variations fixture before writing this (originally this
+-- function excluded every owner-side user outright; Aled caught that
+-- this was wrong before it ever shipped). The v67 commercial_viewer_
+-- totals_v67 test's own fixture proves the real pattern: VIEWER (the
+-- person representative of "the client who gets totals-only access")
+-- is added via test_join_project_by_invite — a genuine owner-side
+-- organisation_members row, project_members role 'collaborator', with
+-- NO project_parties involvement at all — restricted only by a
+-- project_module_roles('commercial', 'viewer') grant layered on top.
+-- An outright "not owner-side" exclusion would have let this exact
+-- person (and anyone shaped like them) read other people's
+-- site-assigned diary entries, since they're a genuine project editor
+-- and were never on any party, let alone a 'client' one.
+--
+-- So "client" is mapped onto TWO real, existing signals:
+--   1. A project_parties row whose party_role is literally 'client'.
+--   2. An owner-side user whose RAW project_module_role(..., 'commercial')
+--      grant is 'viewer'. Deliberately the RAW project_module_role(),
+--      NOT commercial_access_role(): that function layers v67's own
+--      "ownership always wins" override on top (is_project_owner() =>
+--      'contributor', even over a stale/leftover 'viewer' row — see
+--      commercial_viewer_totals_v67's OWNER_VIEWER_GRANT case), which
+--      is the right call for v67's own concern (never block the actual
+--      project owner from their own project's pricing) but the WRONG
+--      call here. is_project_owner(p_project_id) requires the caller to
+--      be in organisation_members for projects.org_id (see
+--      is_project_owner's own join) — i.e. "project owner" means
+--      "member of whichever org the project record belongs to", not
+--      "is a contractor". A client who sets up and administers their
+--      OWN project in this app (projects.org_id is the client's org,
+--      they hold project_members.role = 'owner') is_project_owner() for
+--      exactly that project — and if they were ALSO explicitly marked
+--      with a project_module_roles('commercial','viewer') grant (the
+--      same tier v67 uses for "client with totals-only access"), using
+--      commercial_access_role() here would let the owner-override
+--      paper over that and hand them full contractor site-diary
+--      access. The raw grant has no such override, so a "client
+--      project owner" shaped like that is correctly excluded, while a
+--      genuine single-company owner-side editor with NO commercial
+--      grant at all (project_module_role() returns null) is correctly
+--      left alone by the check below — wrapped in coalesce(..., false)
+--      deliberately, because a bare "project_module_role(...) =
+--      'viewer'" is NULL (not false) when there's no grant row, and
+--      NULL would propagate through the outer "not (... and ...)" and
+--      the top-level "and" too, making the WHOLE function return NULL
+--      instead of true for that editor — which Postgres RLS treats as
+--      false, wrongly locking them out of their own colleague's entry.
+--      Scoped to the 'commercial' module specifically because that's
+--      the only module role_roles has any rows for today; revisit if
+--      a future module's own "viewer"-equivalent tier needs the same
+--      treatment.
+-- This also fixes the single-company case the first version of this
+-- function got wrong: on a project with no invited parties at all and
+-- no commercial-viewer-only grants, every genuine owner-side editor —
+-- the realistic shape of "Aled's own company, no separate parties" —
+-- now correctly counts as contractor-side and can read a colleague's
+-- site-assigned diary entry.
 create or replace function public.is_contractor_side_editor(p_project_id uuid)
 returns boolean
 language sql
@@ -17049,11 +17094,14 @@ security definer
 set search_path = public
 as $$
   select public.is_project_editor(p_project_id)
-     and not public.is_owner_side_user(p_project_id, auth.uid())
      and not exists (
        select 1 from public.project_parties pp
        where pp.id in (select public.user_party_ids(p_project_id, auth.uid()))
          and pp.party_role = 'client'
+     )
+     and not (
+       public.is_owner_side_user(p_project_id, auth.uid())
+       and coalesce(public.project_module_role(p_project_id, 'commercial') = 'viewer', false)
      );
 $$;
 revoke all on function public.is_contractor_side_editor(uuid) from public, anon;

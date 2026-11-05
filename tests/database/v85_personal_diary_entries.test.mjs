@@ -1,10 +1,25 @@
 // v85: personal_diary_entries — a private diary, one per user. Once an
 // entry is assigned to a project (site), it becomes readable (never
 // writable by anyone but the author) by a CONTRACTOR-SIDE project
-// editor of that project — never a Viewer, never an owner-side/client
-// user, however broad their ordinary project access otherwise is.
+// editor of that project — never a Viewer, never a client (however
+// they're modelled), however broad their ordinary project access
+// otherwise is.
+//
+// "Client" is deliberately NOT "owner-side" here — is_contractor_side_
+// editor() checks the RAW project_module_role(..., 'commercial'),
+// never commercial_access_role()'s "ownership always wins" override
+// (that override exists for v67's own, unrelated concern: never block
+// the actual project owner from their own project's pricing). Proven
+// against the live v67 commercial_viewer_totals_v67 fixture, whose own
+// OWNER_VIEWER_GRANT case is mirrored below as CLIENTOWNER: a client
+// who owns their OWN project (projects.org_id is their org, they hold
+// project_members.role='owner') but was explicitly given a
+// project_module_roles('commercial','viewer') grant must still get
+// nothing from a colleague's site-assigned diary entry, despite
+// is_project_owner() being true for them.
+//
 // Fixture:
-//   Owner Co (OWNER) owns JOB1 and JOB2.
+//   Owner Co (OWNER) owns JOB1, JOB2 and JOB3.
 //   MainCo — main contractor on JOB1: lead MC (becomes a collaborator/
 //     editor automatically, 'full' main_contractor_access default).
 //   Almo — subcontractor on JOB1: SUBA (explicitly promoted to
@@ -13,7 +28,20 @@
 //   ClientCo — client party on JOB1: CLIENTUSER, explicitly promoted
 //     to collaborator/editor — the strongest test that the exclusion
 //     is about SIDE (client), not role.
-//   STRANGER has no relationship to JOB1 or JOB2 at all.
+//   CLIENTVIEWER — an owner-side collaborator on JOB1 (Owner Co
+//     organisation_members + project_members, NO party at all — the
+//     exact shape of v67's own VIEWER fixture), explicitly granted
+//     project_module_roles('commercial','viewer') by OWNER.
+//   JOB3 — a genuinely single-company project (Owner Co, no invited
+//     parties at all). COLLEAGUE is a second Owner Co collaborator on
+//     JOB3 with no commercial grant of any kind.
+//   ClientOwnerCo (CLIENTOWNER) owns JOB4 outright (projects.org_id is
+//     ClientOwnerCo, CLIENTOWNER is project_members.role='owner' via
+//     the usual creation trigger) but was explicitly granted
+//     project_module_roles('commercial','viewer') on JOB4 — mirroring
+//     v67's OWNER_VIEWER_GRANT. COLLEAGUE2 is a second ClientOwnerCo
+//     collaborator on JOB4 with no grant.
+//   STRANGER has no relationship to any of these projects at all.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createTestDatabase, dropTestDatabase, setupSchema, adminClient, userClient, isRlsError } from "../lib/db.mjs";
@@ -21,9 +49,12 @@ import { createTestDatabase, dropTestDatabase, setupSchema, adminClient, userCli
 const DB = "tracker_test_v85_personal_diary";
 const U = (n) => `a8500000-0000-0000-0000-0000000000${String(n).padStart(2, "0")}`;
 const OWNER = U(1), MC = U(2), SUBA = U(3), SUBVIEW = U(4), CLIENTUSER = U(5), STRANGER = U(6);
+const COLLEAGUE = U(7), CLIENTVIEWER = U(8), CLIENTOWNER = U(9), COLLEAGUE2 = U(10);
 const EMAIL = {
   [OWNER]: "owner@x.test", [MC]: "mc@main.test", [SUBA]: "suba@almo.test",
   [SUBVIEW]: "subview@almo.test", [CLIENTUSER]: "client@clientco.test", [STRANGER]: "stranger@x.test",
+  [COLLEAGUE]: "colleague@x.test", [CLIENTVIEWER]: "clientviewer@x.test",
+  [CLIENTOWNER]: "owner@clientowner.test", [COLLEAGUE2]: "colleague2@clientowner.test",
 };
 
 const fx = {};
@@ -74,6 +105,39 @@ before(async () => {
   inv = await as(OWNER, (c) => invite(c, fx.job1, EMAIL[CLIENTUSER], "client"));
   await as(CLIENTUSER, (c) => accept(c, inv.token, fx.clientOrg));
   await as(OWNER, (c) => c.query("select public.set_project_member_role($1, $2, 'collaborator')", [fx.job1, CLIENTUSER]));
+
+  // CLIENTVIEWER — an owner-side collaborator on JOB1 with NO party at
+  // all (same shape as v67's own VIEWER fixture), explicitly granted a
+  // commercial-viewer module role by OWNER.
+  await sql("insert into public.organisation_members (org_id, user_id, role) values ($1, $2, 'member')", [fx.ownerOrg, CLIENTVIEWER]);
+  await sql("insert into public.project_members (project_id, user_id, role) values ($1, $2, 'collaborator')", [fx.job1, CLIENTVIEWER]);
+  await as(OWNER, (c) => c.query(
+    "insert into public.project_module_roles (project_id, user_id, module, role, granted_by) values ($1, $2, 'commercial', 'viewer', $3)",
+    [fx.job1, CLIENTVIEWER, OWNER]
+  ));
+
+  // JOB3 — a genuinely single-company project: Owner Co, no invited
+  // parties at all. COLLEAGUE is a second Owner Co collaborator here,
+  // with no commercial grant of any kind.
+  fx.job3 = (await as(OWNER, (c) => one(c, "insert into public.projects (name, org_id, created_by) values ('Job 3', $1, $2) returning id", [fx.ownerOrg, OWNER]))).id;
+  await sql("insert into public.organisation_members (org_id, user_id, role) values ($1, $2, 'member')", [fx.ownerOrg, COLLEAGUE]);
+  await sql("insert into public.project_members (project_id, user_id, role) values ($1, $2, 'collaborator')", [fx.job3, COLLEAGUE]);
+
+  // JOB4 — owned OUTRIGHT by a client (ClientOwnerCo): CLIENTOWNER is
+  // project_members.role='owner' via the normal creation trigger, but
+  // was explicitly granted a commercial-viewer module role on their
+  // own project too — mirroring v67's OWNER_VIEWER_GRANT case exactly.
+  // COLLEAGUE2 is a second ClientOwnerCo collaborator with no grant.
+  await as(CLIENTOWNER, async (c) => {
+    fx.clientOwnerOrg = await newOrg(c, "ClientOwnerCo", "developer_client");
+    fx.job4 = (await one(c, "insert into public.projects (name, org_id, created_by) values ('Job 4', $1, $2) returning id", [fx.clientOwnerOrg, CLIENTOWNER])).id;
+    await c.query(
+      "insert into public.project_module_roles (project_id, user_id, module, role, granted_by) values ($1, $2, 'commercial', 'viewer', $2)",
+      [fx.job4, CLIENTOWNER]
+    );
+  });
+  await sql("insert into public.organisation_members (org_id, user_id, role) values ($1, $2, 'member')", [fx.clientOwnerOrg, COLLEAGUE2]);
+  await sql("insert into public.project_members (project_id, user_id, role) values ($1, $2, 'collaborator')", [fx.job4, COLLEAGUE2]);
 });
 
 after(async () => { await dropTestDatabase(DB); });
@@ -143,11 +207,28 @@ test("v85: a Viewer (default-role subcontractor) can NOT read another author's s
   });
 });
 
-test("v85: an owner-side user (even the project owner) can NOT read another author's site-assigned entry", async () => {
-  const entry = await as(MC, (c) => one(c, "insert into public.personal_diary_entries (project_id, body) values ($1, 'owner-side must not see this') returning id", [fx.job1]));
+test("v85: on a single-company project, an owner-side editor with no commercial restriction CAN read a colleague's site-assigned entry", async () => {
+  const entry = await as(COLLEAGUE, (c) => one(c, "insert into public.personal_diary_entries (project_id, body) values ($1, 'single-company colleague note') returning id", [fx.job3]));
   await as(OWNER, async (c) => {
+    const { rows } = await c.query("select body from public.personal_diary_entries where id = $1", [entry.id]);
+    assert.equal(rows.length, 1, "an unrestricted owner-side editor on a single-company project must be able to read a colleague's site-assigned entry");
+    assert.equal(rows[0].body, "single-company colleague note");
+  });
+});
+
+test("v85: a client modelled as an owner-side member with a commercial-viewer grant (the v67 VIEWER shape) can NOT read a colleague's site-assigned entry", async () => {
+  const entry = await as(MC, (c) => one(c, "insert into public.personal_diary_entries (project_id, body) values ($1, 'commercial-viewer-grant client must not see this') returning id", [fx.job1]));
+  await as(CLIENTVIEWER, async (c) => {
     const { rows } = await c.query("select 1 from public.personal_diary_entries where id = $1", [entry.id]);
-    assert.equal(rows.length, 0, "an owner-side user must never see another person's site-assigned diary entry, regardless of their editor role");
+    assert.equal(rows.length, 0, "an owner-side user restricted to a commercial-viewer module role is a client for diary purposes and must see nothing");
+  });
+});
+
+test("v85: a client project owner (owns their own project, but holds an explicit commercial-viewer grant on it) can NOT read a colleague's site-assigned entry", async () => {
+  const entry = await as(COLLEAGUE2, (c) => one(c, "insert into public.personal_diary_entries (project_id, body) values ($1, 'client project owner must not see this') returning id", [fx.job4]));
+  await as(CLIENTOWNER, async (c) => {
+    const { rows } = await c.query("select 1 from public.personal_diary_entries where id = $1", [entry.id]);
+    assert.equal(rows.length, 0, "is_project_owner() being true must not override an explicit commercial-viewer grant for diary purposes — ownership-always-wins is a v67-specific, not general, rule");
   });
 });
 

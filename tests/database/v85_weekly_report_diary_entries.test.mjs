@@ -2,12 +2,19 @@
 // weekly report. A dedicated child table, not a column on
 // weekly_reports itself (see sql/schema.sql's own comment for why).
 // The rule Aled asked for: a contractor-side editor can always read
-// it; anyone else who can otherwise read the parent report at all
-// (an owner-side user, or a client via the weekly_reports_read
-// capability) only once that report has genuinely transitioned to
-// 'issued'. A subcontractor Viewer — who has no weekly_reports_read/
-// write capability at all (see party_role_capabilities) — never sees
-// it, issued or not.
+// (and write) it; anyone else who can otherwise read the parent
+// report at all (a client, via the weekly_reports_read capability)
+// only once that report has genuinely transitioned to 'issued', and
+// never write it regardless. A subcontractor Viewer — who has no
+// weekly_reports_read/write capability at all (see
+// party_role_capabilities) — never sees it, issued or not.
+//
+// OWNER here is a genuinely UNRESTRICTED owner-side user (no
+// project_module_roles grant at all on Job 1) — is_contractor_side_
+// editor() correctly counts them as contractor-side (same reasoning,
+// and same fixture shape, as tests/database/v85_personal_diary_
+// entries.test.mjs's own "single-company project" case), so they
+// behave like MC throughout this file, not like CLIENTUSER.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createTestDatabase, dropTestDatabase, setupSchema, adminClient, userClient, isRlsError } from "../lib/db.mjs";
@@ -78,17 +85,30 @@ test("v85: a contractor-side editor can attach a diary entry to a draft weekly r
   });
 });
 
-test("v85: an owner-side user and a client CANNOT insert a diary entry onto the report, and CANNOT see it yet, while it's still draft", async () => {
-  for (const user of [OWNER, CLIENTUSER]) {
-    await as(user, async (c) => {
-      await assert.rejects(
-        c.query("insert into public.weekly_report_diary_entries (weekly_report_id, entry_date, body) values ($1, current_date, 'sneaking one in')", [fx.report.id]),
-        denied
-      );
-      const { rows } = await c.query("select 1 from public.weekly_report_diary_entries where id = $1", [fx.attachedId]);
-      assert.equal(rows.length, 0, `${user} must not see the attached diary entry while the report is still draft`);
-    });
-  }
+test("v85: an unrestricted owner-side editor (no commercial-module grant) is contractor-side here too — can read AND attach during draft, same as MC", async () => {
+  // Owner Co owns Job 1 outright and OWNER has no project_module_roles
+  // grant on it at all — the realistic "single company, no separate
+  // parties" shape is_contractor_side_editor() is meant to include.
+  await as(OWNER, async (c) => {
+    const { rows } = await c.query("select body from public.weekly_report_diary_entries where id = $1", [fx.attachedId]);
+    assert.equal(rows.length, 1, "an unrestricted owner-side editor must see the attached diary entry even while the report is still draft");
+    const extra = await one(c,
+      "insert into public.weekly_report_diary_entries (weekly_report_id, entry_date, body) values ($1, current_date, 'owner can attach too') returning id",
+      [fx.report.id]);
+    assert.ok(extra.id, "an unrestricted owner-side editor must be able to attach a diary entry too");
+    await c.query("delete from public.weekly_report_diary_entries where id = $1", [extra.id]); // tidy up, doesn't affect fx.attachedId
+  });
+});
+
+test("v85: a client CANNOT insert a diary entry onto the report, and CANNOT see it yet, while it's still draft", async () => {
+  await as(CLIENTUSER, async (c) => {
+    await assert.rejects(
+      c.query("insert into public.weekly_report_diary_entries (weekly_report_id, entry_date, body) values ($1, current_date, 'sneaking one in')", [fx.report.id]),
+      denied
+    );
+    const { rows } = await c.query("select 1 from public.weekly_report_diary_entries where id = $1", [fx.attachedId]);
+    assert.equal(rows.length, 0, "a client must not see the attached diary entry while the report is still draft");
+  });
 });
 
 test("v85: a subcontractor Viewer never sees it — no weekly_reports capability at all, draft or issued", async () => {
@@ -108,16 +128,29 @@ test("v85: once the report is actually issued, an owner-side user and a client C
     assert.equal(rows[0].status, "issued");
   });
 
-  for (const user of [OWNER, CLIENTUSER]) {
-    await as(user, async (c) => {
-      const { rows } = await c.query("select body from public.weekly_report_diary_entries where id = $1", [fx.attachedId]);
-      assert.equal(rows.length, 1, `${user} must be able to read the diary entry once the report is issued`);
-      assert.equal(rows[0].body, "Scaffolding went up on the east elevation.");
+  // CLIENTUSER has no contractor-side write access at all — blocked
+  // silently by RLS (0 rows), issued or not.
+  await as(CLIENTUSER, async (c) => {
+    const { rows } = await c.query("select body from public.weekly_report_diary_entries where id = $1", [fx.attachedId]);
+    assert.equal(rows.length, 1, "a client must be able to read the diary entry once the report is issued");
+    assert.equal(rows[0].body, "Scaffolding went up on the east elevation.");
 
-      const upd = await c.query("update public.weekly_report_diary_entries set body = 'tampering' where id = $1", [fx.attachedId]);
-      assert.equal(upd.rowCount, 0, `${user} must still never be able to WRITE the diary entry, issued or not`);
-    });
-  }
+    const upd = await c.query("update public.weekly_report_diary_entries set body = 'tampering' where id = $1", [fx.attachedId]);
+    assert.equal(upd.rowCount, 0, "a client must still never be able to WRITE the diary entry, issued or not");
+  });
+
+  // OWNER, by contrast, IS contractor-side here (no commercial-module
+  // restriction) — their write is refused by the same "content is
+  // locked" trigger that blocks MC below, not by a silent RLS no-op.
+  await as(OWNER, async (c) => {
+    const { rows } = await c.query("select body from public.weekly_report_diary_entries where id = $1", [fx.attachedId]);
+    assert.equal(rows.length, 1, "an unrestricted owner-side editor must be able to read the diary entry once the report is issued");
+
+    await assert.rejects(
+      c.query("update public.weekly_report_diary_entries set body = 'tampering' where id = $1", [fx.attachedId]),
+      /content is locked/
+    );
+  });
 
   // The subcontractor Viewer still sees nothing — issuing the report never changes that.
   await as(SUBVIEW, async (c) => {
@@ -172,20 +205,29 @@ test("v85: the same diary entry can't be attached to the same report twice (uniq
   });
 });
 
-test("v85: get_unattached_diary_entries excludes anything already attached, and refuses an owner-side/client caller", async () => {
+test("v85: get_unattached_diary_entries excludes anything already attached, allows an unrestricted owner-side caller, and refuses a client", async () => {
+  let extraDiaryId;
   await as(MC, async (c) => {
     const extraDiary = await one(c, "insert into public.personal_diary_entries (project_id, entry_date, body) values ($1, current_date, 'A second, not-yet-attached note') returning id", [fx.job1]);
+    extraDiaryId = extraDiary.id;
     const { rows } = await c.query("select * from public.get_unattached_diary_entries($1, current_date - 7, current_date + 7)", [fx.job1]);
     const ids = rows.map((r) => r.diary_entry_id);
     assert.ok(ids.includes(extraDiary.id), "a not-yet-attached entry must be offered");
     assert.ok(!ids.includes(fx.diary.id), "an already-attached entry must be excluded");
   });
-  for (const user of [OWNER, CLIENTUSER]) {
-    await as(user, async (c) => {
-      await assert.rejects(
-        c.query("select * from public.get_unattached_diary_entries($1, current_date - 7, current_date + 7)", [fx.job1]),
-        /Only a contractor-side project editor/
-      );
-    });
-  }
+
+  // OWNER is an unrestricted owner-side editor on Job 1 (no commercial
+  // module grant) — contractor-side here too, so the RPC must work for
+  // them exactly as it does for MC.
+  await as(OWNER, async (c) => {
+    const { rows } = await c.query("select * from public.get_unattached_diary_entries($1, current_date - 7, current_date + 7)", [fx.job1]);
+    assert.ok(rows.map((r) => r.diary_entry_id).includes(extraDiaryId), "an unrestricted owner-side editor must be offered the same unattached entries as MC");
+  });
+
+  await as(CLIENTUSER, async (c) => {
+    await assert.rejects(
+      c.query("select * from public.get_unattached_diary_entries($1, current_date - 7, current_date + 7)", [fx.job1]),
+      /Only a contractor-side project editor/
+    );
+  });
 });
