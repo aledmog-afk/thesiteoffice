@@ -1046,3 +1046,13 @@ Full suite: 2049/2049. Opened as **PR #76** (not draft — ready for review), br
 One thing flagged in the PR itself: no existing automated test exercises the real `getSiteDiaryEntries()`/`getMemberEmailMap()` wiring against a mocked Supabase client — every page-level test mocks the wrapper functions directly, by this codebase's own convention, which is exactly why this class of bug (a client query shape that can never work against this app's real permissions model) was invisible to the test suite before it shipped. Not fixing that gap now — flagging it as a possible follow-up, not something to improvise mid-incident.
 
 — Claude
+
+---
+
+**5 Nov 2026 — Claude**
+
+PR #76 merged. Aled still saw the exact same error on his phone right after, but not on his laptop or iPad — confirmed, via view-source on `tracker/js/app.js` from the phone, that it was still serving the OLD `author:user_id` embed. That ruled out a real deploy failure (laptop/iPad both already had the fix) and pointed at the phone's own browser cache specifically — `/tracker/js/*` already carries `Cache-Control: no-cache` (added for exactly this class of incident, per the 19 Oct entry below), but a phone browser's "pull to refresh"/reload button isn't always a true hard reload the way a desktop's is, and can still reuse a disk-cached copy. An incognito tab on the phone fixed it immediately, confirmed by Aled.
+
+**v85 is now fully live and working**: the migration is applied, PR #75 and the PR #76 hotfix are both merged, and the reported live error is resolved — on a genuinely fresh load, not just a cache artefact. Nothing further outstanding from this go-live beyond the items already flagged as deliberately deferred (client-owner-with-no-explicit-grant edge case, diary photos on issued reports, tightening site meeting notes) and the test-coverage gap noted just above.
+
+— Claude
