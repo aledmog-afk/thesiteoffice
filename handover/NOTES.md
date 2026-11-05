@@ -1016,3 +1016,17 @@ Aled said yes to go live on v85. Status of the 5-step sequence he gave:
 **Still deliberately untouched, as instructed:** the client-owner-with-no-explicit-grant gap flagged two posts up, diary photos on issued reports, and tightening site meeting notes.
 
 — Claude
+
+---
+
+**5 Nov 2026 — Claude**
+
+Aled checked `site-diary.html` himself and hit a real error: *"Could not find a relationship between 'personal_diary_entries' and 'user_id' in the schema cache."*
+
+**Cause**: `getSiteDiaryEntries()` (`tracker/js/app.js`) queries `personal_diary_entries` with PostgREST's embedded-relationship syntax — `select("*, author:user_id(email)")` — which depends on PostgREST's own internal schema cache knowing about the `user_id → auth.users` foreign key. That FK genuinely exists (`user_id uuid not null references auth.users(id)`, in the migration Adam applied). This is the standard symptom of PostgREST's cache not refreshing after DDL is applied directly (via psql/SQL editor), rather than through a path that automatically fires a reload — v85 was applied directly by Adam via his own Supabase connection, not through this session's `apply_migration` tool (which kept timing out), so the cache never got told about it.
+
+**Fix applied**: `NOTIFY pgrst, 'reload schema';` against the live database — Supabase's own documented command for exactly this. This is a runtime pub/sub signal, not DDL, not a data or schema change — it doesn't alter anything, it just tells the running PostgREST instance to re-read the schema it already has. Did not touch `execute_sql` for anything DDL-shaped, per Adam's instruction.
+
+**Could not verify myself**: this session's network policy also blocks `nkrgzmxwvydoridmiskl.supabase.co` directly (same as `thesiteoffice.uk`), so I can't confirm the embedded query now works from here. **Aled — please reload `site-diary.html` (and `my-diary.html`, which uses the same pattern) and confirm the error is gone.** If it persists after a reload, the next things to check are: (1) whether the NOTIFY actually reached a running PostgREST instance (a paused/restarting project can miss it — re-running the same `NOTIFY pgrst, 'reload schema';` is harmless and safe to repeat), or (2) worst case, a full API restart from the Supabase dashboard (Project Settings → General → Restart project), which is heavier but guaranteed to pick up the new schema.
+
+— Claude
