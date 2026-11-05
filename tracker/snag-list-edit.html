@@ -171,7 +171,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, uploadImage, todayISO, comparePlotNumbers, SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_PRIORITY_BADGE, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE, SNAG_ROOMS, SNAG_TRADES, getOrgCustomTrades, addOrgCustomTrade, getOrgCustomSnagDescriptions, addOrgCustomSnagDescription, categoriseSnag, assignSnag, verifySnag, unverifySnag, completeSnagWithPhoto, closeSnagWithEvidence, submitSnagForReview, approveSnagReview, rejectSnagReview, getSnagPhotos, addSnagPhoto, deleteSnagPhoto, getSnagCompletionPhotoCounts, createActionFromSnag, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel, moveSnagItemsToPlot, getProjectDrawings, getSnagDrawingPin, getDrawingForPage, createDrawingPin, DRAWING_STOREYS } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, uploadImage, todayISO, comparePlotNumbers, SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_PRIORITY_BADGE, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE, SNAG_ROOMS, SNAG_TRADES, getOrgCustomTrades, addOrgCustomTrade, getOrgCustomSnagDescriptions, addOrgCustomSnagDescription, categoriseSnag, assignSnag, verifySnag, unverifySnag, completeSnagWithPhoto, closeSnagWithEvidence, submitSnagForReview, approveSnagReview, rejectSnagReview, getSnagPhotos, addSnagPhoto, deleteSnagPhoto, getSnagCompletionPhotoCounts, createActionFromSnag, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel, moveSnagItemsToPlot, getProjectDrawings, getSnagDrawingPin, getDrawing, createDrawingPin, DRAWING_STOREYS } from "./js/app.js";
 
   await requireAuth();
   const listId = getParam("id");
@@ -436,7 +436,7 @@
     const btn = document.getElementById("savePinBtn");
     btn.disabled = true;
     try {
-      await createDrawingPin(selectedPinDrawing.current_page.id, pendingPinCoords.x, pendingPinCoords.y, { snagItemId: editingId });
+      await createDrawingPin(selectedPinDrawing.current_page.id, pendingPinCoords.x, pendingPinCoords.y, { snagItemId: editingId }, selectedPinDrawing.id);
       const s = allSnags.find((x) => x.id === editingId);
       await loadPinSection(s || { id: editingId, plot_id: null });
     } catch (err) {
@@ -468,7 +468,7 @@
       // deliberately read-only here, not a "move pin" control. See
       // this PR's own notes for the gap and the smallest migration
       // that would close it, if that's ever wanted.
-      const drawing = await getDrawingForPage(existingPin.drawing_page_id).catch(() => null);
+      const drawing = await getDrawing(existingPin.drawing_id).catch(() => null);
       statusEl.innerHTML = drawing
         ? `✓ Pinned on <a href="drawing-view.html?id=${drawing.id}" target="_blank">${escapeHtml(drawing.title)}</a>`
         : "✓ Pinned on a drawing.";

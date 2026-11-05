@@ -7618,18 +7618,26 @@ export async function archiveDrawing(drawingId) {
 
 // ─── Pins ────────────────────────────────────────────────────────────
 
-export async function getDrawingPagePins(drawingPageId) {
+// v88: a pin now reads scoped to the specific drawing it was placed
+// on, not the page underneath it — a page can be the current page for
+// several drawings at once (multi-assign, identical house types), so
+// reading by drawing_page_id would leak another plot's pins onto this
+// one. Renamed from the v87 getDrawingPagePins(drawingPageId).
+export async function getDrawingPins(drawingId) {
   const { data, error } = await supabase
     .from("drawing_pins")
     .select("id, x_pct, y_pct, snag_item_id, rfi_id, quality_gate_id, query_id")
-    .eq("drawing_page_id", drawingPageId);
+    .eq("drawing_id", drawingId);
   if (error) throw error;
   return data || [];
 }
 
 // owner is exactly one of { snagItemId, rfiId, qualityGateId, queryId }.
-export async function createDrawingPin(drawingPageId, xPct, yPct, owner) {
-  const row = { drawing_page_id: drawingPageId, x_pct: xPct, y_pct: yPct };
+// drawingId (v88, required): the drawing the user was actually viewing
+// when they placed this pin — never inferred from drawingPageId, since
+// one page can now be the current page of more than one drawing.
+export async function createDrawingPin(drawingPageId, xPct, yPct, owner, drawingId) {
+  const row = { drawing_page_id: drawingPageId, drawing_id: drawingId, x_pct: xPct, y_pct: yPct };
   if (owner.snagItemId) row.snag_item_id = owner.snagItemId;
   else if (owner.rfiId) row.rfi_id = owner.rfiId;
   else if (owner.qualityGateId) row.quality_gate_id = owner.qualityGateId;
@@ -7647,73 +7655,72 @@ export async function createDrawingPin(drawingPageId, xPct, yPct, owner) {
 // one-time placement record") — so once this returns non-null, the
 // pin-placement UI shows it read-only; moving/replacing a pin would
 // need its own small migration, not built here (see the PR notes).
+// v88: also returns drawing_id — the unambiguous way to link back to
+// the drawing a pin lives on, now that a page alone can't tell you.
 export async function getSnagDrawingPin(snagItemId) {
-  const { data, error } = await supabase.from("drawing_pins").select("id, x_pct, y_pct, drawing_page_id").eq("snag_item_id", snagItemId).limit(1).maybeSingle();
+  const { data, error } = await supabase.from("drawing_pins").select("id, x_pct, y_pct, drawing_page_id, drawing_id").eq("snag_item_id", snagItemId).limit(1).maybeSingle();
   if (error) throw error;
   return data;
 }
 
-// v87: which drawing (id + title) a given page currently belongs to —
-// used only to link back to drawing-view.html from a snag's own
-// already-placed pin. A page's assignment history could in principle
-// hold more than one row (re-assigned, then reassigned elsewhere), so
-// this takes the most recent; in practice a page is assigned once.
-export async function getDrawingForPage(drawingPageId) {
-  const { data, error } = await supabase.from("drawing_page_assignments")
-    .select("drawing_id, drawings(id, title)")
-    .eq("drawing_page_id", drawingPageId)
-    .order("assigned_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (error) throw error;
-  return data?.drawings || null;
-}
-
 // v87: the "pinned drawings" section of a printable snag sheet — for a
-// given set of snag item ids, every drawing page that has a pin on one
-// of them, with the page's own image reference (a bare site-photos
+// given set of snag item ids, every drawing that has a pin on one of
+// them, with its current page's image reference (a bare site-photos
 // path, same as everywhere else in this app — the caller resolves it
 // to a signed URL via getSitePhotoUrls() before printing) and the
-// owning drawing's title for a caption. Scoped strictly by
-// snag_item_id, never by page — a drawing page can hold pins from
-// other snag lists, RFIs, Quality Gates and queries too, and this must
-// never surface any of those on a sheet for a different list.
+// drawing's own title for a caption. Scoped strictly by snag_item_id,
+// never by page — a drawing page can hold pins from other snag lists,
+// RFIs, Quality Gates and queries too, and this must never surface any
+// of those on a sheet for a different list.
+// v88: grouped/joined by drawing_id, not drawing_page_id — a page
+// shared by several drawings (multi-assign) must only ever show each
+// pin against the one drawing it was actually placed on.
 export async function getDrawingPinsForSnagItems(snagItemIds) {
   if (!snagItemIds.length) return [];
   const { data: pins, error } = await supabase.from("drawing_pins")
-    .select("id, x_pct, y_pct, snag_item_id, drawing_page_id")
+    .select("id, x_pct, y_pct, snag_item_id, drawing_id, drawing_page_id")
     .in("snag_item_id", snagItemIds);
   if (error) throw error;
   if (!pins.length) return [];
   const pageIds = [...new Set(pins.map((p) => p.drawing_page_id))];
-  const [{ data: pages, error: pagesErr }, { data: assignments, error: assignErr }] = await Promise.all([
+  const drawingIds = [...new Set(pins.map((p) => p.drawing_id))];
+  const [{ data: pages, error: pagesErr }, { data: drawings, error: drawingsErr }] = await Promise.all([
     supabase.from("drawing_pages").select("id, image_url").in("id", pageIds),
-    supabase.from("drawing_page_assignments").select("drawing_page_id, drawings(title)").in("drawing_page_id", pageIds).order("assigned_at", { ascending: false }),
+    supabase.from("drawings").select("id, title").in("id", drawingIds),
   ]);
   if (pagesErr) throw pagesErr;
-  if (assignErr) throw assignErr;
+  if (drawingsErr) throw drawingsErr;
   const imageByPage = Object.fromEntries((pages || []).map((p) => [p.id, p.image_url]));
-  const titleByPage = {};
-  (assignments || []).forEach((a) => { if (!(a.drawing_page_id in titleByPage)) titleByPage[a.drawing_page_id] = a.drawings?.title || null; });
-  return pins.map((p) => ({ ...p, image_url: imageByPage[p.drawing_page_id] || null, drawing_title: titleByPage[p.drawing_page_id] || null }));
+  const titleByDrawing = Object.fromEntries((drawings || []).map((d) => [d.id, d.title]));
+  return pins.map((p) => ({ ...p, image_url: imageByPage[p.drawing_page_id] || null, drawing_title: titleByDrawing[p.drawing_id] || null }));
 }
 
 // v87: builds the "Pinned Drawings" print section's HTML — one block
-// per drawing page that has a pin among these snag items, with every
-// pin numbered by its snag's own item_no (one number system, matching
-// the sheet's own "#" column). Pure/sync: the caller resolves
-// image_url to a real signed URL first (getSitePhotoUrls()) and waits
-// for every [data-drawing-page-img] to load before printing — this
-// function only builds markup, never fetches anything itself. Returns
-// "" for an empty pins array so a caller can always concatenate the
-// result straight into the rest of the sheet.
+// per drawing that has a pin among these snag items, with every pin
+// numbered by its snag's own item_no (one number system, matching the
+// sheet's own "#" column). Pure/sync: the caller resolves image_url to
+// a real signed URL first (getSitePhotoUrls()) and waits for every
+// [data-drawing-page-img] to load before printing — this function only
+// builds markup, never fetches anything itself. Returns "" for an
+// empty pins array so a caller can always concatenate the result
+// straight into the rest of the sheet.
+// v88: grouped/captioned by drawing_id, not the page-derived title
+// v87 used — a page shared by two different drawings (multi-assign)
+// must never have their pins merged into one captioned block. Still
+// keyed per drawing_page_id WITHIN that (not drawing_id alone): the
+// same drawing can have pins on more than one page over its revision
+// history (an old pin never moves when a new page is assigned — see
+// the v74/v88 schema notes), and those live on different images, so
+// collapsing them into a single canvas would plot a pin's coordinates
+// against the wrong image.
 export function buildPinnedDrawingsHtml(pins, itemNoBySnagId) {
   if (!pins || !pins.length) return "";
-  const byPage = {};
+  const byDrawingPage = {};
   for (const p of pins) {
-    (byPage[p.drawing_page_id] ||= { image_url: p.image_url, title: p.drawing_title, pins: [] }).pins.push(p);
+    const key = `${p.drawing_id}:${p.drawing_page_id}`;
+    (byDrawingPage[key] ||= { image_url: p.image_url, title: p.drawing_title, pins: [] }).pins.push(p);
   }
-  const blocks = Object.values(byPage).map((g) => `
+  const blocks = Object.values(byDrawingPage).map((g) => `
     <div class="drawing-canvas-wrap pinned-drawing-print" style="margin-top:0.8rem;">
       ${g.title ? `<div class="hint" style="margin-bottom:0.4rem;">${escapeHtml(g.title)}</div>` : ""}
       <div class="drawing-canvas">

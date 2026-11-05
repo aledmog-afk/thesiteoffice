@@ -1,6 +1,6 @@
 // v87: snag-list-edit.html's "Drawing Pin" section — placing a pin on
 // a drawing when editing a snag. app.js's own drawing_pins helpers
-// (getProjectDrawings, getSnagDrawingPin, getDrawingForPage,
+// (getProjectDrawings, getSnagDrawingPin, getDrawing,
 // createDrawingPin) are already proven against a real database with
 // real RLS in tests/database/v74_drawing_pins.test.mjs — mocked here
 // so this file can focus purely on what the PAGE does: which
@@ -99,7 +99,7 @@ async function run(store, overrides = {}) {
     moveSnagItemsToPlot: async () => {},
     getProjectDrawings: overrides.getProjectDrawings || (async () => []),
     getSnagDrawingPin: overrides.getSnagDrawingPin || (async () => null),
-    getDrawingForPage: overrides.getDrawingForPage || (async () => null),
+    getDrawing: overrides.getDrawing || (async () => null),
     createDrawingPin: overrides.createDrawingPin || (async () => "pin1"),
   });
 }
@@ -209,7 +209,7 @@ test("Drawing Pin: tapping the drawing then Save Pin calls createDrawingPin with
   const calls = [];
   const { document, window } = await run(store, {
     getProjectDrawings: async () => [drawing({ id: "dGF", scope: "plot_storey", plotId: "plotA", storey: "GF", title: "Plot 5" })],
-    createDrawingPin: async (pageId, x, y, owner) => { calls.push({ pageId, x, y, owner }); return "newpin"; },
+    createDrawingPin: async (pageId, x, y, owner, drawingId) => { calls.push({ pageId, x, y, owner, drawingId }); return "newpin"; },
   });
   await wait(30);
   await window.editSnag("s1");
@@ -232,6 +232,7 @@ test("Drawing Pin: tapping the drawing then Save Pin calls createDrawingPin with
   assert.equal(calls[0].x, 50, "100/200 width = 50%");
   assert.equal(calls[0].y, 25, "25/100 height = 25%");
   assert.equal(calls[0].owner.snagItemId, "s1");
+  assert.equal(calls[0].drawingId, "dGF", "the drawing the user actually selected must be passed through, not inferred from the page");
 });
 
 test("Drawing Pin: an already-pinned snag shows read-only pinned status, never a second picker", async () => {
@@ -239,8 +240,8 @@ test("Drawing Pin: an already-pinned snag shows read-only pinned status, never a
   const store = { snagList: plotSpecificList(), snags: [snag] };
   const { document, window } = await run(store, {
     getProjectDrawings: async () => [drawing({ id: "dGF", scope: "plot_storey", plotId: "plotA", storey: "GF", title: "Plot 5" })],
-    getSnagDrawingPin: async (id) => (id === "s1" ? { id: "pinX", x_pct: 50, y_pct: 50, drawing_page_id: "page-dGF" } : null),
-    getDrawingForPage: async () => ({ id: "dGF", title: "Plot 5" }),
+    getSnagDrawingPin: async (id) => (id === "s1" ? { id: "pinX", x_pct: 50, y_pct: 50, drawing_page_id: "page-dGF", drawing_id: "dGF" } : null),
+    getDrawing: async (id) => (id === "dGF" ? { id: "dGF", title: "Plot 5" } : null),
   });
   await wait(30);
   await window.editSnag("s1");
