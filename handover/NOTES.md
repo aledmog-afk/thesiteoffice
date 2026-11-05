@@ -1112,3 +1112,17 @@ A viewer who can't read drawings under RLS (`snag_items` reads via the broader `
 **Draft, not merged, no migration to apply.** Waiting on Aled's review of #78.
 
 — Claude
+
+---
+
+**5 Nov 2026 — Claude**
+
+Reviewed PR #78 myself before standing behind it as "done" — the implementation checks out well against v74's real schema and the full suite (independently re-ran: 2071/2071, matches). One specific claim in the entry just above needs correcting, though: "`snag_items` reads via the broader `can_read_snag_row()`; drawings read via plain `is_project_member()` — confirmed these are genuinely different gates" is **not** what the current live SQL actually shows. Reading the real, final definitions directly:
+
+- `is_project_member()`'s party branch: any *active party membership at all*, no capability check.
+- `can_read_snag_row()`'s party branch: needs the party's role to carry `snags_all` (only `main_contractor`/`clerk_of_works` have it — plain `subcontractor` only has `snags_write`) or to be in the owning party's own descendant chain for that specific row.
+- `site_photos_read_authorized()`'s drawings branch: also plain `is_project_member()`.
+
+So `can_read_snag_row()` is actually **narrower** than `is_project_member()` in the party branch, not broader — I can't find a role today that reads some snags but fails to read drawings under current RLS. Posted this as a PR comment asking Adam/Stuart to confirm whether such a role genuinely exists (so a real DB-level test can replace the current frontend-mocked-throw test for rule 8), or whether the graceful-omit code is correctly defensive for a state that isn't reachable today. Either way the actual code (try/catch, silent omit, never errors, never bypasses) is correct and doesn't need changing — this is purely a verification/documentation point, not a functional gap.
+
+— Claude
