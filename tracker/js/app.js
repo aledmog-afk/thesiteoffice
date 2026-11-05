@@ -7639,6 +7639,91 @@ export async function createDrawingPin(drawingPageId, xPct, yPct, owner) {
   return data.id;
 }
 
+// v87: this snag's own pin, if it has one — a snag can have at most
+// one in practice (nothing in this app's UI ever offers a second), but
+// v74 put no unique constraint on drawing_pins.snag_item_id, so this
+// deliberately reads at most one via limit(1) rather than assuming it.
+// v74 also added no update/delete policy on drawing_pins ("a pin is a
+// one-time placement record") — so once this returns non-null, the
+// pin-placement UI shows it read-only; moving/replacing a pin would
+// need its own small migration, not built here (see the PR notes).
+export async function getSnagDrawingPin(snagItemId) {
+  const { data, error } = await supabase.from("drawing_pins").select("id, x_pct, y_pct, drawing_page_id").eq("snag_item_id", snagItemId).limit(1).maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+// v87: which drawing (id + title) a given page currently belongs to —
+// used only to link back to drawing-view.html from a snag's own
+// already-placed pin. A page's assignment history could in principle
+// hold more than one row (re-assigned, then reassigned elsewhere), so
+// this takes the most recent; in practice a page is assigned once.
+export async function getDrawingForPage(drawingPageId) {
+  const { data, error } = await supabase.from("drawing_page_assignments")
+    .select("drawing_id, drawings(id, title)")
+    .eq("drawing_page_id", drawingPageId)
+    .order("assigned_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data?.drawings || null;
+}
+
+// v87: the "pinned drawings" section of a printable snag sheet — for a
+// given set of snag item ids, every drawing page that has a pin on one
+// of them, with the page's own image reference (a bare site-photos
+// path, same as everywhere else in this app — the caller resolves it
+// to a signed URL via getSitePhotoUrls() before printing) and the
+// owning drawing's title for a caption. Scoped strictly by
+// snag_item_id, never by page — a drawing page can hold pins from
+// other snag lists, RFIs, Quality Gates and queries too, and this must
+// never surface any of those on a sheet for a different list.
+export async function getDrawingPinsForSnagItems(snagItemIds) {
+  if (!snagItemIds.length) return [];
+  const { data: pins, error } = await supabase.from("drawing_pins")
+    .select("id, x_pct, y_pct, snag_item_id, drawing_page_id")
+    .in("snag_item_id", snagItemIds);
+  if (error) throw error;
+  if (!pins.length) return [];
+  const pageIds = [...new Set(pins.map((p) => p.drawing_page_id))];
+  const [{ data: pages, error: pagesErr }, { data: assignments, error: assignErr }] = await Promise.all([
+    supabase.from("drawing_pages").select("id, image_url").in("id", pageIds),
+    supabase.from("drawing_page_assignments").select("drawing_page_id, drawings(title)").in("drawing_page_id", pageIds).order("assigned_at", { ascending: false }),
+  ]);
+  if (pagesErr) throw pagesErr;
+  if (assignErr) throw assignErr;
+  const imageByPage = Object.fromEntries((pages || []).map((p) => [p.id, p.image_url]));
+  const titleByPage = {};
+  (assignments || []).forEach((a) => { if (!(a.drawing_page_id in titleByPage)) titleByPage[a.drawing_page_id] = a.drawings?.title || null; });
+  return pins.map((p) => ({ ...p, image_url: imageByPage[p.drawing_page_id] || null, drawing_title: titleByPage[p.drawing_page_id] || null }));
+}
+
+// v87: builds the "Pinned Drawings" print section's HTML — one block
+// per drawing page that has a pin among these snag items, with every
+// pin numbered by its snag's own item_no (one number system, matching
+// the sheet's own "#" column). Pure/sync: the caller resolves
+// image_url to a real signed URL first (getSitePhotoUrls()) and waits
+// for every [data-drawing-page-img] to load before printing — this
+// function only builds markup, never fetches anything itself. Returns
+// "" for an empty pins array so a caller can always concatenate the
+// result straight into the rest of the sheet.
+export function buildPinnedDrawingsHtml(pins, itemNoBySnagId) {
+  if (!pins || !pins.length) return "";
+  const byPage = {};
+  for (const p of pins) {
+    (byPage[p.drawing_page_id] ||= { image_url: p.image_url, title: p.drawing_title, pins: [] }).pins.push(p);
+  }
+  const blocks = Object.values(byPage).map((g) => `
+    <div class="drawing-canvas-wrap pinned-drawing-print" style="margin-top:0.8rem;">
+      ${g.title ? `<div class="hint" style="margin-bottom:0.4rem;">${escapeHtml(g.title)}</div>` : ""}
+      <div class="drawing-canvas">
+        <img src="${g.image_url || ""}" data-drawing-page-img alt="">
+        ${g.pins.map((p) => `<div class="pin pin-numbered" style="left:${p.x_pct}%; top:${p.y_pct}%;"><span>${escapeHtml(String(itemNoBySnagId[p.snag_item_id] ?? "?"))}</span></div>`).join("")}
+      </div>
+    </div>`).join("");
+  return `<div class="doc-section" style="margin-top:2rem;"><h3>Pinned Drawings</h3>${blocks}</div>`;
+}
+
 // ─── General Queries (a new, lighter query type than RFIs) ─────────
 
 export const QUERY_STATUS_LABEL = { open: "Open", answered: "Answered", closed: "Closed" };

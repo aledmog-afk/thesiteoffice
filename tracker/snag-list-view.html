@@ -29,13 +29,20 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, todayISO, getOrgLogoUrl, isSnagOutstanding, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, todayISO, getOrgLogoUrl, isSnagOutstanding, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE, getDrawingPinsForSnagItems, buildPinnedDrawingsHtml, getSitePhotoUrls } from "./js/app.js";
 
   await requireAuth();
   const listId = getParam("id");
   if (!listId) window.location.href = "dashboard.html";
 
-  document.getElementById("printBtn").addEventListener("click", () => window.print());
+  // Resolves once every pinned-drawing image (if any) has actually
+  // loaded, so "Print / Save as PDF" never fires while a drawing is
+  // still blank — set by load() below, awaited here before printing.
+  let drawingsReady = Promise.resolve();
+  document.getElementById("printBtn").addEventListener("click", async () => {
+    await drawingsReady;
+    window.print();
+  });
 
   async function load() {
     const { data: list, error } = await supabase.from("snag_lists").select("*, projects(*), plots(*)").eq("id", listId).single();
@@ -83,6 +90,25 @@
     const photoSnags = (snags || []).filter(s => s.photo_url);
     const photoGroups = [];
     for (let i = 0; i < photoSnags.length; i += 4) photoGroups.push(photoSnags.slice(i, i + 4));
+
+    // v87: pinned drawings for this list's own items — never fetched
+    // for anyone who can't read drawings (RLS-restricted role, e.g. a
+    // party-scoped snag reader without plain project membership): the
+    // try/catch below just omits the section silently, same as every
+    // other "this viewer may not have this permission" case in this
+    // app (never a page error, never a bypass).
+    let pinnedDrawingsHtml = "";
+    try {
+      const itemNoBySnagId = Object.fromEntries((snags || []).map((s) => [s.id, s.item_no]));
+      const pins = await getDrawingPinsForSnagItems((snags || []).map((s) => s.id));
+      if (pins.length) {
+        const urlMap = await getSitePhotoUrls(pins.map((p) => p.image_url));
+        const resolved = pins.map((p) => ({ ...p, image_url: urlMap.get(p.image_url) || p.image_url }));
+        pinnedDrawingsHtml = buildPinnedDrawingsHtml(resolved, itemNoBySnagId);
+      }
+    } catch {
+      pinnedDrawingsHtml = "";
+    }
 
     const roundupHtml = photoGroups.length ? `
       <div class="doc-section" style="margin-top:2rem;">
@@ -142,7 +168,15 @@
         </table>
       </div>
       ${roundupHtml}
+      ${pinnedDrawingsHtml}
     `;
+
+    if (pinnedDrawingsHtml) {
+      const imgs = [...document.querySelectorAll("[data-drawing-page-img]")];
+      drawingsReady = Promise.all(imgs.map((img) => img.complete ? Promise.resolve() : new Promise((resolve) => { img.onload = resolve; img.onerror = resolve; })));
+    } else {
+      drawingsReady = Promise.resolve();
+    }
   }
 
   load();

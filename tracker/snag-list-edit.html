@@ -113,6 +113,27 @@
           <div class="photo-grid" id="completionEvidenceGrid"></div>
         </div>
       </div>
+      <!-- v87: optional, and (same reason as extraPhotosWrap above) only
+           meaningful once this snag actually exists — a pin's FK needs a
+           real snag_items.id — so this stays hidden while adding a
+           brand-new item and only appears once editing a saved one. -->
+      <div id="pinWrap" style="display:none;">
+        <div class="field">
+          <label>Drawing Pin <span class="hint">(optional)</span></label>
+          <div id="pinStatus" class="hint"></div>
+          <p class="hint" id="noDrawingsHint" style="display:none;">No drawings uploaded for this project yet.</p>
+          <div id="pinPicker" style="display:none;">
+            <select id="pinDrawingSelect" style="margin-bottom:0.5rem;"></select>
+            <div class="drawing-canvas-wrap">
+              <div class="drawing-canvas" id="pinCanvas"><img id="pinCanvasImg" alt=""></div>
+            </div>
+            <p class="hint" style="margin-top:0.4rem;">Tap the drawing to drop a pin, then Save Pin.</p>
+            <div class="btn-row" style="margin-top:0.5rem;">
+              <button type="button" class="btn btn-amber btn-sm" id="savePinBtn" disabled>Save Pin</button>
+            </div>
+          </div>
+        </div>
+      </div>
       <div class="btn-row">
         <button type="submit" class="btn btn-amber" id="saveBtn">Add Item</button>
         <button type="button" class="btn btn-outline" id="cancelBtn">Cancel</button>
@@ -150,7 +171,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, uploadImage, todayISO, comparePlotNumbers, SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_PRIORITY_BADGE, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE, SNAG_ROOMS, SNAG_TRADES, getOrgCustomTrades, addOrgCustomTrade, getOrgCustomSnagDescriptions, addOrgCustomSnagDescription, categoriseSnag, assignSnag, verifySnag, unverifySnag, completeSnagWithPhoto, closeSnagWithEvidence, submitSnagForReview, approveSnagReview, rejectSnagReview, getSnagPhotos, addSnagPhoto, deleteSnagPhoto, getSnagCompletionPhotoCounts, createActionFromSnag, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel, moveSnagItemsToPlot } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, uploadImage, todayISO, comparePlotNumbers, SNAG_PRIORITIES, SNAG_PRIORITY_LABEL, SNAG_PRIORITY_BADGE, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE, SNAG_ROOMS, SNAG_TRADES, getOrgCustomTrades, addOrgCustomTrade, getOrgCustomSnagDescriptions, addOrgCustomSnagDescription, categoriseSnag, assignSnag, verifySnag, unverifySnag, completeSnagWithPhoto, closeSnagWithEvidence, submitSnagForReview, approveSnagReview, rejectSnagReview, getSnagPhotos, addSnagPhoto, deleteSnagPhoto, getSnagCompletionPhotoCounts, createActionFromSnag, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel, moveSnagItemsToPlot, getProjectDrawings, getSnagDrawingPin, getDrawingForPage, createDrawingPin, DRAWING_STOREYS } from "./js/app.js";
 
   await requireAuth();
   const listId = getParam("id");
@@ -177,6 +198,14 @@
   let myRole = null; // owner/collaborator/snagging — verification is editor-only
   let completionPhotoCounts = {}; // snag id -> number of completion-kind snag_photos, bulk-loaded once per list load
   let extraPhotos = { problem: [], completion: [] }; // the CURRENTLY-EDITED snag's snag_photos rows, split by kind
+  // v87: drawing pin state for the currently-edited snag. projectDrawings
+  // is loaded once per page load (every current drawing for the
+  // project); pinDrawingOptions is the filtered/ordered subset offered
+  // for THIS snag (plot-storey-preferred, see pinDrawingsFor()).
+  let projectDrawings = [];
+  let pinDrawingOptions = [];
+  let selectedPinDrawing = null;
+  let pendingPinCoords = null;
   let selectedIds = new Set(); // bulk-assign selection, cleared on every load/assign
   let orgId = null; // resolved in init(), needed for custom-trade lookups/saves
   let customTrades = []; // org_custom_trades, merged into the Trade dropdown alongside SNAG_TRADES
@@ -350,6 +379,119 @@
   }
   window.removeExtraPhoto = removeExtraPhoto;
 
+  // ─── v87: drawing pin ────────────────────────────────────────────
+  // "This plot's own storey drawing(s)" for a plot-specific list, or
+  // the tagged plot on a general-list item — the default, preferred
+  // candidates before falling back to every other current drawing in
+  // the project. Only drawings with a page actually assigned
+  // (current_page) are pinnable at all.
+  function pinDrawingsFor(plotId) {
+    const pinnable = projectDrawings.filter((d) => d.current_page);
+    const preferred = plotId ? pinnable.filter((d) => d.scope === "plot_storey" && d.plot_id === plotId) : [];
+    const rest = pinnable.filter((d) => !preferred.includes(d));
+    return { preferred, rest };
+  }
+
+  function drawingLabel(d) {
+    if (d.scope === "site") return d.title;
+    const storeyLabel = (DRAWING_STOREYS.find((s) => s.value === d.storey) || {}).label || d.storey;
+    return `${d.title} — ${storeyLabel}`;
+  }
+
+  function renderPinCanvas() {
+    const img = document.getElementById("pinCanvasImg");
+    const canvas = document.getElementById("pinCanvas");
+    canvas.querySelectorAll(".pin").forEach((el) => el.remove());
+    pendingPinCoords = null;
+    document.getElementById("savePinBtn").disabled = true;
+    img.src = selectedPinDrawing?.current_page?.image_url || "";
+  }
+
+  function selectPinDrawing(drawingId) {
+    selectedPinDrawing = pinDrawingOptions.find((d) => d.id === drawingId) || null;
+    renderPinCanvas();
+  }
+  document.getElementById("pinDrawingSelect").addEventListener("change", (e) => selectPinDrawing(e.target.value));
+
+  document.getElementById("pinCanvas").addEventListener("click", (e) => {
+    if (!selectedPinDrawing) return;
+    const img = document.getElementById("pinCanvasImg");
+    const rect = img.getBoundingClientRect();
+    const xPct = ((e.clientX - rect.left) / rect.width) * 100;
+    const yPct = ((e.clientY - rect.top) / rect.height) * 100;
+    if (xPct < 0 || xPct > 100 || yPct < 0 || yPct > 100) return;
+    document.getElementById("pinCanvas").querySelectorAll(".pin.temp").forEach((el) => el.remove());
+    const dot = document.createElement("div");
+    dot.className = "pin temp";
+    dot.style.left = xPct + "%";
+    dot.style.top = yPct + "%";
+    document.getElementById("pinCanvas").appendChild(dot);
+    pendingPinCoords = { x: xPct, y: yPct };
+    document.getElementById("savePinBtn").disabled = false;
+  });
+
+  document.getElementById("savePinBtn").addEventListener("click", async () => {
+    const editingId = document.getElementById("editingId").value;
+    if (!editingId || !selectedPinDrawing || !pendingPinCoords) return;
+    const btn = document.getElementById("savePinBtn");
+    btn.disabled = true;
+    try {
+      await createDrawingPin(selectedPinDrawing.current_page.id, pendingPinCoords.x, pendingPinCoords.y, { snagItemId: editingId });
+      const s = allSnags.find((x) => x.id === editingId);
+      await loadPinSection(s || { id: editingId, plot_id: null });
+    } catch (err) {
+      showError(errorBox, err);
+      btn.disabled = false;
+    }
+  });
+
+  // Entry point — called from openForEdit() only (see pinWrap's own
+  // comment for why: a pin's FK needs a real snag_items.id).
+  async function loadPinSection(s) {
+    const statusEl = document.getElementById("pinStatus");
+    const picker = document.getElementById("pinPicker");
+    const noDrawingsHint = document.getElementById("noDrawingsHint");
+    statusEl.textContent = "";
+    picker.style.display = "none";
+    noDrawingsHint.style.display = "none";
+
+    let existingPin;
+    try {
+      existingPin = await getSnagDrawingPin(s.id);
+    } catch {
+      existingPin = null; // RLS/older-database tolerant, same convention as the rest of this page
+    }
+
+    if (existingPin) {
+      // v74 has no update/delete policy on drawing_pins ("a pin is a
+      // one-time placement record") — so once placed, this is
+      // deliberately read-only here, not a "move pin" control. See
+      // this PR's own notes for the gap and the smallest migration
+      // that would close it, if that's ever wanted.
+      const drawing = await getDrawingForPage(existingPin.drawing_page_id).catch(() => null);
+      statusEl.innerHTML = drawing
+        ? `✓ Pinned on <a href="drawing-view.html?id=${drawing.id}" target="_blank">${escapeHtml(drawing.title)}</a>`
+        : "✓ Pinned on a drawing.";
+      return;
+    }
+
+    const plotId = isGeneralList ? (s.plot_id || null) : snagList.plot_id;
+    const { preferred, rest } = pinDrawingsFor(plotId);
+    pinDrawingOptions = [...preferred, ...rest];
+    if (!pinDrawingOptions.length) {
+      noDrawingsHint.style.display = "block";
+      return;
+    }
+
+    const select = document.getElementById("pinDrawingSelect");
+    select.innerHTML =
+      (preferred.length ? `<optgroup label="This plot">${preferred.map((d) => `<option value="${d.id}">${escapeHtml(drawingLabel(d))}</option>`).join("")}</optgroup>` : "") +
+      (rest.length ? `<optgroup label="Other drawings">${rest.map((d) => `<option value="${d.id}">${escapeHtml(drawingLabel(d))}</option>`).join("")}</optgroup>` : "");
+    select.value = pinDrawingOptions[0].id;
+    selectPinDrawing(pinDrawingOptions[0].id);
+    picker.style.display = "block";
+  }
+
   function openForAdd() {
     snagForm.reset();
     document.getElementById("editingId").value = "";
@@ -369,6 +511,10 @@
     // reference it — additional photos are only manageable once saved.
     document.getElementById("extraPhotosWrap").style.display = "none";
     extraPhotos = { problem: [], completion: [] };
+    // Same reason — a pin's FK needs a real snag_items.id.
+    document.getElementById("pinWrap").style.display = "none";
+    selectedPinDrawing = null;
+    pendingPinCoords = null;
     document.getElementById("saveBtn").textContent = "Add Item";
     snagCard.style.display = "block";
   }
@@ -436,6 +582,8 @@
     }
     renderExtraPhotoGrid("problem");
     renderExtraPhotoGrid("completion");
+    document.getElementById("pinWrap").style.display = "block";
+    await loadPinSection(s);
     document.getElementById("saveBtn").textContent = "Save Changes";
     snagCard.style.display = "block";
   }
@@ -973,6 +1121,13 @@
         parties.map((p) => `<option value="${p.party_id}">${escapeHtml(p.company)}${p.trade ? " (" + escapeHtml(p.trade) + ")" : ""}</option>`).join("");
       document.getElementById("partyFieldWrap").style.display = "block";
     }
+
+    // v87: every current drawing for this project, loaded once — the
+    // pin section filters/orders this per snag rather than re-fetching
+    // on every Edit click. Tolerates a database without v74 yet.
+    try {
+      projectDrawings = await getProjectDrawings(snagList.project_id);
+    } catch { projectDrawings = []; }
 
     loadSnags();
   }
