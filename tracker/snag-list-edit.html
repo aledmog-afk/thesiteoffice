@@ -113,10 +113,12 @@
           <div class="photo-grid" id="completionEvidenceGrid"></div>
         </div>
       </div>
-      <!-- v87: optional, and (same reason as extraPhotosWrap above) only
-           meaningful once this snag actually exists — a pin's FK needs a
-           real snag_items.id — so this stays hidden while adding a
-           brand-new item and only appears once editing a saved one. -->
+      <!-- v87/v89: optional. On a brand-new item there's no real
+           snag_items.id yet for the pin's FK, so a tap here only STAGES
+           coords/drawing (pendingPinCoords/selectedPinDrawing) — the
+           actual drawing_pins row is created inside the submit handler
+           once the snag itself has been saved. On an existing item, a
+           pin already placed is read-only (v74 has no update/delete). -->
       <div id="pinWrap" style="display:none;">
         <div class="field">
           <label>Drawing Pin <span class="hint">(optional)</span></label>
@@ -127,7 +129,7 @@
             <div class="drawing-canvas-wrap">
               <div class="drawing-canvas" id="pinCanvas"><img id="pinCanvasImg" alt=""></div>
             </div>
-            <p class="hint" style="margin-top:0.4rem;">Tap the drawing to drop a pin, then Save Pin.</p>
+            <p class="hint" id="pinTapHint" style="margin-top:0.4rem;">Tap the drawing to drop a pin, then Save Pin.</p>
             <div class="btn-row" style="margin-top:0.5rem;">
               <button type="button" class="btn btn-amber btn-sm" id="savePinBtn" disabled>Save Pin</button>
             </div>
@@ -379,7 +381,7 @@
   }
   window.removeExtraPhoto = removeExtraPhoto;
 
-  // ─── v87: drawing pin ────────────────────────────────────────────
+  // ─── v87/v89: drawing pin ────────────────────────────────────────
   // "This plot's own storey drawing(s)" for a plot-specific list, or
   // the tagged plot on a general-list item — the default, preferred
   // candidates before falling back to every other current drawing in
@@ -445,8 +447,41 @@
     }
   });
 
-  // Entry point — called from openForEdit() only (see pinWrap's own
-  // comment for why: a pin's FK needs a real snag_items.id).
+  // Shared by both the Add and Edit paths below — renders the drawing
+  // picker + canvas (or the no-drawings hint), with no "already
+  // pinned" concept, since that only applies once a snag actually
+  // exists. showSaveButton is false on Add: there, a tap only stages
+  // pendingPinCoords/selectedPinDrawing, and the real drawing_pins row
+  // is created inside the submit handler once the snag has been
+  // saved, not via this button.
+  function renderPinPicker(plotId, showSaveButton) {
+    const picker = document.getElementById("pinPicker");
+    const noDrawingsHint = document.getElementById("noDrawingsHint");
+    const { preferred, rest } = pinDrawingsFor(plotId);
+    pinDrawingOptions = [...preferred, ...rest];
+    if (!pinDrawingOptions.length) {
+      noDrawingsHint.style.display = "block";
+      picker.style.display = "none";
+      return;
+    }
+    noDrawingsHint.style.display = "none";
+
+    const select = document.getElementById("pinDrawingSelect");
+    select.innerHTML =
+      (preferred.length ? `<optgroup label="This plot">${preferred.map((d) => `<option value="${d.id}">${escapeHtml(drawingLabel(d))}</option>`).join("")}</optgroup>` : "") +
+      (rest.length ? `<optgroup label="Other drawings">${rest.map((d) => `<option value="${d.id}">${escapeHtml(drawingLabel(d))}</option>`).join("")}</optgroup>` : "");
+    select.value = pinDrawingOptions[0].id;
+    selectPinDrawing(pinDrawingOptions[0].id);
+    document.getElementById("savePinBtn").style.display = showSaveButton ? "" : "none";
+    document.getElementById("pinTapHint").textContent = showSaveButton
+      ? "Tap the drawing to drop a pin, then Save Pin."
+      : "Tap the drawing to drop a pin for this item — it's saved together with it.";
+    picker.style.display = "block";
+  }
+
+  // Entry point — called from openForEdit() only. An existing snag may
+  // already have a pin (read-only, v74 has no update/delete); a
+  // brand-new one never does, so Add uses renderPinPicker() directly.
   async function loadPinSection(s) {
     const statusEl = document.getElementById("pinStatus");
     const picker = document.getElementById("pinPicker");
@@ -476,20 +511,7 @@
     }
 
     const plotId = isGeneralList ? (s.plot_id || null) : snagList.plot_id;
-    const { preferred, rest } = pinDrawingsFor(plotId);
-    pinDrawingOptions = [...preferred, ...rest];
-    if (!pinDrawingOptions.length) {
-      noDrawingsHint.style.display = "block";
-      return;
-    }
-
-    const select = document.getElementById("pinDrawingSelect");
-    select.innerHTML =
-      (preferred.length ? `<optgroup label="This plot">${preferred.map((d) => `<option value="${d.id}">${escapeHtml(drawingLabel(d))}</option>`).join("")}</optgroup>` : "") +
-      (rest.length ? `<optgroup label="Other drawings">${rest.map((d) => `<option value="${d.id}">${escapeHtml(drawingLabel(d))}</option>`).join("")}</optgroup>` : "");
-    select.value = pinDrawingOptions[0].id;
-    selectPinDrawing(pinDrawingOptions[0].id);
-    picker.style.display = "block";
+    renderPinPicker(plotId, true);
   }
 
   function openForAdd() {
@@ -511,10 +533,17 @@
     // reference it — additional photos are only manageable once saved.
     document.getElementById("extraPhotosWrap").style.display = "none";
     extraPhotos = { problem: [], completion: [] };
-    // Same reason — a pin's FK needs a real snag_items.id.
-    document.getElementById("pinWrap").style.display = "none";
+    // v89: unlike extra photos above, a pin CAN now be placed while
+    // adding a brand-new item — there's just no "already pinned"
+    // state to check (a new item can't have one yet), and the tap
+    // only stages pendingPinCoords/selectedPinDrawing until the submit
+    // handler below turns it into a real row once the snag is saved.
+    document.getElementById("pinWrap").style.display = "block";
+    document.getElementById("pinStatus").textContent = "";
     selectedPinDrawing = null;
     pendingPinCoords = null;
+    const addPlotId = isGeneralList ? (document.getElementById("itemPlot").value || null) : snagList.plot_id;
+    renderPinPicker(addPlotId, false);
     document.getElementById("saveBtn").textContent = "Add Item";
     snagCard.style.display = "block";
   }
@@ -693,6 +722,7 @@
     }
     if (isGeneralList) payload.plot_id = document.getElementById("itemPlot").value || null;
     try {
+      let newSnagId = null;
       if (editingId) {
         const { error } = await supabase.from("snag_items").update(payload).eq("id", editingId);
         if (error) throw error;
@@ -702,9 +732,26 @@
         payload.snag_list_id = listId;
         payload.raised_date = todayISO();
         payload.created_by = user.id;
-        const { error } = await supabase.from("snag_items").insert(payload);
+        const { data, error } = await supabase.from("snag_items").insert(payload).select("id").single();
         if (error) throw error;
+        newSnagId = data.id;
       }
+      // v89: a pin tapped while adding a brand-new item was only ever
+      // staged (pendingPinCoords/selectedPinDrawing) — it becomes a
+      // real drawing_pins row only now, once the snag actually has an
+      // id for the pin's FK. A pin failure here must never undo the
+      // snag that was just successfully saved; it's reported the same
+      // way every other secondary-effect failure on this page is
+      // (alert, not showError — the primary save already succeeded).
+      if (newSnagId && pendingPinCoords && selectedPinDrawing) {
+        try {
+          await createDrawingPin(selectedPinDrawing.current_page.id, pendingPinCoords.x, pendingPinCoords.y, { snagItemId: newSnagId }, selectedPinDrawing.id);
+        } catch (pinErr) {
+          alert("Item saved, but the pin couldn't be placed: " + pinErr.message);
+        }
+      }
+      pendingPinCoords = null;
+      selectedPinDrawing = null;
       snagCard.style.display = "none";
       loadSnags();
     } catch (err) {
