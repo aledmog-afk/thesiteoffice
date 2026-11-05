@@ -958,3 +958,22 @@ Aled asked for a personal diary, a site diary, pulling diary entries into weekly
 Please confirm or correct **A** (owner-only personal diary — my recommendation) and the **general-meeting follow-ups** asymmetry above (inline checklist vs. real Actions, which structurally needs a project). B/D/C/E are my recommendations with reasoning above — flag if you'd rather I go a different way on any of them, otherwise I'll take silence-plus-a-yes-on-the-plan as agreement to all of it.
 
 — Claude
+
+---
+
+**5 Nov 2026 — Claude**
+
+Aled reviewed the plan above and tightened A before giving the go-ahead: a site-assigned personal diary entry is readable (never writable by anyone but its author) only by a **contractor-side** project editor — never a Viewer, never an owner-side/client user, enforced in RLS not the UI — and clients/other project members only ever see diary content once it's copied onto an **issued** weekly report. Built to that tightened spec.
+
+**Schema (v85):**
+- `personal_diary_entries` — the personal/site diary (same table, filtered). New `is_contractor_side_editor()` helper: `is_project_editor()` AND NOT `is_owner_side_user()` AND not a party member with `party_role = 'client'`. Gates the extra read-access once a site is assigned; the author always keeps full read/write of their own entry regardless. Photos only once a site is assigned — a new `diary` site-photos area, gated the same way (both read and write).
+- `org_meeting_notes` (any org member) / `project_meeting_notes` (any project member — deliberately **not** tightened). New nullable `actions.source_meeting_note_id` links a site meeting's follow-up to the real action it raised. General-meeting follow-ups stay a plain inline `follow_ups` jsonb checklist, since `actions.project_id` is `NOT NULL` and a general meeting structurally has none.
+- `weekly_report_diary_entries` — built as a **dedicated child table**, not a jsonb column on `weekly_reports` as originally sketched in the plan above. Reason, found while actually building it: `weekly_reports` has no per-column grants anywhere — a plain column would be visible to anyone who can already read that row via its existing RLS, which defeats the whole "only once issued" rule. The child table gets its own RLS tied live to the parent report's status (contractor-side editor always; everyone else only once `status = 'issued'`), and its own before-write/before-delete triggers freeze it on approve/issue exactly like every other locked report field. New `get_unattached_diary_entries()` RPC (contractor-side-editor gated) drives the "pull in" picker on `weekly-report-form.html`.
+
+**Flagging for Aled's attention (in the PR too):** the `is_contractor_side_editor()` mapping — "owner-side" = member of the org that owns the project record, "client" = a party with `party_role = 'client'` — is my best literal reading of his instruction; on a project with no invited parties at all (a single company using the app for its own site), everyone is "owner-side" by this definition, so diary sharing never kicks in there until a real contractor party exists on it. Also: diary photos are NOT carried through to the weekly-report attachment (text only) — doing that safely needs a second, differently-authorised copy of the file in storage, flagged as separate follow-up work rather than half-built here.
+
+4 new pages: `tracker/my-diary.html`, `tracker/site-diary.html`, `tracker/meeting-notes.html`, `tracker/site-meeting-notes.html`, plus the new "Site Diary" section on `weekly-report-form.html`/`weekly-report-view.html`. 20 new DB tests + 25 new frontend tests. Full suite 2046/2046. Opened as draft PR #75 — **not yet reviewed or approved by Aled.**
+
+**What Aled needs to do:** review and approve PR #75 (merge is his call, same as every PR); separately, say yes before the v85 SQL migration is applied to live Supabase — nothing has been applied there yet. Rollback script is ready at `sql/rollback/v85_diary_meeting_notes_rollback.sql` if it's ever needed.
+
+— Claude
