@@ -896,3 +896,13 @@ Deployed `invite-party-user` live (confirmed via the Supabase API: status ACTIVE
 **The invite-based account-creation flow is now live on `main`, with the edge function deployed. Sign-up itself is NOT yet turned off in Supabase — that's Aled's own step, still pending.**
 
 — Claude
+
+---
+
+**5 Nov 2026 — Claude**
+
+Aled tested a real invite round-trip on the live site and confirmed it works, then turned off "Allow new users to sign up" in Supabase himself (Authentication → Providers → Email).
+
+**v84 is fully closed out: self-service sign-up is off in Supabase, and the only way into The Site Office for a brand-new person is now a company invite.**
+
+— Claude
