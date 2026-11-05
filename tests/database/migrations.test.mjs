@@ -267,7 +267,7 @@ test("Actions Engine: table, indexes, triggers and RLS policy are idempotent acr
     assert.equal(triggers.rows[0].n, 3, "[v62: + company default trigger] exactly 2 triggers on actions (before-write + audit), never duplicated");
 
     const indexes = await client.query("select count(*)::int as n from pg_indexes where tablename = 'actions' and indexname like 'actions_%_idx'");
-    assert.equal(indexes.rows[0].n, 7, "[v85: + actions_source_meeting_note_idx] [v62: + actions_party_idx] 4 original named indexes plus actions_plot_id_idx (external DB review, v56), never duplicated");
+    assert.equal(indexes.rows[0].n, 8, "[v86: + actions_source_diary_entry_idx] [v85: + actions_source_meeting_note_idx] [v62: + actions_party_idx] 4 original named indexes plus actions_plot_id_idx (external DB review, v56), never duplicated");
 
     const policies = await client.query("select count(*)::int as n from pg_policies where tablename = 'actions'");
     assert.equal(policies.rows[0].n, 7, "[v62: + 3 company-capability policies; read folded into the existing select policy] exactly 4 RLS policies on actions (select/insert/update/delete), never duplicated");

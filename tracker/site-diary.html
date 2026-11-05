@@ -28,7 +28,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, getSiteDiaryEntries, getSitePhotoUrls, getMemberEmailMap } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, getSiteDiaryEntries, getSitePhotoUrls, getMemberEmailMap, getActionsForDiaryEntry, createAction } from "./js/app.js";
 
   const me = await requireAuth();
   const projectId = getParam("project");
@@ -47,15 +47,31 @@
     } catch (err) { showError(errorBox, err); return; }
 
     document.getElementById("noEntries").style.display = entries.length ? "none" : "block";
-    document.getElementById("entryList").innerHTML = entries.map((e) => `
-      <div class="card" style="margin-top:0.6rem;">
+    const rows = await Promise.all(entries.map(async (e) => {
+      // Actions never carry diary content — just this FK id, which is
+      // useless without a separate read of personal_diary_entries
+      // (gated by its own tighter RLS). Listed only here, on a page
+      // that already only shows entries this viewer is allowed to see.
+      const actions = await getActionsForDiaryEntry(e.id).catch(() => []);
+      return `
+      <div class="card" style="margin-top:0.6rem;" data-entry="${e.id}">
         <div class="btn-row" style="justify-content:space-between; align-items:flex-start;">
           <div><strong>${formatDate(e.entry_date)}</strong> <span class="hint">${escapeHtml(memberEmails[e.user_id] || "")}${e.user_id === me.id ? " (you)" : ""}</span></div>
         </div>
         ${e.body ? `<p style="margin-top:0.5rem;">${escapeHtml(e.body)}</p>` : ""}
         <p class="hint">${[e.weather, e.labour_count != null ? `${e.labour_count} on site` : null, e.visitors ? `Visitors: ${escapeHtml(e.visitors)}` : null, e.delay_flag ? `⚠ Delay: ${escapeHtml(e.delay_reason || "")}` : null].filter(Boolean).join(" · ")}</p>
         ${(e.photos || []).length ? `<div class="btn-row" data-photos="${e.id}"></div>` : ""}
-      </div>`).join("");
+        <div style="margin-top:0.6rem;">
+          <strong style="font-size:0.85rem;">Follow-ups</strong>
+          <ul style="margin-top:0.3rem;">${actions.map((a) => `<li>${escapeHtml(a.title)} <span class="badge badge-${a.status === "completed" ? "green" : "amber"}">${escapeHtml(a.status)}</span></li>`).join("") || `<li class="hint">None yet</li>`}</ul>
+          <div class="btn-row" style="margin-top:0.4rem;" data-followup-form="${e.id}">
+            <input type="text" placeholder="Add a follow-up action…" style="flex:1;">
+            <button type="button" class="btn btn-outline btn-sm" data-add-followup="${e.id}">Add</button>
+          </div>
+        </div>
+      </div>`;
+    }));
+    document.getElementById("entryList").innerHTML = rows.join("");
 
     for (const e of entries) {
       if ((e.photos || []).length) {
@@ -66,6 +82,20 @@
       }
     }
   }
+
+  document.getElementById("entryList").addEventListener("click", async (e) => {
+    const t = e.target;
+    if (t.dataset.addFollowup) {
+      const wrap = document.querySelector(`[data-followup-form="${t.dataset.addFollowup}"]`);
+      const input = wrap.querySelector("input");
+      const title = input.value.trim();
+      if (!title) return;
+      try {
+        await createAction(projectId, { title, sourceDiaryEntryId: t.dataset.addFollowup });
+        await load();
+      } catch (err) { showError(errorBox, err); }
+    }
+  });
 
   await load();
 </script>
