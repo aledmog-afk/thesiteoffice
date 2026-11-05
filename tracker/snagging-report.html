@@ -39,13 +39,21 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, todayISO, getOrgLogoUrl, comparePlotNumbers, SNAG_STATUS_LABEL } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, todayISO, getOrgLogoUrl, comparePlotNumbers, SNAG_STATUS_LABEL, getDrawingPinsForSnagItems, buildPinnedDrawingsHtml, getSitePhotoUrls } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
   if (!projectId) window.location.href = "dashboard.html";
 
-  document.getElementById("printBtn").addEventListener("click", () => window.print());
+  // Resolves once every pinned-drawing image (if any) for the CURRENT
+  // filter has actually loaded — render() below replaces this promise
+  // every time the filter changes, so Print always waits for whatever
+  // is on screen right now, not a stale earlier filter's images.
+  let drawingsReady = Promise.resolve();
+  document.getElementById("printBtn").addEventListener("click", async () => {
+    await drawingsReady;
+    window.print();
+  });
 
   const statusBadge = { open: "badge-red", pending_review: "badge-amber", closed: "badge-green", rejected: "badge-grey" };
 
@@ -92,7 +100,7 @@
   let project = null;
   let logoUrl = null;
 
-  function render() {
+  async function render() {
     const filter = document.getElementById("statusFilter").value;
     const filtered = filterItems(sortItems(allItems), filter);
     const filterLabel = { open: "Open", open_flagged: "Open (Flagged First)", pending_review: "Pending Review", all: "All", closed: "Closed", rejected: "Rejected" }[filter];
@@ -107,6 +115,23 @@
     const plotCount = new Set(filtered.map(rowGroupLabel)).size;
 
     document.getElementById("emailLink").href = buildEmailHref(filterLabel, filtered.length);
+
+    // v87: pinned drawings for exactly the items shown under the
+    // CURRENT filter — never fetched for a viewer who can't read
+    // drawings under RLS (the try/catch below just omits the section,
+    // same graceful-omit convention as everywhere else in this app).
+    let pinnedDrawingsHtml = "";
+    try {
+      const itemNoBySnagId = Object.fromEntries(filtered.map((s) => [s.id, s.item_no]));
+      const pins = await getDrawingPinsForSnagItems(filtered.map((s) => s.id));
+      if (pins.length) {
+        const urlMap = await getSitePhotoUrls(pins.map((p) => p.image_url));
+        const resolved = pins.map((p) => ({ ...p, image_url: urlMap.get(p.image_url) || p.image_url }));
+        pinnedDrawingsHtml = buildPinnedDrawingsHtml(resolved, itemNoBySnagId);
+      }
+    } catch {
+      pinnedDrawingsHtml = "";
+    }
 
     document.getElementById("doc").innerHTML = `
       <div class="doc-head">
@@ -154,7 +179,15 @@
           </tbody>
         </table>
       </div>
+      ${pinnedDrawingsHtml}
     `;
+
+    if (pinnedDrawingsHtml) {
+      const imgs = [...document.querySelectorAll("[data-drawing-page-img]")];
+      drawingsReady = Promise.all(imgs.map((img) => img.complete ? Promise.resolve() : new Promise((resolve) => { img.onload = resolve; img.onerror = resolve; })));
+    } else {
+      drawingsReady = Promise.resolve();
+    }
   }
 
   function buildEmailHref(filterLabel, count) {
