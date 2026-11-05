@@ -4,6 +4,12 @@
 // the database layer (see tests/database/v85_personal_diary_entries.test.mjs)
 // and getSiteDiaryEntries() is a plain query with no extra client-side
 // filtering — this just proves the page renders whatever comes back.
+//
+// Author emails come from getMemberEmailMap(), same pattern as every
+// other page that shows one (toolbox talks, dayworks/variations,
+// documents, my-work) — NOT a PostgREST embed into auth.users, which
+// this briefly shipped as and which can never work in this app (see
+// app.js's own getSiteDiaryEntries() comment for why).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { extractScript, runPage, wait } from "../lib/jsdom-harness.mjs";
@@ -28,19 +34,24 @@ function ctx(overrides = {}) {
     supabase,
     getSiteDiaryEntries: async () => [],
     getSitePhotoUrls: async () => new Map(),
+    getMemberEmailMap: async () => ({}),
     ...overrides,
   };
 }
 
-test("site-diary.html: renders entries from everyone the server chose to return, marking the viewer's own", async () => {
+test("site-diary.html: renders entries from everyone the server chose to return, resolving authors via getMemberEmailMap and marking the viewer's own", async () => {
   const entries = [
-    { id: "d1", entry_date: "2026-11-01", user_id: "other-user", author: { email: "mc@main.test" }, body: "Steel delivery today.", photos: [] },
-    { id: "d2", entry_date: "2026-11-02", user_id: "u1", author: { email: "me@x.test" }, body: "My own note.", photos: [] },
+    { id: "d1", entry_date: "2026-11-01", user_id: "other-user", body: "Steel delivery today.", photos: [] },
+    { id: "d2", entry_date: "2026-11-02", user_id: "u1", body: "My own note.", photos: [] },
   ];
-  const { document } = await runPage(PAGE, extractScript(PAGE), ctx({ getSiteDiaryEntries: async () => entries }));
+  const { document } = await runPage(PAGE, extractScript(PAGE), ctx({
+    getSiteDiaryEntries: async () => entries,
+    getMemberEmailMap: async () => ({ "other-user": "mc@main.test", u1: "me@x.test" }),
+  }));
   await wait(30);
   const text = document.getElementById("entryList").textContent;
   assert.match(text, /Steel delivery today/);
+  assert.match(text, /mc@main\.test/, "another author's email, resolved via getMemberEmailMap, must render — not a broken auth.users embed");
   assert.match(text, /My own note/);
   assert.match(text, /\(you\)/);
   assert.equal(document.getElementById("noEntries").style.display, "none");

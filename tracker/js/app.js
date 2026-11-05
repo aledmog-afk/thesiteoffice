@@ -7698,8 +7698,16 @@ export async function deleteDiaryEntry(id) {
 // The "site diary" — everyone's entries assigned to one project. RLS
 // (read own or contractor-side diary entries) already narrows this to
 // exactly who's allowed to see it; this is just the plain query.
+// Deliberately NOT a PostgREST embed (`select("*, author:user_id(email)")`,
+// as this briefly shipped) — clients can't query auth.users directly
+// in this app (same reasoning as get_project_members()/
+// getOrganisationMembers() above), so that embed could never resolve,
+// cache-fresh or not. The caller resolves the author's email itself
+// via getMemberEmailMap(), same as every other page that shows one
+// (toolbox talks, dayworks/variations, documents, my-work) — not done
+// here, to keep this a plain query like its own name promises.
 export async function getSiteDiaryEntries(projectId) {
-  const { data, error } = await supabase.from("personal_diary_entries").select("*, author:user_id(email)")
+  const { data, error } = await supabase.from("personal_diary_entries").select("*")
     .eq("project_id", projectId).order("entry_date", { ascending: false }).order("created_at", { ascending: false });
   if (error) throw error;
   return data || [];
