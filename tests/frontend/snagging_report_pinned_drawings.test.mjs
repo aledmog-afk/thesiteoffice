@@ -54,14 +54,17 @@ function ctx(store, overrides = {}) {
 
 // Real app.js buildPinnedDrawingsHtml(), inlined (not imported — this
 // harness mocks the data layer the page imports, not app.js itself).
+// v88: keyed by drawing_id + drawing_page_id, matching the real
+// function — a page shared by two drawings is never merged into one.
 function realBuildPinnedDrawingsHtml(pins, itemNoBySnagId) {
   if (!pins || !pins.length) return "";
-  const byPage = {};
+  const byDrawingPage = {};
   for (const p of pins) {
-    (byPage[p.drawing_page_id] ||= { image_url: p.image_url, title: p.drawing_title, pins: [] }).pins.push(p);
+    const key = `${p.drawing_id}:${p.drawing_page_id}`;
+    (byDrawingPage[key] ||= { image_url: p.image_url, title: p.drawing_title, pins: [] }).pins.push(p);
   }
   const esc = (s) => String(s ?? "").replace(/</g, "&lt;");
-  const blocks = Object.values(byPage).map((g) => `
+  const blocks = Object.values(byDrawingPage).map((g) => `
     <div class="drawing-canvas-wrap pinned-drawing-print">
       ${g.title ? `<div class="hint">${esc(g.title)}</div>` : ""}
       <div class="drawing-canvas">
@@ -83,7 +86,7 @@ test("snagging-report.html: pins are fetched for exactly the currently-filtered 
   const { document } = await runPage(PAGE, extractScript(PAGE), ctx(store, {
     getDrawingPinsForSnagItems: async (ids) => {
       assert.deepEqual(ids, ["s1"], "default filter is Open only — must only request pins for the open item, not the closed one");
-      return [{ id: "pin1", x_pct: 25, y_pct: 75, snag_item_id: "s1", drawing_page_id: "pageA", image_url: "drawings/p1/pageA.jpg", drawing_title: "Site Plan" }];
+      return [{ id: "pin1", x_pct: 25, y_pct: 75, snag_item_id: "s1", drawing_id: "dA", drawing_page_id: "pageA", image_url: "drawings/p1/pageA.jpg", drawing_title: "Site Plan" }];
     },
     buildPinnedDrawingsHtml: realBuildPinnedDrawingsHtml,
   }));
@@ -142,7 +145,7 @@ test("snagging-report.html: Print waits for the pinned drawing's image to actual
     snags: [snag("s1", { item_no: 1, status: "open", snag_lists: { title: "List A", plot_id: null, plots: null } })],
   };
   const { document, window } = await runPage(PAGE, extractScript(PAGE), ctx(store, {
-    getDrawingPinsForSnagItems: async () => [{ id: "pin1", x_pct: 10, y_pct: 10, snag_item_id: "s1", drawing_page_id: "pageA", image_url: "drawings/p1/pageA.jpg", drawing_title: null }],
+    getDrawingPinsForSnagItems: async () => [{ id: "pin1", x_pct: 10, y_pct: 10, snag_item_id: "s1", drawing_id: "dA", drawing_page_id: "pageA", image_url: "drawings/p1/pageA.jpg", drawing_title: null }],
     buildPinnedDrawingsHtml: realBuildPinnedDrawingsHtml,
   }));
   await wait(30);

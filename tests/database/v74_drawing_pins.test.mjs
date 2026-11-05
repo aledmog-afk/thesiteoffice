@@ -24,6 +24,7 @@ import { createTestDatabase, dropTestDatabase, setupSchema, adminClient, userCli
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROLLBACK = fs.readFileSync(path.join(__dirname, "../../sql/rollback/v74_drawing_pins_rollback.sql"), "utf8");
+const V88_ROLLBACK = fs.readFileSync(path.join(__dirname, "../../sql/rollback/v88_drawing_multi_assign_rollback.sql"), "utf8");
 
 const DB = "tracker_test_v74_drawing_pins";
 
@@ -265,8 +266,8 @@ test("assigning a new page to a drawing supersedes the old assignment and repoin
   const { drawing, page: pageV1 } = await makeDrawing(owner, {});
 
   const pin = (await owner.query(
-    "insert into public.drawing_pins (drawing_page_id, x_pct, y_pct, snag_item_id) values ($1,40,60,$2) returning id, drawing_page_id",
-    [pageV1, fx.snag]
+    "insert into public.drawing_pins (drawing_page_id, drawing_id, x_pct, y_pct, snag_item_id) values ($1,$2,40,60,$3) returning id, drawing_page_id",
+    [pageV1, drawing, fx.snag]
   )).rows[0];
   assert.equal(pin.drawing_page_id, pageV1);
 
@@ -307,15 +308,15 @@ test("current_page_id cannot be set directly by an ordinary client UPDATE", asyn
 
 test("drawing_pins_exactly_one_owner: all four single-owner cases succeed", async () => {
   const owner = await userClient(DB, OWNER);
-  const { page } = await makeDrawing(owner, {});
+  const { drawing, page } = await makeDrawing(owner, {});
   const query = (await owner.query(
     "insert into public.general_queries (project_id, question) values ($1,'Q?') returning id", [fx.projA]
   )).rows[0].id;
 
   for (const [col, val] of [["snag_item_id", fx.snag], ["rfi_id", fx.rfi], ["quality_gate_id", fx.gate], ["query_id", query]]) {
     const { rows } = await owner.query(
-      `insert into public.drawing_pins (drawing_page_id, x_pct, y_pct, ${col}) values ($1,10,10,$2) returning id`,
-      [page, val]
+      `insert into public.drawing_pins (drawing_page_id, drawing_id, x_pct, y_pct, ${col}) values ($1,$2,10,10,$3) returning id`,
+      [page, drawing, val]
     );
     assert.ok(rows[0].id, `${col} alone is a valid pin`);
   }
@@ -324,9 +325,9 @@ test("drawing_pins_exactly_one_owner: all four single-owner cases succeed", asyn
 
 test("drawing_pins_exactly_one_owner: zero owners rejected (caught explicitly by the trigger, with the real CHECK constraint as the backstop)", async () => {
   const owner = await userClient(DB, OWNER);
-  const { page } = await makeDrawing(owner, {});
+  const { drawing, page } = await makeDrawing(owner, {});
   await assert.rejects(
-    owner.query("insert into public.drawing_pins (drawing_page_id, x_pct, y_pct) values ($1,10,10)", [page]),
+    owner.query("insert into public.drawing_pins (drawing_page_id, drawing_id, x_pct, y_pct) values ($1,$2,10,10)", [page, drawing]),
     /exactly one of snag_item_id\/rfi_id\/quality_gate_id\/query_id/
   );
   await owner.end();
@@ -334,9 +335,9 @@ test("drawing_pins_exactly_one_owner: zero owners rejected (caught explicitly by
 
 test("drawing_pins_exactly_one_owner: two owners at once rejected", async () => {
   const owner = await userClient(DB, OWNER);
-  const { page } = await makeDrawing(owner, {});
+  const { drawing, page } = await makeDrawing(owner, {});
   await assert.rejects(
-    owner.query("insert into public.drawing_pins (drawing_page_id, x_pct, y_pct, snag_item_id, rfi_id) values ($1,10,10,$2,$3)", [page, fx.snag, fx.rfi]),
+    owner.query("insert into public.drawing_pins (drawing_page_id, drawing_id, x_pct, y_pct, snag_item_id, rfi_id) values ($1,$2,10,10,$3,$4)", [page, drawing, fx.snag, fx.rfi]),
     /exactly one of snag_item_id\/rfi_id\/quality_gate_id\/query_id/
   );
   await owner.end();
@@ -354,13 +355,13 @@ test("the drawing_pins_exactly_one_owner CHECK constraint itself still exists as
 
 test("x_pct/y_pct are bounded to 0-100", async () => {
   const owner = await userClient(DB, OWNER);
-  const { page } = await makeDrawing(owner, {});
+  const { drawing, page } = await makeDrawing(owner, {});
   await assert.rejects(
-    owner.query("insert into public.drawing_pins (drawing_page_id, x_pct, y_pct, snag_item_id) values ($1,101,10,$2)", [page, fx.snag]),
+    owner.query("insert into public.drawing_pins (drawing_page_id, drawing_id, x_pct, y_pct, snag_item_id) values ($1,$2,101,10,$3)", [page, drawing, fx.snag]),
     /check/i
   );
   await assert.rejects(
-    owner.query("insert into public.drawing_pins (drawing_page_id, x_pct, y_pct, snag_item_id) values ($1,-1,10,$2)", [page, fx.snag]),
+    owner.query("insert into public.drawing_pins (drawing_page_id, drawing_id, x_pct, y_pct, snag_item_id) values ($1,$2,-1,10,$3)", [page, drawing, fx.snag]),
     /check/i
   );
   await owner.end();
@@ -369,12 +370,12 @@ test("x_pct/y_pct are bounded to 0-100", async () => {
 test("a pin's owner must belong to the same project as the drawing page (cross-project rejected)", async () => {
   const owner = await userClient(DB, OWNER);
   const ownerB = await userClient(DB, OWNER_B);
-  const { page } = await makeDrawing(owner, {});
+  const { drawing, page } = await makeDrawing(owner, {});
   const rfiB = (await ownerB.query(
     "insert into public.rfis (project_id, reference, title, question) values ($1,'RFI-B-1','T','Q?') returning id", [fx.projB]
   )).rows[0].id;
   await assert.rejects(
-    owner.query("insert into public.drawing_pins (drawing_page_id, x_pct, y_pct, rfi_id) values ($1,10,10,$2)", [page, rfiB]),
+    owner.query("insert into public.drawing_pins (drawing_page_id, drawing_id, x_pct, y_pct, rfi_id) values ($1,$2,10,10,$3)", [page, drawing, rfiB]),
     /same project/
   );
   await owner.end();
@@ -430,7 +431,7 @@ test("RLS read: a snagging-only member can read drawings, pages, assignments, qu
   const owner = await userClient(DB, OWNER);
   const { drawing, page } = await makeDrawing(owner, {});
   const query = (await owner.query("insert into public.general_queries (project_id, question) values ($1,'Q?') returning id", [fx.projA])).rows[0].id;
-  await owner.query("insert into public.drawing_pins (drawing_page_id, x_pct, y_pct, query_id) values ($1,10,10,$2)", [page, query]);
+  await owner.query("insert into public.drawing_pins (drawing_page_id, drawing_id, x_pct, y_pct, query_id) values ($1,$2,10,10,$3)", [page, drawing, query]);
   await owner.end();
 
   const snagOnly = await userClient(DB, SNAG_ONLY);
@@ -473,25 +474,25 @@ test("RLS write: a snagging-only member cannot upload a drawing or create a draw
 
 test("RLS write: a snagging-only member CAN pin their own snag or a query, but NOT an RFI or a Quality Gate", async () => {
   const owner = await userClient(DB, OWNER);
-  const { page } = await makeDrawing(owner, {});
+  const { drawing, page } = await makeDrawing(owner, {});
   await owner.end();
 
   const snagOnly = await userClient(DB, SNAG_ONLY);
   const query = (await snagOnly.query("insert into public.general_queries (project_id, question) values ($1,'Q?') returning id", [fx.projA])).rows[0].id;
 
-  const snagPin = await snagOnly.query("insert into public.drawing_pins (drawing_page_id, x_pct, y_pct, snag_item_id) values ($1,10,10,$2) returning id", [page, fx.snag]);
+  const snagPin = await snagOnly.query("insert into public.drawing_pins (drawing_page_id, drawing_id, x_pct, y_pct, snag_item_id) values ($1,$2,10,10,$3) returning id", [page, drawing, fx.snag]);
   assert.ok(snagPin.rows[0].id, "pinning a snag is allowed");
 
-  const queryPin = await snagOnly.query("insert into public.drawing_pins (drawing_page_id, x_pct, y_pct, query_id) values ($1,10,10,$2) returning id", [page, query]);
+  const queryPin = await snagOnly.query("insert into public.drawing_pins (drawing_page_id, drawing_id, x_pct, y_pct, query_id) values ($1,$2,10,10,$3) returning id", [page, drawing, query]);
   assert.ok(queryPin.rows[0].id, "pinning a query is allowed");
 
   await assert.rejects(
-    snagOnly.query("insert into public.drawing_pins (drawing_page_id, x_pct, y_pct, rfi_id) values ($1,10,10,$2)", [page, fx.rfi]),
+    snagOnly.query("insert into public.drawing_pins (drawing_page_id, drawing_id, x_pct, y_pct, rfi_id) values ($1,$2,10,10,$3)", [page, drawing, fx.rfi]),
     /row-level security|policy/i,
     "pinning an RFI requires editor"
   );
   await assert.rejects(
-    snagOnly.query("insert into public.drawing_pins (drawing_page_id, x_pct, y_pct, quality_gate_id) values ($1,10,10,$2)", [page, fx.gate]),
+    snagOnly.query("insert into public.drawing_pins (drawing_page_id, drawing_id, x_pct, y_pct, quality_gate_id) values ($1,$2,10,10,$3)", [page, drawing, fx.gate]),
     /row-level security|policy/i,
     "pinning a Quality Gate requires editor"
   );
@@ -500,10 +501,10 @@ test("RLS write: a snagging-only member CAN pin their own snag or a query, but N
 
 test("RLS write: an editor can pin all four owner types", async () => {
   const owner = await userClient(DB, OWNER);
-  const { page } = await makeDrawing(owner, {});
+  const { drawing, page } = await makeDrawing(owner, {});
   const query = (await owner.query("insert into public.general_queries (project_id, question) values ($1,'Q?') returning id", [fx.projA])).rows[0].id;
   for (const [col, val] of [["snag_item_id", fx.snag], ["rfi_id", fx.rfi], ["quality_gate_id", fx.gate], ["query_id", query]]) {
-    const { rows } = await owner.query(`insert into public.drawing_pins (drawing_page_id, x_pct, y_pct, ${col}) values ($1,20,20,$2) returning id`, [page, val]);
+    const { rows } = await owner.query(`insert into public.drawing_pins (drawing_page_id, drawing_id, x_pct, y_pct, ${col}) values ($1,$2,20,20,$3) returning id`, [page, drawing, val]);
     assert.ok(rows[0].id, col);
   }
   await owner.end();
@@ -530,7 +531,7 @@ test("audit log: an insert on each of the six new tables is recorded", async () 
   const owner = await userClient(DB, OWNER);
   const { upload, page, drawing } = await makeDrawing(owner, {});
   const query = (await owner.query("insert into public.general_queries (project_id, question) values ($1,'Q?') returning id", [fx.projA])).rows[0].id;
-  const pin = (await owner.query("insert into public.drawing_pins (drawing_page_id, x_pct, y_pct, query_id) values ($1,10,10,$2) returning id", [page, query])).rows[0].id;
+  const pin = (await owner.query("insert into public.drawing_pins (drawing_page_id, drawing_id, x_pct, y_pct, query_id) values ($1,$2,10,10,$3) returning id", [page, drawing, query])).rows[0].id;
   await owner.end();
 
   const admin = adminClient(DB);
@@ -554,6 +555,73 @@ test("audit log: an insert on each of the six new tables is recorded", async () 
   await admin.end();
 });
 
+// ─── v88: drawing_id (multi-assign pin isolation) ───────────────────
+
+test("v88: a pin insert without drawing_id is rejected", async () => {
+  const owner = await userClient(DB, OWNER);
+  const { page } = await makeDrawing(owner, {});
+  await assert.rejects(
+    owner.query("insert into public.drawing_pins (drawing_page_id, x_pct, y_pct, snag_item_id) values ($1,10,10,$2)", [page, fx.snag]),
+    /drawing_pins\.drawing_id is required/
+  );
+  await owner.end();
+});
+
+test("v88: a pin insert whose drawing_id was never assigned that drawing_page_id is rejected", async () => {
+  const owner = await userClient(DB, OWNER);
+  const { page } = await makeDrawing(owner, {}); // drawing A, its own page
+  const { drawing: drawingB } = await makeDrawing(owner, {}); // an unrelated drawing B, different page
+  await assert.rejects(
+    owner.query("insert into public.drawing_pins (drawing_page_id, drawing_id, x_pct, y_pct, snag_item_id) values ($1,$2,10,10,$3)", [page, drawingB, fx.snag]),
+    /drawing_id has never been assigned this drawing_page_id/
+  );
+  await owner.end();
+});
+
+test("v88: a snagging-only member can still insert a snag pin — the drawing_id requirement doesn't change who can pin what", async () => {
+  const owner = await userClient(DB, OWNER);
+  const { drawing, page } = await makeDrawing(owner, {});
+  await owner.end();
+  const snagOnly = await userClient(DB, SNAG_ONLY);
+  const { rows } = await snagOnly.query(
+    "insert into public.drawing_pins (drawing_page_id, drawing_id, x_pct, y_pct, snag_item_id) values ($1,$2,10,10,$3) returning id",
+    [page, drawing, fx.snag]
+  );
+  assert.ok(rows[0].id);
+  await snagOnly.end();
+});
+
+test("v88: shared-page isolation — one page assigned to two different plot_storey drawings, a pin on drawing A never shows up under drawing B", async () => {
+  const owner = await userClient(DB, OWNER);
+  const { drawing: drawingA, page: sharedPage } = await makeDrawing(owner, {}); // fresh plot_storey drawing A, with its own page
+
+  // Assign the SAME page to a second, different plot_storey drawing B —
+  // exactly what v88's multi-assign upload flow does (assignDrawingPage
+  // called once per destination with the same drawing_page_id).
+  const plotB = (await owner.query(
+    "insert into public.plots (project_id, plot_number, created_by) values ($1,'V88-P-SHARED',$2) returning id", [fx.projA, OWNER]
+  )).rows[0].id;
+  const { rows: drawingBRows } = await owner.query(
+    "insert into public.drawings (project_id, scope, plot_id, storey, title) values ($1,'plot_storey',$2,'GF','Plot Shared') returning id",
+    [fx.projA, plotB]
+  );
+  const drawingB = drawingBRows[0].id;
+  await owner.query("insert into public.drawing_page_assignments (drawing_id, drawing_page_id) values ($1,$2)", [drawingB, sharedPage]);
+
+  const pin = (await owner.query(
+    "insert into public.drawing_pins (drawing_page_id, drawing_id, x_pct, y_pct, snag_item_id) values ($1,$2,40,60,$3) returning id",
+    [sharedPage, drawingA, fx.snag]
+  )).rows[0];
+
+  const underA = await owner.query("select id from public.drawing_pins where drawing_id = $1", [drawingA]);
+  assert.deepEqual(underA.rows.map((r) => r.id), [pin.id], "drawing A's own pin must show up when read scoped to drawing A");
+
+  const underB = await owner.query("select id from public.drawing_pins where drawing_id = $1", [drawingB]);
+  assert.deepEqual(underB.rows, [], "drawing B must see NO pins, even though it currently shares the exact same page as drawing A — this is the cross-plot leak v88 closes");
+
+  await owner.end();
+});
+
 // ─── Rollback script sanity (full apply/rollback/idempotency already
 // exercised by hand during the build — see handover/NOTES.md) ───────
 
@@ -563,4 +631,10 @@ test("rollback script: contains the data-loss guard and restores the old table/c
   assert.match(ROLLBACK, /drawing_url text not null/);
   assert.match(ROLLBACK, /snag_items add column if not exists drawing_id/);
   assert.match(ROLLBACK, /quality_gates add column if not exists drawing_id/);
+});
+
+test("v88 rollback script: reverts the trigger and drops drawing_id/its index", () => {
+  assert.match(V88_ROLLBACK, /drop column if exists drawing_id/);
+  assert.match(V88_ROLLBACK, /drop index if exists public\.drawing_pins_drawing_idx/);
+  assert.doesNotMatch(V88_ROLLBACK, /drawing_pins\.drawing_id is required/, "the reverted trigger body must be the pre-v88 one, with no drawing_id checks");
 });

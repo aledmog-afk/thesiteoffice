@@ -225,14 +225,32 @@
     loadDrawings();
   });
 
-  function destinationSelectHtml(i) {
-    const plotOptions = plots.map((p) => DRAWING_STOREYS.map((s) => `<option value="plot|${p.id}||${s.value}">Plot ${escapeHtml(p.plot_number)} – ${s.label}</option>`).join("")).join("");
-    const blockOptions = blocks.map((b) => DRAWING_STOREYS.map((s) => `<option value="block||${b.id}|${s.value}">Block ${escapeHtml(b.block_name)} – ${s.label}</option>`).join("")).join("");
-    return `<select data-dest="${i}">
-      <option value="site|||">Site drawing</option>
-      ${plotOptions}
-      ${blockOptions}
-    </select>`;
+  // v88: multi-select destinations per page — one uploaded page can now
+  // be assigned to several plots/blocks at once (identical house
+  // types), so this is a checkbox list grouped Site/Plots/Blocks
+  // instead of the old single <select>. Site stays a single checkbox
+  // (there's only ever one site-drawing destination to offer, so "at
+  // most one" holds automatically). assignDrawingPage() is still the
+  // only thing that ever inserts into drawing_page_assignments — this
+  // just calls it once per checked destination.
+  function destinationCheckboxesHtml(i) {
+    const row = (value, label) => `
+      <div class="checklist-item"><input type="checkbox" data-dest="${i}" value="${value}" id="dest-${i}-${escapeHtml(value)}"><label for="dest-${i}-${escapeHtml(value)}">${label}</label></div>`;
+    const plotRows = plots.map((p) => DRAWING_STOREYS.map((s) => row(`plot|${p.id}||${s.value}`, `Plot ${escapeHtml(p.plot_number)} – ${s.label}`)).join("")).join("");
+    const blockRows = blocks.map((b) => DRAWING_STOREYS.map((s) => row(`block||${b.id}|${s.value}`, `Block ${escapeHtml(b.block_name)} – ${s.label}`)).join("")).join("");
+    return `
+      <div style="max-height:200px; overflow-y:auto; border:1px solid var(--rule); border-radius:6px; padding:0.2rem 0.6rem;">
+        ${row("site|||", "Site drawing")}
+        ${plotRows ? `<div class="hint" style="margin-top:0.4rem; font-weight:600;">Plots</div>${plotRows}` : ""}
+        ${blockRows ? `<div class="hint" style="margin-top:0.4rem; font-weight:600;">Blocks</div>${blockRows}` : ""}
+      </div>`;
+  }
+
+  function destinationLabel(value) {
+    const [scope, plotId, blockId, storey] = value.split("|");
+    if (scope === "site") return "Site drawing";
+    if (scope === "plot") return `Plot ${(plots.find((p) => p.id === plotId) || {}).plot_number} – ${storey}`;
+    return `Block ${(blocks.find((b) => b.id === blockId) || {}).block_name} – ${storey}`;
   }
 
   document.getElementById("uploadFile").addEventListener("change", async () => {
@@ -249,32 +267,54 @@
       document.getElementById("multiPageHint").style.display = pages.length > 1 ? "block" : "none";
       list.innerHTML = pages.map((p, i) => `
         <div class="card" style="margin-bottom:0.6rem;">
-          <div style="display:flex; gap:0.8rem; align-items:center;">
+          <div style="display:flex; gap:0.8rem; align-items:flex-start;">
             <img src="${p.previewUrl}" style="width:80px; height:80px; object-fit:cover; border-radius:6px; flex-shrink:0;">
             <div style="flex:1;">
-              <div class="hint">Page ${p.pageNumber}</div>
-              ${destinationSelectHtml(i)}
+              <div class="hint" style="margin-bottom:0.3rem;">Page ${p.pageNumber}</div>
+              ${destinationCheckboxesHtml(i)}
+              <div class="btn-row" style="margin-top:0.5rem; align-items:center;">
+                <button type="button" class="btn btn-amber btn-sm" data-assign="${i}" data-page-id="${p.pageId}">Assign</button>
+                <span class="hint" data-assign-status="${i}"></span>
+              </div>
+              <div data-assign-errors="${i}"></div>
             </div>
-            <button type="button" class="btn btn-amber btn-sm" data-assign="${i}" data-page-id="${p.pageId}">Assign</button>
           </div>
         </div>
       `).join("");
       list.querySelectorAll("[data-assign]").forEach((btn) => btn.addEventListener("click", async () => {
-        const sel = list.querySelector(`[data-dest="${btn.dataset.assign}"]`);
-        const [scope, plotId, blockId, storey] = sel.value.split("|");
-        const destScope = scope === "site" ? "site" : scope === "plot" ? "plot_storey" : "block_storey";
-        const title = destScope === "site" ? "Site Layout"
-          : destScope === "plot_storey" ? `${(plots.find((p) => p.id === plotId) || {}).plot_number} – ${storey}`
-          : `${(blocks.find((b) => b.id === blockId) || {}).block_name} – ${storey}`;
+        const i = btn.dataset.assign;
+        const checked = [...list.querySelectorAll(`[data-dest="${i}"]:checked`)];
+        const statusEl = list.querySelector(`[data-assign-status="${i}"]`);
+        const errorsEl = list.querySelector(`[data-assign-errors="${i}"]`);
+        if (!checked.length) { showError(document.getElementById("uploadErrorBox"), { message: "Check at least one destination first." }); return; }
         btn.disabled = true;
-        try {
-          await assignDrawingPage(projectId, btn.dataset.pageId, {
-            scope: destScope, plotId: plotId || null, blockId: blockId || null, storey: storey || null, title,
-          });
-          btn.textContent = "Assigned ✓";
-        } catch (err) {
-          btn.disabled = false;
-          showError(document.getElementById("uploadErrorBox"), err);
+        errorsEl.innerHTML = "";
+        let done = 0;
+        const failures = [];
+        statusEl.textContent = `Assigned 0/${checked.length}`;
+        await Promise.allSettled(checked.map(async (box) => {
+          const [scope, plotId, blockId, storey] = box.value.split("|");
+          const destScope = scope === "site" ? "site" : scope === "plot" ? "plot_storey" : "block_storey";
+          const title = destScope === "site" ? "Site Layout"
+            : destScope === "plot_storey" ? `${(plots.find((pl) => pl.id === plotId) || {}).plot_number} – ${storey}`
+            : `${(blocks.find((bl) => bl.id === blockId) || {}).block_name} – ${storey}`;
+          try {
+            await assignDrawingPage(projectId, btn.dataset.pageId, {
+              scope: destScope, plotId: plotId || null, blockId: blockId || null, storey: storey || null, title,
+            });
+            box.disabled = true;
+          } catch (err) {
+            failures.push({ label: destinationLabel(box.value), message: err.message || String(err) });
+          } finally {
+            done++;
+            statusEl.textContent = `Assigned ${done - failures.length}/${checked.length}`;
+          }
+        }));
+        btn.disabled = false;
+        if (failures.length) {
+          errorsEl.innerHTML = `<div class="error-box" style="display:block; margin-top:0.4rem; margin-bottom:0;">${failures.map((f) => `${escapeHtml(f.label)}: ${escapeHtml(f.message)}`).join("<br>")}</div>`;
+        } else {
+          statusEl.textContent = `Assigned ✓ (${checked.length})`;
         }
       }));
     } catch (err) {

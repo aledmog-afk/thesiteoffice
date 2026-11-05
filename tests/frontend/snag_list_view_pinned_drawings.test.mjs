@@ -56,14 +56,18 @@ function ctx(overrides = {}) {
 // imported — this file's harness mocks the data layer, not app.js
 // itself) so these tests exercise the exact numbering/markup contract
 // the real function produces, not a hand-rolled stand-in.
+// v88: keyed by drawing_id + drawing_page_id (not drawing_page_id
+// alone) — matches the real function exactly, so a page shared by two
+// drawings is never merged into one captioned block.
 function realBuildPinnedDrawingsHtml(pins, itemNoBySnagId) {
   if (!pins || !pins.length) return "";
-  const byPage = {};
+  const byDrawingPage = {};
   for (const p of pins) {
-    (byPage[p.drawing_page_id] ||= { image_url: p.image_url, title: p.drawing_title, pins: [] }).pins.push(p);
+    const key = `${p.drawing_id}:${p.drawing_page_id}`;
+    (byDrawingPage[key] ||= { image_url: p.image_url, title: p.drawing_title, pins: [] }).pins.push(p);
   }
   const esc = (s) => String(s ?? "").replace(/</g, "&lt;");
-  const blocks = Object.values(byPage).map((g) => `
+  const blocks = Object.values(byDrawingPage).map((g) => `
     <div class="drawing-canvas-wrap pinned-drawing-print">
       ${g.title ? `<div class="hint">${esc(g.title)}</div>` : ""}
       <div class="drawing-canvas">
@@ -78,7 +82,7 @@ test("snag-list-view.html: renders a numbered pin for each pinned item, using th
   const { document } = await runPage(PAGE, extractScript(PAGE), ctx({
     getDrawingPinsForSnagItems: async (ids) => {
       assert.deepEqual(ids.sort(), ["s1", "s2"], "must be called with exactly this list's own snag item ids");
-      return [{ id: "pin1", x_pct: 40, y_pct: 60, snag_item_id: "s2", drawing_page_id: "pageA", image_url: "drawings/p1/pageA.jpg", drawing_title: "Plot 5 — GF" }];
+      return [{ id: "pin1", x_pct: 40, y_pct: 60, snag_item_id: "s2", drawing_id: "dA", drawing_page_id: "pageA", image_url: "drawings/p1/pageA.jpg", drawing_title: "Plot 5 — GF" }];
     },
     buildPinnedDrawingsHtml: realBuildPinnedDrawingsHtml,
   }));
@@ -95,6 +99,24 @@ test("snag-list-view.html: renders a numbered pin for each pinned item, using th
   assert.ok(img.src.startsWith("https://signed.example/"), "the image src must be the SIGNED url, not the bare stored path");
 });
 
+test("snag-list-view.html: v88 — two pins sharing the same drawing_page_id but belonging to different drawings render as two separate captioned blocks, never merged", async () => {
+  const { document } = await runPage(PAGE, extractScript(PAGE), ctx({
+    getDrawingPinsForSnagItems: async () => [
+      { id: "pin1", x_pct: 10, y_pct: 10, snag_item_id: "s1", drawing_id: "dPlot1", drawing_page_id: "sharedPage", image_url: "drawings/p1/shared.jpg", drawing_title: "Plot 1 — GF" },
+      { id: "pin2", x_pct: 90, y_pct: 90, snag_item_id: "s2", drawing_id: "dPlot2", drawing_page_id: "sharedPage", image_url: "drawings/p1/shared.jpg", drawing_title: "Plot 2 — GF" },
+    ],
+    buildPinnedDrawingsHtml: realBuildPinnedDrawingsHtml,
+  }));
+  await wait(30);
+  const doc = document.getElementById("doc");
+  assert.match(doc.textContent, /Plot 1 — GF/);
+  assert.match(doc.textContent, /Plot 2 — GF/);
+  const canvases = doc.querySelectorAll(".drawing-canvas-wrap.pinned-drawing-print");
+  assert.equal(canvases.length, 2, "a page shared by two different drawings must render as two separate blocks, one per drawing — never merged into one");
+  const pins = doc.querySelectorAll(".pin-numbered");
+  assert.equal(pins.length, 2, "each block must show only its own drawing's pin, not both");
+});
+
 test("snag-list-view.html: a viewer who can't read drawings under RLS just loses the Pinned Drawings section — no page error, rest of the sheet still renders", async () => {
   const { document } = await runPage(PAGE, extractScript(PAGE), ctx({
     getDrawingPinsForSnagItems: async () => { throw new Error("permission denied for table drawing_pins"); },
@@ -109,7 +131,7 @@ test("snag-list-view.html: a viewer who can't read drawings under RLS just loses
 test("snag-list-view.html: Print waits for the pinned drawing's image to actually load before window.print() fires", async () => {
   let printed = 0;
   const { document, window } = await runPage(PAGE, extractScript(PAGE), ctx({
-    getDrawingPinsForSnagItems: async () => [{ id: "pin1", x_pct: 10, y_pct: 10, snag_item_id: "s1", drawing_page_id: "pageA", image_url: "drawings/p1/pageA.jpg", drawing_title: null }],
+    getDrawingPinsForSnagItems: async () => [{ id: "pin1", x_pct: 10, y_pct: 10, snag_item_id: "s1", drawing_id: "dA", drawing_page_id: "pageA", image_url: "drawings/p1/pageA.jpg", drawing_title: null }],
     buildPinnedDrawingsHtml: realBuildPinnedDrawingsHtml,
   }));
   await wait(30);

@@ -923,3 +923,63 @@ test("v52: a fresh install has zero snag_photos — there is no legacy predecess
     await dropTestDatabase(db);
   }
 });
+
+// ─── v88: drawing_pins.drawing_id (multi-assign pin isolation) ──────
+// A fresh install has zero drawing_pins, so the backfill DO block is a
+// correct no-op every time — the only thing to prove at this
+// (schema-shape) level is that the column/index/trigger are idempotent
+// across repeated re-application. The backfill's own resolution logic
+// (prefer non-superseded, then plot/block match, then most recent
+// assigned_at) and the trigger's new drawing_id checks are exercised
+// directly against real data in tests/database/v74_drawing_pins.test.mjs.
+
+test("v88: drawing_pins.drawing_id is NOT NULL, indexed, and the extended before-insert trigger is idempotent across repeated re-application", async () => {
+  const db = "tracker_test_v88_idempotent";
+  await createTestDatabase(db);
+  try {
+    const client = adminClient(db);
+    await client.connect();
+    await runSqlFile(client, MOCK_SETUP);
+    for (let i = 0; i < 3; i++) {
+      await runSqlFile(client, CURRENT_SCHEMA);
+    }
+
+    const column = await client.query(`
+      select is_nullable from information_schema.columns
+      where table_schema = 'public' and table_name = 'drawing_pins' and column_name = 'drawing_id'
+    `);
+    assert.equal(column.rowCount, 1, "drawing_id must exist exactly once after repeated re-application");
+    assert.equal(column.rows[0].is_nullable, "NO", "drawing_id must end up NOT NULL");
+
+    const index = await client.query("select count(*)::int as n from pg_indexes where tablename = 'drawing_pins' and indexname = 'drawing_pins_drawing_idx'");
+    assert.equal(index.rows[0].n, 1, "drawing_pins_drawing_idx must exist exactly once, never duplicated");
+
+    const triggers = await client.query("select count(*)::int as n from pg_trigger where tgrelid = 'public.drawing_pins'::regclass and tgname = 'trg_drawing_pins_before_insert'");
+    assert.equal(triggers.rows[0].n, 1, "re-applying create or replace function must never duplicate the trigger itself");
+
+    const fnBody = await client.query("select pg_get_functiondef(oid) as def from pg_catalog.pg_proc where proname = 'drawing_pins_before_insert'");
+    assert.match(fnBody.rows[0].def, /drawing_id is required/, "the live function must be the v88 body, not a stale pre-v88 one");
+
+    await client.end();
+  } finally {
+    await dropTestDatabase(db);
+  }
+});
+
+test("v88: a fresh install's backfill is a correct no-op — zero drawing_pins means nothing to backfill, and no error is raised", async () => {
+  const db = "tracker_test_v88_no_backfill";
+  await createTestDatabase(db);
+  try {
+    const client = adminClient(db);
+    await client.connect();
+    await runSqlFile(client, MOCK_SETUP);
+    await runSqlFile(client, CURRENT_SCHEMA); // throws if the backfill DO block errors on an empty table
+
+    const pins = await client.query("select count(*)::int as n from public.drawing_pins");
+    assert.equal(pins.rows[0].n, 0);
+
+    await client.end();
+  } finally {
+    await dropTestDatabase(db);
+  }
+});

@@ -120,7 +120,7 @@
   import {
     requireAuth, renderHeader, getParam, escapeHtml, formatDate, formatDateTime, showError, clearError, uploadImage, todayISO,
     SNAG_PRIORITY_LABEL, SNAG_PRIORITY_BADGE, SNAG_STATUS_LABEL, SNAG_STATUS_BADGE,
-    getDrawing, getDrawingRevisionHistory, getDrawingPagePins, createDrawingPin,
+    getDrawing, getDrawingRevisionHistory, getDrawingPins, createDrawingPin,
     uploadAndRasterizeDrawing, assignDrawingPage, DRAWING_STOREYS,
   } from "./js/app.js";
 
@@ -257,7 +257,7 @@
       if (type === "snag") {
         const existingId = document.getElementById("snagExisting").value;
         if (existingId) {
-          await createDrawingPin(pageId, pendingCoords.x, pendingCoords.y, { snagItemId: existingId });
+          await createDrawingPin(pageId, pendingCoords.x, pendingCoords.y, { snagItemId: existingId }, drawing.id);
           newPinPanel.style.display = "none"; clearTempPin(); loadPins(); return;
         }
         const location = document.getElementById("snagLocation").value.trim();
@@ -277,11 +277,11 @@
           priority: document.getElementById("snagPriority").value, raised_date: todayISO(), created_by: user.id,
         }).select("id").single();
         if (error) throw error;
-        await createDrawingPin(pageId, pendingCoords.x, pendingCoords.y, { snagItemId: snag.id });
+        await createDrawingPin(pageId, pendingCoords.x, pendingCoords.y, { snagItemId: snag.id }, drawing.id);
       } else if (type === "rfi") {
         const existingId = document.getElementById("rfiExisting").value;
         if (existingId) {
-          await createDrawingPin(pageId, pendingCoords.x, pendingCoords.y, { rfiId: existingId });
+          await createDrawingPin(pageId, pendingCoords.x, pendingCoords.y, { rfiId: existingId }, drawing.id);
           newPinPanel.style.display = "none"; clearTempPin(); loadPins(); return;
         }
         const title = document.getElementById("rfiTitle").value.trim();
@@ -291,15 +291,15 @@
           project_id: drawing.project_id, plot_id: drawing.plot_id, title, question,
         }).select("id").single();
         if (error) throw error;
-        await createDrawingPin(pageId, pendingCoords.x, pendingCoords.y, { rfiId: rfi.id });
+        await createDrawingPin(pageId, pendingCoords.x, pendingCoords.y, { rfiId: rfi.id }, drawing.id);
       } else if (type === "gate") {
         const gateId = document.getElementById("gateSelect").value;
         if (!gateId) { showError(pinErrorBox, { message: "Choose a Quality Gate." }); return; }
-        await createDrawingPin(pageId, pendingCoords.x, pendingCoords.y, { qualityGateId: gateId });
+        await createDrawingPin(pageId, pendingCoords.x, pendingCoords.y, { qualityGateId: gateId }, drawing.id);
       } else {
         const existingId = document.getElementById("queryExisting").value;
         if (existingId) {
-          await createDrawingPin(pageId, pendingCoords.x, pendingCoords.y, { queryId: existingId });
+          await createDrawingPin(pageId, pendingCoords.x, pendingCoords.y, { queryId: existingId }, drawing.id);
           newPinPanel.style.display = "none"; clearTempPin(); loadPins(); return;
         }
         const question = document.getElementById("queryQuestion").value.trim();
@@ -308,7 +308,7 @@
           project_id: drawing.project_id, plot_id: drawing.plot_id, block_id: drawing.block_id, question,
         }).select("id").single();
         if (error) throw error;
-        await createDrawingPin(pageId, pendingCoords.x, pendingCoords.y, { queryId: query.id });
+        await createDrawingPin(pageId, pendingCoords.x, pendingCoords.y, { queryId: query.id }, drawing.id);
       }
 
       newPinPanel.style.display = "none";
@@ -357,7 +357,7 @@
 
   async function loadPins() {
     if (!drawing.current_page) { pins = []; renderPins(); return; }
-    pins = await getDrawingPagePins(drawing.current_page.id);
+    pins = await getDrawingPins(drawing.id);
     renderPins();
   }
 

@@ -15368,6 +15368,15 @@ create trigger trg_plots_before_write
 -- reassigning a drawing's current page (a revision) never moves or
 -- orphans an existing pin; it stays exactly where it was placed,
 -- against the exact image it was placed on, forever.
+-- SUPERSEDED by v88 (see the v88 ADDITIONS section near the end of
+-- this file): once drawings.html can assign one uploaded page to
+-- several different drawings at once (multi-assign, for identical
+-- house types), "never a drawing" stops being true — a page-keyed pin
+-- would then be visible on every drawing currently sharing that page,
+-- leaking across plots. v88 adds drawing_pins.drawing_id so a pin
+-- stays scoped to the one drawing it was actually placed on; the
+-- revision behaviour described above (a pin never moves when a new
+-- page is assigned) is unchanged.
 --
 -- project_id is denormalised onto drawing_pages, drawing_page_assignments
 -- and drawing_pins (each is really only reachable from its project via
@@ -17784,3 +17793,221 @@ end $$;
 -- deleting the diary entry never deletes the Action it raised.
 alter table public.actions add column if not exists source_diary_entry_id uuid references public.personal_diary_entries(id) on delete set null;
 create index if not exists actions_source_diary_entry_idx on public.actions (source_diary_entry_id) where source_diary_entry_id is not null;
+
+-- ─── v88 ADDITIONS: Drawing multi-assign + drawing_pins.drawing_id ──
+-- Sites with identical house types need one uploaded page assigned to
+-- many plots (Plot 1 GF, Plot 2 GF, …) without re-uploading.
+-- assignDrawingPage() already supported this at the data layer
+-- (drawing_page_assignments has no unique on drawing_page_id — it was
+-- only ever drawings.html's single-destination <select> stopping a
+-- page being assigned twice); this migration is the other half: the
+-- drawing_pins fix that makes it SAFE to ship the multi-select UI.
+--
+-- Blocker this closes: pins were keyed only by drawing_page_id. Once
+-- one page is current for both Plot 1's GF and Plot 2's GF, a pin
+-- read scoped to "this page" returns both plots' pins — a real
+-- cross-plot leak, not a hypothetical one. See the SUPERSEDED note on
+-- the old v74 comment above ("Pins reference a drawing_page directly,
+-- never a drawing") for why that was true then and isn't now.
+--
+-- Fix: drawing_pins gets a direct drawing_id, backfilled below, then
+-- required. Every read helper (getDrawingPins, getDrawingPinsForSnagItems,
+-- buildPinnedDrawingsHtml) and every create call site (drawing-view.html,
+-- snag-list-edit.html) now key off drawing_id, not drawing_page_id.
+--
+-- Out of scope (unchanged by this migration): no unpin/replace policy
+-- on drawing_pins (still a one-time placement record, per v74); no
+-- change to who can insert which pin type (same four owner-type RLS
+-- policies as v74); no change to assignDrawingPage() itself — it
+-- already does the right thing when called once per destination.
+
+alter table public.drawing_pins add column if not exists drawing_id uuid references public.drawings(id) on delete cascade;
+
+-- Backfill: every pin placed before this migration was placed back
+-- when drawings.html only ever assigned one destination per page, so
+-- in practice every pin's drawing_page_id maps to exactly one drawing
+-- via drawing_page_assignments — this loop should resolve all of them
+-- on the first (non-superseded, no ambiguity) branch below. The
+-- plot/block-match and most-recent-assigned_at tiebreaks are a
+-- defensive provision for a page that was, for whatever reason,
+-- already shared before this backfill ran — not exercised by today's
+-- real data, but handled correctly if it ever is. If a pin still
+-- can't be resolved to exactly one drawing (no assignment row at all
+-- links its drawing_page_id to any drawing — which the schema's own
+-- FK/trigger invariants should make impossible), the migration stops
+-- loudly rather than guessing or leaving a NULL behind.
+do $$
+declare
+  v_pin record;
+  v_pin_plot_id uuid;
+  v_pin_block_id uuid;
+  v_drawing_id uuid;
+  v_tied_count int;
+  v_unmatched int := 0;
+begin
+  for v_pin in
+    select id, drawing_page_id, snag_item_id, rfi_id, quality_gate_id, query_id
+    from public.drawing_pins where drawing_id is null
+  loop
+    v_pin_plot_id := null;
+    v_pin_block_id := null;
+
+    -- Same plot/block derivation each pin owner type's own schema
+    -- already uses elsewhere (e.g. plots_before_write()'s snag
+    -- blocking check: coalesce(snag_items.plot_id, snag_lists.plot_id)).
+    if v_pin.snag_item_id is not null then
+      select coalesce(si.plot_id, sl.plot_id) into v_pin_plot_id
+      from public.snag_items si
+      left join public.snag_lists sl on sl.id = si.snag_list_id
+      where si.id = v_pin.snag_item_id;
+    elsif v_pin.rfi_id is not null then
+      select plot_id into v_pin_plot_id from public.rfis where id = v_pin.rfi_id;
+    elsif v_pin.quality_gate_id is not null then
+      select plot_id, block_id into v_pin_plot_id, v_pin_block_id from public.quality_gates where id = v_pin.quality_gate_id;
+    elsif v_pin.query_id is not null then
+      select plot_id, block_id into v_pin_plot_id, v_pin_block_id from public.general_queries where id = v_pin.query_id;
+    end if;
+
+    v_drawing_id := null;
+
+    -- (1) The single non-superseded assignment for this page, if
+    -- there's exactly one.
+    select count(*) into v_tied_count
+    from public.drawing_page_assignments
+    where drawing_page_id = v_pin.drawing_page_id and superseded_at is null;
+
+    if v_tied_count = 1 then
+      select drawing_id into v_drawing_id
+      from public.drawing_page_assignments
+      where drawing_page_id = v_pin.drawing_page_id and superseded_at is null;
+    elsif v_tied_count > 1 then
+      -- The real multi-assign case: more than one drawing currently
+      -- holds this page. (2) Prefer whichever tied drawing's
+      -- plot_id/block_id matches this pin's own pinned item.
+      select dpa.drawing_id into v_drawing_id
+      from public.drawing_page_assignments dpa
+      join public.drawings d on d.id = dpa.drawing_id
+      where dpa.drawing_page_id = v_pin.drawing_page_id and dpa.superseded_at is null
+        and ((v_pin_plot_id is not null and d.plot_id = v_pin_plot_id)
+             or (v_pin_block_id is not null and d.block_id = v_pin_block_id))
+      order by dpa.assigned_at desc
+      limit 1;
+
+      if v_drawing_id is null then
+        -- (3) No plot/block match among the tied assignments — fall
+        -- back to the most recently assigned_at.
+        select drawing_id into v_drawing_id
+        from public.drawing_page_assignments
+        where drawing_page_id = v_pin.drawing_page_id and superseded_at is null
+        order by assigned_at desc
+        limit 1;
+      end if;
+    else
+      -- Zero non-superseded assignments for this page (every drawing
+      -- that ever held it has since moved on to a newer revision) —
+      -- this is the normal "pin stays on the page version it was
+      -- placed on" case (see the revision-flow test above). Resolve
+      -- via the most recent assignment overall, ignoring supersession.
+      select drawing_id into v_drawing_id
+      from public.drawing_page_assignments
+      where drawing_page_id = v_pin.drawing_page_id
+      order by assigned_at desc
+      limit 1;
+    end if;
+
+    if v_drawing_id is null then
+      v_unmatched := v_unmatched + 1;
+      raise warning 'v88 backfill: drawing_pins.id = % has no resolvable drawing_id (drawing_page_id = %)', v_pin.id, v_pin.drawing_page_id;
+    else
+      update public.drawing_pins set drawing_id = v_drawing_id where id = v_pin.id;
+    end if;
+  end loop;
+
+  if v_unmatched > 0 then
+    raise exception 'v88 backfill refused: % drawing_pins row(s) could not be matched to exactly one drawing — resolve manually before re-running this migration', v_unmatched;
+  end if;
+end $$;
+
+alter table public.drawing_pins alter column drawing_id set not null;
+create index if not exists drawing_pins_drawing_idx on public.drawing_pins (drawing_id);
+
+-- Extend drawing_pins_before_insert(): drawing_id is now required,
+-- must belong to the same project, and must be (or have been) a real
+-- assignment target for that exact drawing_page_id — ANY row in
+-- drawing_page_assignments linking them, not only the current one, so
+-- a pin placed on an older page revision (back when that revision WAS
+-- current for that drawing) stays valid once a newer revision
+-- supersedes it. Same exactly-one-owner and same-project-as-pinned-
+-- item checks as v74, unchanged.
+create or replace function public.drawing_pins_before_insert()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_page_project_id uuid;
+  v_drawing_project_id uuid;
+  v_owner_project_id uuid;
+  v_owner_count int;
+begin
+  v_owner_count := (new.snag_item_id is not null)::int + (new.rfi_id is not null)::int +
+                    (new.quality_gate_id is not null)::int + (new.query_id is not null)::int;
+  if v_owner_count <> 1 then
+    raise exception 'drawing_pins: exactly one of snag_item_id/rfi_id/quality_gate_id/query_id must be set, got %', v_owner_count;
+  end if;
+
+  if new.drawing_id is null then
+    raise exception 'drawing_pins.drawing_id is required';
+  end if;
+
+  select project_id into v_page_project_id from public.drawing_pages where id = new.drawing_page_id;
+  if v_page_project_id is null then
+    raise exception 'drawing_pins.drawing_page_id must reference an existing drawing_pages row';
+  end if;
+  new.project_id := v_page_project_id;
+
+  select project_id into v_drawing_project_id from public.drawings where id = new.drawing_id;
+  if v_drawing_project_id is null then
+    raise exception 'drawing_pins.drawing_id must reference an existing drawing';
+  end if;
+  if v_drawing_project_id <> v_page_project_id then
+    raise exception 'drawing_pins: drawing_id must belong to the same project as drawing_page_id';
+  end if;
+
+  if not exists (
+    select 1 from public.drawing_page_assignments
+    where drawing_id = new.drawing_id and drawing_page_id = new.drawing_page_id
+  ) then
+    raise exception 'drawing_pins: drawing_id has never been assigned this drawing_page_id';
+  end if;
+
+  if new.snag_item_id is not null then
+    select project_id into v_owner_project_id from public.snag_items where id = new.snag_item_id;
+  elsif new.rfi_id is not null then
+    select project_id into v_owner_project_id from public.rfis where id = new.rfi_id;
+  elsif new.quality_gate_id is not null then
+    select project_id into v_owner_project_id from public.quality_gates where id = new.quality_gate_id;
+  elsif new.query_id is not null then
+    select project_id into v_owner_project_id from public.general_queries where id = new.query_id;
+  end if;
+  if v_owner_project_id is null or v_owner_project_id <> v_page_project_id then
+    raise exception 'drawing_pins: the pinned item must exist in the same project as the drawing page';
+  end if;
+
+  new.created_by := auth.uid();
+  new.created_at := now();
+  return new;
+end;
+$$;
+-- trg_drawing_pins_before_insert itself is unchanged — same function
+-- name, same timing, no DROP/CREATE TRIGGER needed; `create or
+-- replace function` above swaps the body in place, and the function
+-- stays revoked from public/anon/authenticated exactly as v74 left it
+-- (a trigger function, never called directly by any page or RPC).
+
+-- RLS: no changes. Re-read against the five live policies on
+-- drawing_pins above (one select, four insert) — every one predicates
+-- only on project_id and the owner columns, never on drawing_page_id
+-- or drawing_id. Still no update/delete policy (v74's "a pin is a
+-- one-time placement record" phase is unchanged). No anon grants.
