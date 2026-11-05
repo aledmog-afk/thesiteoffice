@@ -58,6 +58,12 @@ async function run(supabase) {
       if (error) throw error;
       return data;
     },
+    // v90: referenced unconditionally at module top-level (populating
+    // the quick-create Action priority dropdown), so every dashboard.html
+    // harness needs it even when a test never opens that form.
+    ACTION_PRIORITIES: ["low", "medium", "high", "critical"],
+    ACTION_PRIORITY_LABEL: { low: "Low", medium: "Medium", high: "High", critical: "Critical" },
+    createAction: async () => ({}),
   });
 }
 

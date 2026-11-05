@@ -19,6 +19,7 @@ function extractConst(name) {
   return new Function(`${m[0].replace(/^export /, "")} return ${name};`)();
 }
 const CONTROL_LEVEL_BADGE = extractConst("CONTROL_LEVEL_BADGE");
+const ACTION_PRIORITIES = extractConst("ACTION_PRIORITIES");
 const ACTION_PRIORITY_LABEL = extractConst("ACTION_PRIORITY_LABEL");
 const ACTION_PRIORITY_BADGE = extractConst("ACTION_PRIORITY_BADGE");
 const ACTION_STATUS_LABEL = extractConst("ACTION_STATUS_LABEL");
@@ -86,7 +87,8 @@ async function run({ summary, attentionActions = ATTENTION_ACTIONS, attentionThr
       return attentionActions;
     },
     getMemberEmailMap: async () => ({ "u-collab": "collab@example.com" }),
-    CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE,
+    CONTROL_LEVEL_BADGE, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE,
+    createAction: async () => ({}),
   });
 }
 

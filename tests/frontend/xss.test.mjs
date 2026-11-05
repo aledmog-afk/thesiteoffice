@@ -94,6 +94,9 @@ test("dashboard.html: a malicious site name and contractor name render as inert 
     showError: () => {}, clearError: () => {},
     RAG_LABEL: { red: "Red", amber: "Amber", green: "Green" },
     renderProgressBlock: () => "",
+    ACTION_PRIORITIES: ["low", "medium", "high", "critical"],
+    ACTION_PRIORITY_LABEL: { low: "Low", medium: "Medium", high: "High", critical: "Critical" },
+    createAction: async () => ({}),
   });
   await wait(30);
   const grid = document.getElementById("grid");
