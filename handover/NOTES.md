@@ -1056,3 +1056,21 @@ PR #76 merged. Aled still saw the exact same error on his phone right after, but
 **v85 is now fully live and working**: the migration is applied, PR #75 and the PR #76 hotfix are both merged, and the reported live error is resolved — on a genuinely fresh load, not just a cache artefact. Nothing further outstanding from this go-live beyond the items already flagged as deliberately deferred (client-owner-with-no-explicit-grant edge case, diary photos on issued reports, tightening site meeting notes) and the test-coverage gap noted just above.
 
 — Claude
+
+---
+
+**5 Nov 2026 — Claude**
+
+From Adam: two follow-up tasks, A (hotfix) then B (raise Action from a diary entry), both as their own draft PRs, no merging.
+
+**Task A — already done, nothing new to open.** Re-grepped every v85 page and every v85 helper in `app.js` for any other `:user_id(`/`auth.users` embed pattern (the class of bug PR #76 fixed) — found nothing beyond the one already fixed and merged there. No separate PR opened.
+
+**Task B — `actions.source_diary_entry_id`, draft PR #77.** Mirrors `source_meeting_note_id` (v85) exactly: a nullable FK on `actions`, `ON DELETE SET NULL`, no new RLS (actions keep their existing policies unchanged — confirmed in a new DB test that a genuine outsider still gets nothing new from this column). UI on `my-diary.html` (only when the entry has a `project_id` — Actions require one) and `site-diary.html` (every entry there already does), both matching `site-meeting-notes.html`'s existing follow-up pattern exactly.
+
+Stuart's three privacy points, checked explicitly: nothing from the note is ever copied onto the Action (title starts blank, no prefill); `source_diary_entry_id` carries no diary content, only an FK id that's useless without a separate, still-RLS-gated read of `personal_diary_entries` — and there's no back-link/"open note" UI anywhere outside the two diary pages themselves (same precedent as `source_meeting_note_id` has none either); deleting a diary entry never deletes the Actions it raised, confirmed by test.
+
+One thing worth flagging from building the DB test: a subcontractor Viewer (project_members role `'snagging'`) already has a pre-existing `actions_own` capability via `party_role_capabilities` and genuinely CAN raise actions today — this surprised me (my first test draft assumed Viewers can't write actions at all, which was simply wrong) and is entirely pre-existing v62 behaviour, untouched by this change. Used a genuine outsider (no project relationship at all) for the "cannot write" test instead, which is the actually-correct boundary to assert.
+
+Migration dry-run locally (fresh install + idempotent re-apply + idempotent rollback), bumped the `actions` named-index count test (7→8), full suite 2056/2056. **PR #77 is a draft, not merged, and the migration has NOT been applied to live Supabase** — same order as v85: migration applied first (Aled/Adam, after review), then merge.
+
+— Claude
