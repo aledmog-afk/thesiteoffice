@@ -7697,12 +7697,25 @@ export async function deleteDiaryEntry(id) {
 
 // The "site diary" — everyone's entries assigned to one project. RLS
 // (read own or contractor-side diary entries) already narrows this to
-// exactly who's allowed to see it; this is just the plain query.
+// exactly who's allowed to see it. Deliberately NOT a PostgREST embed
+// (`select("*, author:user_id(email)")`, as this briefly shipped) —
+// clients can't query auth.users directly in this app (same reasoning
+// as get_project_members()/getOrganisationMembers() above), so that
+// embed can never resolve, cache-fresh or not. Resolved the same way
+// every other page does: a separate getMemberEmailMap() lookup.
+// get_project_members() is editor-gated, but every OTHER author's
+// entry visible here (by the RLS rule above) implies the viewer is a
+// contractor-side editor already — so this only ever comes back empty
+// for a non-editor looking at their own single entry, who doesn't
+// need their own email resolved to see "(you)" anyway.
 export async function getSiteDiaryEntries(projectId) {
-  const { data, error } = await supabase.from("personal_diary_entries").select("*, author:user_id(email)")
+  const { data, error } = await supabase.from("personal_diary_entries").select("*")
     .eq("project_id", projectId).order("entry_date", { ascending: false }).order("created_at", { ascending: false });
   if (error) throw error;
-  return data || [];
+  const entries = data || [];
+  if (entries.length === 0) return entries;
+  const emailMap = await getMemberEmailMap([projectId]);
+  return entries.map((e) => ({ ...e, author: { email: emailMap[e.user_id] || "" } }));
 }
 
 // ─── v85: Meeting notes ──────────────────────────────────────────────
