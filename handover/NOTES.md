@@ -1126,3 +1126,29 @@ Reviewed PR #78 myself before standing behind it as "done" — the implementatio
 So `can_read_snag_row()` is actually **narrower** than `is_project_member()` in the party branch, not broader — I can't find a role today that reads some snags but fails to read drawings under current RLS. Posted this as a PR comment asking Adam/Stuart to confirm whether such a role genuinely exists (so a real DB-level test can replace the current frontend-mocked-throw test for rule 8), or whether the graceful-omit code is correctly defensive for a state that isn't reachable today. Either way the actual code (try/catch, silent omit, never errors, never bypasses) is correct and doesn't need changing — this is purely a verification/documentation point, not a functional gap.
 
 — Claude
+
+---
+
+**5 Nov 2026 — Claude**
+
+PR #78 (v87, above) merged as `2f53121`. Next from Adam/Aled: v88, drawing multi-assign — one uploaded page assigned to many plots/blocks at once (identical house types), without re-uploading. Built as draft **PR #79**: https://github.com/aledmog-afk/thesiteoffice/pull/79
+
+Naming note: the task referenced "v87" for both the branch and the schema migration. v87 was already taken by the merged snag-pins work above, so I used **v88** for the branch name and the `sql/schema.sql` section instead, flagged in the PR body rather than silently colliding with an existing section header.
+
+**The blocker, and the fix**: `assignDrawingPage()` already allowed one page to be assigned to several different drawings (`drawing_page_assignments` has no unique on `drawing_page_id`) — `drawings.html`'s single-destination `<select>` was the only thing stopping it. But `drawing_pins` was keyed only by `drawing_page_id`, so once a page is shared, a pin read scoped to "this page" would return every drawing's pins sharing it — a real cross-plot leak. Fixed by adding `drawing_pins.drawing_id`, required and FK'd to `drawings(id)`, with every pin create/read path now scoped by it instead.
+
+**Backfill**: nullable → backfilled → `NOT NULL`. Tiebreak order for a pin whose page maps to more than one drawing: prefer the single non-superseded `drawing_page_assignments` row; else prefer the drawing whose `plot_id`/`block_id` matches the pinned item's own plot/block; else most recent `assigned_at`. Confirmed by reading `drawing_page_assignments_after_insert()` directly that superseding is scoped per-`drawing_id` (not globally per page) — which is exactly the mechanism that lets two drawings each hold their own non-superseded assignment to the same page, the real ambiguity case this tiebreak exists for. In practice every pre-v88 pin resolves on step 1 — the old UI never let one page serve two destinations — so this is a defensive provision for the future, not a fix for present data. If a pin's page somehow has zero assignment rows at all, the migration stops with a loud `RAISE EXCEPTION` rather than guessing.
+
+**Schema comment supersession**: v74's own comment claimed "Pins reference a drawing_page directly, never a drawing." Left in place (not rewritten) with a `SUPERSEDED by v88` note explaining why that's no longer true, so the original reasoning stays legible for anyone reading the file top-to-bottom.
+
+**`drawings.html`**: single `<select>` per page replaced with a checkbox list grouped Site (one checkbox, so "at most one" holds trivially) / Plots-by-storey / Blocks-by-storey. `assignDrawingPage()` itself is untouched and stays the only client insert into `drawing_page_assignments` — the UI just loops it once per checked box, with live "Assigned N/M" progress and per-destination errors that don't abort the rest.
+
+**`app.js`**: `createDrawingPin(..., owner, drawingId)` — `drawingId` now required, never inferred from the page. `getDrawingPagePins` renamed `getDrawingPins(drawingId)`. `getSnagDrawingPin` now also returns `drawing_id`. `getDrawingPinsForSnagItems`/`buildPinnedDrawingsHtml` group/caption by `drawing_id` **and** `drawing_page_id` together (not `drawing_id` alone) — a drawing with pins on two different page revisions still renders as two separate canvases rather than merging them onto one image, which a drawing_id-only key would have silently broken. `getDrawingForPage()` removed outright — it becomes genuinely ambiguous once a page can belong to more than one drawing — its one call site (`snag-list-edit.html`'s already-pinned status lookup) now uses the existing, unambiguous `getDrawing(pin.drawing_id)`.
+
+**Known gap, unchanged from v74**: still no unpin/replace policy on `drawing_pins`. Not touched here — out of scope per the brief.
+
+4 updated `app.js` helpers (1 renamed, 1 removed, 2 extended), one new migration + rollback, one new database-test section plus fixture updates across all of v74's existing `drawing_pins` tests, frontend test updates across all three v87 pin test files plus a new shared-page-isolation case. Full suite: database + frontend all green; security suite green (one pre-existing, unrelated `EXPLAIN ANALYZE` timing test — `quality_gates` full-table-scan at 1,600-plot scale — flaked once over the 150ms threshold on sandbox contention, passed clean twice in isolation immediately after; confirmed unrelated to this change before treating the suite as green).
+
+**Draft, not merged, no migration applied to live.** Waiting on Aled's review of #79 — test plan is in the PR body (assign one page to two plots, pin a snag on one, confirm the other plot's drawing-view shows nothing).
+
+— Claude
