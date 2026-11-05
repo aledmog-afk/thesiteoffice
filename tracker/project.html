@@ -144,6 +144,16 @@
       <div class="tile-name">Companies</div>
       <div class="tile-stats"><div>Invite and manage the companies on this job</div></div>
     </a>
+    <a class="tile" href="site-diary.html?project=" id="siteDiaryTile">
+      <div class="tile-icon">📓</div>
+      <div class="tile-name">Site Diary</div>
+      <div class="tile-stats"><div>Day-to-day notes from the contractor team</div></div>
+    </a>
+    <a class="tile" href="site-meeting-notes.html?project=" id="siteMeetingNotesTile">
+      <div class="tile-icon">🗒️</div>
+      <div class="tile-name">Meeting Notes</div>
+      <div class="tile-stats"><div>Site meetings and their follow-up actions</div></div>
+    </a>
     <a class="tile" href="drawings.html?project=" id="drawingsTile">
       <div class="tile-icon">📐</div>
       <div class="tile-name">Drawings &amp; Layouts</div>
@@ -336,6 +346,8 @@
   document.getElementById("rfisTile").href = `rfis.html?project=${projectId}`;
   document.getElementById("queriesTile").href = `general-queries.html?project=${projectId}`;
   document.getElementById("companiesTile").href = `companies.html?project=${projectId}`;
+  document.getElementById("siteDiaryTile").href = `site-diary.html?project=${projectId}`;
+  document.getElementById("siteMeetingNotesTile").href = `site-meeting-notes.html?project=${projectId}`;
 
   let project = null;
   let plotsCount = 0;

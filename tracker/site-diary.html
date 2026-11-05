@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="js/theme-init.js"></script>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Site Diary – The Site Office</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page page-640">
+  <div class="page-head">
+    <div>
+      <div class="page-title">Site Diary</div>
+      <div class="page-sub" id="projectSub">Day-to-day notes assigned to this site, from everyone on the contractor team. If you can't see anything here, either nothing's been assigned yet, or — if you're on the owner/client side — this is by design: diary notes only become visible once copied onto an issued weekly report.</div>
+    </div>
+    <a class="btn btn-outline btn-sm" id="myDiaryLink" href="my-diary.html">My Diary →</a>
+  </div>
+  <div id="errorBox" class="error-box"></div>
+  <div id="entryList"></div>
+  <p class="hint" id="noEntries" style="display:none;">No diary entries visible here yet.</p>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, getSiteDiaryEntries, getSitePhotoUrls } from "./js/app.js";
+
+  const me = await requireAuth();
+  const projectId = getParam("project");
+  if (!projectId) window.location.href = "dashboard.html";
+  renderHeader([{ label: "Project", href: `project.html?id=${projectId}` }, { label: "Site Diary" }]);
+
+  const errorBox = document.getElementById("errorBox");
+
+  async function load() {
+    const { data: proj } = await supabase.from("projects").select("name").eq("id", projectId).single();
+    if (proj) document.getElementById("projectSub").textContent = `${proj.name} — ` + document.getElementById("projectSub").textContent;
+
+    let entries;
+    try {
+      entries = await getSiteDiaryEntries(projectId);
+    } catch (err) { showError(errorBox, err); return; }
+
+    document.getElementById("noEntries").style.display = entries.length ? "none" : "block";
+    document.getElementById("entryList").innerHTML = entries.map((e) => `
+      <div class="card" style="margin-top:0.6rem;">
+        <div class="btn-row" style="justify-content:space-between; align-items:flex-start;">
+          <div><strong>${formatDate(e.entry_date)}</strong> <span class="hint">${escapeHtml(e.author?.email || "")}${e.user_id === me.id ? " (you)" : ""}</span></div>
+        </div>
+        ${e.body ? `<p style="margin-top:0.5rem;">${escapeHtml(e.body)}</p>` : ""}
+        <p class="hint">${[e.weather, e.labour_count != null ? `${e.labour_count} on site` : null, e.visitors ? `Visitors: ${escapeHtml(e.visitors)}` : null, e.delay_flag ? `⚠ Delay: ${escapeHtml(e.delay_reason || "")}` : null].filter(Boolean).join(" · ")}</p>
+        ${(e.photos || []).length ? `<div class="btn-row" data-photos="${e.id}"></div>` : ""}
+      </div>`).join("");
+
+    for (const e of entries) {
+      if ((e.photos || []).length) {
+        const refs = e.photos.map((p) => p.path || p);
+        const urls = await getSitePhotoUrls(refs).catch(() => new Map());
+        const wrap = document.querySelector(`[data-photos="${e.id}"]`);
+        if (wrap) wrap.innerHTML = refs.map((r) => urls.get(r) ? `<a href="${urls.get(r)}" target="_blank" rel="noopener"><img src="${urls.get(r)}" style="max-width:90px; max-height:90px; border-radius:6px;"></a>` : "").join("");
+      }
+    }
+  }
+
+  await load();
+</script>
+</body>
+</html>

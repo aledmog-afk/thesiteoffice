@@ -902,7 +902,7 @@ export async function getAction(actionId) {
 // tracker/README.md). Every "Create Action from X" helper below DOES
 // pass one, inherited automatically from its source entity's own
 // already-known plot — never asked of the user a second time.
-export async function createAction(projectId, { title, description = null, priority = "medium", assignedTo = null, dueDate = null, plotId = null }) {
+export async function createAction(projectId, { title, description = null, priority = "medium", assignedTo = null, dueDate = null, plotId = null, sourceMeetingNoteId = null }) {
   const { data, error } = await supabase.from("actions").insert({
     project_id: projectId,
     title,
@@ -911,6 +911,7 @@ export async function createAction(projectId, { title, description = null, prior
     assigned_to: assignedTo,
     due_date: dueDate,
     plot_id: plotId,
+    source_meeting_note_id: sourceMeetingNoteId,
   }).select().single();
   if (error) throw error;
   return data;
@@ -7663,5 +7664,134 @@ export async function answerQuery(queryId, response) {
 
 export async function closeQuery(queryId) {
   const { error } = await supabase.from("general_queries").update({ status: "closed" }).eq("id", queryId);
+  if (error) throw error;
+}
+
+// ─── v85: Personal diary ────────────────────────────────────────────
+// Own entries, newest first — RLS already scopes this to the caller
+// regardless of any filter below (user_id = auth.uid() always).
+export async function getMyDiaryEntries({ projectId = undefined } = {}) {
+  let q = supabase.from("personal_diary_entries").select("*").order("entry_date", { ascending: false }).order("created_at", { ascending: false });
+  if (projectId !== undefined) q = q.eq("project_id", projectId);
+  const { data, error } = await q;
+  if (error) throw error;
+  return data || [];
+}
+
+export async function createDiaryEntry(fields) {
+  const { data, error } = await supabase.from("personal_diary_entries").insert(fields).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateDiaryEntry(id, fields) {
+  const { data, error } = await supabase.from("personal_diary_entries").update(fields).eq("id", id).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function deleteDiaryEntry(id) {
+  const { error } = await supabase.from("personal_diary_entries").delete().eq("id", id);
+  if (error) throw error;
+}
+
+// The "site diary" — everyone's entries assigned to one project. RLS
+// (read own or contractor-side diary entries) already narrows this to
+// exactly who's allowed to see it; this is just the plain query.
+export async function getSiteDiaryEntries(projectId) {
+  const { data, error } = await supabase.from("personal_diary_entries").select("*, author:user_id(email)")
+    .eq("project_id", projectId).order("entry_date", { ascending: false }).order("created_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+// ─── v85: Meeting notes ──────────────────────────────────────────────
+export async function getOrgMeetingNotes(orgId) {
+  const { data, error } = await supabase.from("org_meeting_notes").select("*").eq("org_id", orgId)
+    .order("meeting_date", { ascending: false }).order("created_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+export async function createOrgMeetingNote(fields) {
+  const { data, error } = await supabase.from("org_meeting_notes").insert(fields).select().single();
+  if (error) throw error;
+  return data;
+}
+export async function updateOrgMeetingNote(id, fields) {
+  const { data, error } = await supabase.from("org_meeting_notes").update(fields).eq("id", id).select().single();
+  if (error) throw error;
+  return data;
+}
+export async function deleteOrgMeetingNote(id) {
+  const { error } = await supabase.from("org_meeting_notes").delete().eq("id", id);
+  if (error) throw error;
+}
+
+export async function getProjectMeetingNotes(projectId) {
+  const { data, error } = await supabase.from("project_meeting_notes").select("*").eq("project_id", projectId)
+    .order("meeting_date", { ascending: false }).order("created_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+export async function createProjectMeetingNote(fields) {
+  const { data, error } = await supabase.from("project_meeting_notes").insert(fields).select().single();
+  if (error) throw error;
+  return data;
+}
+export async function updateProjectMeetingNote(id, fields) {
+  const { data, error } = await supabase.from("project_meeting_notes").update(fields).eq("id", id).select().single();
+  if (error) throw error;
+  return data;
+}
+export async function deleteProjectMeetingNote(id) {
+  const { error } = await supabase.from("project_meeting_notes").delete().eq("id", id);
+  if (error) throw error;
+}
+// Actions raised from a specific site meeting note.
+export async function getActionsForMeetingNote(meetingNoteId) {
+  const { data, error } = await supabase.from("actions").select("*").eq("source_meeting_note_id", meetingNoteId).order("created_at");
+  if (error) throw error;
+  return data || [];
+}
+
+// ─── v85: Weekly report diary pull-in ───────────────────────────────
+// Contractor-side-editor gated server-side (see get_unattached_diary_entries()) —
+// an owner-side/client caller gets a thrown error, which the page
+// should treat as "this section isn't available to you", not an error banner.
+export async function getUnattachedDiaryEntries(projectId, weekStarting, weekEnding) {
+  const { data, error } = await supabase.rpc("get_unattached_diary_entries", {
+    p_project_id: projectId, p_week_starting: weekStarting, p_week_ending: weekEnding,
+  });
+  if (error) throw error;
+  return data || [];
+}
+export async function getWeeklyReportDiaryEntries(weeklyReportId) {
+  const { data, error } = await supabase.from("weekly_report_diary_entries").select("*").eq("weekly_report_id", weeklyReportId).order("entry_date");
+  if (error) throw error;
+  return data || [];
+}
+export async function attachDiaryEntryToReport(weeklyReportId, entry) {
+  const { data, error } = await supabase.from("weekly_report_diary_entries").insert({
+    weekly_report_id: weeklyReportId,
+    diary_entry_id: entry.diary_entry_id,
+    entry_date: entry.entry_date,
+    author_email: entry.author_email,
+    body: entry.body,
+    weather: entry.weather,
+    labour_count: entry.labour_count,
+    visitors: entry.visitors,
+    delay_flag: entry.delay_flag,
+    delay_reason: entry.delay_reason,
+  }).select().single();
+  if (error) throw error;
+  return data;
+}
+export async function updateAttachedDiaryEntry(id, fields) {
+  const { data, error } = await supabase.from("weekly_report_diary_entries").update(fields).eq("id", id).select().single();
+  if (error) throw error;
+  return data;
+}
+export async function removeAttachedDiaryEntry(id) {
+  const { error } = await supabase.from("weekly_report_diary_entries").delete().eq("id", id);
   if (error) throw error;
 }
