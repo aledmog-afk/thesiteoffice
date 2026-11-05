@@ -1030,3 +1030,19 @@ Aled checked `site-diary.html` himself and hit a real error: *"Could not find a 
 **Could not verify myself**: this session's network policy also blocks `nkrgzmxwvydoridmiskl.supabase.co` directly (same as `thesiteoffice.uk`), so I can't confirm the embedded query now works from here. **Aled — please reload `site-diary.html` (and `my-diary.html`, which uses the same pattern) and confirm the error is gone.** If it persists after a reload, the next things to check are: (1) whether the NOTIFY actually reached a running PostgREST instance (a paused/restarting project can miss it — re-running the same `NOTIFY pgrst, 'reload schema';` is harmless and safe to repeat), or (2) worst case, a full API restart from the Supabase dashboard (Project Settings → General → Restart project), which is heavier but guaranteed to pick up the new schema.
 
 — Claude
+
+---
+
+**5 Nov 2026 — Claude**
+
+The `NOTIFY` didn't fix it — Aled confirmed the error was still there. That's because it was never a cache-staleness problem. The real cause: `getSiteDiaryEntries()` used `select("*, author:user_id(email)")` — a PostgREST embed straight into `auth.users`. **This app never exposes `auth.users` to client-side queries at all**, which `get_project_members()`/`getOrganisationMembers()` already document explicitly in `app.js` ("clients can't query auth.users directly"). That embed could never have resolved, cache-fresh or not — confirmed live that the foreign key itself genuinely exists (`personal_diary_entries_user_id_fkey → auth.users(id)`), so this was purely a client-query-shape bug, not a schema problem.
+
+Fixed by switching to `getMemberEmailMap()` — the small existing helper every other page in this app already uses for exactly this (toolbox talks, dayworks/variations, documents, my-work). First pass had `getSiteDiaryEntries()` itself call this internally; Adam's second look caught that this doesn't match the established convention (every other page calls `getMemberEmailMap()` itself and resolves the email in its own render, keeping the data-layer wrapper a plain query) — revised to match exactly: `getSiteDiaryEntries()` is back to `select("*")` only, and `site-diary.html` fetches entries and the email map in parallel via `Promise.all`, same shape as `toolbox-talks.html`. Updated `tests/frontend/site_diary_ui.test.mjs` to mock `getMemberEmailMap` directly (same pattern as `tests/frontend/toolbox_talks.test.mjs`) rather than pre-attaching an `author` property to the entries fixture.
+
+`getMyDiaryEntries()` (the personal `my-diary.html` page) was never affected — it only ever queries the caller's own rows with a plain `select("*")`, no embed, so Aled didn't need to check that one specifically; mentioning it only because I'd asked him to check it too, for completeness.
+
+Full suite: 2049/2049. Opened as **PR #76** (not draft — ready for review), branched from current `main` (which already includes the merged v85 work). **Needs Aled's yes to merge** — this is a live-site fix, not a new schema change, so nothing further needs applying to Supabase once it's merged; Cloudflare Pages picks it up on the next push to `main` automatically.
+
+One thing flagged in the PR itself: no existing automated test exercises the real `getSiteDiaryEntries()`/`getMemberEmailMap()` wiring against a mocked Supabase client — every page-level test mocks the wrapper functions directly, by this codebase's own convention, which is exactly why this class of bug (a client query shape that can never work against this app's real permissions model) was invisible to the test suite before it shipped. Not fixing that gap now — flagging it as a possible follow-up, not something to improvise mid-incident.
+
+— Claude
