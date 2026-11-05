@@ -31,7 +31,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, getOrgLogoUrl, formatGBP, showError, clearError, PHOTO_COMPLIANCE_BADGE, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_BADGE, STATUTORY_OUTCOME_BADGE, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, validWeeklyReportStatusTransitions, reviewWeeklyReport, approveWeeklyReport, issueWeeklyReport, reviseWeeklyReport, CONTROL_LEVEL_BADGE, getRfiLinksForWeeklyReport, normalisePlotToken, attachReportCommercialNotes } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, getOrgLogoUrl, formatGBP, showError, clearError, PHOTO_COMPLIANCE_BADGE, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_BADGE, STATUTORY_OUTCOME_BADGE, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, validWeeklyReportStatusTransitions, reviewWeeklyReport, approveWeeklyReport, issueWeeklyReport, reviseWeeklyReport, CONTROL_LEVEL_BADGE, getRfiLinksForWeeklyReport, normalisePlotToken, attachReportCommercialNotes, getWeeklyReportDiaryEntries } from "./js/app.js";
 
   await requireAuth();
   const reportId = getParam("id");
@@ -54,6 +54,22 @@
   function section(title, value) {
     if (!value) return "";
     return `<div class="doc-section"><h3>${escapeHtml(title)}</h3><div class="body-text">${escapeHtml(value)}</div></div>`;
+  }
+
+  // v85: diary entries pulled in from the team's site diary. This
+  // table's own RLS already decides whether this reader sees anything
+  // at all — a contractor-side editor sees it any time, everyone else
+  // only once the report is 'issued' — so the empty-list case here
+  // (section renders nothing) covers "not visible yet" with no special
+  // handling needed on this page.
+  function diarySection(entries) {
+    if (!entries.length) return "";
+    return `<div class="doc-section"><h3>Site Diary</h3>${entries.map((e) => `
+      <div style="margin-bottom:0.8rem;">
+        <strong>${formatDate(e.entry_date)}</strong>${e.author_email ? ` <span style="color:var(--ink-soft); font-size:0.85rem;">${escapeHtml(e.author_email)}</span>` : ""}
+        ${e.body ? `<div class="body-text">${escapeHtml(e.body)}</div>` : ""}
+        <p class="hint">${[e.weather, e.labour_count != null ? `${e.labour_count} on site` : null, e.visitors, e.delay_flag ? `⚠ ${e.delay_reason || "Delay"}` : null].filter(Boolean).map(escapeHtml).join(" · ")}</p>
+      </div>`).join("")}</div>`;
   }
 
   function itemSection(title, items, fallbackText) {
@@ -378,6 +394,7 @@
 
     const photos = Array.isArray(r.photos) ? r.photos : [];
     const logoUrl = await getOrgLogoUrl(project.org_id);
+    const diaryEntries = await getWeeklyReportDiaryEntries(r.id).catch(() => []);
 
     // Both best-effort only — an empty/failed lookup just means the
     // Raise RFI link falls back to no pre-matched plot, or shows
@@ -434,6 +451,7 @@
       ${section("Site Housekeeping", r.site_housekeeping)}
       ${section("Drawings / Information Received on Site", r.drawings_received)}
       ${section("Visitors", r.visitors)}
+      ${diarySection(diaryEntries)}
       ${showCommercial ? commercialSection(r.commercial_items) : ""}
       ${itemSection("Plan for Next Week", r.next_week_items, r.next_week_plan)}
       ${section("Other Comments", r.other_comments || r.deliveries_materials)}

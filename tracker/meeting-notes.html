@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="js/theme-init.js"></script>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Meeting Notes – The Site Office</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page page-640">
+  <div class="page-head">
+    <div>
+      <div class="page-title">Meeting Notes</div>
+      <div class="page-sub">General meetings for your company — not tied to one site. For a site-specific meeting, open that project and use its own Meeting Notes page.</div>
+    </div>
+  </div>
+  <div id="errorBox" class="error-box"></div>
+  <div class="field" id="orgPickerField" style="display:none; max-width:320px;"><label for="orgPicker">Company</label><select id="orgPicker"></select></div>
+
+  <div class="card" id="formCard">
+    <h3 class="card-heading" id="formHeading" style="margin-bottom:0.8rem;">New meeting note</h3>
+    <form id="noteForm">
+      <div class="btn-row">
+        <div class="field" style="flex:1 1 160px;"><label for="meetingDate">Date</label><input type="date" id="meetingDate" required></div>
+        <div class="field" style="flex:0 0 140px;"><label for="meetingTime">Time</label><input type="time" id="meetingTime"></div>
+      </div>
+      <div class="field"><label for="meetingTitle">Title</label><input type="text" id="meetingTitle" required placeholder="e.g. Monthly H&amp;S review"></div>
+      <div class="field"><label for="meetingAttendees">Attendees</label><input type="text" id="meetingAttendees" placeholder="Names, comma separated"></div>
+      <div class="field"><label for="meetingNotesBody">Notes</label><textarea id="meetingNotesBody" rows="5"></textarea></div>
+
+      <div class="field">
+        <label>Follow-ups</label>
+        <div id="followUpList"></div>
+        <div class="btn-row" style="margin-top:0.4rem;">
+          <input type="text" id="newFollowUp" placeholder="Add a follow-up…" style="flex:1;">
+          <button type="button" class="btn btn-outline btn-sm" id="addFollowUpBtn">Add</button>
+        </div>
+      </div>
+
+      <div class="btn-row" style="margin-top:0.8rem;">
+        <button type="submit" class="btn btn-amber" id="saveBtn">Save note</button>
+        <button type="button" class="btn btn-outline" id="cancelEditBtn" style="display:none;">Cancel</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card" style="margin-top:1.2rem;">
+    <h3 class="card-heading" style="margin-bottom:0.8rem;">Past meetings</h3>
+    <div id="noteList"></div>
+    <p class="hint" id="noNotes" style="display:none;">No meeting notes yet.</p>
+  </div>
+</div>
+
+<script type="module">
+  import { requireAuth, renderHeader, escapeHtml, formatDate, showError, clearError, getMyOrganisations, getOrgMeetingNotes, createOrgMeetingNote, updateOrgMeetingNote, deleteOrgMeetingNote } from "./js/app.js";
+
+  await requireAuth();
+  renderHeader([{ label: "Dashboard", href: "dashboard.html" }, { label: "Meeting Notes" }]);
+
+  const errorBox = document.getElementById("errorBox");
+  const form = document.getElementById("noteForm");
+  let orgId = null;
+  let editingId = null;
+  let followUps = [];
+
+  document.getElementById("meetingDate").value = new Date().toISOString().slice(0, 10);
+
+  function renderFollowUps() {
+    document.getElementById("followUpList").innerHTML = followUps.map((f, i) => `
+      <div class="btn-row" style="margin-top:0.3rem;">
+        <label style="flex:1;"><input type="checkbox" data-fu-done="${i}" ${f.done ? "checked" : ""}> ${escapeHtml(f.text)}</label>
+        <button type="button" class="btn btn-outline btn-sm" data-fu-remove="${i}">Remove</button>
+      </div>`).join("");
+  }
+  document.getElementById("followUpList").addEventListener("click", (e) => {
+    const t = e.target;
+    if (t.dataset.fuRemove !== undefined) { followUps.splice(Number(t.dataset.fuRemove), 1); renderFollowUps(); }
+  });
+  document.getElementById("followUpList").addEventListener("change", (e) => {
+    const t = e.target;
+    if (t.dataset.fuDone !== undefined) { followUps[Number(t.dataset.fuDone)].done = t.checked; }
+  });
+  document.getElementById("addFollowUpBtn").addEventListener("click", () => {
+    const input = document.getElementById("newFollowUp");
+    const text = input.value.trim();
+    if (!text) return;
+    followUps.push({ text, done: false });
+    input.value = "";
+    renderFollowUps();
+  });
+
+  function resetForm() {
+    editingId = null;
+    followUps = [];
+    form.reset();
+    document.getElementById("meetingDate").value = new Date().toISOString().slice(0, 10);
+    document.getElementById("formHeading").textContent = "New meeting note";
+    document.getElementById("cancelEditBtn").style.display = "none";
+    document.getElementById("saveBtn").textContent = "Save note";
+    renderFollowUps();
+  }
+  document.getElementById("cancelEditBtn").addEventListener("click", resetForm);
+
+  function startEdit(note) {
+    editingId = note.id;
+    followUps = JSON.parse(JSON.stringify(note.follow_ups || []));
+    document.getElementById("meetingDate").value = note.meeting_date;
+    document.getElementById("meetingTime").value = note.meeting_time || "";
+    document.getElementById("meetingTitle").value = note.title;
+    document.getElementById("meetingAttendees").value = note.attendees || "";
+    document.getElementById("meetingNotesBody").value = note.notes || "";
+    renderFollowUps();
+    document.getElementById("formHeading").textContent = "Edit meeting note";
+    document.getElementById("cancelEditBtn").style.display = "inline-block";
+    document.getElementById("saveBtn").textContent = "Save changes";
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  let notesCache = [];
+  async function loadNotes() {
+    notesCache = await getOrgMeetingNotes(orgId);
+    document.getElementById("noNotes").style.display = notesCache.length ? "none" : "block";
+    document.getElementById("noteList").innerHTML = notesCache.map((n) => `
+      <div class="card" style="margin-top:0.6rem;">
+        <div class="btn-row" style="justify-content:space-between; align-items:flex-start;">
+          <div><strong>${escapeHtml(n.title)}</strong> <span class="hint">${formatDate(n.meeting_date)}${n.meeting_time ? ` ${n.meeting_time.slice(0, 5)}` : ""}</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn btn-outline btn-sm" data-edit="${n.id}">Edit</button>
+            <button type="button" class="btn btn-outline btn-sm" data-delete="${n.id}">Delete</button>
+          </div>
+        </div>
+        ${n.attendees ? `<p class="hint">Attendees: ${escapeHtml(n.attendees)}</p>` : ""}
+        ${n.notes ? `<p style="margin-top:0.4rem;">${escapeHtml(n.notes)}</p>` : ""}
+        ${(n.follow_ups || []).length ? `<ul style="margin-top:0.4rem;">${n.follow_ups.map((f) => `<li>${f.done ? "✅" : "⬜"} ${escapeHtml(f.text)}</li>`).join("")}</ul>` : ""}
+      </div>`).join("");
+  }
+
+  document.getElementById("noteList").addEventListener("click", async (e) => {
+    const t = e.target;
+    if (t.dataset.edit) {
+      const note = notesCache.find((x) => x.id === t.dataset.edit);
+      if (note) startEdit(note);
+    } else if (t.dataset.delete) {
+      if (!window.confirm("Delete this meeting note?")) return;
+      try { await deleteOrgMeetingNote(t.dataset.delete); await loadNotes(); } catch (err) { showError(errorBox, err); }
+    }
+  });
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearError(errorBox);
+    const fields = {
+      org_id: orgId,
+      meeting_date: document.getElementById("meetingDate").value,
+      meeting_time: document.getElementById("meetingTime").value || null,
+      title: document.getElementById("meetingTitle").value.trim(),
+      attendees: document.getElementById("meetingAttendees").value.trim() || null,
+      notes: document.getElementById("meetingNotesBody").value.trim() || null,
+      follow_ups: followUps,
+    };
+    try {
+      if (editingId) await updateOrgMeetingNote(editingId, fields);
+      else await createOrgMeetingNote(fields);
+      resetForm();
+      await loadNotes();
+    } catch (err) { showError(errorBox, err); }
+  });
+
+  const orgs = await getMyOrganisations();
+  if (!orgs.length) {
+    showError(errorBox, { message: "You don't belong to a company yet — set one up from onboarding first." });
+  } else {
+    orgId = orgs[0].id;
+    if (orgs.length > 1) {
+      document.getElementById("orgPickerField").style.display = "block";
+      const orgPicker = document.getElementById("orgPicker");
+      orgPicker.innerHTML = orgs.map((o) => `<option value="${o.id}">${escapeHtml(o.name)}</option>`).join("");
+      orgPicker.addEventListener("change", async () => { orgId = orgPicker.value; resetForm(); await loadNotes(); });
+    }
+    renderFollowUps();
+    await loadNotes();
+  }
+</script>
+</body>
+</html>

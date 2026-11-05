@@ -46,6 +46,15 @@ export async function runPage(htmlPath, scriptSrc, context = {}) {
     // v62 default: report pages behave as for the owner side (commercial
     // notes shown, report objects untouched) unless a test overrides it.
     attachReportCommercialNotes: async () => true,
+    // v85 default: no diary entries attached/pullable unless a test
+    // overrides it — keeps every pre-existing weekly-report-form.html/
+    // weekly-report-view.html test working without having to know
+    // about this feature at all.
+    getWeeklyReportDiaryEntries: async () => [],
+    getUnattachedDiaryEntries: async () => [],
+    attachDiaryEntryToReport: async () => ({}),
+    updateAttachedDiaryEntry: async () => ({}),
+    removeAttachedDiaryEntry: async () => {},
     ...context,
   };
   const ctx = vm.createContext(fullContext);

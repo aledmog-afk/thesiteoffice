@@ -101,6 +101,18 @@
         <div id="nextWeekItems"></div>
       </div>
 
+      <div class="field" id="diaryField" style="display:none;">
+        <label>Site Diary</label>
+        <p class="hint" style="margin-bottom:0.6rem;">Pull in diary notes from the team, then keep, edit or remove each one before issuing — only visible to the contractor team until this report is issued.</p>
+        <div class="btn-row" id="diaryPickerRow" style="display:none; margin-bottom:0.8rem;">
+          <select id="diaryPicker" style="flex:1; min-width:220px;"></select>
+          <button type="button" class="btn btn-outline btn-sm" id="pullInDiaryBtn">Pull in</button>
+        </div>
+        <div id="diaryAttachedList"></div>
+        <p class="hint" id="noDiaryCandidates" style="display:none;">No unattached diary entries for this project in this date range.</p>
+        <p class="hint" id="saveFirstForDiaryHint">Save this report once to start pulling in diary entries.</p>
+      </div>
+
       <div class="field">
         <label>Site Photos</label>
         <input type="file" id="photoInput" accept="image/*" multiple>
@@ -123,7 +135,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, mountTableEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions, comparePlotNumbers, normalisePlotToken, syncGateStatusFromMilestones, EXTERNAL_WORKS_TAG, PHOTO_COMPLIANCE_STATUS, RESOURCE_ADEQUACY, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_LEVELS, RISK_IMPACT_BADGE, RISK_OWNER_SUGGESTIONS, STATUTORY_MILESTONE_TYPES, STATUTORY_OUTCOMES, STATUTORY_OUTCOME_BADGE, getWeeklyReportPosition, isWeeklyReportLocked, reviseWeeklyReport, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, CONTROL_LEVEL_BADGE, FINDING_SEVERITY_LABEL, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel, getRfiLinksForWeeklyReport, attachReportCommercialNotes } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, mountTableEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions, comparePlotNumbers, normalisePlotToken, syncGateStatusFromMilestones, EXTERNAL_WORKS_TAG, PHOTO_COMPLIANCE_STATUS, RESOURCE_ADEQUACY, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_LEVELS, RISK_IMPACT_BADGE, RISK_OWNER_SUGGESTIONS, STATUTORY_MILESTONE_TYPES, STATUTORY_OUTCOMES, STATUTORY_OUTCOME_BADGE, getWeeklyReportPosition, isWeeklyReportLocked, reviseWeeklyReport, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, CONTROL_LEVEL_BADGE, FINDING_SEVERITY_LABEL, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel, getRfiLinksForWeeklyReport, attachReportCommercialNotes, getUnattachedDiaryEntries, getWeeklyReportDiaryEntries, attachDiaryEntryToReport, updateAttachedDiaryEntry, removeAttachedDiaryEntry } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -241,6 +253,68 @@
     }
   }
   document.getElementById("refreshPositionBtn").addEventListener("click", generatePosition);
+
+  // ─── Site Diary pull-in (v85) ──────────────────────────────────────
+  // Only usable once the report has a real id (the attach table's FK
+  // needs one) — a brand-new, not-yet-saved report shows the "save
+  // first" hint instead. getUnattachedDiaryEntries() is contractor-
+  // side-editor-gated server-side: an owner-side/client user gets a
+  // thrown error here, which this page reads as "this picker isn't for
+  // you" and simply hides, rather than showing as a page error — the
+  // attached list below still renders normally (empty while draft,
+  // populated once issued, per that table's own RLS).
+  async function loadDiarySection() {
+    const field = document.getElementById("diaryField");
+    field.style.display = "block";
+    document.getElementById("saveFirstForDiaryHint").style.display = reportId ? "none" : "block";
+    if (!reportId) { document.getElementById("diaryPickerRow").style.display = "none"; document.getElementById("diaryAttachedList").innerHTML = ""; return; }
+
+    const weekStarting = document.getElementById("weekStarting").value;
+    const weekEnding = document.getElementById("weekEnding").value;
+    try {
+      const candidates = await getUnattachedDiaryEntries(projectId, weekStarting, weekEnding);
+      document.getElementById("diaryPickerRow").style.display = "flex";
+      document.getElementById("noDiaryCandidates").style.display = candidates.length ? "none" : "block";
+      document.getElementById("diaryPicker").innerHTML = candidates.map((c) =>
+        `<option value='${escapeHtml(JSON.stringify(c))}'>${formatDate(c.entry_date)} — ${escapeHtml(c.author_email || "")} — ${escapeHtml((c.body || "").slice(0, 60))}</option>`
+      ).join("") || `<option value="">No entries to pull in</option>`;
+    } catch {
+      // Not a contractor-side editor — this section is read-only for them.
+      document.getElementById("diaryPickerRow").style.display = "none";
+    }
+
+    const attached = await getWeeklyReportDiaryEntries(reportId).catch(() => []);
+    document.getElementById("diaryAttachedList").innerHTML = attached.map((a) => `
+      <div class="card" style="margin-top:0.5rem;" data-attached="${a.id}">
+        <div class="btn-row" style="justify-content:space-between; align-items:flex-start;">
+          <strong>${formatDate(a.entry_date)}</strong>
+          <button type="button" class="btn btn-outline btn-sm" data-remove-diary="${a.id}">Remove</button>
+        </div>
+        <textarea data-diary-body="${a.id}" rows="2" style="margin-top:0.4rem;">${escapeHtml(a.body || "")}</textarea>
+        <p class="hint">${[a.weather, a.labour_count != null ? `${a.labour_count} on site` : null, a.visitors, a.delay_flag ? `⚠ ${a.delay_reason || "Delay"}` : null].filter(Boolean).map(escapeHtml).join(" · ")}</p>
+      </div>`).join("");
+  }
+
+  document.getElementById("pullInDiaryBtn").addEventListener("click", async () => {
+    const picker = document.getElementById("diaryPicker");
+    if (!picker.value) return;
+    clearError(errorBox);
+    try {
+      const entry = JSON.parse(picker.value);
+      await attachDiaryEntryToReport(reportId, entry);
+      await loadDiarySection();
+    } catch (err) { showError(errorBox, err); }
+  });
+
+  document.getElementById("diaryAttachedList").addEventListener("click", async (e) => {
+    if (!e.target.dataset.removeDiary) return;
+    if (!window.confirm("Remove this diary entry from the report?")) return;
+    try { await removeAttachedDiaryEntry(e.target.dataset.removeDiary); await loadDiarySection(); } catch (err) { showError(errorBox, err); }
+  });
+  document.getElementById("diaryAttachedList").addEventListener("change", async (e) => {
+    if (!e.target.dataset.diaryBody) return;
+    try { await updateAttachedDiaryEntry(e.target.dataset.diaryBody, { body: e.target.value }); } catch (err) { showError(errorBox, err); }
+  });
 
   function applyLockState() {
     const locked = existingReport && isWeeklyReportLocked(existingReport);
@@ -843,6 +917,7 @@
         document.getElementById("carriedOverHint").style.display = "block";
       }
       generatePosition();
+      await loadDiarySection();
       return;
     }
     document.getElementById("formTitle").textContent = "Edit Weekly Report";
@@ -917,6 +992,7 @@
     } else {
       generatePosition();
     }
+    await loadDiarySection();
   }
 
   document.getElementById("reportForm").addEventListener("submit", async (e) => {

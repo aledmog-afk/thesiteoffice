@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="js/theme-init.js"></script>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Meeting Notes – The Site Office</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page page-640">
+  <div class="page-head">
+    <div>
+      <div class="page-title">Meeting Notes</div>
+      <div class="page-sub" id="projectSub"></div>
+    </div>
+  </div>
+  <div id="errorBox" class="error-box"></div>
+
+  <div class="card" id="formCard">
+    <h3 class="card-heading" id="formHeading" style="margin-bottom:0.8rem;">New meeting note</h3>
+    <form id="noteForm">
+      <div class="btn-row">
+        <div class="field" style="flex:1 1 160px;"><label for="meetingDate">Date</label><input type="date" id="meetingDate" required></div>
+        <div class="field" style="flex:0 0 140px;"><label for="meetingTime">Time</label><input type="time" id="meetingTime"></div>
+      </div>
+      <div class="field"><label for="meetingTitle">Title</label><input type="text" id="meetingTitle" required placeholder="e.g. Weekly progress meeting"></div>
+      <div class="field"><label for="meetingAttendees">Attendees</label><input type="text" id="meetingAttendees" placeholder="Names, comma separated"></div>
+      <div class="field"><label for="meetingNotesBody">Notes</label><textarea id="meetingNotesBody" rows="5"></textarea></div>
+      <div class="btn-row" style="margin-top:0.8rem;">
+        <button type="submit" class="btn btn-amber" id="saveBtn">Save note</button>
+        <button type="button" class="btn btn-outline" id="cancelEditBtn" style="display:none;">Cancel</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card" style="margin-top:1.2rem;">
+    <h3 class="card-heading" style="margin-bottom:0.8rem;">Past meetings</h3>
+    <div id="noteList"></div>
+    <p class="hint" id="noNotes" style="display:none;">No meeting notes yet.</p>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, getProjectMeetingNotes, createProjectMeetingNote, updateProjectMeetingNote, deleteProjectMeetingNote, getActionsForMeetingNote, createAction } from "./js/app.js";
+
+  await requireAuth();
+  const projectId = getParam("project");
+  if (!projectId) window.location.href = "dashboard.html";
+  renderHeader([{ label: "Project", href: `project.html?id=${projectId}` }, { label: "Meeting Notes" }]);
+
+  const errorBox = document.getElementById("errorBox");
+  const form = document.getElementById("noteForm");
+  let editingId = null;
+  let notesCache = [];
+
+  document.getElementById("meetingDate").value = new Date().toISOString().slice(0, 10);
+
+  async function loadProjectName() {
+    const { data } = await supabase.from("projects").select("name").eq("id", projectId).single();
+    document.getElementById("projectSub").textContent = data?.name || "";
+  }
+
+  function resetForm() {
+    editingId = null;
+    form.reset();
+    document.getElementById("meetingDate").value = new Date().toISOString().slice(0, 10);
+    document.getElementById("formHeading").textContent = "New meeting note";
+    document.getElementById("cancelEditBtn").style.display = "none";
+    document.getElementById("saveBtn").textContent = "Save note";
+  }
+  document.getElementById("cancelEditBtn").addEventListener("click", resetForm);
+
+  function startEdit(note) {
+    editingId = note.id;
+    document.getElementById("meetingDate").value = note.meeting_date;
+    document.getElementById("meetingTime").value = note.meeting_time || "";
+    document.getElementById("meetingTitle").value = note.title;
+    document.getElementById("meetingAttendees").value = note.attendees || "";
+    document.getElementById("meetingNotesBody").value = note.notes || "";
+    document.getElementById("formHeading").textContent = "Edit meeting note";
+    document.getElementById("cancelEditBtn").style.display = "inline-block";
+    document.getElementById("saveBtn").textContent = "Save changes";
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function loadNotes() {
+    notesCache = await getProjectMeetingNotes(projectId);
+    document.getElementById("noNotes").style.display = notesCache.length ? "none" : "block";
+    const rows = await Promise.all(notesCache.map(async (n) => {
+      const actions = await getActionsForMeetingNote(n.id).catch(() => []);
+      return `
+      <div class="card" style="margin-top:0.6rem;" data-note="${n.id}">
+        <div class="btn-row" style="justify-content:space-between; align-items:flex-start;">
+          <div><strong>${escapeHtml(n.title)}</strong> <span class="hint">${formatDate(n.meeting_date)}${n.meeting_time ? ` ${n.meeting_time.slice(0, 5)}` : ""}</span></div>
+          <div class="btn-row">
+            <button type="button" class="btn btn-outline btn-sm" data-edit="${n.id}">Edit</button>
+            <button type="button" class="btn btn-outline btn-sm" data-delete="${n.id}">Delete</button>
+          </div>
+        </div>
+        ${n.attendees ? `<p class="hint">Attendees: ${escapeHtml(n.attendees)}</p>` : ""}
+        ${n.notes ? `<p style="margin-top:0.4rem;">${escapeHtml(n.notes)}</p>` : ""}
+        <div style="margin-top:0.6rem;">
+          <strong style="font-size:0.85rem;">Follow-ups</strong>
+          <ul style="margin-top:0.3rem;">${actions.map((a) => `<li>${escapeHtml(a.title)} <span class="badge badge-${a.status === "completed" ? "green" : "amber"}">${escapeHtml(a.status)}</span></li>`).join("") || `<li class="hint">None yet</li>`}</ul>
+          <div class="btn-row" style="margin-top:0.4rem;" data-followup-form="${n.id}">
+            <input type="text" placeholder="Add a follow-up action…" style="flex:1;">
+            <button type="button" class="btn btn-outline btn-sm" data-add-followup="${n.id}">Add</button>
+          </div>
+        </div>
+      </div>`;
+    }));
+    document.getElementById("noteList").innerHTML = rows.join("");
+  }
+
+  document.getElementById("noteList").addEventListener("click", async (e) => {
+    const t = e.target;
+    if (t.dataset.edit) {
+      const note = notesCache.find((x) => x.id === t.dataset.edit);
+      if (note) startEdit(note);
+    } else if (t.dataset.delete) {
+      if (!window.confirm("Delete this meeting note? Any follow-up actions it raised stay on the project.")) return;
+      try { await deleteProjectMeetingNote(t.dataset.delete); await loadNotes(); } catch (err) { showError(errorBox, err); }
+    } else if (t.dataset.addFollowup) {
+      const wrap = document.querySelector(`[data-followup-form="${t.dataset.addFollowup}"]`);
+      const input = wrap.querySelector("input");
+      const title = input.value.trim();
+      if (!title) return;
+      try {
+        await createAction(projectId, { title, sourceMeetingNoteId: t.dataset.addFollowup });
+        await loadNotes();
+      } catch (err) { showError(errorBox, err); }
+    }
+  });
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearError(errorBox);
+    const fields = {
+      project_id: projectId,
+      meeting_date: document.getElementById("meetingDate").value,
+      meeting_time: document.getElementById("meetingTime").value || null,
+      title: document.getElementById("meetingTitle").value.trim(),
+      attendees: document.getElementById("meetingAttendees").value.trim() || null,
+      notes: document.getElementById("meetingNotesBody").value.trim() || null,
+    };
+    try {
+      if (editingId) await updateProjectMeetingNote(editingId, fields);
+      else await createProjectMeetingNote(fields);
+      resetForm();
+      await loadNotes();
+    } catch (err) { showError(errorBox, err); }
+  });
+
+  await loadProjectName();
+  await loadNotes();
+</script>
+</body>
+</html>

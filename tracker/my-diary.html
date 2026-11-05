@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="js/theme-init.js"></script>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>My Diary – The Site Office</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page page-640">
+  <div class="page-head">
+    <div>
+      <div class="page-title">My Diary</div>
+      <div class="page-sub">Private day-to-day notes. Assign one to a site to let that site's contractor team see it, and to make it available to pull into a weekly report.</div>
+    </div>
+  </div>
+  <div id="errorBox" class="error-box"></div>
+
+  <div class="card" id="formCard">
+    <h3 class="card-heading" id="formHeading" style="margin-bottom:0.8rem;">New entry</h3>
+    <form id="entryForm">
+      <div class="field"><label for="entryDate">Date</label><input type="date" id="entryDate" required></div>
+      <div class="field"><label for="entrySite">Site (optional)</label><select id="entrySite"><option value="">— Personal, no site —</option></select></div>
+      <div class="field"><label for="entryBody">Notes</label><textarea id="entryBody" rows="4" placeholder="What happened today?"></textarea></div>
+
+      <button type="button" class="btn btn-outline btn-sm" id="moreDetailsBtn" style="margin-bottom:0.8rem;">+ Weather, labour, visitors, delays</button>
+      <div id="moreDetails" style="display:none;">
+        <div class="btn-row">
+          <div class="field" style="flex:1 1 140px;"><label for="entryWeather">Weather</label><input type="text" id="entryWeather" placeholder="e.g. Dry, overcast"></div>
+          <div class="field" style="flex:0 0 120px;"><label for="entryLabour">People on site</label><input type="number" id="entryLabour" min="0"></div>
+        </div>
+        <div class="field"><label for="entryVisitors">Visitors</label><input type="text" id="entryVisitors" placeholder="e.g. Building control, client rep"></div>
+        <div class="field"><label><input type="checkbox" id="entryDelayFlag"> There was a delay today</label></div>
+        <div class="field" id="delayReasonField" style="display:none;"><label for="entryDelayReason">Delay reason</label><input type="text" id="entryDelayReason"></div>
+        <div class="field" id="photosField" style="display:none;">
+          <label for="entryPhotos">Photos</label>
+          <input type="file" id="entryPhotos" accept="image/*" multiple>
+          <p class="hint" id="photosHint" style="margin-top:0.3rem;"></p>
+        </div>
+        <p class="hint" id="noSitePhotoHint" style="display:none;">Assign a site above to add photos to this entry.</p>
+      </div>
+
+      <div class="btn-row" style="margin-top:0.8rem;">
+        <button type="submit" class="btn btn-amber" id="saveBtn">Save entry</button>
+        <button type="button" class="btn btn-outline" id="cancelEditBtn" style="display:none;">Cancel</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="card" style="margin-top:1.2rem;">
+    <h3 class="card-heading" style="margin-bottom:0.8rem;">Past entries</h3>
+    <div id="entryList"></div>
+    <p class="hint" id="noEntries" style="display:none;">No diary entries yet.</p>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, escapeHtml, formatDate, showError, clearError, getMyDiaryEntries, createDiaryEntry, updateDiaryEntry, deleteDiaryEntry, uploadPhoto, getSitePhotoUrls } from "./js/app.js";
+
+  const me = await requireAuth();
+  renderHeader([{ label: "Dashboard", href: "dashboard.html" }, { label: "My Diary" }]);
+
+  const errorBox = document.getElementById("errorBox");
+  const form = document.getElementById("entryForm");
+  const siteSelect = document.getElementById("entrySite");
+  const moreDetails = document.getElementById("moreDetails");
+  const photosField = document.getElementById("photosField");
+  const noSitePhotoHint = document.getElementById("noSitePhotoHint");
+  const delayFlag = document.getElementById("entryDelayFlag");
+  const delayReasonField = document.getElementById("delayReasonField");
+  let editingId = null;
+  let editingPhotos = [];
+
+  document.getElementById("entryDate").value = new Date().toISOString().slice(0, 10);
+
+  document.getElementById("moreDetailsBtn").addEventListener("click", () => {
+    moreDetails.style.display = moreDetails.style.display === "none" ? "block" : "none";
+  });
+  delayFlag.addEventListener("change", () => { delayReasonField.style.display = delayFlag.checked ? "block" : "none"; });
+  function updatePhotosVisibility() {
+    const hasSite = !!siteSelect.value;
+    photosField.style.display = hasSite ? "block" : "none";
+    noSitePhotoHint.style.display = hasSite ? "none" : "block";
+  }
+  siteSelect.addEventListener("change", updatePhotosVisibility);
+
+  async function loadProjects() {
+    const { data, error } = await supabase.from("projects").select("id, name").order("name");
+    if (error) { showError(errorBox, error); return; }
+    siteSelect.innerHTML = `<option value="">— Personal, no site —</option>` + (data || []).map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("");
+  }
+
+  function resetForm() {
+    editingId = null;
+    editingPhotos = [];
+    form.reset();
+    document.getElementById("entryDate").value = new Date().toISOString().slice(0, 10);
+    document.getElementById("formHeading").textContent = "New entry";
+    document.getElementById("cancelEditBtn").style.display = "none";
+    document.getElementById("saveBtn").textContent = "Save entry";
+    delayReasonField.style.display = "none";
+    updatePhotosVisibility();
+  }
+  document.getElementById("cancelEditBtn").addEventListener("click", resetForm);
+
+  function startEdit(entry) {
+    editingId = entry.id;
+    editingPhotos = entry.photos || [];
+    document.getElementById("entryDate").value = entry.entry_date;
+    siteSelect.value = entry.project_id || "";
+    document.getElementById("entryBody").value = entry.body || "";
+    document.getElementById("entryWeather").value = entry.weather || "";
+    document.getElementById("entryLabour").value = entry.labour_count ?? "";
+    document.getElementById("entryVisitors").value = entry.visitors || "";
+    delayFlag.checked = !!entry.delay_flag;
+    document.getElementById("entryDelayReason").value = entry.delay_reason || "";
+    delayReasonField.style.display = entry.delay_flag ? "block" : "none";
+    moreDetails.style.display = (entry.weather || entry.labour_count || entry.visitors || entry.delay_flag) ? "block" : "none";
+    updatePhotosVisibility();
+    document.getElementById("formHeading").textContent = "Edit entry";
+    document.getElementById("cancelEditBtn").style.display = "inline-block";
+    document.getElementById("saveBtn").textContent = "Save changes";
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  async function loadEntries() {
+    const entries = await getMyDiaryEntries();
+    const { data: projects } = await supabase.from("projects").select("id, name");
+    const projectName = Object.fromEntries((projects || []).map((p) => [p.id, p.name]));
+    document.getElementById("noEntries").style.display = entries.length ? "none" : "block";
+    document.getElementById("entryList").innerHTML = entries.map((e) => `
+      <div class="card" style="margin-top:0.6rem;" data-entry="${e.id}">
+        <div class="btn-row" style="justify-content:space-between; align-items:flex-start;">
+          <div>
+            <strong>${formatDate(e.entry_date)}</strong>
+            ${e.project_id ? `<span class="badge badge-blue">${escapeHtml(projectName[e.project_id] || "Site")}</span>` : `<span class="hint">Personal</span>`}
+          </div>
+          <div class="btn-row">
+            <button type="button" class="btn btn-outline btn-sm" data-edit="${e.id}">Edit</button>
+            <button type="button" class="btn btn-outline btn-sm" data-delete="${e.id}">Delete</button>
+          </div>
+        </div>
+        ${e.body ? `<p style="margin-top:0.5rem;">${escapeHtml(e.body)}</p>` : ""}
+        <p class="hint">${[e.weather, e.labour_count != null ? `${e.labour_count} on site` : null, e.visitors ? `Visitors: ${escapeHtml(e.visitors)}` : null, e.delay_flag ? `⚠ Delay: ${escapeHtml(e.delay_reason || "")}` : null].filter(Boolean).join(" · ")}</p>
+        ${(e.photos || []).length ? `<div class="btn-row" data-photos="${e.id}"></div>` : ""}
+      </div>`).join("");
+
+    for (const e of entries) {
+      if ((e.photos || []).length) {
+        const refs = e.photos.map((p) => p.path || p);
+        const urls = await getSitePhotoUrls(refs).catch(() => new Map());
+        const wrap = document.querySelector(`[data-photos="${e.id}"]`);
+        if (wrap) wrap.innerHTML = refs.map((r) => urls.get(r) ? `<a href="${urls.get(r)}" target="_blank" rel="noopener"><img src="${urls.get(r)}" style="max-width:90px; max-height:90px; border-radius:6px;"></a>` : "").join("");
+      }
+    }
+  }
+
+  document.getElementById("entryList").addEventListener("click", async (e) => {
+    const t = e.target;
+    if (t.dataset.edit) {
+      const entries = await getMyDiaryEntries();
+      const entry = entries.find((x) => x.id === t.dataset.edit);
+      if (entry) startEdit(entry);
+    } else if (t.dataset.delete) {
+      if (!window.confirm("Delete this diary entry?")) return;
+      try { await deleteDiaryEntry(t.dataset.delete); await loadEntries(); } catch (err) { showError(errorBox, err); }
+    }
+  });
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearError(errorBox);
+    const projectId = siteSelect.value || null;
+    let photos = editingPhotos;
+    const fileInput = document.getElementById("entryPhotos");
+    try {
+      if (projectId && fileInput.files.length) {
+        const uploaded = await Promise.all([...fileInput.files].map((f) => uploadPhoto(f, `${projectId}/diary`)));
+        photos = [...photos, ...uploaded.map((path) => ({ path }))];
+      }
+      const fields = {
+        entry_date: document.getElementById("entryDate").value,
+        project_id: projectId,
+        body: document.getElementById("entryBody").value.trim() || null,
+        weather: document.getElementById("entryWeather").value.trim() || null,
+        labour_count: document.getElementById("entryLabour").value === "" ? null : Number(document.getElementById("entryLabour").value),
+        visitors: document.getElementById("entryVisitors").value.trim() || null,
+        delay_flag: delayFlag.checked,
+        delay_reason: delayFlag.checked ? (document.getElementById("entryDelayReason").value.trim() || null) : null,
+        photos,
+      };
+      if (editingId) await updateDiaryEntry(editingId, fields);
+      else await createDiaryEntry(fields);
+      resetForm();
+      await loadEntries();
+    } catch (err) { showError(errorBox, err); }
+  });
+
+  await loadProjects();
+  updatePhotosVisibility();
+  await loadEntries();
+</script>
+</body>
+</html>

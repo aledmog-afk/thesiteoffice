@@ -17016,3 +17016,705 @@ revoke all on table public.interest_signups from anon, authenticated;
 -- to every role it applies to (anon, authenticated); only service_role
 -- and the table owner (used by the SQL editor / this migration itself)
 -- bypass RLS by definition and are unaffected.
+
+-- ─── v85 ADDITIONS: Personal/site diary, meeting notes, weekly-report pull-in ───
+-- Full plan (schema sketch, open-question answers, screens) was posted
+-- to handover/NOTES.md before any of this was written, per Aled's own
+-- delivery instructions. After reviewing it he tightened one rule
+-- before giving the go-ahead: a site-assigned personal diary entry is
+-- readable by its own author plus a CONTRACTOR-SIDE project editor
+-- only — never a Viewer, never an owner-side/client user — and that
+-- has to be enforced here in RLS, not just hidden in the UI. Clients
+-- and other project members only ever see diary content once it has
+-- been copied onto an ISSUED weekly report.
+--
+-- "Owner-side" and "client" are mapped onto the two real, existing
+-- concepts that already distinguish them: is_owner_side_user()
+-- (member of the organisation that owns/created the project record
+-- itself, projects.org_id) and a project_parties row whose party_role
+-- is literally 'client'. Flagging this mapping explicitly: on a
+-- project with no invited parties at all (a single company using The
+-- Site Office purely for its own site, nothing else), EVERY user on it
+-- is owner-side by this definition, so is_contractor_side_editor()
+-- below is false for everyone and a site-assigned diary entry is only
+-- ever visible to its own author — no sharing happens at all until
+-- the project actually has a separate contractor party on it. If
+-- that's not the intended behaviour for a simple single-company
+-- project, this mapping is the one line to revisit.
+create or replace function public.is_contractor_side_editor(p_project_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select public.is_project_editor(p_project_id)
+     and not public.is_owner_side_user(p_project_id, auth.uid())
+     and not exists (
+       select 1 from public.project_parties pp
+       where pp.id in (select public.user_party_ids(p_project_id, auth.uid()))
+         and pp.party_role = 'client'
+     );
+$$;
+revoke all on function public.is_contractor_side_editor(uuid) from public, anon;
+grant execute on function public.is_contractor_side_editor(uuid) to authenticated;
+
+-- ── Personal diary (one per signed-in user) ──────────────────────────
+-- Entries are private to their author by default. Assigning a project
+-- links an entry to that site, at which point it becomes readable
+-- (never writable by anyone but the author) by a contractor-side
+-- project editor of that project too — the "site diary" the brief
+-- asks about is simply this same table, filtered to a project; see the
+-- handover/NOTES.md plan for why a second table would just duplicate
+-- data the moment someone decides a personal note belongs to a site.
+create table if not exists public.personal_diary_entries (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  project_id uuid references public.projects(id) on delete set null,
+  entry_date date not null default current_date,
+  body text,
+  weather text,
+  labour_count integer,
+  visitors text,
+  delay_flag boolean not null default false,
+  delay_reason text,
+  -- Only ever populated once project_id is set — see the trigger below
+  -- and "diary" area's own entry in site_photos_authorized()/
+  -- site_photos_read_authorized(): there is no authorised storage path
+  -- for a personal, projectless upload yet, so one isn't invented here.
+  photos jsonb not null default '[]'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists personal_diary_entries_user_date_idx on public.personal_diary_entries (user_id, entry_date desc);
+create index if not exists personal_diary_entries_project_date_idx on public.personal_diary_entries (project_id, entry_date) where project_id is not null;
+
+create or replace function public.personal_diary_entries_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if TG_OP = 'INSERT' then
+    new.user_id := auth.uid();
+    new.created_at := now();
+    new.updated_at := now();
+  else
+    new.user_id := old.user_id;
+    new.created_at := old.created_at;
+    new.updated_at := now();
+  end if;
+
+  -- Assigning a site only requires genuine membership of it (any
+  -- role) — tagging your own diary entry to a site you're actually on
+  -- is not itself restricted to contractor-side editors; only OTHER
+  -- people's visibility into that entry is (see the RLS policy below).
+  if new.project_id is not null and not public.is_project_member(new.project_id) then
+    raise exception 'You are not a member of that project' using errcode = '42501';
+  end if;
+
+  if not new.delay_flag then
+    new.delay_reason := null;
+  end if;
+
+  new.photos := coalesce(new.photos, '[]'::jsonb);
+  if new.project_id is null and new.photos <> '[]'::jsonb then
+    raise exception 'A diary entry can only have photos once a site is assigned';
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_personal_diary_entries_before_write on public.personal_diary_entries;
+create trigger trg_personal_diary_entries_before_write
+  before insert or update on public.personal_diary_entries
+  for each row execute function public.personal_diary_entries_before_write();
+
+alter table public.personal_diary_entries enable row level security;
+
+-- The tightened rule: always readable/writable by its own author;
+-- readable (never writable) by a contractor-side editor of the
+-- assigned project once one is set. A Viewer (snagging role) and an
+-- owner-side/client user never see another person's entry, however
+-- broad their ordinary project access otherwise is.
+drop policy if exists "read own or contractor-side diary entries" on public.personal_diary_entries;
+create policy "read own or contractor-side diary entries" on public.personal_diary_entries for select to authenticated
+  using (user_id = auth.uid() or (project_id is not null and public.is_contractor_side_editor(project_id)));
+
+drop policy if exists "insert own diary entries" on public.personal_diary_entries;
+create policy "insert own diary entries" on public.personal_diary_entries for insert to authenticated
+  with check (user_id = auth.uid());
+
+drop policy if exists "update own diary entries" on public.personal_diary_entries;
+create policy "update own diary entries" on public.personal_diary_entries for update to authenticated
+  using (user_id = auth.uid());
+
+drop policy if exists "delete own diary entries" on public.personal_diary_entries;
+create policy "delete own diary entries" on public.personal_diary_entries for delete to authenticated
+  using (user_id = auth.uid());
+
+revoke all on public.personal_diary_entries from anon;
+grant select, insert, update, delete on public.personal_diary_entries to authenticated;
+
+-- "diary" is a new site-photos area: project-scoped, contractor-side
+-- editor only for BOTH read and write, matching personal_diary_entries'
+-- own RLS exactly — a photo is exactly as restricted as the row that
+-- references it.
+create or replace function public.site_photos_authorized(object_name text)
+returns boolean
+language plpgsql stable
+as $$
+declare
+  parts record;
+begin
+  if (storage.foldername(object_name))[1] = 'org-logo' then
+    return exists (select 1 from public.organisation_members where user_id = auth.uid());
+  end if;
+
+  select * into parts from public.site_photos_path_parts(object_name);
+  if parts.project_id is null then
+    return false;
+  end if;
+
+  if parts.area = 'snags' then
+    return public.is_project_member(parts.project_id);
+  end if;
+
+  if parts.area = 'diary' then
+    return public.is_contractor_side_editor(parts.project_id);
+  end if;
+
+  return public.is_project_editor(parts.project_id);
+end;
+$$;
+
+create or replace function public.site_photos_read_authorized(object_name text)
+returns boolean
+language plpgsql stable
+security definer
+set search_path = public
+as $$
+declare
+  parts record;
+  v_uid uuid := auth.uid();
+begin
+  if v_uid is null or object_name is null then
+    return false;
+  end if;
+
+  if (storage.foldername(object_name))[1] = 'org-logo' then
+    return exists (
+      select 1
+      from public.org_settings os
+      where public.site_photos_ref_to_path(os.logo_url) = object_name
+        and (
+          exists (select 1 from public.organisation_members om
+                  where om.org_id = os.org_id and om.user_id = v_uid)
+          or exists (select 1 from public.projects p
+                     join public.project_members pm on pm.project_id = p.id
+                     where p.org_id = os.org_id and pm.user_id = v_uid)
+        )
+    );
+  end if;
+
+  select * into parts from public.site_photos_path_parts(object_name);
+  if parts.project_id is null then
+    return false;
+  end if;
+
+  if parts.area = 'diary' then
+    return public.is_contractor_side_editor(parts.project_id);
+  end if;
+
+  return public.is_project_member(parts.project_id);
+end;
+$$;
+
+-- ── General (org-wide) meeting notes ──────────────────────────────────
+-- Not touched by the tightened diary rule above — unchanged from the
+-- plan Aled already approved: any org member reads/writes, matching
+-- org_settings' own existing bucket. Follow-ups stay a plain inline
+-- checklist (text/done/due_date), never real Actions rows: actions
+-- requires a project_id, and a general meeting deliberately has none —
+-- see handover/NOTES.md for why this is the one place Actions genuinely
+-- doesn't fit, rather than inventing a second task system to force it.
+create table if not exists public.org_meeting_notes (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references public.organisations(id) on delete cascade,
+  meeting_date date not null,
+  meeting_time time,
+  title text not null,
+  attendees text,
+  notes text,
+  follow_ups jsonb not null default '[]'::jsonb,
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists org_meeting_notes_org_date_idx on public.org_meeting_notes (org_id, meeting_date desc);
+
+create or replace function public.org_meeting_notes_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_org_member(new.org_id) then
+    raise exception 'You are not a member of that organisation' using errcode = '42501';
+  end if;
+  if TG_OP = 'INSERT' then
+    new.created_by := auth.uid();
+    new.created_at := now();
+    new.updated_at := now();
+  else
+    new.org_id := old.org_id;
+    new.created_by := old.created_by;
+    new.created_at := old.created_at;
+    new.updated_at := now();
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_org_meeting_notes_before_write on public.org_meeting_notes;
+create trigger trg_org_meeting_notes_before_write
+  before insert or update on public.org_meeting_notes
+  for each row execute function public.org_meeting_notes_before_write();
+
+alter table public.org_meeting_notes enable row level security;
+
+drop policy if exists "org members read org_meeting_notes" on public.org_meeting_notes;
+create policy "org members read org_meeting_notes" on public.org_meeting_notes for select to authenticated using (public.is_org_member(org_id));
+drop policy if exists "org members insert org_meeting_notes" on public.org_meeting_notes;
+create policy "org members insert org_meeting_notes" on public.org_meeting_notes for insert to authenticated with check (public.is_org_member(org_id));
+drop policy if exists "org members update org_meeting_notes" on public.org_meeting_notes;
+create policy "org members update org_meeting_notes" on public.org_meeting_notes for update to authenticated using (public.is_org_member(org_id));
+drop policy if exists "org members delete org_meeting_notes" on public.org_meeting_notes;
+create policy "org members delete org_meeting_notes" on public.org_meeting_notes for delete to authenticated using (public.is_org_member(org_id));
+
+revoke all on public.org_meeting_notes from anon;
+grant select, insert, update, delete on public.org_meeting_notes to authenticated;
+
+-- ── Per-site meeting notes ─────────────────────────────────────────────
+-- Any project member reads/writes (matches the brief's own suggested
+-- default). Follow-ups here DO become real actions rows (org_id/
+-- project_id both naturally available), tagged via a new nullable
+-- column on actions so a meeting note can list what it raised.
+create table if not exists public.project_meeting_notes (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  -- Trigger-derived from the project, never trusted from the client —
+  -- same convention actions.org_id already uses.
+  org_id uuid not null references public.organisations(id),
+  meeting_date date not null,
+  meeting_time time,
+  title text not null,
+  attendees text,
+  notes text,
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists project_meeting_notes_project_date_idx on public.project_meeting_notes (project_id, meeting_date desc);
+create index if not exists project_meeting_notes_org_id_idx on public.project_meeting_notes (org_id);
+
+create or replace function public.project_meeting_notes_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_org_id uuid;
+begin
+  select org_id into v_org_id from public.projects where id = new.project_id;
+  if v_org_id is null then
+    raise exception 'project_meeting_notes.project_id must reference an existing project with an organisation';
+  end if;
+  new.org_id := v_org_id;
+
+  if TG_OP = 'INSERT' then
+    new.created_by := auth.uid();
+    new.created_at := now();
+    new.updated_at := now();
+  else
+    new.project_id := old.project_id;
+    new.created_by := old.created_by;
+    new.created_at := old.created_at;
+    new.updated_at := now();
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_project_meeting_notes_before_write on public.project_meeting_notes;
+create trigger trg_project_meeting_notes_before_write
+  before insert or update on public.project_meeting_notes
+  for each row execute function public.project_meeting_notes_before_write();
+
+alter table public.project_meeting_notes enable row level security;
+
+drop policy if exists "members read project_meeting_notes" on public.project_meeting_notes;
+create policy "members read project_meeting_notes" on public.project_meeting_notes for select to authenticated using (public.is_project_member(project_id));
+drop policy if exists "members insert project_meeting_notes" on public.project_meeting_notes;
+create policy "members insert project_meeting_notes" on public.project_meeting_notes for insert to authenticated with check (public.is_project_member(project_id));
+drop policy if exists "members update project_meeting_notes" on public.project_meeting_notes;
+create policy "members update project_meeting_notes" on public.project_meeting_notes for update to authenticated using (public.is_project_member(project_id));
+drop policy if exists "members delete project_meeting_notes" on public.project_meeting_notes;
+create policy "members delete project_meeting_notes" on public.project_meeting_notes for delete to authenticated using (public.is_project_member(project_id));
+
+revoke all on public.project_meeting_notes from anon;
+grant select, insert, update, delete on public.project_meeting_notes to authenticated;
+
+alter table public.actions add column if not exists source_meeting_note_id uuid references public.project_meeting_notes(id) on delete set null;
+create index if not exists actions_source_meeting_note_idx on public.actions (source_meeting_note_id) where source_meeting_note_id is not null;
+
+-- ── Weekly report diary pull-in ────────────────────────────────────────
+-- Deliberately a SEPARATE table, not a jsonb column on weekly_reports
+-- itself. weekly_reports already relies on authenticated getting a
+-- blanket table-level grant (no per-column grants exist on it anywhere
+-- in this schema) with the whole-row lock enforced by
+-- weekly_reports_before_write() — adding a column there would make it
+-- visible to anyone who can already read that row, which is exactly
+-- what Aled's rule forbids before the report is issued. A column-grant
+-- rewrite (revoke the table-wide grant, re-grant an explicit list of
+-- every existing column) would work but risks silently breaking one of
+-- the ~30 columns that table already has across every page that reads
+-- it. A dedicated child table gets its own clean RLS instead, with no
+-- existing grants to disturb.
+create table if not exists public.weekly_report_diary_entries (
+  id uuid primary key default gen_random_uuid(),
+  weekly_report_id uuid not null references public.weekly_reports(id) on delete cascade,
+  -- Trigger-derived from the parent report below — the actual
+  -- authorisation gate depends on this being correct, so it is never
+  -- trusted from the client.
+  project_id uuid not null references public.projects(id) on delete cascade,
+  diary_entry_id uuid references public.personal_diary_entries(id) on delete set null,
+  entry_date date not null,
+  author_email text,
+  body text,
+  weather text,
+  labour_count integer,
+  visitors text,
+  delay_flag boolean not null default false,
+  delay_reason text,
+  -- Text fields only — a diary photo is NOT carried over onto the
+  -- report in v1. Its storage path is authorised for contractor-side
+  -- editors only (see the "diary" area above); making it visible to a
+  -- client once the report issues would need either a second,
+  -- differently-authorised copy of the object in storage or a signed-
+  -- URL-minting Edge Function, either of which is its own separate
+  -- piece of work, not something to half-build here.
+  attached_by uuid references auth.users(id) on delete set null,
+  attached_at timestamptz not null default now()
+);
+
+create index if not exists weekly_report_diary_entries_report_idx on public.weekly_report_diary_entries (weekly_report_id);
+-- Defence in depth: the picker RPC below already excludes anything
+-- already attached, but this also makes it impossible at the database
+-- level for the same diary entry to land on the same report twice.
+create unique index if not exists weekly_report_diary_entries_unique_source
+  on public.weekly_report_diary_entries (weekly_report_id, diary_entry_id) where diary_entry_id is not null;
+
+create or replace function public.weekly_report_diary_entries_before_write()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_project_id uuid;
+  v_status text;
+begin
+  select project_id, status into v_project_id, v_status from public.weekly_reports where id = new.weekly_report_id;
+  if v_project_id is null then
+    raise exception 'weekly_report_diary_entries.weekly_report_id must reference an existing weekly report';
+  end if;
+  new.project_id := v_project_id;
+
+  if v_status in ('approved', 'issued') then
+    raise exception 'This report is % — its content is locked. Use Revise to reopen it before changing its diary entries.', v_status;
+  end if;
+
+  if TG_OP = 'INSERT' then
+    if not public.is_contractor_side_editor(v_project_id) then
+      raise exception 'Only a contractor-side project editor can attach diary entries to a weekly report' using errcode = '42501';
+    end if;
+    new.attached_by := auth.uid();
+    new.attached_at := now();
+  else
+    new.weekly_report_id := old.weekly_report_id;
+    new.attached_by := old.attached_by;
+    new.attached_at := old.attached_at;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_weekly_report_diary_entries_before_write on public.weekly_report_diary_entries;
+create trigger trg_weekly_report_diary_entries_before_write
+  before insert or update on public.weekly_report_diary_entries
+  for each row execute function public.weekly_report_diary_entries_before_write();
+
+-- A separate BEFORE DELETE trigger (OLD only, no NEW row to derive
+-- project_id from) enforces the same issued/approved lock on removal.
+create or replace function public.weekly_report_diary_entries_before_delete()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_status text;
+begin
+  select status into v_status from public.weekly_reports where id = old.weekly_report_id;
+  if v_status in ('approved', 'issued') then
+    raise exception 'This report is % — its content is locked. Use Revise to reopen it before removing a diary entry.', v_status;
+  end if;
+  return old;
+end;
+$$;
+
+drop trigger if exists trg_weekly_report_diary_entries_before_delete on public.weekly_report_diary_entries;
+create trigger trg_weekly_report_diary_entries_before_delete
+  before delete on public.weekly_report_diary_entries
+  for each row execute function public.weekly_report_diary_entries_before_delete();
+
+alter table public.weekly_report_diary_entries enable row level security;
+
+-- Who can read a weekly_reports ROW at all today, composed from its
+-- own real policies (v33's "editors read weekly_reports" plus v62's
+-- "v62 parties read weekly_reports", which additionally grants a
+-- party the 'weekly_reports_read'/'weekly_reports_write' capability —
+-- e.g. a client party, seeded 'any' mc_mode in party_role_capabilities
+-- — read access without being a project editor). Used below so
+-- "anyone who can otherwise see this project" means exactly that real
+-- audience, not a broader guess: is_project_member() alone would be
+-- WIDER than who can actually read the parent report, which would
+-- leak the diary snapshot to someone who can't even see the report
+-- it's attached to.
+create or replace function public.can_read_weekly_report(p_project_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select public.is_project_editor(p_project_id)
+     or public.party_cap(p_project_id, 'weekly_reports_read')
+     or public.party_cap(p_project_id, 'weekly_reports_write');
+$$;
+revoke all on function public.can_read_weekly_report(uuid) from public, anon;
+grant execute on function public.can_read_weekly_report(uuid) to authenticated;
+
+-- The actual visibility gate: a contractor-side editor always reads it
+-- (draft through issued); anyone else who can otherwise read the
+-- PARENT weekly report at all (including an owner-side/client user
+-- with the weekly_reports_read capability) only once that report has
+-- genuinely transitioned to 'issued' — checked here via a live join,
+-- never cached or trusted from the client.
+drop policy if exists "read weekly_report_diary_entries" on public.weekly_report_diary_entries;
+create policy "read weekly_report_diary_entries" on public.weekly_report_diary_entries for select to authenticated using (
+  public.is_contractor_side_editor(project_id)
+  or (
+    public.can_read_weekly_report(project_id)
+    and exists (select 1 from public.weekly_reports wr where wr.id = weekly_report_id and wr.status = 'issued')
+  )
+);
+
+drop policy if exists "contractor editors insert weekly_report_diary_entries" on public.weekly_report_diary_entries;
+create policy "contractor editors insert weekly_report_diary_entries" on public.weekly_report_diary_entries for insert to authenticated
+  with check (public.is_contractor_side_editor(project_id));
+drop policy if exists "contractor editors update weekly_report_diary_entries" on public.weekly_report_diary_entries;
+create policy "contractor editors update weekly_report_diary_entries" on public.weekly_report_diary_entries for update to authenticated
+  using (public.is_contractor_side_editor(project_id));
+drop policy if exists "contractor editors delete weekly_report_diary_entries" on public.weekly_report_diary_entries;
+create policy "contractor editors delete weekly_report_diary_entries" on public.weekly_report_diary_entries for delete to authenticated
+  using (public.is_contractor_side_editor(project_id));
+
+revoke all on public.weekly_report_diary_entries from anon;
+grant select, insert, update, delete on public.weekly_report_diary_entries to authenticated;
+
+-- The "what can still be pulled in" picker. Contractor-side-editor
+-- gated (same as who may attach), not merely editor-gated — an
+-- owner-side/client editor of the report must never be able to list
+-- raw diary candidates, even via this RPC, or the whole point of the
+-- visibility rule above is defeated through a side door.
+create or replace function public.get_unattached_diary_entries(p_project_id uuid, p_week_starting date, p_week_ending date)
+returns table (
+  diary_entry_id uuid, entry_date date, author_email text, body text, weather text,
+  labour_count integer, visitors text, delay_flag boolean, delay_reason text
+)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_contractor_side_editor(p_project_id) then
+    raise exception 'Only a contractor-side project editor can pull in diary entries' using errcode = '42501';
+  end if;
+  return query
+    select d.id, d.entry_date, u.email, d.body, d.weather, d.labour_count, d.visitors, d.delay_flag, d.delay_reason
+    from public.personal_diary_entries d
+    join auth.users u on u.id = d.user_id
+    where d.project_id = p_project_id
+      and d.entry_date between p_week_starting and p_week_ending
+      and not exists (
+        select 1 from public.weekly_report_diary_entries e
+        where e.project_id = p_project_id and e.diary_entry_id = d.id
+      )
+    order by d.entry_date, d.created_at;
+end;
+$$;
+revoke all on function public.get_unattached_diary_entries(uuid, date, date) from public, anon;
+grant execute on function public.get_unattached_diary_entries(uuid, date, date) to authenticated;
+
+-- ── Audit log wiring ───────────────────────────────────────────────────
+-- personal_diary_entries is deliberately NOT audited: it's a private,
+-- owner-only row (even once site-assigned, visibility only ever
+-- widens to contractor-side editors, never to the shared audit trail's
+-- usual org-admin-level audience) — audit_log exists for shared
+-- accountability, which doesn't fit a single-owner private note.
+-- org_meeting_notes/project_meeting_notes and
+-- weekly_report_diary_entries ARE audited normally, via the existing
+-- generic write_audit_log() trigger infrastructure and buckets below.
+--
+-- Full replacement of write_audit_log() — same behaviour throughout,
+-- with one new branch added: org_meeting_notes has no project_id
+-- column at all (same shape as org_settings/toolbox_talk_templates
+-- above it), so without this branch the generic else-case would look
+-- up a project by a project_id that doesn't exist on this table,
+-- find nothing, and silently drop the org scoping entirely.
+create or replace function public.write_audit_log()
+ returns trigger
+ language plpgsql
+ security definer
+ set search_path to 'public'
+as $function$
+declare
+  v_record jsonb := to_jsonb(coalesce(new, old));
+  v_record_id uuid;
+  v_project_id uuid;
+  v_org_id uuid;
+begin
+  if TG_TABLE_NAME = 'projects' then
+    v_record_id := (v_record->>'id')::uuid;
+    v_project_id := case when TG_OP = 'DELETE' then null else v_record_id end;
+    v_org_id := (v_record->>'org_id')::uuid;
+  elsif TG_TABLE_NAME = 'org_settings' then
+    v_project_id := null;
+    v_org_id := (v_record->>'org_id')::uuid;
+    v_record_id := v_org_id;
+  elsif TG_TABLE_NAME = 'toolbox_talk_templates' then
+    v_record_id := (v_record->>'id')::uuid;
+    v_project_id := null;
+    v_org_id := (v_record->>'org_id')::uuid;
+  elsif TG_TABLE_NAME = 'org_meeting_notes' then
+    v_record_id := (v_record->>'id')::uuid;
+    v_project_id := null;
+    v_org_id := (v_record->>'org_id')::uuid;
+  else
+    v_record_id := (v_record->>'id')::uuid;
+    v_project_id := (v_record->>'project_id')::uuid;
+    select org_id into v_org_id from public.projects where id = v_project_id;
+    if not found then
+      v_project_id := null;
+      v_org_id := null;
+    end if;
+  end if;
+
+  insert into public.audit_log (org_id, project_id, user_id, action, table_name, record_id, old_data, new_data)
+  values (
+    v_org_id,
+    v_project_id,
+    auth.uid(),
+    TG_OP,
+    TG_TABLE_NAME,
+    v_record_id,
+    case when TG_OP = 'INSERT' then null else to_jsonb(old) end,
+    case when TG_OP = 'DELETE' then null else to_jsonb(new) end
+  );
+
+  return coalesce(new, old);
+end;
+$function$;
+
+drop trigger if exists trg_audit_org_meeting_notes on public.org_meeting_notes;
+create trigger trg_audit_org_meeting_notes
+  after insert or update or delete on public.org_meeting_notes
+  for each row execute function public.write_audit_log();
+drop trigger if exists trg_audit_project_meeting_notes on public.project_meeting_notes;
+create trigger trg_audit_project_meeting_notes
+  after insert or update or delete on public.project_meeting_notes
+  for each row execute function public.write_audit_log();
+drop trigger if exists trg_audit_weekly_report_diary_entries on public.weekly_report_diary_entries;
+create trigger trg_audit_weekly_report_diary_entries
+  after insert or update or delete on public.weekly_report_diary_entries
+  for each row execute function public.write_audit_log();
+
+create or replace function public.can_read_audit_row(p_table_name text, p_project_id uuid, p_org_id uuid)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+begin
+  if p_table_name = 'org_settings' then
+    return p_org_id is not null and public.is_org_member(p_org_id);
+  end if;
+
+  if p_table_name = 'toolbox_talk_templates' then
+    return p_org_id is not null and public.is_org_member(p_org_id);
+  end if;
+
+  if p_table_name = 'org_meeting_notes' then
+    return p_org_id is not null and public.is_org_member(p_org_id);
+  end if;
+
+  if p_project_id is null then
+    return false;
+  end if;
+
+  if p_table_name in ('commercial_events', 'commercial_line_items', 'variations', 'dayworks', 'variation_dayworks',
+                      'commercial_evidence_links', 'commercial_signatures', 'commercial_approval_requests', 'commercial_items') then
+    return public.can_see_commercial_prices(p_project_id);
+  end if;
+
+  if p_table_name = 'weekly_report_diary_entries' then
+    return public.is_contractor_side_editor(p_project_id);
+  end if;
+
+  if p_table_name in ('projects', 'snag_items', 'documents', 'document_revisions', 'toolbox_talks', 'toolbox_talk_attendees',
+                      'drawing_uploads', 'drawing_pages', 'drawings', 'drawing_page_assignments', 'general_queries', 'drawing_pins',
+                      'project_meeting_notes') then
+    return public.is_project_member(p_project_id);
+  end if;
+
+  return public.is_project_editor(p_project_id);
+end;
+$$;
+
+-- These are all trigger functions, never called directly by any page
+-- or RPC — a trigger fires regardless of EXECUTE grants on its own
+-- function (matching documents_before_write()/drawing_pins_before_insert()'s
+-- own established pattern), so they're fully locked down, not granted
+-- back to authenticated like an actually-callable RPC would be.
+do $$
+declare f text;
+begin
+  foreach f in array array[
+    'public.personal_diary_entries_before_write()',
+    'public.org_meeting_notes_before_write()',
+    'public.project_meeting_notes_before_write()',
+    'public.weekly_report_diary_entries_before_write()',
+    'public.weekly_report_diary_entries_before_delete()'
+  ] loop
+    execute format('revoke execute on function %s from public, anon, authenticated', f);
+  end loop;
+end $$;
