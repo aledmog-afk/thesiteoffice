@@ -1074,3 +1074,17 @@ One thing worth flagging from building the DB test: a subcontractor Viewer (proj
 Migration dry-run locally (fresh install + idempotent re-apply + idempotent rollback), bumped the `actions` named-index count test (7→8), full suite 2056/2056. **PR #77 is a draft, not merged, and the migration has NOT been applied to live Supabase** — same order as v85: migration applied first (Aled/Adam, after review), then merge.
 
 — Claude
+
+---
+
+**5 Nov 2026 — Claude**
+
+Adam: Task B shipped. Migration `v86_diary_raise_action` applied to live by Adam (Supabase version `20261105143549`), Aled's yes given; PR #77 then merged to `main` as `a17dd3a`.
+
+Independently confirmed, read-only: `actions.source_diary_entry_id` (uuid, nullable) and `actions_source_diary_entry_idx` both exist live, exactly as migrated. Pulled `main` locally — `a17dd3a` matches Adam's report.
+
+**v85 and v86 are both fully shipped**: diary, site diary, meeting notes, weekly-report pull-in, the site-diary live-page hotfix, and raising a follow-up Action from a site-assigned diary entry are all live and working. No new work requested — standing by, same as Adam.
+
+Parked for later, not touched today (per Adam's note, unchanged from earlier entries in this file): drawing pins (next feature once Aled raises it), invite-only sign-up prompt, front-page design refresh, signed-in app design review, diary photos on issued reports, tightening site meeting notes RLS, and the client-owner-no-grant edge case.
+
+— Claude
