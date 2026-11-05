@@ -1,18 +1,21 @@
-// v87: snag-list-edit.html's "Drawing Pin" section — placing a pin on
-// a drawing when editing a snag. app.js's own drawing_pins helpers
-// (getProjectDrawings, getSnagDrawingPin, getDrawing,
-// createDrawingPin) are already proven against a real database with
-// real RLS in tests/database/v74_drawing_pins.test.mjs — mocked here
-// so this file can focus purely on what the PAGE does: which
-// drawing(s) it offers by default (plot-list vs general-list, with or
-// without the item's own plot tag), that tapping + Save Pin calls
-// createDrawingPin with the right snag id and coordinates, and that an
-// already-pinned snag shows read-only status rather than a second
-// picker (v74 has no "move a pin" policy).
+// v87/v89: snag-list-edit.html's "Drawing Pin" section — placing a pin
+// on a drawing when raising OR editing a snag. app.js's own
+// drawing_pins helpers (getProjectDrawings, getSnagDrawingPin,
+// getDrawing, createDrawingPin) are already proven against a real
+// database with real RLS in tests/database/v74_drawing_pins.test.mjs —
+// mocked here so this file can focus purely on what the PAGE does:
+// which drawing(s) it offers by default (plot-list vs general-list,
+// with or without the item's own plot tag), that tapping + Save Pin
+// calls createDrawingPin with the right snag id and coordinates on
+// Edit, that a brand-new item's tap only STAGES a pin (v89 — no
+// snag_items.id exists yet for the FK) and is only turned into a real
+// pin once the new item is actually saved, and that an already-pinned
+// snag shows read-only status rather than a second picker (v74 has no
+// "move a pin" policy).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { extractScript, runPage, wait } from "../lib/jsdom-harness.mjs";
+import { extractScript, runPage, fireEvent, wait } from "../lib/jsdom-harness.mjs";
 
 const HTML = new URL("../../tracker/snag-list-edit.html", import.meta.url).pathname;
 
@@ -47,6 +50,14 @@ function makeSupabase(store) {
         neq() { return api; },
         order() { return api; },
         in() { return api; },
+        // v89: snagForm's submit on a brand-new item does
+        // .insert(payload).select("id").single() to get the new row's
+        // id back (needed for the deferred pin's FK) — mirrors the
+        // exact chain snag_room_dropdown.test.mjs's own mock uses.
+        insert(payload) {
+          store.inserted = payload;
+          return { select: () => ({ single: async () => ({ data: { id: store.newSnagId || "newsnag1" }, error: null }) }) };
+        },
         single: async () => (table === "snag_lists" ? { data: store.snagList, error: null } : { data: null, error: null }),
         then(resolve) {
           if (table === "snag_items") return resolve({ data: store.snags, error: null });
@@ -95,7 +106,7 @@ async function run(store, overrides = {}) {
     ACTION_STATUS_LABEL: {}, ACTION_STATUS_BADGE: {},
     saveFileToDevice: async () => ({ method: "share", status: "saved" }),
     deviceSavePhotoFilename: () => "", deviceSaveStatusLabel: () => "",
-    alert: () => {}, confirm: () => true, prompt: () => "",
+    alert: overrides.alert || (() => {}), confirm: () => true, prompt: () => "",
     moveSnagItemsToPlot: async () => {},
     getProjectDrawings: overrides.getProjectDrawings || (async () => []),
     getSnagDrawingPin: overrides.getSnagDrawingPin || (async () => null),
@@ -104,13 +115,128 @@ async function run(store, overrides = {}) {
   });
 }
 
-test("Drawing Pin: hidden entirely while adding a brand-new item (no snag id yet for the pin's FK)", async () => {
+test("Drawing Pin: v89 — shown while adding a brand-new item too, when pinnable drawings exist; Save Pin is hidden since the pin saves together with the item", async () => {
   const store = { snagList: plotSpecificList(), snags: [] };
-  const { document, window } = await run(store);
+  const { document } = await run(store, {
+    getProjectDrawings: async () => [drawing({ id: "dGF", scope: "plot_storey", plotId: "plotA", storey: "GF", title: "Plot 5" })],
+  });
   await wait(30);
   document.getElementById("newSnagBtn").click();
   await wait(10);
-  assert.equal(document.getElementById("pinWrap").style.display, "none");
+
+  assert.equal(document.getElementById("pinWrap").style.display, "block");
+  assert.equal(document.getElementById("pinPicker").style.display, "block");
+  assert.equal(document.getElementById("noDrawingsHint").style.display, "none");
+  assert.equal(document.getElementById("savePinBtn").style.display, "none", "Save Pin has no role while adding — the tap is staged and saved together with the new item");
+  const options = [...document.getElementById("pinDrawingSelect").options];
+  assert.equal(options.length, 1);
+  assert.equal(options[0].value, "dGF");
+});
+
+test("Drawing Pin: v89 — adding a brand-new item with no pinnable drawings at all shows the same graceful hint as editing", async () => {
+  const store = { snagList: plotSpecificList(), snags: [] };
+  const { document } = await run(store, { getProjectDrawings: async () => [] });
+  await wait(30);
+  document.getElementById("newSnagBtn").click();
+  await wait(10);
+
+  assert.equal(document.getElementById("noDrawingsHint").style.display, "block");
+  assert.equal(document.getElementById("pinPicker").style.display, "none");
+});
+
+test("Drawing Pin: v89 — tapping while adding only stages the pin; createDrawingPin is never called until the item is actually saved", async () => {
+  const store = { snagList: plotSpecificList(), snags: [] };
+  const calls = [];
+  const { document, window } = await run(store, {
+    getProjectDrawings: async () => [drawing({ id: "dGF", scope: "plot_storey", plotId: "plotA", storey: "GF", title: "Plot 5" })],
+    createDrawingPin: async (...args) => { calls.push(args); return "newpin"; },
+  });
+  await wait(30);
+  document.getElementById("newSnagBtn").click();
+  await wait(10);
+
+  const img = document.getElementById("pinCanvasImg");
+  img.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 100 });
+  document.getElementById("pinCanvas").dispatchEvent(new window.MouseEvent("click", { bubbles: true, clientX: 100, clientY: 25 }));
+  await wait(10);
+
+  assert.equal(calls.length, 0, "a tap while adding must never call createDrawingPin directly");
+});
+
+test("Drawing Pin: v89 — saving a brand-new item with a staged pin creates it afterward, using the new snag's real id and the selected drawing", async () => {
+  const store = { snagList: plotSpecificList(), snags: [], newSnagId: "newsnag1" };
+  const calls = [];
+  const { document, window } = await run(store, {
+    getProjectDrawings: async () => [drawing({ id: "dGF", scope: "plot_storey", plotId: "plotA", storey: "GF", title: "Plot 5" })],
+    createDrawingPin: async (pageId, x, y, owner, drawingId) => { calls.push({ pageId, x, y, owner, drawingId }); return "newpin"; },
+  });
+  await wait(30);
+  document.getElementById("newSnagBtn").click();
+  await wait(10);
+
+  const img = document.getElementById("pinCanvasImg");
+  img.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 100 });
+  document.getElementById("pinCanvas").dispatchEvent(new window.MouseEvent("click", { bubbles: true, clientX: 100, clientY: 25 }));
+  await wait(10);
+
+  document.getElementById("location").value = "Kitchen";
+  document.getElementById("description").value = "Crack in wall";
+  fireEvent(document.getElementById("snagForm"), "submit");
+  await wait(30);
+
+  assert.equal(calls.length, 1, "createDrawingPin must fire exactly once, after the snag was created");
+  assert.equal(calls[0].pageId, "page-dGF");
+  assert.equal(calls[0].owner.snagItemId, "newsnag1", "must use the id the insert actually returned, not a stale/empty editingId");
+  assert.equal(calls[0].drawingId, "dGF");
+  assert.equal(calls[0].x, 50, "100/200 width = 50%");
+  assert.equal(calls[0].y, 25, "25/100 height = 25%");
+});
+
+test("Drawing Pin: v89 — saving a brand-new item with nothing tapped never calls createDrawingPin at all", async () => {
+  const store = { snagList: plotSpecificList(), snags: [], newSnagId: "newsnag2" };
+  const calls = [];
+  const { document } = await run(store, {
+    getProjectDrawings: async () => [drawing({ id: "dGF", scope: "plot_storey", plotId: "plotA", storey: "GF", title: "Plot 5" })],
+    createDrawingPin: async (...args) => { calls.push(args); return "newpin"; },
+  });
+  await wait(30);
+  document.getElementById("newSnagBtn").click();
+  await wait(10);
+
+  document.getElementById("location").value = "Kitchen";
+  document.getElementById("description").value = "No pin on this one";
+  fireEvent(document.getElementById("snagForm"), "submit");
+  await wait(30);
+
+  assert.equal(calls.length, 0, "no tap, no pin — createDrawingPin must not be called just because drawings exist");
+});
+
+test("Drawing Pin: v89 — a pin failure after a successful add is reported but never blocks the snag from being saved", async () => {
+  const store = { snagList: plotSpecificList(), snags: [], newSnagId: "newsnag3" };
+  const alerts = [];
+  const { document, window } = await run(store, {
+    getProjectDrawings: async () => [drawing({ id: "dGF", scope: "plot_storey", plotId: "plotA", storey: "GF", title: "Plot 5" })],
+    createDrawingPin: async () => { throw new Error("permission denied for table drawing_pins"); },
+    alert: (msg) => alerts.push(msg),
+  });
+  await wait(30);
+  document.getElementById("newSnagBtn").click();
+  await wait(10);
+
+  const img = document.getElementById("pinCanvasImg");
+  img.getBoundingClientRect = () => ({ left: 0, top: 0, width: 200, height: 100 });
+  document.getElementById("pinCanvas").dispatchEvent(new window.MouseEvent("click", { bubbles: true, clientX: 100, clientY: 25 }));
+  await wait(10);
+
+  document.getElementById("location").value = "Kitchen";
+  document.getElementById("description").value = "Crack in wall";
+  fireEvent(document.getElementById("snagForm"), "submit");
+  await wait(30);
+
+  assert.equal(document.getElementById("errorBox").textContent, "", "the primary save succeeded — showError must not fire for a pin-only failure");
+  assert.equal(alerts.length, 1, "the pin failure must still be surfaced, just not as a blocking form error");
+  assert.match(alerts[0], /pin couldn't be placed/);
+  assert.equal(document.getElementById("snagCard").style.display, "none", "the form must still close — the snag itself was saved successfully");
 });
 
 test("Drawing Pin: a plot-specific list with exactly one storey drawing auto-selects it", async () => {
