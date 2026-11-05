@@ -28,7 +28,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, getSiteDiaryEntries, getSitePhotoUrls } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, getSiteDiaryEntries, getSitePhotoUrls, getMemberEmailMap } from "./js/app.js";
 
   const me = await requireAuth();
   const projectId = getParam("project");
@@ -41,16 +41,16 @@
     const { data: proj } = await supabase.from("projects").select("name").eq("id", projectId).single();
     if (proj) document.getElementById("projectSub").textContent = `${proj.name} — ` + document.getElementById("projectSub").textContent;
 
-    let entries;
+    let entries, memberEmails;
     try {
-      entries = await getSiteDiaryEntries(projectId);
+      [entries, memberEmails] = await Promise.all([getSiteDiaryEntries(projectId), getMemberEmailMap([projectId])]);
     } catch (err) { showError(errorBox, err); return; }
 
     document.getElementById("noEntries").style.display = entries.length ? "none" : "block";
     document.getElementById("entryList").innerHTML = entries.map((e) => `
       <div class="card" style="margin-top:0.6rem;">
         <div class="btn-row" style="justify-content:space-between; align-items:flex-start;">
-          <div><strong>${formatDate(e.entry_date)}</strong> <span class="hint">${escapeHtml(e.author?.email || "")}${e.user_id === me.id ? " (you)" : ""}</span></div>
+          <div><strong>${formatDate(e.entry_date)}</strong> <span class="hint">${escapeHtml(memberEmails[e.user_id] || "")}${e.user_id === me.id ? " (you)" : ""}</span></div>
         </div>
         ${e.body ? `<p style="margin-top:0.5rem;">${escapeHtml(e.body)}</p>` : ""}
         <p class="hint">${[e.weather, e.labour_count != null ? `${e.labour_count} on site` : null, e.visitors ? `Visitors: ${escapeHtml(e.visitors)}` : null, e.delay_flag ? `⚠ Delay: ${escapeHtml(e.delay_reason || "")}` : null].filter(Boolean).join(" · ")}</p>
