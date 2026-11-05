@@ -1088,3 +1088,27 @@ Independently confirmed, read-only: `actions.source_diary_entry_id` (uuid, nulla
 Parked for later, not touched today (per Adam's note, unchanged from earlier entries in this file): drawing pins (next feature once Aled raises it), invite-only sign-up prompt, front-page design refresh, signed-in app design review, diary photos on issued reports, tightening site meeting notes RLS, and the client-owner-no-grant edge case.
 
 — Claude
+
+---
+
+**5 Nov 2026 — Claude**
+
+From Adam: v87, drawing pins picked up — snag pins when raising a snag, numbered pins on the snag sheet PDF. Built as draft **PR #78**: https://github.com/aledmog-afk/thesiteoffice/pull/78
+
+Read the real v74 schema and `drawing-view.html` before building anything (v74 — `drawings`/`drawing_pages`/`drawing_page_assignments`/`drawing_pins` — shipped as a separate, earlier feature than the drawing-pins *plan* discussion above; that plan predates v74 and v74 superseded it, so this PR builds on v74 as it actually exists live, not on the older plan's proposed schema).
+
+**Pin placement, `snag-list-edit.html`**: optional pin step on add/edit. Plot-specific list defaults to that plot's own current storey drawing(s), with a storey picker if more than one. General list shows a drawing picker — preferring the item's own tagged plot's drawings first (still able to choose any other current drawing). Text-only snags unaffected; pin is always optional. Reused `drawing-view.html`'s tap-coordinate math verbatim — no new coordinate model.
+
+**Numbered pins on print, `snag-list-view.html` + `snagging-report.html`**: each drawing page carrying pins for items on that sheet gets attached with numbered markers, the number being the snag's own `item_no` — one number system, matching the row table exactly. `snagging-report.html` re-scopes to whichever status filter is currently selected (confirmed: switching filters re-fetches pins for exactly the new filtered set). Only pins belonging to this sheet's own items show — a page's RFI/quality-gate/other-list pins never leak through. Images resolve to signed URLs; Print now waits for every pinned drawing image to actually finish loading before `window.print()` fires, so PDFs never come out with a blank drawing. Reflects **current** pins at print time, not a frozen snapshot — there's no "issued" status in this app, so no freeze/snapshot concept was invented for this, per Adam's instruction.
+
+A viewer who can't read drawings under RLS (`snag_items` reads via the broader `can_read_snag_row()`; drawings read via plain `is_project_member()` — confirmed these are genuinely different gates, so this restricted-role scenario is real, not hypothetical) just loses the Pinned Drawings section silently — no page error, rest of the sheet renders in full. Tested directly against a throwing mock.
+
+**No migration** — v74's existing member-level insert policy on `drawing_pins` for a `snag_item_id` owner already exactly matches `snag_items`' own insert gate, so pinning from the edit form needs zero schema changes.
+
+**Known gap, flagged not built**: `drawing_pins` has no update/delete RLS policy at all (v74's own schema comment: pins are a one-time placement, no unpin in this phase) — so a placed pin is read-only in this UI, no move/replace. Needs its own small follow-up migration if Aled/Stuart want that; not guessed at here.
+
+4 new `app.js` helpers, CSS additions for the numbered-pin marker and print pagination, 3 new test files (15 tests total: pin-placement UI, per-list print sheet, site-wide print sheet). Full suite: 2071/2071 passing.
+
+**Draft, not merged, no migration to apply.** Waiting on Aled's review of #78.
+
+— Claude
