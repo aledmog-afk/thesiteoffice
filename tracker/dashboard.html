@@ -24,6 +24,7 @@
       <a class="btn btn-outline btn-sm" href="my-diary.html">My Diary</a>
       <a class="btn btn-outline btn-sm" href="meeting-notes.html">Meeting Notes</a>
       <button class="btn btn-outline btn-sm" id="refreshBtn">↻ Refresh</button>
+      <button class="btn btn-outline" id="newActionBtn">+ New Action</button>
       <button class="btn btn-amber" id="newProjectBtn">+ New Project</button>
     </div>
   </div>
@@ -69,6 +70,48 @@
       <div class="btn-row">
         <button type="submit" class="btn btn-amber">Create Project</button>
         <button type="button" class="btn btn-outline" id="cancelBtn">Cancel</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- v90: a task/reminder for yourself or someone else, without first
+       opening a project. Reuses the existing Actions engine exactly as
+       actions.html does (createAction, same editor-only assignee list
+       via get_project_members) — no new table, no new RLS. -->
+  <div class="card" id="newActionCard" style="display:none;">
+    <div id="actionErrorBox" class="error-box"></div>
+    <form id="quickActionForm">
+      <div class="form-grid">
+        <div class="field">
+          <label for="actionProject">Project *</label>
+          <select id="actionProject" required><option value="">Choose a project…</option></select>
+        </div>
+        <div class="field">
+          <label for="actionTitle">Title *</label>
+          <input type="text" id="actionTitle" required placeholder="e.g. Chase Building Control re: substructure sign-off">
+        </div>
+      </div>
+      <div class="field">
+        <label for="actionDescription">Description</label>
+        <textarea id="actionDescription" rows="2" placeholder="Optional detail / evidence / notes"></textarea>
+      </div>
+      <div class="form-grid">
+        <div class="field">
+          <label for="actionAssignedTo">Assigned to</label>
+          <select id="actionAssignedTo"><option value="">Unassigned</option></select>
+        </div>
+        <div class="field">
+          <label for="actionPriority">Priority</label>
+          <select id="actionPriority"></select>
+        </div>
+      </div>
+      <div class="field">
+        <label for="actionDueDate">Due date</label>
+        <input type="date" id="actionDueDate">
+      </div>
+      <div class="btn-row">
+        <button type="submit" class="btn btn-amber">Create Action</button>
+        <button type="button" class="btn btn-outline" id="cancelActionBtn">Cancel</button>
       </div>
     </form>
   </div>
@@ -134,9 +177,9 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, ensureOrganisation, getPortfolioControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, isSnagOutstanding, externalWorksStale, externalWorksShareSet, EXTERNAL_WORKS_STALE_DAYS } from "./js/app.js";
+  import { requireAuth, renderHeader, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, ensureOrganisation, getPortfolioControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, createAction, isSnagOutstanding, externalWorksStale, externalWorksShareSet, EXTERNAL_WORKS_STALE_DAYS } from "./js/app.js";
 
-  await requireAuth();
+  const me = await requireAuth();
   renderHeader([{ label: "Dashboard" }]);
 
   const grid = document.getElementById("grid");
@@ -151,6 +194,7 @@
   let memberEmails = {};
   let projectFilter = "all";
   let attentionFilter = "all";
+  let allProjects = []; // every project visible to the caller — populated by loadSites(), reused for the quick-create Action's project picker
 
   function toggleForm(show) {
     newProjectCard.style.display = show ? "block" : "none";
@@ -195,6 +239,70 @@
       window.location.href = `project.html?id=${newId}`;
     } catch (err) {
       showError(errorBox, err);
+    }
+  });
+
+  // ─── v90: quick-create Action, no project page needed first ──────
+  const newActionCard = document.getElementById("newActionCard");
+  const actionErrorBox = document.getElementById("actionErrorBox");
+  const actionProjectSelect = document.getElementById("actionProject");
+  const actionAssignedToSelect = document.getElementById("actionAssignedTo");
+  const actionPrioritySelect = document.getElementById("actionPriority");
+  actionPrioritySelect.innerHTML = ACTION_PRIORITIES.map((p) => `<option value="${p}">${ACTION_PRIORITY_LABEL[p]}</option>`).join("");
+
+  // Mirrors actions.html's own loadEditors() exactly: Actions are
+  // editor-gated (is_project_editor()), so owner/collaborator is the
+  // only legitimate assignee list for whichever project is selected.
+  // Defaults to the caller themselves when they're one of those
+  // editors, else leaves it Unassigned rather than guessing.
+  async function loadActionAssignees(projectId) {
+    actionAssignedToSelect.innerHTML = `<option value="">Unassigned</option>`;
+    if (!projectId) return;
+    try {
+      const { data, error } = await supabase.rpc("get_project_members", { p_project_id: projectId });
+      if (error) throw error;
+      const editors = (data || []).filter((m) => m.role === "owner" || m.role === "collaborator");
+      actionAssignedToSelect.innerHTML = `<option value="">Unassigned</option>` +
+        editors.map((m) => `<option value="${m.user_id}">${escapeHtml(m.email)}</option>`).join("");
+      actionAssignedToSelect.value = editors.some((m) => m.user_id === me.id) ? me.id : "";
+    } catch {
+      actionAssignedToSelect.innerHTML = `<option value="">Unassigned</option>`; // best-effort, same convention as the rest of this page
+    }
+  }
+
+  function toggleActionForm(show) {
+    newActionCard.style.display = show ? "block" : "none";
+    if (!show) return;
+    clearError(actionErrorBox);
+    document.getElementById("quickActionForm").reset();
+    actionProjectSelect.innerHTML = `<option value="">Choose a project…</option>` +
+      allProjects.map((p) => `<option value="${p.id}">${escapeHtml(p.name)}</option>`).join("");
+    actionPrioritySelect.value = "medium";
+    loadActionAssignees("");
+  }
+  document.getElementById("newActionBtn").addEventListener("click", () => toggleActionForm(true));
+  document.getElementById("cancelActionBtn").addEventListener("click", () => toggleActionForm(false));
+  actionProjectSelect.addEventListener("change", (e) => loadActionAssignees(e.target.value));
+
+  document.getElementById("quickActionForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    clearError(actionErrorBox);
+    const projectId = actionProjectSelect.value;
+    if (!projectId) { showError(actionErrorBox, { message: "Choose a project first." }); return; }
+    try {
+      await createAction(projectId, {
+        title: document.getElementById("actionTitle").value.trim(),
+        description: document.getElementById("actionDescription").value.trim() || null,
+        priority: actionPrioritySelect.value,
+        assignedTo: actionAssignedToSelect.value || null,
+        dueDate: document.getElementById("actionDueDate").value || null,
+      });
+      toggleActionForm(false);
+      // So a newly-created overdue/high-priority/self-assigned Action
+      // shows up immediately, same data this page already loads.
+      loadControlSummary();
+    } catch (err) {
+      showError(actionErrorBox, err);
     }
   });
 
@@ -301,6 +409,7 @@
       .select("*")
       .order("created_at", { ascending: false });
     if (error) { grid.innerHTML = `<div class="error-box" style="display:block;">${escapeHtml(error.message)}</div>`; return; }
+    allProjects = projects;
 
     if (!projects.length) {
       emptyState.style.display = "block";

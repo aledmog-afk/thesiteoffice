@@ -310,7 +310,8 @@ function dashboardContext(sb) {
     ensureOrganisation: async () => "org1",
     getPortfolioControlSummary: async () => ({ projectsRequiringAttention: 0, totals: { openActions: 0, overdue: 0, dueToday: 0, blocked: 0, highCritical: 0, overdueProgrammeActivities: 0, overdueProgrammeMilestones: 0, materialForecastLateProgrammeActivities: 0, forecastLateProgrammeMilestones: 0 }, projects: [] }),
     getAttentionActions: async () => [], getMemberEmailMap: async () => ({}),
-    CONTROL_LEVEL_BADGE: {}, ACTION_PRIORITY_LABEL: {}, ACTION_PRIORITY_BADGE: {}, ACTION_STATUS_LABEL: {}, ACTION_STATUS_BADGE: {}, ACTION_DUE_LABEL: {}, ACTION_DUE_BADGE: {},
+    CONTROL_LEVEL_BADGE: {}, ACTION_PRIORITIES: ["low", "medium", "high", "critical"], ACTION_PRIORITY_LABEL: {}, ACTION_PRIORITY_BADGE: {}, ACTION_STATUS_LABEL: {}, ACTION_STATUS_BADGE: {}, ACTION_DUE_LABEL: {}, ACTION_DUE_BADGE: {},
+    createAction: async () => ({}),
     isSnagOutstanding: () => false,
   };
 }

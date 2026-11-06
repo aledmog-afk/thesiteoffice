@@ -43,7 +43,9 @@ async function runDashboard(controlSummary) {
     getAttentionActions: async () => [],
     getMemberEmailMap: async () => ({}),
     CONTROL_LEVEL_BADGE: { attention: "badge-red", watch: "badge-amber", on_track: "badge-green", restricted: "badge-grey" },
+    ACTION_PRIORITIES: ["low", "medium", "high", "critical"],
     ACTION_PRIORITY_LABEL: {}, ACTION_PRIORITY_BADGE: {}, ACTION_STATUS_LABEL: {}, ACTION_STATUS_BADGE: {}, ACTION_DUE_LABEL: {}, ACTION_DUE_BADGE: {},
+    createAction: async () => ({}),
   });
 }
 
