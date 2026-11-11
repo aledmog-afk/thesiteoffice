@@ -46,6 +46,7 @@ async function runDashboard(controlSummary) {
     ACTION_PRIORITIES: ["low", "medium", "high", "critical"],
     ACTION_PRIORITY_LABEL: {}, ACTION_PRIORITY_BADGE: {}, ACTION_STATUS_LABEL: {}, ACTION_STATUS_BADGE: {}, ACTION_DUE_LABEL: {}, ACTION_DUE_BADGE: {},
     createAction: async () => ({}),
+    isPlatformAdmin: async () => false,
   });
 }
 

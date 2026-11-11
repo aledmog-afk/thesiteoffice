@@ -98,6 +98,7 @@ async function run(overrides = {}) {
     getMemberEmailMap: async () => ({}),
     CONTROL_LEVEL_BADGE, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE,
     createAction: overrides.createAction || (async (projectId, fields) => { createActionCalls.push({ projectId, fields }); return { id: "newaction1" }; }),
+    isPlatformAdmin: overrides.isPlatformAdmin || (async () => false),
     isSnagOutstanding: () => false,
     externalWorksStale: () => false,
     externalWorksShareSet: () => true,
@@ -262,4 +263,27 @@ test("dashboard.html: if the assignee RPC fails, the picker falls back to Unassi
 
   const options = [...document.getElementById("actionAssignedTo").options].map((o) => o.value);
   assert.deepEqual(options, [""], "must fall back to just Unassigned, never throw or leave stale options");
+});
+
+// v91: the "Invite a Customer" nav link — cosmetic only (the real
+// gate is server-side is_platform_admin()), but it must only ever
+// show for an actual platform admin, and must never block the rest of
+// the dashboard if that check fails.
+test("dashboard.html: the Invite a Customer link is hidden by default and shown only once is_platform_admin() resolves true", async () => {
+  const { document } = await run({ isPlatformAdmin: async () => true });
+  await wait(30);
+  assert.equal(document.getElementById("inviteCustomerLink").style.display, "", "must be shown (default display) for a real platform admin");
+});
+
+test("dashboard.html: the Invite a Customer link stays hidden for an ordinary user", async () => {
+  const { document } = await run({ isPlatformAdmin: async () => false });
+  await wait(30);
+  assert.equal(document.getElementById("inviteCustomerLink").style.display, "none");
+});
+
+test("dashboard.html: a failed platform-admin check hides the link and never breaks the rest of the dashboard", async () => {
+  const { document, controlSummaryCalls } = await run({ isPlatformAdmin: async () => { throw new Error("network error"); } });
+  await wait(30);
+  assert.equal(document.getElementById("inviteCustomerLink").style.display, "none");
+  assert.ok(controlSummaryCalls.n >= 1, "the rest of the dashboard must still have loaded normally");
 });

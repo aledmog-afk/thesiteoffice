@@ -139,7 +139,13 @@ const AUTH_ALLOWLIST = [
   // contractor-side-editor check itself.
   "is_contractor_side_editor(uuid)",
   "can_read_weekly_report(uuid)",
-  "get_unattached_diary_entries(uuid,date,date)"
+  "get_unattached_diary_entries(uuid,date,date)",
+  // v91: the platform-admin check both invite-customer.html and the
+  // invite-customer edge function call directly — the page to decide
+  // whether to show the nav link/render at all, the edge function (via
+  // the caller's own forwarded JWT) as its real authorization check
+  // before ever touching the service-role key.
+  "is_platform_admin()"
 ].sort();
 
 const PRIV_SQL = `
@@ -218,9 +224,9 @@ for (const [sig, q] of V68_CLOSED) {
   });
 }
 
-test("ALLOWLIST CI GUARD: the SECURITY DEFINER functions authenticated can execute are EXACTLY the 67 kept after v68, plus the 5 v69 progress RPCs, the 4 v72 handover-confirmation RPCs, the 2 v75 block-override RPCs and the 3 v85 diary RPCs", async () => {
+test("ALLOWLIST CI GUARD: the SECURITY DEFINER functions authenticated can execute are EXACTLY the 67 kept after v68, plus the 5 v69 progress RPCs, the 4 v72 handover-confirmation RPCs, the 2 v75 block-override RPCs, the 3 v85 diary RPCs and v91's is_platform_admin()", async () => {
   const got = (await sql(AUTH_EXECUTABLE_DEFINER_SQL)).rows.map((r) => r.sig).sort();
-  assert.equal(AUTH_ALLOWLIST.length, 81);
+  assert.equal(AUTH_ALLOWLIST.length, 82);
   assert.deepEqual(got, AUTH_ALLOWLIST,
     "authenticated must reach only the reviewed set. Internal-only SECURITY DEFINER helpers: revoke execute from public, anon, authenticated. " +
     "Needed by a page or an RLS policy: add to AUTH_ALLOWLIST on purpose.");

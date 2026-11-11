@@ -64,6 +64,7 @@ async function run(supabase) {
     ACTION_PRIORITIES: ["low", "medium", "high", "critical"],
     ACTION_PRIORITY_LABEL: { low: "Low", medium: "Medium", high: "High", critical: "Critical" },
     createAction: async () => ({}),
+    isPlatformAdmin: async () => false,
   });
 }
 

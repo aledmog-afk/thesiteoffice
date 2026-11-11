@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="js/theme-init.js"></script>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>Invite a Customer – The Site Office</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div id="site-header"></div>
+
+<div class="page page-900">
+  <div class="page-head">
+    <div>
+      <div class="page-title">Invite a New Customer</div>
+      <div class="page-sub">Sends a real account-invite email so a brand-new company can get started without self-sign-up. Platform admin only — this page and every action on it are re-checked server-side.</div>
+    </div>
+  </div>
+
+  <div id="errorBox" class="error-box"></div>
+
+  <!-- v91: hidden until the server-side is_platform_admin() check
+       actually resolves true — the redirect below is the real gate
+       (and every action here re-checks it again server-side), this
+       just avoids a flash of admin-only content while that check is
+       still in flight. -->
+  <div id="adminContent" style="display:none;">
+    <div class="card">
+      <h3 class="card-heading" style="margin-bottom:0.4rem;">Invite someone</h3>
+      <p class="hint" style="margin-bottom:0.8rem;">They'll get an email to set a password, then land on the Dashboard to create their own organisation and first project.</p>
+      <form id="inviteForm">
+        <div class="form-grid">
+          <div class="field"><label for="inviteEmail">Email *</label><input type="email" id="inviteEmail" required></div>
+          <div class="field"><label for="inviteCompany">Company <span class="hint">(optional)</span></label><input type="text" id="inviteCompany" placeholder="e.g. Smith Builders"></div>
+        </div>
+        <button type="submit" class="btn btn-amber" id="inviteBtn">Invite</button>
+      </form>
+      <p class="hint" id="inviteResult" style="display:none; margin-top:0.6rem;"></p>
+    </div>
+
+    <div class="card" style="margin-top:1.2rem;">
+      <h3 class="card-heading" style="margin-bottom:0.4rem;">Recent interest signups</h3>
+      <p class="hint" style="margin-bottom:0.8rem;">From Register Your Interest on the public site.</p>
+      <div class="table-wrap"><table class="stack-mobile">
+        <thead><tr><th>Name</th><th>Email</th><th>Company</th><th>Received</th><th></th></tr></thead>
+        <tbody id="signupRows"></tbody>
+      </table></div>
+      <p class="hint" id="noSignups" style="display:none;">No interest signups yet.</p>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+  import { supabase } from "./js/supabase-client.js";
+  import { requireAuth, renderHeader, escapeHtml, formatDate, showError, clearError, isPlatformAdmin, inviteCustomer, getRecentInterestSignups } from "./js/app.js";
+
+  await requireAuth();
+
+  // The real authorization boundary is server-side (is_platform_admin(),
+  // re-checked again by the edge function and by interest_signups' own
+  // RLS policy) — this redirect is just the page-level UX reflection of
+  // that, never the thing actually enforcing it.
+  const amAdmin = await isPlatformAdmin().catch(() => false);
+  if (!amAdmin) {
+    window.location.href = "dashboard.html";
+  } else {
+    renderHeader([{ label: "Dashboard", href: "dashboard.html" }, { label: "Invite a Customer" }]);
+    document.getElementById("adminContent").style.display = "block";
+
+    const errorBox = document.getElementById("errorBox");
+    const inviteResult = document.getElementById("inviteResult");
+    const inviteBtn = document.getElementById("inviteBtn");
+
+    function describeResult(result) {
+      return result && result.sent === false
+        ? "Already registered — they already have an account and can sign in directly; no email was sent."
+        : "Invite sent — they'll get an email to set a password.";
+    }
+
+    document.getElementById("inviteForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      clearError(errorBox);
+      inviteResult.style.display = "none";
+      const email = document.getElementById("inviteEmail").value.trim();
+      const company = document.getElementById("inviteCompany").value.trim() || null;
+      inviteBtn.disabled = true;
+      try {
+        const result = await inviteCustomer(email, company);
+        inviteResult.textContent = describeResult(result);
+        inviteResult.style.display = "block";
+        document.getElementById("inviteForm").reset();
+      } catch (err) {
+        showError(errorBox, err);
+      } finally {
+        inviteBtn.disabled = false;
+      }
+    });
+
+    // Bonus: invite straight from a recent interest signup, one click,
+    // with its own inline result — doesn't touch or require the form
+    // above at all.
+    async function inviteFromSignup(id, email, company, statusEl) {
+      const btn = document.querySelector(`[data-invite-signup="${id}"]`);
+      btn.disabled = true;
+      statusEl.textContent = "Sending…";
+      try {
+        const result = await inviteCustomer(email, company);
+        statusEl.textContent = describeResult(result);
+      } catch (err) {
+        statusEl.textContent = "Couldn't send: " + (err.message || err);
+        btn.disabled = false;
+      }
+    }
+
+    async function loadSignups() {
+      let signups = [];
+      try {
+        signups = await getRecentInterestSignups();
+      } catch (err) {
+        showError(errorBox, err);
+        return;
+      }
+      document.getElementById("noSignups").style.display = signups.length ? "none" : "block";
+      document.getElementById("signupRows").innerHTML = signups.map((s) => `
+        <tr>
+          <td>${escapeHtml(s.name)}</td>
+          <td>${escapeHtml(s.email)}</td>
+          <td>${s.company ? escapeHtml(s.company) : "<span class=\"hint\">—</span>"}</td>
+          <td>${formatDate(s.created_at)}</td>
+          <td>
+            <button type="button" class="btn btn-outline btn-sm" data-invite-signup="${s.id}">Invite</button>
+            <span class="hint" data-invite-status="${s.id}"></span>
+          </td>
+        </tr>
+      `).join("");
+      document.querySelectorAll("[data-invite-signup]").forEach((btn) => {
+        const signup = signups.find((s) => s.id === btn.dataset.inviteSignup);
+        btn.addEventListener("click", () => {
+          const statusEl = document.querySelector(`[data-invite-status="${signup.id}"]`);
+          inviteFromSignup(signup.id, signup.email, signup.company || null, statusEl);
+        });
+      });
+    }
+
+    loadSignups();
+  }
+</script>
+</body>
+</html>

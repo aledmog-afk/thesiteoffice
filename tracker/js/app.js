@@ -822,6 +822,37 @@ export const setPartyRole = (partyId, role, trade = null) => rpcOrThrow("set_par
 export const removeParty = (partyId) => rpcOrThrow("remove_party", { p_party_id: partyId });
 export const addOrgMemberToProject = (projectId, userId, role = "collaborator") => rpcOrThrow("add_org_member_to_project", { p_project_id: projectId, p_user_id: userId, p_role: role });
 export const setProjectMemberRole = (projectId, userId, role) => rpcOrThrow("set_project_member_role", { p_project_id: projectId, p_user_id: userId, p_role: role });
+
+// ─── v91: platform admin / invite a new customer ───────────────────
+// Server-derived, never a hardcoded email or JS-only check — is_platform_admin()
+// is SECURITY DEFINER against the real platform_admins table (see
+// sql/schema.sql's own comment). invite-customer.html uses this both
+// to decide whether to render at all and dashboard.html uses it to
+// decide whether to show the nav link — either page rendering the
+// link/form is cosmetic only, since every real action still re-checks
+// this same function server-side (the edge function via the caller's
+// JWT, the interest_signups read via RLS).
+export const isPlatformAdmin = () => rpcOrThrow("is_platform_admin");
+
+// v83's interest_signups, now readable by a platform admin via the
+// one SELECT policy v91 added — same supabase.from() shape as every
+// other read in this app, not a bespoke RPC.
+export async function getRecentInterestSignups(limit = 50) {
+  const { data, error } = await supabase.from("interest_signups").select("*").order("created_at", { ascending: false }).limit(limit);
+  if (error) throw error;
+  return data || [];
+}
+
+// Fires the real Supabase account-invite email for a brand-new
+// customer (see supabase/functions/invite-customer/ for the why and
+// the authorization it re-checks server-side). company is optional
+// and purely informational (carried as the invited user's metadata;
+// nothing in this app reads it back).
+export async function inviteCustomer(email, company = null) {
+  const { data, error } = await supabase.functions.invoke("invite-customer", { body: { email, company } });
+  if (error) throw error;
+  return data;
+}
 // Companies the caller belongs to (any role) — the ones they can accept
 // a company invite for. RLS limits rows to the caller's own.
 export async function getMyOrganisations() {
