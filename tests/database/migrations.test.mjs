@@ -983,3 +983,61 @@ test("v88: a fresh install's backfill is a correct no-op — zero drawing_pins m
     await dropTestDatabase(db);
   }
 });
+
+// ─── v91: platform_admins + is_platform_admin() ─────────────────────
+// A fresh install has zero platform_admins — there is no legacy
+// predecessor and no backfill; the only thing to prove at this
+// (schema-shape) level is idempotency across repeated re-application.
+// The authorization behaviour itself (stranger/org-admin refused,
+// platform admin allowed) is proven directly in
+// tests/security/v91_platform_admin_authz.test.mjs.
+
+test("v91: platform_admins, is_platform_admin(), and the interest_signups SELECT policy are idempotent across repeated re-application", async () => {
+  const db = "tracker_test_v91_idempotent";
+  await createTestDatabase(db);
+  try {
+    const client = adminClient(db);
+    await client.connect();
+    await runSqlFile(client, MOCK_SETUP);
+    for (let i = 0; i < 3; i++) {
+      await runSqlFile(client, CURRENT_SCHEMA);
+    }
+
+    const tables = await client.query("select count(*)::int as n from information_schema.tables where table_schema = 'public' and table_name = 'platform_admins'");
+    assert.equal(tables.rows[0].n, 1);
+
+    const fn = await client.query("select count(*)::int as n from information_schema.routines where routine_schema = 'public' and routine_name = 'is_platform_admin'");
+    assert.equal(fn.rows[0].n, 1, "is_platform_admin must exist exactly once after repeated re-application");
+
+    const policies = await client.query("select count(*)::int as n from pg_policies where tablename = 'platform_admins'");
+    assert.equal(policies.rows[0].n, 0, "platform_admins keeps zero policies — service_role/table-owner only, by design");
+
+    const interestPolicies = await client.query("select count(*)::int as n from pg_policies where tablename = 'interest_signups' and policyname = 'platform admins read interest_signups'");
+    assert.equal(interestPolicies.rows[0].n, 1, "the new SELECT policy on interest_signups must exist exactly once, never duplicated");
+
+    const grant = await client.query(`select has_table_privilege('authenticated', 'public.interest_signups', 'select') as can_select`);
+    assert.equal(grant.rows[0].can_select, true);
+
+    await client.end();
+  } finally {
+    await dropTestDatabase(db);
+  }
+});
+
+test("v91: a fresh install has zero platform_admins — nobody is a platform admin by default", async () => {
+  const db = "tracker_test_v91_no_backfill";
+  await createTestDatabase(db);
+  try {
+    const client = adminClient(db);
+    await client.connect();
+    await runSqlFile(client, MOCK_SETUP);
+    await runSqlFile(client, CURRENT_SCHEMA);
+
+    const admins = await client.query("select count(*)::int as n from public.platform_admins");
+    assert.equal(admins.rows[0].n, 0);
+
+    await client.end();
+  } finally {
+    await dropTestDatabase(db);
+  }
+});

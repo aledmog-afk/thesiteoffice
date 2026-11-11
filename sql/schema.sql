@@ -17025,6 +17025,10 @@ revoke all on table public.interest_signups from anon, authenticated;
 -- to every role it applies to (anon, authenticated); only service_role
 -- and the table owner (used by the SQL editor / this migration itself)
 -- bypass RLS by definition and are unaffected.
+-- AMENDED by v91, below: one additive SELECT policy lets a platform
+-- admin read this table from inside the app too — everything else
+-- stated above (no anon access, no authenticated write, service_role/
+-- table-owner-only otherwise) is still exactly true.
 
 -- ─── v85 ADDITIONS: Personal/site diary, meeting notes, weekly-report pull-in ───
 -- Full plan (schema sketch, open-question answers, screens) was posted
@@ -18011,3 +18015,76 @@ $$;
 -- only on project_id and the owner columns, never on drawing_page_id
 -- or drawing_id. Still no update/delete policy (v74's "a pin is a
 -- one-time placement record" phase is unchanged). No anon grants.
+
+-- ─── v91 ADDITIONS: Platform admin + "Invite a new customer" ───────
+-- Self-sign-up was removed in v74/PR #74 (handover notes, 2026) —
+-- today the only way a brand-new company gets an account is Register
+-- Your Interest (interest_signups, v83), then Aled manually creating
+-- the Auth user in the Supabase dashboard. This adds an in-app
+-- "Invite a new customer" action for Aled, which needs a real,
+-- server-enforced notion of "who is allowed to do this" — this schema
+-- has no platform-admin concept at all yet, only per-organisation
+-- admins (is_org_admin()) and per-project roles, neither of which is
+-- the right gate for a platform-wide action. A hardcoded email or a
+-- JS-only check would both be trivially bypassable (DevTools/direct
+-- RPC call) — exactly the class of bug is_org_admin()/is_project_member()
+-- already exist to avoid for every narrower case in this schema.
+--
+-- Design chosen: the smallest new primitive, a table
+-- (platform_admins) + one SECURITY DEFINER boolean helper
+-- (is_platform_admin()), same shape as is_org_member()/is_org_admin()
+-- above. Trade-off, flagged deliberately: there is no in-app UI to
+-- grant/revoke platform-admin status — Aled adds himself (and only
+-- himself, for now) via the Supabase SQL editor, the same place he
+-- already reads interest_signups and creates accounts by hand today.
+-- Building a self-service "manage platform admins" UI felt like
+-- solving a problem that doesn't exist yet (there is exactly one
+-- platform admin), and would itself need its own careful gating; this
+-- can be revisited the moment a second platform admin is actually
+-- needed.
+create table if not exists public.platform_admins (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+alter table public.platform_admins enable row level security;
+revoke all on table public.platform_admins from anon, authenticated;
+-- No policies at all — the same "RLS enabled, zero policies, grants
+-- revoked too" idiom interest_signups (v83) already uses: denies every
+-- operation to anon/authenticated outright, so even is_platform_admin()
+-- below (SECURITY DEFINER, owned by the migration-running role that
+-- also owns this table) is the only way any row in here is ever read,
+-- and only service_role / the table owner (the SQL editor) can write
+-- one.
+
+create or replace function public.is_platform_admin()
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (select 1 from public.platform_admins where user_id = auth.uid());
+$$;
+-- The live project's own ALTER DEFAULT PRIVILEGES entry (owner role
+-- postgres) auto-grants EXECUTE to anon AND authenticated on every
+-- newly created function, regardless of a later `revoke ... from
+-- public` — that only strips the aggregate PUBLIC pseudo-grant, not a
+-- direct per-role grant already made via the default ACL at CREATE
+-- TIME. Both REVOKE lines below are required — the same gotcha
+-- request_commercial_approval's own comment documents above, and v42's
+-- cleanup migration fixed for 8 other RPCs. An anonymous caller being
+-- able to even ask "am I a platform admin" (always false for them,
+-- auth.uid() is null) isn't a real information leak, but the grant
+-- should still say what's actually intended: authenticated-only.
+revoke all on function public.is_platform_admin() from public;
+revoke execute on function public.is_platform_admin() from anon;
+grant execute on function public.is_platform_admin() to authenticated;
+
+-- Bonus (per the brief): let a platform admin read interest_signups
+-- from inside the app, instead of only via the SQL editor. One
+-- additive SELECT policy — not a bespoke listing RPC — so the page
+-- uses the exact same supabase.from("interest_signups") client shape
+-- as everywhere else in this app. insert/update/delete stay fully
+-- revoked/unpoliced for every role except service_role, unchanged
+-- from v83 — this never becomes a channel for an ordinary signed-in
+-- user to read, let alone write, this table.
+grant select on table public.interest_signups to authenticated;
+drop policy if exists "platform admins read interest_signups" on public.interest_signups;
+create policy "platform admins read interest_signups" on public.interest_signups for select to authenticated using (public.is_platform_admin());

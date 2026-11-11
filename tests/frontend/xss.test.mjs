@@ -97,6 +97,7 @@ test("dashboard.html: a malicious site name and contractor name render as inert 
     ACTION_PRIORITIES: ["low", "medium", "high", "critical"],
     ACTION_PRIORITY_LABEL: { low: "Low", medium: "Medium", high: "High", critical: "Critical" },
     createAction: async () => ({}),
+    isPlatformAdmin: async () => false,
   });
   await wait(30);
   const grid = document.getElementById("grid");

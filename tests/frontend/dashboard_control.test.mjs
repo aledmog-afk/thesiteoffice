@@ -89,6 +89,7 @@ async function run({ summary, attentionActions = ATTENTION_ACTIONS, attentionThr
     getMemberEmailMap: async () => ({ "u-collab": "collab@example.com" }),
     CONTROL_LEVEL_BADGE, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE,
     createAction: async () => ({}),
+    isPlatformAdmin: async () => false,
   });
 }
 

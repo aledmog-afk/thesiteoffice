@@ -24,6 +24,9 @@
       <a class="btn btn-outline btn-sm" href="my-diary.html">My Diary</a>
       <a class="btn btn-outline btn-sm" href="meeting-notes.html">Meeting Notes</a>
       <button class="btn btn-outline btn-sm" id="refreshBtn">↻ Refresh</button>
+      <!-- v91: shown only once the server-side is_platform_admin()
+           check actually resolves true — see the script below. -->
+      <a class="btn btn-outline btn-sm" id="inviteCustomerLink" href="invite-customer.html" style="display:none;">Invite a Customer</a>
       <button class="btn btn-outline" id="newActionBtn">+ New Action</button>
       <button class="btn btn-amber" id="newProjectBtn">+ New Project</button>
     </div>
@@ -177,10 +180,17 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, ensureOrganisation, getPortfolioControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, createAction, isSnagOutstanding, externalWorksStale, externalWorksShareSet, EXTERNAL_WORKS_STALE_DAYS } from "./js/app.js";
+  import { requireAuth, renderHeader, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, ensureOrganisation, getPortfolioControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, createAction, isPlatformAdmin, isSnagOutstanding, externalWorksStale, externalWorksShareSet, EXTERNAL_WORKS_STALE_DAYS } from "./js/app.js";
 
   const me = await requireAuth();
   renderHeader([{ label: "Dashboard" }]);
+
+  // v91: cosmetic only — the real gate is server-side (is_platform_admin()
+  // itself, re-checked again by invite-customer.html and by the edge
+  // function). Never blocks the rest of the dashboard if it fails.
+  isPlatformAdmin().then((admin) => {
+    if (admin) document.getElementById("inviteCustomerLink").style.display = "";
+  }).catch(() => {});
 
   const grid = document.getElementById("grid");
   const emptyState = document.getElementById("emptyState");

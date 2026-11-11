@@ -43,18 +43,31 @@ test("v83: anon cannot read or write interest_signups at all — not even insert
   }
 });
 
-test("v83: a signed-in user (authenticated role) also cannot read or write it — this is not even org/project-scoped, it's fully locked", async () => {
+test("v83: a signed-in user (authenticated role) still cannot write it at all — this is not even org/project-scoped, it's fully locked", async () => {
   const stranger = await userClient(DB, STRANGER);
   try {
     let insertErr = null;
     try { await stranger.query("insert into public.interest_signups (name, email) values ('Someone', 'someone@example.com')"); }
     catch (err) { insertErr = err; }
     assert.ok(isRlsError(insertErr), "authenticated insert must be denied");
+  } finally {
+    await stranger.end();
+  }
+});
 
-    let selectErr = null;
-    try { await stranger.query("select * from public.interest_signups"); }
-    catch (err) { selectErr = err; }
-    assert.ok(isRlsError(selectErr), "authenticated select must be denied");
+// v91: an ordinary authenticated user's SELECT is no longer a hard
+// permission-denied error — v91 grants authenticated the base SELECT
+// privilege so a real platform admin can read this table, with
+// is_platform_admin() as the one RLS policy gating which rows actually
+// come back. A non-admin's SELECT therefore now succeeds with zero
+// rows, not an error — this is covered directly, with the
+// stranger-vs-platform-admin contrast, in
+// tests/security/v91_platform_admin_authz.test.mjs.
+test("v91: a signed-in non-platform-admin's SELECT succeeds but returns zero rows — no error, no visibility either", async () => {
+  const stranger = await userClient(DB, STRANGER);
+  try {
+    const { rows } = await stranger.query("select * from public.interest_signups");
+    assert.deepEqual(rows, [], "no error thrown, but nothing readable without is_platform_admin()");
   } finally {
     await stranger.end();
   }
