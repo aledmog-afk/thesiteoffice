@@ -222,6 +222,54 @@ test("Site Details: a recent note clears the stale flag; a set share shows; a co
   assert.equal(done.document.getElementById("ewStale"), null);
 });
 
+// ─── "Programme complete" (v93) ────────────────────────────────────
+// Shown ALONGSIDE the stored actual_progress_pct figure above
+// (progressDisplay/renderProgressBlock), never replacing it — these
+// two figures can legitimately disagree (see computeProgrammeComplete()'s
+// own header comment in app.js). computeProgrammeComplete() itself runs
+// for real here via the jsdom harness's default binding (see
+// loadComputeProgrammeComplete() in tests/lib/jsdom-harness.mjs).
+test("Site Details: with no active programme, 'Programme complete' stays hidden — the stored Actual Progress figure is unaffected", async () => {
+  const { document } = await runSiteDetails(PROJECT_BASE);
+  assert.equal(document.getElementById("programmeCompleteDisplay").style.display, "none");
+  assert.match(document.getElementById("progressDisplay").innerHTML, /38\.4/);
+});
+
+test("Site Details: with an active programme, 'Programme complete' renders the weighted percent and counts next to the untouched stored figure", async () => {
+  const sb = mockSupabase({
+    singles: { projects: PROJECT_BASE },
+    rpc: { get_my_role: { data: "owner", error: null }, get_project_members: { data: [], error: null } },
+  });
+  const activities = [
+    { id: "a1", status: "complete", percent_complete: 100, is_milestone: false, planned_start: "2026-01-01", planned_finish: "2026-01-11" },
+    { id: "a2", status: "in_progress", percent_complete: 50, is_milestone: false, planned_start: "2026-01-01", planned_finish: "2026-01-11" },
+  ];
+  const { document } = await runPage(page("project.html"), extractScript(page("project.html")), {
+    ...projectContext(sb),
+    getActiveProgramme: async () => ({ id: "prog1", project_id: "p1", status: "active" }),
+    listProgrammeActivities: async () => activities,
+  });
+  await wait(40);
+  const el = document.getElementById("programmeCompleteDisplay");
+  assert.equal(el.style.display, "block");
+  assert.match(el.textContent, /Programme complete: 75% \(1 of 2 activities\)/);
+  assert.match(document.getElementById("progressDisplay").innerHTML, /38\.4/, "the stored Actual Progress figure stays exactly as before");
+});
+
+test("Site Details: an active programme with nothing countable (e.g. everything cancelled) also stays hidden, not a misleading 0%", async () => {
+  const sb = mockSupabase({
+    singles: { projects: PROJECT_BASE },
+    rpc: { get_my_role: { data: "owner", error: null }, get_project_members: { data: [], error: null } },
+  });
+  const { document } = await runPage(page("project.html"), extractScript(page("project.html")), {
+    ...projectContext(sb),
+    getActiveProgramme: async () => ({ id: "prog1", project_id: "p1", status: "active" }),
+    listProgrammeActivities: async () => [{ id: "a1", status: "cancelled", percent_complete: 0, is_milestone: false, planned_start: "2026-01-01", planned_finish: "2026-01-11" }],
+  });
+  await wait(40);
+  assert.equal(document.getElementById("programmeCompleteDisplay").style.display, "none");
+});
+
 test("Site Details: packages show their share and %, with report tasks read-only beside the matching package and the rest under unassigned; notes history renders", async () => {
   const packages = [
     { id: "k1", name: "Sewers", share: 40, percent: 100, report_stages: ["Drainage (Below Ground)"], sort_order: 1 },

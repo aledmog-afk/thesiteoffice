@@ -42,6 +42,7 @@
     </div>
     <div id="progressDisplay"></div>
     <p class="hint" style="margin-top:0.5rem;">Actual Progress is a weighted average of every plot's own progress (set on its Plot Handovers page), each apartment block's own progress weighted by how many flats it has (a block's shared structure underpins every flat in it), plus External / Engineering Works below.</p>
+    <p class="hint" id="programmeCompleteDisplay" style="margin-top:0.3rem; display:none;"></p>
     <div id="generatePlotsWrap" style="display:none; margin-top:0.8rem;">
       <button type="button" class="btn btn-outline btn-sm" id="generatePlotsBtn"></button>
     </div>
@@ -324,7 +325,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, formatDateTime, showError, clearError, RAG_LABEL, renderProgressBlock, geocodePostcode, generateMissingPlots, EXTERNAL_WORKS_TAG, BUILD_MILESTONES, externalWorksStale, externalWorksShareSet, externalWorksSuggestions, EXTERNAL_WORKS_STALE_DAYS, historyActorName, normalisedPackageShare, monthStartISO, getProjectControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, isFindingOutstanding, categoriseSnag, isSnagOutstanding, getProjectPlotReadiness, getMyCommercialRole, commercialCapabilities, getMyToolboxTalkRole, toolboxTalkCapabilities, getModuleRolesCatalog, getProjectModuleRoles, setProjectModuleRole, getCommercialOwnerAccessUserIds } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, formatDateTime, showError, clearError, RAG_LABEL, renderProgressBlock, geocodePostcode, generateMissingPlots, EXTERNAL_WORKS_TAG, BUILD_MILESTONES, externalWorksStale, externalWorksShareSet, externalWorksSuggestions, EXTERNAL_WORKS_STALE_DAYS, historyActorName, normalisedPackageShare, monthStartISO, getProjectControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, isFindingOutstanding, categoriseSnag, isSnagOutstanding, getProjectPlotReadiness, getMyCommercialRole, commercialCapabilities, getMyToolboxTalkRole, toolboxTalkCapabilities, getModuleRolesCatalog, getProjectModuleRoles, setProjectModuleRole, getCommercialOwnerAccessUserIds, getActiveProgramme, listProgrammeActivities, computeProgrammeComplete } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("id");
@@ -1057,6 +1058,28 @@
     }
   }
 
+  // "Programme complete" (v93) — shown ALONGSIDE projects.actual_progress_pct
+  // above (progressDisplay/renderProgressBlock), never in place of it; see
+  // computeProgrammeComplete()'s own header comment in app.js for why the
+  // two figures can legitimately disagree. Left hidden (not "0%") when
+  // there's no active programme or nothing countable in it.
+  async function loadProgrammeComplete() {
+    try {
+      const programme = await getActiveProgramme(projectId);
+      if (!programme) return;
+      const programmeActivities = await listProgrammeActivities(programme.id);
+      const pct = computeProgrammeComplete(programmeActivities);
+      if (pct === null) return;
+      const completeCount = programmeActivities.filter((a) => a.status === "complete").length;
+      const totalCount = programmeActivities.length;
+      document.getElementById("programmeCompleteDisplay").textContent = `Programme complete: ${pct.toFixed(0)}% (${completeCount} of ${totalCount} activities)`;
+      document.getElementById("programmeCompleteDisplay").style.display = "block";
+    } catch {
+      // Supplementary figure only — leave it hidden on any failure
+      // rather than surfacing a page error for a non-critical display.
+    }
+  }
+
   async function load() {
     const { data: { user } } = await supabase.auth.getUser();
     currentUserId = user.id;
@@ -1090,6 +1113,7 @@
     loadControlSummary();
     loadCommercialModuleTile();
     loadToolboxTalksTile();
+    loadProgrammeComplete();
 
     const [{ count: reportCount }, { count: monthlyReportCount }, { data: snags }, { count: fetchedPlotsCount }, { data: gates }, { data: commercials }, { count: drawingsCount }, { data: hsAudits }, { data: actions }, { data: findings }, { data: rfis }, { data: queries }, { count: documentsCount }, { count: programmeActivitiesCount }] = await Promise.all([
       supabase.from("weekly_reports").select("id", { count: "exact", head: true }).eq("project_id", projectId),

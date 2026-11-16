@@ -63,6 +63,10 @@
       <div class="field">
         <label>Progress this week</label>
         <p class="hint" id="stageFeedHint" style="margin-bottom:0.4rem;">Saving a draft doesn't change any plot. When the report is issued, each task's build stage is raised on every plot it tags: it only ever raises a stage, never lowers it. Use whole plot names or ranges: "Plot 22", "22-27" (every plot in it). A tag that matches no plot, or more than one, is skipped. Tasks tagged "External / Engineering Works" or a block name don't move any plot; external works tasks are listed on Site Details beside the external works figure.</p>
+        <div class="btn-row" id="progressActivityPickerRow" style="display:none; margin-bottom:0.5rem; align-items:center; gap:0.5rem;">
+          <label for="progressActivityPicker" class="hint" style="margin:0;">Add from programme</label>
+          <select id="progressActivityPicker" style="flex:1 1 auto;"><option value="">Pick an activity…</option></select>
+        </div>
         <div id="progressItems"></div>
         <p class="hint" id="carriedOverHint" style="display:none;">Pre-filled from last week's plan, starting at last week's % complete on each — just update it if it's moved on. Anything under 100% carries into this week's own "Plan for next week" automatically; reaching 100% drops it for good.</p>
       </div>
@@ -98,6 +102,10 @@
       </div>
       <div class="field">
         <label>Plan for next week</label>
+        <div class="btn-row" id="nextWeekActivityPickerRow" style="display:none; margin-bottom:0.5rem; align-items:center; gap:0.5rem;">
+          <label for="nextWeekActivityPicker" class="hint" style="margin:0;">Add from programme</label>
+          <select id="nextWeekActivityPicker" style="flex:1 1 auto;"><option value="">Pick an activity…</option></select>
+        </div>
         <div id="nextWeekItems"></div>
       </div>
 
@@ -135,7 +143,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, mountTableEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions, comparePlotNumbers, normalisePlotToken, syncGateStatusFromMilestones, EXTERNAL_WORKS_TAG, PHOTO_COMPLIANCE_STATUS, RESOURCE_ADEQUACY, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_LEVELS, RISK_IMPACT_BADGE, RISK_OWNER_SUGGESTIONS, STATUTORY_MILESTONE_TYPES, STATUTORY_OUTCOMES, STATUTORY_OUTCOME_BADGE, getWeeklyReportPosition, isWeeklyReportLocked, reviseWeeklyReport, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, CONTROL_LEVEL_BADGE, FINDING_SEVERITY_LABEL, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel, getRfiLinksForWeeklyReport, attachReportCommercialNotes, getUnattachedDiaryEntries, getWeeklyReportDiaryEntries, attachDiaryEntryToReport, updateAttachedDiaryEntry, removeAttachedDiaryEntry } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, mountTableEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions, comparePlotNumbers, normalisePlotToken, syncGateStatusFromMilestones, EXTERNAL_WORKS_TAG, PHOTO_COMPLIANCE_STATUS, RESOURCE_ADEQUACY, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_LEVELS, RISK_IMPACT_BADGE, RISK_OWNER_SUGGESTIONS, STATUTORY_MILESTONE_TYPES, STATUTORY_OUTCOMES, STATUTORY_OUTCOME_BADGE, getWeeklyReportPosition, isWeeklyReportLocked, reviseWeeklyReport, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, CONTROL_LEVEL_BADGE, FINDING_SEVERITY_LABEL, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel, getRfiLinksForWeeklyReport, attachReportCommercialNotes, getUnattachedDiaryEntries, getWeeklyReportDiaryEntries, attachDiaryEntryToReport, updateAttachedDiaryEntry, removeAttachedDiaryEntry, getActiveProgramme, listProgrammeActivities } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -371,6 +379,58 @@
 
   let progressEditor = mountItemListEditor(document.getElementById("progressItems"), [], () => {}, { withPercent: true, withMilestone: true, withVerification: true, plotOptions });
   let nextWeekEditor = mountItemListEditor(document.getElementById("nextWeekItems"), [], () => {}, { withPercent: true, withMilestone: true, plotOptions });
+
+  // Programme activity picker (v93) — lets a coordinator add a
+  // progress/next-week item straight from the site's own active
+  // programme instead of retyping its title, pre-filling the plot tag
+  // (matched against plotOptions above, since listProgrammeActivities()
+  // already joins plots(plot_number)) and, for progress items only, the
+  // percent complete already recorded on the activity. Only ever ADDS
+  // an item to progressEditor/nextWeekEditor's own in-memory list —
+  // issuing this report never writes back to the programme activity
+  // itself (explicitly out of scope). Hidden entirely when there's no
+  // active programme, or nothing on it left to pick (everything already
+  // complete/cancelled).
+  const activeProgramme = await getActiveProgramme(projectId);
+  const programmeActivityOptions = activeProgramme
+    ? (await listProgrammeActivities(activeProgramme.id)).filter((a) => a.status !== "complete" && a.status !== "cancelled")
+    : [];
+  if (programmeActivityOptions.length) {
+    const activityOptionsHtml = programmeActivityOptions.map((a) => {
+      const finishLabel = a.forecast_finish ? formatDate(a.forecast_finish) : "No forecast finish";
+      const plotSuffix = a.plots?.plot_number ? ` (${a.plots.plot_number})` : "";
+      return `<option value="${a.id}">${escapeHtml(`${finishLabel} — ${a.title}${plotSuffix}`)}</option>`;
+    }).join("");
+
+    const progressPicker = document.getElementById("progressActivityPicker");
+    progressPicker.innerHTML = `<option value="">Pick an activity…</option>${activityOptionsHtml}`;
+    document.getElementById("progressActivityPickerRow").style.display = "flex";
+    progressPicker.addEventListener("change", () => {
+      const activity = programmeActivityOptions.find((a) => a.id === progressPicker.value);
+      if (!activity) return;
+      progressEditor.addFromActivity({
+        text: activity.title,
+        plot: activity.plots?.plot_number || "",
+        percent: typeof activity.percent_complete === "number" ? activity.percent_complete : 0,
+        programme_activity_id: activity.id,
+      });
+      progressPicker.value = "";
+    });
+
+    const nextWeekPicker = document.getElementById("nextWeekActivityPicker");
+    nextWeekPicker.innerHTML = `<option value="">Pick an activity…</option>${activityOptionsHtml}`;
+    document.getElementById("nextWeekActivityPickerRow").style.display = "flex";
+    nextWeekPicker.addEventListener("change", () => {
+      const activity = programmeActivityOptions.find((a) => a.id === nextWeekPicker.value);
+      if (!activity) return;
+      nextWeekEditor.addFromActivity({
+        text: activity.title,
+        plot: activity.plots?.plot_number || "",
+        programme_activity_id: activity.id,
+      });
+      nextWeekPicker.value = "";
+    });
+  }
 
   const labourColumns = [
     { key: "trade", label: "Trade", type: "text", placeholder: "Subcontractor / trade", datalist: "tradeSuggestions", flex: "1 1 160px" },
@@ -749,7 +809,7 @@
     const keptIds = new Set(kept.map((nw) => nw.id));
     const toCarry = progressItems
       .filter((p) => p.percent < 100 && !keptIds.has(p.id))
-      .map((p) => ({ id: p.id, plot: p.plot, text: p.text, milestone: p.milestone || "", percent: p.percent }));
+      .map((p) => ({ id: p.id, plot: p.plot, text: p.text, milestone: p.milestone || "", percent: p.percent, programme_activity_id: p.programme_activity_id || null }));
     return [...kept, ...toCarry];
   }
 

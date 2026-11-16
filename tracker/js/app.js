@@ -3596,14 +3596,21 @@ export function hsAuditScore(items) {
 // verified works audit rather than just a contractor-reported %.
 // Calls onChange(items) whenever the list changes. Returns { getItems }.
 export function mountItemListEditor(container, initialItems, onChange, { withPercent = false, withMilestone = false, withVerification = false, plotOptions = [] } = {}) {
+  // programme_activity_id (v93) — set only when an item was added from
+  // the programme activity picker (weekly-report-form.html), traced
+  // back to the programme_activities row it came from. Passed through
+  // unconditionally (not gated by any withX flag — it's pure data, not
+  // a UI field) so a freetext item simply carries null and manual
+  // edits (which spread `...items[i]` below) never drop it.
   function normalise(item) {
     if (typeof item === "string") {
-      return { id: crypto.randomUUID(), plot: "", text: item, ...(withPercent ? { percent: 0 } : {}), ...(withMilestone ? { milestone: "" } : {}), ...(withVerification ? { verification_notes: "" } : {}) };
+      return { id: crypto.randomUUID(), plot: "", text: item, programme_activity_id: null, ...(withPercent ? { percent: 0 } : {}), ...(withMilestone ? { milestone: "" } : {}), ...(withVerification ? { verification_notes: "" } : {}) };
     }
     return {
       id: item.id || crypto.randomUUID(),
       plot: item.plot || "",
       text: item.text || "",
+      programme_activity_id: item.programme_activity_id || null,
       ...(withPercent ? { percent: typeof item.percent === "number" ? item.percent : 0 } : {}),
       ...(withMilestone ? { milestone: item.milestone || "" } : {}),
       ...(withVerification ? { verification_notes: item.verification_notes || "" } : {}),
@@ -3781,7 +3788,20 @@ export function mountItemListEditor(container, initialItems, onChange, { withPer
   }
 
   render();
-  return { getItems: () => items };
+  // addFromActivity (v93) — the programme activity picker's own entry
+  // point (weekly-report-form.html), kept separate from addItem()'s
+  // DOM-reading internal version above so the picker never has to fake
+  // input-element values. Runs the same normalise() every other item
+  // goes through, so percent/milestone/verification defaults for this
+  // editor's own withX config still apply.
+  return {
+    getItems: () => items,
+    addFromActivity: (partial) => {
+      items.push(normalise({ ...partial, id: crypto.randomUUID() }));
+      onChange(items);
+      render();
+    },
+  };
 }
 
 // ─── Weekly report: Clerk of Works compliance record fields ──────
@@ -4838,6 +4858,53 @@ export async function listProgrammeActivities(programmeId, { status } = {}) {
   const { data, error } = await query.order("forecast_finish", { ascending: true, nullsFirst: false });
   if (error) throw error;
   return data || [];
+}
+
+// "Programme complete" (v93) — a duration-weighted view of progress
+// against the contractor's programme, read straight from whatever
+// activities the caller already has. Deliberately separate from
+// projects.actual_progress_pct (the stored, plot-stage-based site
+// figure recalculated server-side — see the Site Actual Progress note
+// above): many programmes (Red Dragon's included) tag no activity to
+// a plot at all, so that stored figure can sit still while programme
+// items are completed. This is shown ALONGSIDE it, never in place of
+// it, and nothing here writes back to the database.
+//
+// Each activity contributes weight x (percent_complete/100), with a
+// complete activity always counted as 100 regardless of what
+// percent_complete happens to hold — the same coupling
+// programme_activities_before_write() enforces server-side on that
+// transition. Weight is the planned duration in days (planned_finish
+// minus planned_start, at least 1), falling back to the forecast pair
+// when planned dates are missing, else a flat weight of 1. Milestones
+// are always weight 1 — a point-in-time event has no duration to
+// weight by. Cancelled activities are excluded entirely, not weighted
+// at 0: abandoned scope shouldn't dilute the denominator either.
+// Returns null, not 0, when there's nothing countable (including no
+// activities at all), so a caller with no active programme can pass
+// [] and get the same "render nothing" signal.
+function programmeActivityDurationWeight(activity) {
+  if (activity.planned_start && activity.planned_finish) {
+    return Math.max(1, diffCalendarDays(activity.planned_finish, activity.planned_start));
+  }
+  if (activity.forecast_start && activity.forecast_finish) {
+    return Math.max(1, diffCalendarDays(activity.forecast_finish, activity.forecast_start));
+  }
+  return 1;
+}
+
+export function computeProgrammeComplete(activities) {
+  const countable = (activities || []).filter((a) => a.status !== "cancelled");
+  if (!countable.length) return null;
+  let totalWeight = 0;
+  let doneWeight = 0;
+  for (const a of countable) {
+    const weight = a.is_milestone ? 1 : programmeActivityDurationWeight(a);
+    const pct = a.status === "complete" ? 100 : Number(a.percent_complete) || 0;
+    totalWeight += weight;
+    doneWeight += weight * (pct / 100);
+  }
+  return totalWeight > 0 ? (doneWeight / totalWeight) * 100 : null;
 }
 
 export async function createProgrammeActivity(programmeId, fields) {
