@@ -135,7 +135,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, PROGRAMME_STATUS_LABEL, PROGRAMME_STATUS_BADGE, ACTIVITY_STATUSES, ACTIVITY_STATUS_LABEL, ACTIVITY_STATUS_BADGE, listProgrammes, createProgramme, activateProgramme, archiveProgramme, listProgrammeActivities, createProgrammeActivity, updateProgrammeActivity, deleteProgrammeActivity, categoriseProgrammeActivity, PROGRAMME_VARIANCE_LABEL, PROGRAMME_VARIANCE_BADGE, createActionFromProgrammeActivity, buildProgrammeActionContext, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, todayISO, showError, clearError, PROGRAMME_STATUS_LABEL, PROGRAMME_STATUS_BADGE, ACTIVITY_STATUSES, ACTIVITY_STATUS_LABEL, ACTIVITY_STATUS_BADGE, listProgrammes, createProgramme, activateProgramme, archiveProgramme, listProgrammeActivities, createProgrammeActivity, updateProgrammeActivity, deleteProgrammeActivity, categoriseProgrammeActivity, PROGRAMME_VARIANCE_LABEL, PROGRAMME_VARIANCE_BADGE, createActionFromProgrammeActivity, buildProgrammeActionContext, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -299,6 +299,43 @@
     }
   });
 
+  // One-click Complete — see the file's own header comment context:
+  // leaving actual_finish to programme_activities_before_write()'s own
+  // default (today, when the client sends none) makes catch-up entry
+  // of long-finished work look "Completed Late" by however many weeks
+  // have passed since. Computed here and sent explicitly instead:
+  // the forecast finish if that's today or earlier (the best evidence
+  // of when the work actually finished), otherwise today (never a
+  // future date). actual_start is filled from forecast/planned start
+  // only when it's empty and that date doesn't land after the actual
+  // finish just computed — never guessed if it would be inconsistent.
+  function computeCompletionFields(activity) {
+    const today = todayISO();
+    const actualFinish = activity.forecast_finish && activity.forecast_finish <= today ? activity.forecast_finish : today;
+    const fields = { status: "complete", actual_finish: actualFinish };
+    if (!activity.actual_start) {
+      const startRef = activity.forecast_start || activity.planned_start;
+      if (startRef && startRef <= actualFinish) fields.actual_start = startRef;
+    }
+    return fields;
+  }
+
+  async function completeActivity(id, btn) {
+    if (btn.disabled) return; // the disabled attribute alone only stops a real second click — guard explicitly too
+    clearError(pageErrorBox);
+    const activity = activities.find((a) => a.id === id);
+    if (!activity) return;
+    btn.disabled = true;
+    try {
+      await updateProgrammeActivity(id, computeCompletionFields(activity));
+      await loadActivities();
+    } catch (err) {
+      showError(pageErrorBox, err);
+      btn.disabled = false;
+    }
+  }
+  window.completeActivity = completeActivity;
+
   async function deleteActivity(id, title) {
     if (!confirm(`Delete "${title}"? This cannot be undone.`)) return;
     clearError(pageErrorBox);
@@ -393,6 +430,7 @@
         <td>
           <button class="btn btn-outline btn-sm" onclick="editActivity('${a.id}')">Edit</button>
           <button class="btn btn-outline btn-sm" onclick="deleteActivity('${a.id}', '${escapeHtml(a.title).replace(/'/g, "\\'")}')">Delete</button>
+          ${a.status !== "complete" && a.status !== "cancelled" ? `<button class="btn btn-outline btn-sm" onclick="completeActivity('${a.id}', this)">Complete</button>` : ""}
           ${actionCell}
         </td>
       </tr>
