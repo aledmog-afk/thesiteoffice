@@ -607,3 +607,43 @@ test("programme.html: a successful Complete re-renders the row — the Complete 
   assert.ok(!completeButtonFor(document, "Finishing Up"), "Complete must no longer be offered once the row re-renders as complete");
   assert.match(document.getElementById("activityRows").textContent, /Completed/i);
 });
+
+// ─── "Programme complete" summary (v93) ──────────────────────────
+// computeProgrammeComplete() itself is exercised for real (not
+// reimplemented) via the jsdom harness's own default binding — see
+// loadComputeProgrammeComplete() in tests/lib/jsdom-harness.mjs — so
+// these only prove the PAGE renders what that real function returns,
+// the same division of responsibility the rest of this file already
+// keeps between categoriseProgrammeActivity() and its own rendering.
+test("programme.html: the 'Programme complete' summary shows the duration-weighted percent and the raw complete/total counts", async () => {
+  const { document } = await runProgrammePage({
+    activities: [activity({ id: "a1", title: "Groundworks", status: "in_progress", percent_complete: 40, planned_start: "2026-01-01", planned_finish: "2026-01-15" })],
+  });
+  await wait(30);
+  const summary = document.getElementById("programmeCompleteSummary");
+  assert.equal(summary.style.display, "block");
+  assert.match(summary.textContent, /Programme complete: 40% \(0 of 1 activities\)/);
+});
+
+test("programme.html: the summary excludes cancelled activities from the weighted percent but still counts them in the total shown", async () => {
+  const { document } = await runProgrammePage({
+    activities: [
+      activity({ id: "a1", title: "Done", status: "complete", percent_complete: 100, planned_start: "2026-01-01", planned_finish: "2026-01-15" }),
+      activity({ id: "a2", title: "Abandoned", status: "cancelled", percent_complete: 0, planned_start: "2026-01-01", planned_finish: "2026-01-15" }),
+      activity({ id: "a3", title: "Halfway", status: "in_progress", percent_complete: 50, planned_start: "2026-01-01", planned_finish: "2026-01-15" }),
+    ],
+  });
+  await wait(30);
+  const summary = document.getElementById("programmeCompleteSummary");
+  // Both countable activities (a1, a3) have equal weight (same 14-day
+  // planned duration), so the weighted figure is a plain average of
+  // 100% and 50% — 75% — with the cancelled activity contributing to
+  // neither side of that fraction.
+  assert.match(summary.textContent, /Programme complete: 75% \(1 of 3 activities\)/);
+});
+
+test("programme.html: with no programme at all, the summary stays hidden", async () => {
+  const { document } = await runProgrammePage({ programmes: [] });
+  await wait(30);
+  assert.equal(document.getElementById("programmeCompleteSummary").style.display, "none");
+});

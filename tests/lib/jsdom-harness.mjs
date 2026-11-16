@@ -55,6 +55,13 @@ export async function runPage(htmlPath, scriptSrc, context = {}) {
     attachDiaryEntryToReport: async () => ({}),
     updateAttachedDiaryEntry: async () => ({}),
     removeAttachedDiaryEntry: async () => {},
+    // v93 defaults: "no active programme" everywhere until a test says
+    // otherwise, and the real computeProgrammeComplete() (see above) so
+    // calling it against an empty/default activities list behaves
+    // exactly as the real page does.
+    getActiveProgramme: async () => null,
+    listProgrammeActivities: async () => [],
+    computeProgrammeComplete: DEFAULT_COMPUTE_PROGRAMME_COMPLETE,
     ...context,
   };
   const ctx = vm.createContext(fullContext);
@@ -86,3 +93,27 @@ export function loadSafeNextPage() {
   const m = src.match(/export function safeNextPage\([\s\S]*?\n\}/);
   return m ? new Function(`return ${m[0].replace(/^export /, "")}`)() : null;
 }
+
+// The real computeProgrammeComplete() (v93) from tracker/js/app.js,
+// extracted the same way loadSafeNextPage() is above, plus its two
+// private dependencies (programmeActivityDurationWeight/
+// diffCalendarDays) — never a reimplementation that could drift from
+// the real one. Used as runPage()'s default binding below so every
+// pre-existing test of a page that now imports computeProgrammeComplete
+// (dashboard.html, project.html, programme.html) keeps working without
+// having to know about this feature at all, the same reasoning the
+// v85 diary defaults above already established.
+function loadComputeProgrammeComplete() {
+  const src = fs.readFileSync(new URL("../../tracker/js/app.js", import.meta.url), "utf8");
+  const diffFn = src.match(/function diffCalendarDays\([\s\S]*?\n\}/);
+  const weightFn = src.match(/function programmeActivityDurationWeight\([\s\S]*?\n\}/);
+  const mainFn = src.match(/export function computeProgrammeComplete\([\s\S]*?\n\}/);
+  if (!diffFn || !weightFn || !mainFn) return () => null;
+  return new Function(`
+    ${diffFn[0]}
+    ${weightFn[0]}
+    ${mainFn[0].replace(/^export /, "")}
+    return computeProgrammeComplete;
+  `)();
+}
+const DEFAULT_COMPUTE_PROGRAMME_COMPLETE = loadComputeProgrammeComplete();

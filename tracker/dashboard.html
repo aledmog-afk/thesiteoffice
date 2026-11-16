@@ -180,7 +180,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, ensureOrganisation, getPortfolioControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, createAction, isPlatformAdmin, isSnagOutstanding, externalWorksStale, externalWorksShareSet, EXTERNAL_WORKS_STALE_DAYS } from "./js/app.js";
+  import { requireAuth, renderHeader, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, ensureOrganisation, getPortfolioControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, createAction, isPlatformAdmin, isSnagOutstanding, externalWorksStale, externalWorksShareSet, EXTERNAL_WORKS_STALE_DAYS, computeProgrammeComplete } from "./js/app.js";
 
   const me = await requireAuth();
   renderHeader([{ label: "Dashboard" }]);
@@ -427,10 +427,37 @@
     }
     emptyState.style.display = "none";
 
-    const [{ data: snags }, { data: reports }] = await Promise.all([
+    const [{ data: snags }, { data: reports }, { data: activeProgrammes }] = await Promise.all([
       supabase.from("snag_items").select("project_id, status"),
       supabase.from("weekly_reports").select("project_id, week_ending"),
+      supabase.from("programmes").select("id, project_id").eq("status", "active"),
     ]);
+
+    // "Programme complete" (v93) tile figure — two bulk queries total
+    // (one per project is exactly what this avoids), the same shape as
+    // the snags/reports queries just above: fetch every active
+    // programme's own activities in one go, then group client-side.
+    const programmeProjectId = {};
+    (activeProgrammes || []).forEach((pr) => { programmeProjectId[pr.id] = pr.project_id; });
+    const activitiesByProject = {};
+    const activeProgrammeIds = Object.keys(programmeProjectId);
+    if (activeProgrammeIds.length) {
+      const { data: progActivities } = await supabase
+        .from("programme_activities")
+        .select("programme_id, is_milestone, status, planned_start, planned_finish, forecast_start, forecast_finish, percent_complete")
+        .in("programme_id", activeProgrammeIds);
+      (progActivities || []).forEach((a) => {
+        const pid = programmeProjectId[a.programme_id];
+        (activitiesByProject[pid] || (activitiesByProject[pid] = [])).push(a);
+      });
+    }
+    function programmeCompleteHtml(p) {
+      const projectActivities = activitiesByProject[p.id] || [];
+      const pct = computeProgrammeComplete(projectActivities);
+      if (pct === null) return "";
+      const completeCount = projectActivities.filter((a) => a.status === "complete").length;
+      return `<div class="hint" style="margin-top:0.3rem;">Programme complete: ${pct.toFixed(0)}% (${completeCount} of ${projectActivities.length} activities)</div>`;
+    }
 
     const openSnagCount = {};
     (snags || []).forEach((s) => {
@@ -459,6 +486,7 @@
         </div>
         <div class="tile-meta">${escapeHtml(p.main_contractor_name || "No contractor set")}${p.status !== "active" ? ` · <span class="badge badge-grey">${escapeHtml(p.status)}</span>` : ""}</div>
         ${renderProgressBlock(p.baseline_progress_pct, p.actual_progress_pct, p.rag_status)}
+        ${programmeCompleteHtml(p)}
         ${externalWorksFlagsHtml(p)}
         <div class="tile-stats">
           <div><strong>${openSnagCount[p.id] || 0}</strong>open snags</div>

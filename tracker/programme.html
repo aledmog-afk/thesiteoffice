@@ -41,6 +41,7 @@
         <button class="btn btn-outline btn-sm" id="newProgrammeBtn" style="display:none;">+ New Programme</button>
       </div>
     </div>
+    <p class="hint" id="programmeCompleteSummary" style="margin-top:0.6rem; display:none;"></p>
   </div>
 
   <div class="card" id="activityFormCard" style="display:none; margin-bottom:1.5rem;">
@@ -135,7 +136,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, todayISO, showError, clearError, PROGRAMME_STATUS_LABEL, PROGRAMME_STATUS_BADGE, ACTIVITY_STATUSES, ACTIVITY_STATUS_LABEL, ACTIVITY_STATUS_BADGE, listProgrammes, createProgramme, activateProgramme, archiveProgramme, listProgrammeActivities, createProgrammeActivity, updateProgrammeActivity, deleteProgrammeActivity, categoriseProgrammeActivity, PROGRAMME_VARIANCE_LABEL, PROGRAMME_VARIANCE_BADGE, createActionFromProgrammeActivity, buildProgrammeActionContext, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, todayISO, showError, clearError, PROGRAMME_STATUS_LABEL, PROGRAMME_STATUS_BADGE, ACTIVITY_STATUSES, ACTIVITY_STATUS_LABEL, ACTIVITY_STATUS_BADGE, listProgrammes, createProgramme, activateProgramme, archiveProgramme, listProgrammeActivities, createProgrammeActivity, updateProgrammeActivity, deleteProgrammeActivity, categoriseProgrammeActivity, PROGRAMME_VARIANCE_LABEL, PROGRAMME_VARIANCE_BADGE, createActionFromProgrammeActivity, buildProgrammeActionContext, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL, computeProgrammeComplete } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -394,7 +395,23 @@
     return `<span class="badge ${PROGRAMME_VARIANCE_BADGE[cats.label] || "badge-grey"}">${PROGRAMME_VARIANCE_LABEL[cats.label] || cats.label}</span>${daysText}`;
   }
 
+  // "Programme complete" summary (v93) — computed from the full,
+  // unfiltered `activities` array (not sortedFilteredActivities()'s
+  // result), so the status/variance filters above never change it.
+  function renderProgrammeCompleteSummary() {
+    const summaryEl = document.getElementById("programmeCompleteSummary");
+    const pct = computeProgrammeComplete(activities);
+    if (pct === null) {
+      summaryEl.style.display = "none";
+      return;
+    }
+    const completeCount = activities.filter((a) => a.status === "complete").length;
+    summaryEl.textContent = `Programme complete: ${pct.toFixed(0)}% (${completeCount} of ${activities.length} activities)`;
+    summaryEl.style.display = "block";
+  }
+
   function renderActivities() {
+    renderProgrammeCompleteSummary();
     const list = sortedFilteredActivities();
     const rows = document.getElementById("activityRows");
     if (!list.length) {

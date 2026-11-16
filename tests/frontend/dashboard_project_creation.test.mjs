@@ -9,7 +9,7 @@ import { extractScript, runPage, fireEvent, wait } from "../lib/jsdom-harness.mj
 
 const HTML = new URL("../../tracker/dashboard.html", import.meta.url).pathname;
 
-function makeSupabase({ ensureOrgId = "org-1", projects = [] } = {}) {
+function makeSupabase({ ensureOrgId = "org-1", projects = [], programmes = [], programmeActivities = [] } = {}) {
   const calls = [];
   return {
     calls,
@@ -24,6 +24,7 @@ function makeSupabase({ ensureOrgId = "org-1", projects = [] } = {}) {
       const api = {
         select() { return api; },
         eq() { return api; },
+        in() { return api; }, // v93: dashboard's bulk programme_activities lookup for the "Programme complete" tile figure
         order() { return api; },
         single: async () => ({ data: { id: "new-project-id" }, error: null }),
         insert(payload) {
@@ -32,6 +33,8 @@ function makeSupabase({ ensureOrgId = "org-1", projects = [] } = {}) {
         },
         then(resolve) {
           if (table === "projects") resolve({ data: projects, error: null });
+          else if (table === "programmes") resolve({ data: programmes, error: null });
+          else if (table === "programme_activities") resolve({ data: programmeActivities, error: null });
           else resolve({ data: [], error: null });
         },
       };
@@ -80,6 +83,30 @@ test("dashboard.html: existing projects render as tiles", async () => {
   await wait(20);
   assert.equal(document.getElementById("emptyState").style.display, "none");
   assert.ok(document.getElementById("grid").innerHTML.includes("Elm Grove"));
+});
+
+// "Programme complete" tile figure (v93) — two BULK queries (never one
+// per site, see dashboard.html's own comment), grouped client-side by
+// project. computeProgrammeComplete() itself runs for real here via
+// the jsdom harness's default binding — see programme_complete_figure.test.mjs
+// for its own weighting-maths coverage.
+test("dashboard.html: a site with an active programme shows 'Programme complete' on its tile, alongside the stored Actual Progress figure", async () => {
+  const project = { id: "p1", name: "Elm Grove", main_contractor_name: "Acme Ltd", rag_status: "green", status: "active", baseline_progress_pct: 10, actual_progress_pct: 12 };
+  const programmes = [{ id: "prog1", project_id: "p1", status: "active" }];
+  const programmeActivities = [
+    { programme_id: "prog1", status: "complete", percent_complete: 100, is_milestone: false, planned_start: "2026-01-01", planned_finish: "2026-01-11" },
+    { programme_id: "prog1", status: "in_progress", percent_complete: 50, is_milestone: false, planned_start: "2026-01-01", planned_finish: "2026-01-11" },
+  ];
+  const { document } = await run(makeSupabase({ projects: [project], programmes, programmeActivities }));
+  await wait(20);
+  assert.match(document.getElementById("grid").innerHTML, /Programme complete: 75% \(1 of 2 activities\)/);
+});
+
+test("dashboard.html: a site with no active programme shows no 'Programme complete' figure on its tile", async () => {
+  const project = { id: "p1", name: "Elm Grove", main_contractor_name: "Acme Ltd", rag_status: "green", status: "active", baseline_progress_pct: 10, actual_progress_pct: 12 };
+  const { document } = await run(makeSupabase({ projects: [project] }));
+  await wait(20);
+  assert.ok(!document.getElementById("grid").innerHTML.includes("Programme complete"));
 });
 
 test("dashboard.html: creating a project resolves the caller's organisation and includes org_id in the insert", async () => {
