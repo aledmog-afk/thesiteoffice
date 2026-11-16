@@ -114,6 +114,7 @@ async function runProgrammePage({
   createProgrammeActivity, updateProgrammeActivity, deleteProgrammeActivity,
   createActionFromProgrammeActivity,
   confirm = () => true,
+  todayISO = () => "2026-06-15",
 } = {}) {
   const supabase = baseSupabaseMock();
   return runPage(PROGRAMME_HTML, extractScript(PROGRAMME_HTML), {
@@ -122,7 +123,7 @@ async function runProgrammePage({
     getParam: () => "p1",
     requireAuth: async () => ({ id: "u1" }),
     renderHeader: () => {},
-    escapeHtml, formatDate, showError, clearError,
+    escapeHtml, formatDate, showError, clearError, todayISO,
     PROGRAMME_STATUS_LABEL, PROGRAMME_STATUS_BADGE, ACTIVITY_STATUSES, ACTIVITY_STATUS_LABEL, ACTIVITY_STATUS_BADGE,
     categoriseProgrammeActivity, PROGRAMME_VARIANCE_LABEL, PROGRAMME_VARIANCE_BADGE,
     ACTION_PRIORITIES, ACTION_PRIORITY_LABEL,
@@ -138,6 +139,16 @@ async function runProgrammePage({
     deleteProgrammeActivity: deleteProgrammeActivity || (async () => {}),
     confirm,
   });
+}
+
+// Row buttons use an inline onclick attribute, not a live listener in
+// this harness's jsdom mode (see the established comment on the
+// Edit/Delete tests above) — find the real button element by its own
+// text, for the disabled-state assertions below, rather than guessing
+// a selector from the onclick attribute string.
+function completeButtonFor(document, title) {
+  const row = Array.from(document.querySelectorAll("#activityRows tr")).find((r) => r.textContent.includes(title));
+  return row && Array.from(row.querySelectorAll("button")).find((b) => b.textContent === "Complete");
 }
 
 test("programme.html: with no programme yet, shows the empty state and a Create Programme button", async () => {
@@ -411,4 +422,188 @@ test("programme.html: clicking Create Action opens the modal pre-filled, and sub
   assert.ok(called, "createActionFromProgrammeActivity must have been called");
   assert.equal(called.activityId, "a1");
   assert.equal(document.getElementById("createActionModal").style.display, "none", "the modal should close after a successful save");
+});
+
+// ─── One-click Complete ──────────────────────────────────────────────
+// Fixes a real bug: leaving actual_finish for
+// programme_activities_before_write() to default (today) when
+// catching up on long-finished work makes it show as "Completed Late"
+// by however many weeks have passed. "today" is fixed at 2026-06-15
+// via the injected todayISO() above, matching the variance tests.
+
+test("programme.html: the Complete button shows on an open activity, and not at all once it's complete or cancelled", async () => {
+  const { document } = await runProgrammePage({
+    activities: [
+      activity({ id: "a1", title: "Open One", status: "in_progress" }),
+      activity({ id: "a2", title: "Done One", status: "complete" }),
+      activity({ id: "a3", title: "Cancelled One", status: "cancelled" }),
+    ],
+  });
+  await wait(30);
+  assert.ok(completeButtonFor(document, "Open One"), "an open activity must offer Complete");
+  assert.ok(!completeButtonFor(document, "Done One"), "an already-complete activity must not offer Complete again");
+  assert.ok(!completeButtonFor(document, "Cancelled One"), "a cancelled activity must not offer Complete");
+});
+
+test("programme.html: Complete sends the forecast finish as actual_finish when it's today or earlier", async () => {
+  let called = null;
+  const act = activity({ id: "a1", title: "Groundworks", status: "in_progress", forecast_finish: "2026-05-01" }); // before today (2026-06-15)
+  const { document, window } = await runProgrammePage({
+    activities: [act],
+    updateProgrammeActivity: async (id, fields) => { called = { id, fields }; return {}; },
+  });
+  await wait(30);
+  window.completeActivity("a1", completeButtonFor(document, "Groundworks"));
+  await wait(30);
+
+  assert.ok(called, "updateProgrammeActivity must have been called");
+  assert.equal(called.id, "a1");
+  assert.equal(called.fields.status, "complete");
+  assert.equal(called.fields.actual_finish, "2026-05-01", "a forecast finish on or before today is the best evidence of when it actually finished");
+});
+
+test("programme.html: Complete sends today as actual_finish when the forecast finish is in the future (or missing) — never a future date", async () => {
+  let called = null;
+  const futureAct = activity({ id: "a1", title: "Future Forecast", status: "in_progress", forecast_finish: "2026-07-01" }); // after today
+  const { document, window } = await runProgrammePage({
+    activities: [futureAct],
+    updateProgrammeActivity: async (id, fields) => { called = { id, fields }; return {}; },
+  });
+  await wait(30);
+  window.completeActivity("a1", completeButtonFor(document, "Future Forecast"));
+  await wait(30);
+  assert.equal(called.fields.actual_finish, "2026-06-15", "must fall back to today, never the future forecast date");
+
+  called = null;
+  const noForecastAct = activity({ id: "a2", title: "No Forecast", status: "in_progress", forecast_finish: null });
+  const { document: doc2, window: win2 } = await runProgrammePage({
+    activities: [noForecastAct],
+    updateProgrammeActivity: async (id, fields) => { called = { id, fields }; return {}; },
+  });
+  await wait(30);
+  win2.completeActivity("a2", completeButtonFor(doc2, "No Forecast"));
+  await wait(30);
+  assert.equal(called.fields.actual_finish, "2026-06-15", "no forecast finish at all must also fall back to today");
+});
+
+test("programme.html: Complete fills an empty actual_start from forecast/planned start when that date is on or before the computed actual finish", async () => {
+  let called = null;
+  const act = activity({
+    id: "a1", title: "Fill Start", status: "in_progress",
+    forecast_start: "2026-04-01", planned_start: "2026-03-01", actual_start: null, forecast_finish: "2026-05-01",
+  });
+  const { document, window } = await runProgrammePage({
+    activities: [act],
+    updateProgrammeActivity: async (id, fields) => { called = { id, fields }; return {}; },
+  });
+  await wait(30);
+  window.completeActivity("a1", completeButtonFor(document, "Fill Start"));
+  await wait(30);
+  assert.equal(called.fields.actual_start, "2026-04-01", "forecast_start is preferred over planned_start when both exist");
+});
+
+test("programme.html: Complete falls back to planned_start for actual_start when there's no forecast_start", async () => {
+  let called = null;
+  const act = activity({
+    id: "a1", title: "Planned Start Only", status: "in_progress",
+    forecast_start: null, planned_start: "2026-03-01", actual_start: null, forecast_finish: "2026-05-01",
+  });
+  const { document, window } = await runProgrammePage({
+    activities: [act],
+    updateProgrammeActivity: async (id, fields) => { called = { id, fields }; return {}; },
+  });
+  await wait(30);
+  window.completeActivity("a1", completeButtonFor(document, "Planned Start Only"));
+  await wait(30);
+  assert.equal(called.fields.actual_start, "2026-03-01");
+});
+
+test("programme.html: Complete never overwrites an actual_start that's already set", async () => {
+  let called = null;
+  const act = activity({
+    id: "a1", title: "Already Started", status: "in_progress",
+    forecast_start: "2026-04-01", actual_start: "2026-04-10", forecast_finish: "2026-05-01",
+  });
+  const { document, window } = await runProgrammePage({
+    activities: [act],
+    updateProgrammeActivity: async (id, fields) => { called = { id, fields }; return {}; },
+  });
+  await wait(30);
+  window.completeActivity("a1", completeButtonFor(document, "Already Started"));
+  await wait(30);
+  assert.equal(called.fields.actual_start, undefined, "an already-set actual_start must be left alone, not sent in the update at all");
+});
+
+test("programme.html: Complete never fills actual_start with a date that would land after the computed actual finish", async () => {
+  let called = null;
+  // forecast_start is AFTER the forecast_finish being used as
+  // actual_finish — a clearly inconsistent record, so must be left
+  // alone rather than guessed.
+  const act = activity({
+    id: "a1", title: "Inconsistent Dates", status: "in_progress",
+    forecast_start: "2026-05-10", planned_start: "2026-05-10", actual_start: null, forecast_finish: "2026-05-01",
+  });
+  const { document, window } = await runProgrammePage({
+    activities: [act],
+    updateProgrammeActivity: async (id, fields) => { called = { id, fields }; return {}; },
+  });
+  await wait(30);
+  window.completeActivity("a1", completeButtonFor(document, "Inconsistent Dates"));
+  await wait(30);
+  assert.equal(called.fields.actual_start, undefined, "must never fill actual_start with a date after actual_finish");
+});
+
+test("programme.html: Complete disables the button immediately so a second click before the first save resolves can't fire twice", async () => {
+  let calls = 0;
+  let resolveUpdate;
+  const act = activity({ id: "a1", title: "Slow Save", status: "in_progress" });
+  const { document, window } = await runProgrammePage({
+    activities: [act],
+    updateProgrammeActivity: async () => { calls++; return new Promise((resolve) => { resolveUpdate = () => resolve({}); }); },
+  });
+  await wait(30);
+  const btn = completeButtonFor(document, "Slow Save");
+  window.completeActivity("a1", btn);
+  await wait(10);
+  assert.equal(btn.disabled, true, "the button must be disabled as soon as the save starts");
+
+  // A second click/call while the first save is still in flight.
+  window.completeActivity("a1", btn);
+  await wait(10);
+  assert.equal(calls, 1, "a second click while the first save is in flight must never fire a second update");
+
+  resolveUpdate();
+  await wait(30);
+});
+
+test("programme.html: a failed Complete shows the error and re-enables the button", async () => {
+  const act = activity({ id: "a1", title: "Will Fail", status: "in_progress" });
+  const { document, window } = await runProgrammePage({
+    activities: [act],
+    updateProgrammeActivity: async () => { throw new Error("row-level security policy violation"); },
+  });
+  await wait(30);
+  const btn = completeButtonFor(document, "Will Fail");
+  window.completeActivity("a1", btn);
+  await wait(30);
+
+  assert.match(document.getElementById("pageErrorBox").textContent, /row-level security/);
+  assert.equal(btn.disabled, false, "a failed save must re-enable the button so it can be retried");
+});
+
+test("programme.html: a successful Complete re-renders the row — the Complete button disappears once the activity is actually complete", async () => {
+  const sharedActivities = [activity({ id: "a1", title: "Finishing Up", status: "in_progress", forecast_finish: "2026-05-01" })];
+  const { document, window } = await runProgrammePage({
+    activities: sharedActivities,
+    updateProgrammeActivity: async (id, fields) => {
+      Object.assign(sharedActivities.find((a) => a.id === id), fields);
+      return sharedActivities.find((a) => a.id === id);
+    },
+  });
+  await wait(30);
+  window.completeActivity("a1", completeButtonFor(document, "Finishing Up"));
+  await wait(30);
+
+  assert.ok(!completeButtonFor(document, "Finishing Up"), "Complete must no longer be offered once the row re-renders as complete");
+  assert.match(document.getElementById("activityRows").textContent, /Completed/i);
 });
