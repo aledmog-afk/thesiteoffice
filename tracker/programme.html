@@ -434,7 +434,7 @@
         : (isException ? `<button class="btn btn-outline btn-sm" onclick="openCreateAction('${a.id}')">Create Action</button>` : "");
       const ownerCell = a.assigned_to ? escapeHtml(emailByUserId.get(a.assigned_to) || "—") : `<span class="hint">Unassigned</span>`;
       return `
-      <tr>
+      <tr id="activity-${a.id}">
         <td><strong>${escapeHtml(a.title)}</strong></td>
         <td>${a.is_milestone ? "Milestone" : "Task"}</td>
         <td>${a.plots?.plot_number ? escapeHtml(a.plots.plot_number) : "—"}</td>
@@ -453,6 +453,23 @@
       </tr>
     `;
     }).join("");
+    highlightLinkedActivity();
+  }
+
+  // v94: the dashboard's "Overdue Programme"/"Programme Forecast Late"
+  // tile drill-down links here as #activity-<id> — the exact ?query#hash
+  // deep-link convention project.html's "Manage this company" link
+  // already established for companies.html, scroll-and-highlight
+  // included (same technique as companies.html's highlightLinkedParty()).
+  function highlightLinkedActivity() {
+    const m = /^#activity-(.+)$/.exec(window.location.hash || "");
+    if (!m) return;
+    const row = document.getElementById(`activity-${decodeURIComponent(m[1])}`);
+    if (!row) return;
+    row.classList.add("row-highlight");
+    row.style.background = "#fff6db";
+    row.style.outline = "2px solid #f0a500";
+    if (typeof row.scrollIntoView === "function") row.scrollIntoView({ block: "center" });
   }
 
   // ─── Create Action from a programme exception ──────────────────

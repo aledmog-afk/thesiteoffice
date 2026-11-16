@@ -171,6 +171,25 @@
     </div>
   </div>
 
+  <!-- v94: tile drill-down — the exact items behind a totals-bar tile's
+       number. Reuses the modal-backdrop/modal-box pattern programme.html's
+       Create Action modal already established. -->
+  <div class="modal-backdrop" id="tileDrilldownModal" style="display:none;">
+    <div class="modal-box" style="max-width:900px;" role="dialog" aria-modal="true" aria-labelledby="tileDrilldownTitle">
+      <div class="row-between" style="margin-bottom:1rem;">
+        <h3 class="card-heading" id="tileDrilldownTitle" style="margin:0;"></h3>
+        <button type="button" class="btn btn-outline btn-sm" id="tileDrilldownCloseBtn" aria-label="Close">✕ Close</button>
+      </div>
+      <div class="table-wrap">
+        <table id="tileDrilldownTable">
+          <thead id="tileDrilldownHead"></thead>
+          <tbody id="tileDrilldownRows"></tbody>
+        </table>
+      </div>
+      <div id="tileDrilldownEmpty" class="empty" style="display:none;"><p>Nothing behind this tile right now.</p></div>
+    </div>
+  </div>
+
   <div id="grid" class="grid" style="margin-top:1.5rem;"></div>
   <div id="emptyState" class="empty" style="display:none;">
     <p>No projects yet. Add your first one to start logging weekly reports and snags — or, if you're joining another company's project, open the company invite link they sent you.</p>
@@ -180,7 +199,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, ensureOrganisation, getPortfolioControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, createAction, isPlatformAdmin, isSnagOutstanding, externalWorksStale, externalWorksShareSet, EXTERNAL_WORKS_STALE_DAYS, computeProgrammeComplete } from "./js/app.js";
+  import { requireAuth, renderHeader, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, ensureOrganisation, getPortfolioControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, createAction, isPlatformAdmin, isSnagOutstanding, externalWorksStale, externalWorksShareSet, EXTERNAL_WORKS_STALE_DAYS, computeProgrammeComplete, categoriseProgrammeActivity } from "./js/app.js";
 
   const me = await requireAuth();
   renderHeader([{ label: "Dashboard" }]);
@@ -317,27 +336,123 @@
   });
 
   // ─── Control summary (portfolio) ───────────────────────────────
-  function renderTotals() {
-    const t = controlSummary.totals;
-    const overdueProgramme = t.overdueProgrammeActivities + t.overdueProgrammeMilestones;
-    const forecastLateProgramme = t.materialForecastLateProgrammeActivities + t.forecastLateProgrammeMilestones;
-    const cards = [
-      ["Projects Requiring Attention", controlSummary.projectsRequiringAttention, controlSummary.projectsRequiringAttention > 0 ? "var(--red)" : "var(--ink)"],
-      ["Open Actions", t.openActions, "var(--ink)"],
-      ["Overdue", t.overdue, t.overdue > 0 ? "var(--red)" : "var(--ink)"],
-      ["Due Today", t.dueToday, t.dueToday > 0 ? "var(--amber)" : "var(--ink)"],
-      ["Blocked", t.blocked, t.blocked > 0 ? "var(--red)" : "var(--ink)"],
-      ["High / Critical Priority", t.highCritical, t.highCritical > 0 ? "var(--amber)" : "var(--ink)"],
-      ["Overdue Programme", overdueProgramme, overdueProgramme > 0 ? "var(--red)" : "var(--ink)"],
-      ["Programme Forecast Late", forecastLateProgramme, forecastLateProgramme > 0 ? "var(--amber)" : "var(--ink)"],
-    ];
-    document.getElementById("totalsBar").innerHTML = cards.map(([label, value, color]) => `
-      <div class="totals-box">
-        <div class="totals-label">${escapeHtml(label)}</div>
-        <div class="totals-value" style="color:${color};">${value}</div>
-      </div>
-    `).join("");
+  // ─── Tile drill-down (v94) ──────────────────────────────────────
+  // Every list below is built from data already loaded for the tile
+  // counts themselves (attentionActions, controlSummary.rows/
+  // openActionsList/activeProgrammeActivities) and run through the
+  // SAME categorisation functions that produced those counts
+  // (categoriseAction via attentionActions' own .categories,
+  // categoriseProgrammeActivity here, computeControlStatus via
+  // controlSummary.rows' own .status) — so a tile's drill-down list is
+  // always exactly as long as the number on the tile, never a second,
+  // possibly-drifting interpretation of it. No new queries: title/
+  // project name just ride along on the same two broad selects
+  // getPortfolioControlSummary() already made (see app.js).
+  function isOverdueProgrammeActivity(a) {
+    return categoriseProgrammeActivity(a).overdue;
   }
+  // Mirrors countProgrammeSignals()'s own branching exactly (app.js):
+  // overdue is checked FIRST, so an activity that's both overdue and
+  // forecast-late is only ever counted once, under Overdue — never
+  // double-counted into this list too.
+  function isForecastLateProgrammeActivity(a) {
+    const cats = categoriseProgrammeActivity(a);
+    if (cats.overdue || !cats.forecastLate) return false;
+    return a.is_milestone || cats.materialForecastDelay;
+  }
+
+  const actionDrilldownHead = () => `<tr><th>Title</th><th>Project</th><th>Due</th><th>Status</th></tr>`;
+  const actionDrilldownRow = (a) => `
+    <tr>
+      <td><a href="actions.html?project=${a.project_id}">${escapeHtml(a.title)}</a></td>
+      <td><a href="project.html?id=${a.project_id}">${escapeHtml(a.projects?.name || "—")}</a></td>
+      <td>${a.due_date ? formatDate(a.due_date) : "—"}</td>
+      <td><span class="badge ${ACTION_STATUS_BADGE[a.status] || "badge-grey"}">${ACTION_STATUS_LABEL[a.status] || escapeHtml(a.status)}</span></td>
+    </tr>
+  `;
+
+  const programmeDrilldownHead = () => `<tr><th>Activity</th><th>Project</th><th>Planned Finish</th><th>Forecast Finish</th></tr>`;
+  // Links to programme.html?project=...#activity-<id> — the exact
+  // ?query#hash deep-link convention project.html's own "Manage this
+  // company" link already established for companies.html; programme.html
+  // scrolls to and highlights that row on load (see highlightLinkedActivity()).
+  const programmeDrilldownRow = (a) => `
+    <tr>
+      <td>${escapeHtml(a.title)}${a.is_milestone ? ` <span class="hint">(Milestone)</span>` : ""}</td>
+      <td><a href="programme.html?project=${a.project_id}#activity-${a.id}">${escapeHtml(a.projects?.name || "—")}</a></td>
+      <td>${a.planned_finish ? formatDate(a.planned_finish) : "—"}</td>
+      <td>${a.forecast_finish ? formatDate(a.forecast_finish) : "—"}</td>
+    </tr>
+  `;
+
+  const attentionProjectDrilldownHead = () => `<tr><th>Project</th><th>Why it needs attention</th></tr>`;
+  const attentionProjectDrilldownRow = (r) => `
+    <tr>
+      <td><a href="project.html?id=${r.project.id}">${escapeHtml(r.project.name)}</a></td>
+      <td>${escapeHtml(r.status.reason)}</td>
+    </tr>
+  `;
+
+  function tileDefinitions() {
+    const t = controlSummary.totals;
+    const programmeActivities = controlSummary.activeProgrammeActivities || [];
+    const openActionsList = controlSummary.openActionsList || [];
+    const overdueProgramme = (t.overdueProgrammeActivities || 0) + (t.overdueProgrammeMilestones || 0);
+    const forecastLateProgramme = (t.materialForecastLateProgrammeActivities || 0) + (t.forecastLateProgrammeMilestones || 0);
+    return [
+      { key: "attention", label: "Projects Requiring Attention", value: controlSummary.projectsRequiringAttention, color: controlSummary.projectsRequiringAttention > 0 ? "var(--red)" : "var(--ink)", head: attentionProjectDrilldownHead, row: attentionProjectDrilldownRow, items: () => controlSummary.rows.filter((r) => r.status.level === "attention") },
+      { key: "openActions", label: "Open Actions", value: t.openActions, color: "var(--ink)", head: actionDrilldownHead, row: actionDrilldownRow, items: () => openActionsList },
+      { key: "overdue", label: "Overdue", value: t.overdue, color: t.overdue > 0 ? "var(--red)" : "var(--ink)", head: actionDrilldownHead, row: actionDrilldownRow, items: () => attentionActions.filter((a) => a.categories.overdue) },
+      { key: "dueToday", label: "Due Today", value: t.dueToday, color: t.dueToday > 0 ? "var(--amber)" : "var(--ink)", head: actionDrilldownHead, row: actionDrilldownRow, items: () => attentionActions.filter((a) => a.categories.dueToday) },
+      { key: "blocked", label: "Blocked", value: t.blocked, color: t.blocked > 0 ? "var(--red)" : "var(--ink)", head: actionDrilldownHead, row: actionDrilldownRow, items: () => attentionActions.filter((a) => a.categories.blocked) },
+      { key: "highCritical", label: "High / Critical Priority", value: t.highCritical, color: t.highCritical > 0 ? "var(--amber)" : "var(--ink)", head: actionDrilldownHead, row: actionDrilldownRow, items: () => attentionActions.filter((a) => a.categories.highCritical) },
+      { key: "overdueProgramme", label: "Overdue Programme", value: overdueProgramme, color: overdueProgramme > 0 ? "var(--red)" : "var(--ink)", head: programmeDrilldownHead, row: programmeDrilldownRow, items: () => programmeActivities.filter(isOverdueProgrammeActivity) },
+      { key: "forecastLateProgramme", label: "Programme Forecast Late", value: forecastLateProgramme, color: forecastLateProgramme > 0 ? "var(--amber)" : "var(--ink)", head: programmeDrilldownHead, row: programmeDrilldownRow, items: () => programmeActivities.filter(isForecastLateProgrammeActivity) },
+    ];
+  }
+
+  function renderTotals() {
+    document.getElementById("totalsBar").innerHTML = tileDefinitions().map((tile) => tile.value > 0 ? `
+        <button type="button" class="totals-box totals-box-clickable" data-tile="${tile.key}">
+          <div class="totals-label">${escapeHtml(tile.label)}</div>
+          <div class="totals-value" style="color:${tile.color};">${tile.value}</div>
+        </button>
+      ` : `
+        <div class="totals-box">
+          <div class="totals-label">${escapeHtml(tile.label)}</div>
+          <div class="totals-value" style="color:${tile.color};">${tile.value}</div>
+        </div>
+      `
+    ).join("");
+    document.querySelectorAll("#totalsBar button[data-tile]").forEach((btn) => {
+      btn.addEventListener("click", () => openTileDrilldown(btn.dataset.tile));
+    });
+  }
+
+  const tileDrilldownModal = document.getElementById("tileDrilldownModal");
+  let lastDrilldownTrigger = null;
+  function openTileDrilldown(key) {
+    const tile = tileDefinitions().find((d) => d.key === key);
+    if (!tile) return;
+    lastDrilldownTrigger = document.activeElement;
+    const items = tile.items();
+    document.getElementById("tileDrilldownTitle").textContent = `${tile.label} (${items.length})`;
+    document.getElementById("tileDrilldownHead").innerHTML = tile.head();
+    document.getElementById("tileDrilldownRows").innerHTML = items.map(tile.row).join("");
+    document.getElementById("tileDrilldownTable").style.display = items.length ? "table" : "none";
+    document.getElementById("tileDrilldownEmpty").style.display = items.length ? "none" : "block";
+    tileDrilldownModal.style.display = "flex";
+    document.getElementById("tileDrilldownCloseBtn").focus();
+  }
+  function closeTileDrilldown() {
+    tileDrilldownModal.style.display = "none";
+    if (lastDrilldownTrigger && typeof lastDrilldownTrigger.focus === "function") lastDrilldownTrigger.focus();
+  }
+  document.getElementById("tileDrilldownCloseBtn").addEventListener("click", closeTileDrilldown);
+  tileDrilldownModal.addEventListener("click", (e) => { if (e.target === tileDrilldownModal) closeTileDrilldown(); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && tileDrilldownModal.style.display !== "none") closeTileDrilldown();
+  });
 
   function renderAttentionActions() {
     const filtered = attentionFilter === "all" ? attentionActions : attentionActions.filter((a) => a.categories[attentionFilter]);

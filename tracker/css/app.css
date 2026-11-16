@@ -351,6 +351,14 @@ tr:hover td { background: var(--off); }
 .totals-value.approved { color: var(--green); }
 .totals-value.pending { color: var(--amber); }
 
+/* v94: a tile that drills down into the items behind its number — a
+   real <button> (not a div with a click handler) so it's keyboard-
+   reachable and activatable with no extra JS. A zero-count tile is
+   rendered plain (see dashboard.html), so this only ever styles a
+   genuinely clickable one. */
+.totals-box-clickable { display: block; width: 100%; text-align: left; border: 0; cursor: pointer; font: inherit; color: inherit; }
+.totals-box-clickable:hover, .totals-box-clickable:focus-visible { background: var(--cream, #faf6ec); }
+
 /* ─── CHECKLIST (quality gates) ──────────────────── */
 .gate-card + .gate-card { margin-top: 1.2rem; }
 .gate-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 1rem; flex-wrap: wrap; }

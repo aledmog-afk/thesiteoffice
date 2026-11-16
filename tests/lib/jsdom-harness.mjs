@@ -62,6 +62,8 @@ export async function runPage(htmlPath, scriptSrc, context = {}) {
     getActiveProgramme: async () => null,
     listProgrammeActivities: async () => [],
     computeProgrammeComplete: DEFAULT_COMPUTE_PROGRAMME_COMPLETE,
+    // v94: dashboard.html's own tile drill-down needs this directly.
+    categoriseProgrammeActivity: DEFAULT_CATEGORISE_PROGRAMME_ACTIVITY,
     ...context,
   };
   const ctx = vm.createContext(fullContext);
@@ -117,3 +119,32 @@ function loadComputeProgrammeComplete() {
   `)();
 }
 const DEFAULT_COMPUTE_PROGRAMME_COMPLETE = loadComputeProgrammeComplete();
+
+// The real categoriseProgrammeActivity() (v94 dashboard tile drill-down
+// needs it directly, not just via countProgrammeSignals()) — extracted
+// the same way, plus its const/private dependencies. todayISO() here is
+// the real implementation too (toLocalISODate(new Date())), not a fixed
+// test date, since this is a general-purpose default for whichever
+// "today" the test actually runs on — a test that needs a fixed date
+// for determinism passes its own categoriseProgrammeActivity binding,
+// the same override pattern every other default here already supports.
+function loadCategoriseProgrammeActivity() {
+  const src = fs.readFileSync(new URL("../../tracker/js/app.js", import.meta.url), "utf8");
+  const toLocalISODateFn = src.match(/export function toLocalISODate\([\s\S]*?\n\}/);
+  const todayISOFn = src.match(/export function todayISO\([\s\S]*?\n\}/);
+  const dueSoonConst = src.match(/export const DUE_SOON_DAYS = [\s\S]*?;\n/);
+  const materialDelayConst = src.match(/export const PROGRAMME_MATERIAL_DELAY_DAYS = [\s\S]*?;\n/);
+  const diffFn = src.match(/function diffCalendarDays\([\s\S]*?\n\}/);
+  const mainFn = src.match(/export function categoriseProgrammeActivity\([\s\S]*?\n\}/);
+  if (!toLocalISODateFn || !todayISOFn || !dueSoonConst || !materialDelayConst || !diffFn || !mainFn) return () => ({});
+  return new Function(`
+    ${toLocalISODateFn[0].replace(/^export /, "")}
+    ${todayISOFn[0].replace(/^export /, "")}
+    ${dueSoonConst[0].replace(/^export /, "")}
+    ${materialDelayConst[0].replace(/^export /, "")}
+    ${diffFn[0]}
+    ${mainFn[0].replace(/^export /, "")}
+    return categoriseProgrammeActivity;
+  `)();
+}
+const DEFAULT_CATEGORISE_PROGRAMME_ACTIVITY = loadCategoriseProgrammeActivity();

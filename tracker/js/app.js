@@ -1842,11 +1842,11 @@ async function getProjectsWithRole() {
 export async function getPortfolioControlSummary() {
   const [projects, { data: actions, error: actErr }, { data: hsItems, error: hsErr }, { data: findings, error: findErr }, { data: snags, error: snagErr }, { data: progActivities, error: progErr }] = await Promise.all([
     getProjectsWithRole(),
-    supabase.from("actions").select("id, project_id, status, priority, due_date"),
+    supabase.from("actions").select("id, project_id, title, status, priority, due_date, projects(name)"),
     supabase.from("hs_audit_items").select("project_id, status, severity"),
     supabase.from("inspection_findings").select("id, project_id, severity, status, action_id"),
     supabase.from("snag_items").select("project_id, status, priority, due_date"),
-    supabase.from("programme_activities").select("project_id, is_milestone, status, planned_start, planned_finish, forecast_start, forecast_finish, actual_finish, programmes(status)"),
+    supabase.from("programme_activities").select("id, project_id, title, is_milestone, status, planned_start, planned_finish, forecast_start, forecast_finish, actual_finish, programmes(status), projects(name)"),
   ]);
   if (actErr) throw actErr;
   if (hsErr) throw hsErr;
@@ -1922,7 +1922,19 @@ export async function getPortfolioControlSummary() {
     return acc;
   }, { openActions: 0, overdue: 0, dueToday: 0, blocked: 0, highCritical: 0, overdueProgrammeActivities: 0, overdueProgrammeMilestones: 0, materialForecastLateProgrammeActivities: 0, forecastLateProgrammeMilestones: 0 });
 
-  return { rows, totals, projectsRequiringAttention: rows.filter((r) => r.status.level === "attention").length };
+  // v94: dashboard tile drill-down — every tile's own list, so clicking
+  // one always shows exactly what the number counts. Built with the
+  // SAME filter predicates already used above to feed `totals` (never
+  // a second interpretation of "open" or "active programme"), so each
+  // list's length is guaranteed to equal its tile's count by
+  // construction — no change to how any number itself is calculated,
+  // and no new query (title/projects(name) just ride along on the two
+  // selects already made above).
+  const nonRestrictedProjectIds = new Set(rows.filter((r) => r.counts).map((r) => r.project.id));
+  const openActionsList = (actions || []).filter((a) => nonRestrictedProjectIds.has(a.project_id) && !["completed", "cancelled"].includes(a.status));
+  const activeProgrammeActivities = (progActivities || []).filter((a) => nonRestrictedProjectIds.has(a.project_id) && a.programmes?.status === "active");
+
+  return { rows, totals, projectsRequiringAttention: rows.filter((r) => r.status.level === "attention").length, openActionsList, activeProgrammeActivities };
 }
 
 export async function getProjectControlSummary(projectId) {
