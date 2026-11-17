@@ -18088,3 +18088,472 @@ grant execute on function public.is_platform_admin() to authenticated;
 grant select on table public.interest_signups to authenticated;
 drop policy if exists "platform admins read interest_signups" on public.interest_signups;
 create policy "platform admins read interest_signups" on public.interest_signups for select to authenticated using (public.is_platform_admin());
+
+-- ─── v95 ADDITIONS: Programme-driven progress ───────────────────────
+--
+-- Part 1: issuing a weekly report now also raises the programme
+-- activities linked (v93's programme_activity_id on a progress item)
+-- to the items it carries — the same "raise, never lower" shape the
+-- v69 plot/block stage raising already established, extended in the
+-- SAME function (apply_weekly_report_progress, below) so it can't be
+-- skipped: it already runs inside the SAME transaction as the issue,
+-- from the SAME AFTER trigger (weekly_reports_v69_progress) that only
+-- ever fires once a report's status is actually 'issued'.
+--
+-- Part 2: a per-project progress_source setting ('plots' | 'programme',
+-- default 'plots' — nothing changes for any existing site until an
+-- editor explicitly switches it). When 'programme' and the project has
+-- an active programme with at least one countable activity,
+-- recalc_project_progress() (extended below) stores the SAME duration-
+-- weighted "programme complete" figure computeProgrammeComplete() in
+-- app.js already shows on project.html/programme.html/the dashboard —
+-- into actual_progress_pct. Otherwise (no active programme, or nothing
+-- countable on it) it falls straight back to today's plot-based
+-- calculation, so switching a site with an empty/draft programme never
+-- shows a misleading 0%. Plot/block stages themselves are completely
+-- untouched either way — this only ever changes which figure feeds the
+-- one headline number.
+
+-- (A) projects.progress_source — the per-site setting itself. Column-
+-- level CHECK is the real backstop on the VALUE; WHO may change it is
+-- enforced below in projects_v69_progress_guard() (a trigger, not just
+-- the app's JS), since the existing "members update projects" RLS
+-- policy is satisfied by ANY project member, not only an editor.
+alter table public.projects add column if not exists progress_source text not null default 'plots';
+alter table public.projects drop constraint if exists projects_progress_source_check;
+alter table public.projects add constraint projects_progress_source_check check (progress_source in ('plots', 'programme'));
+
+-- (B) projects_v69_progress_guard(): extended with the progress_source
+-- editor-check (re-checks is_project_editor() itself here — the table's
+-- own RLS alone is not a tight enough gate for this one column) and a
+-- fresh project always starts on 'plots' regardless of client input,
+-- same as every other default this INSERT branch already forces.
+-- Everything else in this function is byte-for-byte the same body as
+-- before.
+create or replace function public.projects_v69_progress_guard()
+returns trigger
+language plpgsql security invoker set search_path = public as $$
+begin
+  if public.progress_internal() or current_user not in ('authenticated', 'anon') then return new; end if;
+  if tg_op = 'INSERT' then
+    -- A new site starts at 0, with no share; the share and first figure
+    -- are then set with a note through set_external_works().
+    new.actual_progress_pct := 0;
+    new.external_works_pct := 0;
+    new.external_works_share := null;
+    new.external_works_updated_at := null;
+    new.external_works_share_set_at := null;
+    new.stage_progress_since := null;
+    new.progress_source := 'plots';
+    return new;
+  end if;
+  new.actual_progress_pct := old.actual_progress_pct;
+  new.stage_progress_since := old.stage_progress_since;
+  new.external_works_updated_at := old.external_works_updated_at;
+  new.external_works_share_set_at := old.external_works_share_set_at;
+  if new.external_works_pct is distinct from old.external_works_pct
+     or new.external_works_share is distinct from old.external_works_share then
+    raise exception 'External works changes need a note. Use Site Details.' using errcode = '42501';
+  end if;
+  if new.progress_source is distinct from old.progress_source then
+    if not public.is_project_editor(old.id) then
+      raise exception 'Only a project editor can change the progress source.' using errcode = '42501';
+    end if;
+    if new.progress_source not in ('plots', 'programme') then
+      raise exception 'progress_source must be ''plots'' or ''programme''';
+    end if;
+  end if;
+  return new;
+end;
+$$;
+revoke all on function public.projects_v69_progress_guard() from public, anon, authenticated; grant execute on function public.projects_v69_progress_guard() to authenticated;
+-- Trigger itself is unchanged (same name, same attachment) — no
+-- drop/create needed, listed here only for context:
+--   trg_projects_v69_progress_guard before insert or update on public.projects
+
+-- (C) compute_programme_complete_pct(): the SAME duration-weighted rule
+-- computeProgrammeComplete() in tracker/js/app.js already applies
+-- client-side, reimplemented here in SQL for recalc_project_progress()
+-- to call server-side. Weight = planned duration in days (planned_finish
+-- - planned_start, min 1), falling back to the forecast pair when
+-- planned dates are missing, else a flat weight of 1; milestones are
+-- always weight 1; cancelled activities are excluded entirely (neither
+-- weighted nor counted in the denominator); a complete activity always
+-- counts as 100 regardless of its own percent_complete. Returns null,
+-- not 0, when there's no active programme or nothing countable on it —
+-- recalc_project_progress() falls back to the plot-based figure in
+-- that case rather than ever storing a misleading 0%. Never granted to
+-- any client role — this is an internal helper for recalc_project_progress()
+-- alone, the same "no wider grant than needed" the rest of this
+-- migration applies to every new SECURITY DEFINER surface too.
+create or replace function public.compute_programme_complete_pct(p_project_id uuid)
+returns numeric
+language sql stable security invoker set search_path = public as $$
+  with active_programme as (
+    select id from public.programmes where project_id = p_project_id and status = 'active' limit 1
+  ),
+  countable as (
+    select
+      a.status,
+      a.percent_complete,
+      case
+        when a.is_milestone then 1
+        when a.planned_start is not null and a.planned_finish is not null then greatest(1, a.planned_finish - a.planned_start)
+        when a.forecast_start is not null and a.forecast_finish is not null then greatest(1, a.forecast_finish - a.forecast_start)
+        else 1
+      end as weight
+    from public.programme_activities a
+    where a.programme_id in (select id from active_programme)
+      and a.status <> 'cancelled'
+  )
+  select case when coalesce(sum(weight), 0) > 0
+    then round(sum(weight * (case when status = 'complete' then 100 else coalesce(percent_complete, 0) end)) / sum(weight), 1)
+    else null
+  end
+  from countable;
+$$;
+revoke all on function public.compute_programme_complete_pct(uuid) from public, anon, authenticated;
+
+-- (D) recalc_project_progress(): extended with the progress_source
+-- branch. Everything above the new block is byte-for-byte the existing
+-- plot/block/external-works calculation (v_site) — still always
+-- computed, so a site switched back to 'plots' (or one that never
+-- switched) sees exactly the figure it always has.
+create or replace function public.recalc_project_progress(p_project_id uuid)
+returns void
+language plpgsql security definer set search_path = public as $$
+declare
+  v_proj public.projects%rowtype;
+  v_ext numeric;
+  v_plot_sum numeric;
+  v_plot_n numeric;
+  v_block_sum numeric;
+  v_block_w numeric;
+  v_part numeric;
+  v_site numeric;
+  v_pkg_share numeric;
+  v_pkg_weighted numeric;
+  v_prev text := coalesce(current_setting('app.progress_internal', true), '');
+  v_programme_site numeric;
+begin
+  select * into v_proj from public.projects where id = p_project_id;
+  if not found then return; end if;
+
+  v_ext := coalesce(v_proj.external_works_pct, 0);
+  select sum(k.share), sum(k.share * k.percent) into v_pkg_share, v_pkg_weighted
+    from public.external_works_packages k
+   where k.project_id = p_project_id and k.retired_at is null;
+  if coalesce(v_pkg_share, 0) > 0 then
+    v_ext := round(v_pkg_weighted / v_pkg_share, 1);
+  end if;
+
+  select coalesce(sum(p.progress_pct), 0), count(*) into v_plot_sum, v_plot_n
+    from public.plots p where p.project_id = p_project_id;
+  select coalesce(sum(b.progress_pct * greatest(f.n, 1)), 0), coalesce(sum(greatest(f.n, 1)), 0)
+    into v_block_sum, v_block_w
+    from public.blocks b
+    cross join lateral (select count(*) as n from public.plots fp where fp.block_id = b.id) f
+   where b.project_id = p_project_id;
+
+  if v_proj.external_works_share is null then
+    v_site := round((v_plot_sum + v_block_sum + v_ext) / (v_plot_n + v_block_w + 1), 1);
+  elsif v_plot_n + v_block_w = 0 then
+    v_site := round(v_ext, 1);
+  else
+    v_part := (v_plot_sum + v_block_sum) / (v_plot_n + v_block_w);
+    v_site := round(v_proj.external_works_share / 100 * v_ext + (1 - v_proj.external_works_share / 100) * v_part, 1);
+  end if;
+  v_site := least(greatest(v_site, 0), 100);
+
+  -- v95: 'programme' sites store the duration-weighted programme figure
+  -- instead, when there's one to compute; otherwise v_site (the
+  -- plot-based figure just computed above) stands as the fallback.
+  if v_proj.progress_source = 'programme' then
+    v_programme_site := public.compute_programme_complete_pct(p_project_id);
+    if v_programme_site is not null then
+      v_site := v_programme_site;
+    end if;
+  end if;
+
+  if v_proj.actual_progress_pct is distinct from v_site or v_proj.external_works_pct is distinct from v_ext then
+    perform set_config('app.progress_internal', 'on', true);
+    update public.projects set actual_progress_pct = v_site, external_works_pct = v_ext where id = p_project_id;
+    perform set_config('app.progress_internal', v_prev, true);
+  end if;
+end;
+$$;
+revoke all on function public.recalc_project_progress(uuid) from public, anon, authenticated;
+
+-- (E) Recalculate when the setting itself changes.
+create or replace function public.projects_v95_progress_source_after()
+returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if new.progress_source is distinct from old.progress_source then
+    perform public.recalc_project_progress(new.id);
+  end if;
+  return null;
+end;
+$$;
+revoke all on function public.projects_v95_progress_source_after() from public, anon, authenticated;
+drop trigger if exists trg_projects_v95_progress_source_after on public.projects;
+create trigger trg_projects_v95_progress_source_after after update of progress_source on public.projects
+  for each row execute function public.projects_v95_progress_source_after();
+
+-- (F) Recalculate when a 'programme'-sourced project's own activities
+-- change (insert/delete always matter; an update only recalculates when
+-- a field compute_programme_complete_pct() actually reads has changed —
+-- never on an unrelated column like title/assigned_to/plot_id).
+create or replace function public.programme_activities_v95_progress_after()
+returns trigger
+language plpgsql security definer set search_path = public as $$
+declare
+  v_pid uuid;
+  v_source text;
+begin
+  v_pid := coalesce(new.project_id, old.project_id);
+  select progress_source into v_source from public.projects where id = v_pid;
+  if v_source is distinct from 'programme' then
+    return null;
+  end if;
+  if tg_op = 'DELETE' or tg_op = 'INSERT' then
+    perform public.recalc_project_progress(v_pid);
+  elsif new.percent_complete is distinct from old.percent_complete
+     or new.status is distinct from old.status
+     or new.is_milestone is distinct from old.is_milestone
+     or new.planned_start is distinct from old.planned_start
+     or new.planned_finish is distinct from old.planned_finish
+     or new.forecast_start is distinct from old.forecast_start
+     or new.forecast_finish is distinct from old.forecast_finish then
+    perform public.recalc_project_progress(v_pid);
+  end if;
+  return null;
+end;
+$$;
+revoke all on function public.programme_activities_v95_progress_after() from public, anon, authenticated;
+drop trigger if exists trg_programme_activities_v95_progress_after on public.programme_activities;
+create trigger trg_programme_activities_v95_progress_after after insert or update or delete on public.programme_activities
+  for each row execute function public.programme_activities_v95_progress_after();
+
+-- (G) Recalculate when a programme itself is activated/archived — that
+-- also changes which activities are "the active programme"'s, even
+-- with no single activity row changing.
+create or replace function public.programmes_v95_progress_after()
+returns trigger
+language plpgsql security definer set search_path = public as $$
+declare
+  v_source text;
+begin
+  if new.status is distinct from old.status then
+    select progress_source into v_source from public.projects where id = new.project_id;
+    if v_source = 'programme' then
+      perform public.recalc_project_progress(new.project_id);
+    end if;
+  end if;
+  return null;
+end;
+$$;
+revoke all on function public.programmes_v95_progress_after() from public, anon, authenticated;
+drop trigger if exists trg_programmes_v95_progress_after on public.programmes;
+create trigger trg_programmes_v95_progress_after after update of status on public.programmes
+  for each row execute function public.programmes_v95_progress_after();
+
+-- (H) raise_programme_activity_from_report(): the per-activity half of
+-- Part 1, factored out of apply_weekly_report_progress() below purely
+-- for readability. Raise-only on percent_complete — deliberate: if a
+-- later report is revised down, the programme activity keeps its
+-- higher figure; the correction path is Edit on the Programme page,
+-- never another report. Status escalates not_started -> in_progress
+-- (>0%) -> complete (100%) as percent rises; programme_activities_before_write()
+-- (unchanged, v35/v38) still has the final say on every write (forces
+-- percent_complete to 100 on the transition into 'complete', etc.) —
+-- this only ever proposes the new values. actual_start is filled from
+-- the report's own week_starting only while still empty; actual_finish
+-- similarly from week_ending, only on the transition into 'complete',
+-- only while empty, and only when doing so wouldn't violate this
+-- table's own `actual_finish >= actual_start` CHECK (an out-of-order
+-- backfilled report could otherwise roll back the ENTIRE issue over
+-- one inconsistent activity) — left null rather than guessed in that
+-- edge case; Edit on the Programme page is the correction path either
+-- way. An unknown id, one belonging to a DIFFERENT project than the
+-- report, or one that's cancelled or already complete, is silently
+-- ignored — never an error that could fail the whole issue over one
+-- stale or mistyped reference.
+create or replace function public.raise_programme_activity_from_report(
+  p_activity_id uuid, p_project_id uuid, p_pct numeric, p_week_start date, p_week_end date
+) returns void
+language plpgsql security definer set search_path = public as $$
+declare
+  v_act public.programme_activities%rowtype;
+  v_new_pct numeric;
+  v_new_status text;
+  v_new_actual_start date;
+  v_new_actual_finish date;
+begin
+  select * into v_act from public.programme_activities where id = p_activity_id and project_id = p_project_id;
+  if not found then
+    return;
+  end if;
+  if v_act.status in ('cancelled', 'complete') then
+    return;
+  end if;
+
+  v_new_pct := greatest(v_act.percent_complete, p_pct);
+  if v_new_pct >= 100 then
+    v_new_status := 'complete';
+  elsif v_new_pct > 0 then
+    v_new_status := 'in_progress';
+  else
+    v_new_status := v_act.status;
+  end if;
+
+  v_new_actual_start := case when v_new_pct > 0 then coalesce(v_act.actual_start, p_week_start) else v_act.actual_start end;
+  v_new_actual_finish := v_act.actual_finish;
+  if v_new_status = 'complete' and v_act.actual_finish is null
+     and (v_new_actual_start is null or p_week_end >= v_new_actual_start) then
+    v_new_actual_finish := p_week_end;
+  end if;
+
+  update public.programme_activities set
+    percent_complete = v_new_pct,
+    status = v_new_status,
+    actual_start = v_new_actual_start,
+    actual_finish = v_new_actual_finish
+  where id = p_activity_id;
+end;
+$$;
+revoke all on function public.raise_programme_activity_from_report(uuid, uuid, numeric, date, date) from public, anon, authenticated;
+
+-- (I) apply_weekly_report_progress(): extended to ALSO raise a linked
+-- programme activity for any progress item carrying a
+-- programme_activity_id (v93) — decoupled from the milestone/stage
+-- matching just below it (a programme-picker item typically carries NO
+-- milestone at all, so it must not be skipped by that unrelated
+-- `continue`). Only ever touches an activity belonging to the SAME
+-- project as this report (see raise_programme_activity_from_report()'s
+-- own WHERE clause) — a cross-project or unknown id does nothing.
+-- Signature deliberately unchanged, same reasoning as the block-raising
+-- extension above it.
+create or replace function public.apply_weekly_report_progress(p_report_id uuid, p_source text default 'report')
+returns integer
+language plpgsql security definer set search_path = public as $$
+declare
+  v_rep record;
+  v_item jsonb;
+  v_stage text;
+  v_pct numeric;
+  v_act_id uuid;
+  v_hit uuid[];
+  v_plots uuid[] := '{}';
+  v_blocks uuid[] := '{}';
+  v_total integer := 0;
+  v_pid uuid;
+  v_prev_int text := coalesce(current_setting('app.progress_internal', true), '');
+  v_prev_bulk text := coalesce(current_setting('app.progress_bulk', true), '');
+  v_prev_src text := coalesce(current_setting('app.progress_source', true), '');
+  v_prev_rep text := coalesce(current_setting('app.progress_report_id', true), '');
+begin
+  if p_source not in ('report', 'backfill') then
+    raise exception 'apply_weekly_report_progress: bad source %', p_source;
+  end if;
+  select w.id, w.project_id, w.progress_items, w.week_starting, w.week_ending into v_rep from public.weekly_reports w where w.id = p_report_id;
+  if not found or v_rep.progress_items is null or jsonb_typeof(v_rep.progress_items) <> 'array' then
+    return 0;
+  end if;
+
+  perform set_config('app.progress_internal', 'on', true);
+  perform set_config('app.progress_bulk', 'on', true);
+  perform set_config('app.progress_source', p_source, true);
+  perform set_config('app.progress_report_id', p_report_id::text, true);
+
+  for v_item in select value from jsonb_array_elements(v_rep.progress_items) loop
+    continue when jsonb_typeof(v_item) <> 'object';
+
+    -- v95: programme activity raising — independent of the stage
+    -- matching below (no milestone-name lookup needed).
+    v_act_id := null;
+    begin
+      v_act_id := (v_item->>'programme_activity_id')::uuid;
+    exception when others then
+      v_act_id := null;
+    end;
+    if v_act_id is not null then
+      v_pct := case
+        when jsonb_typeof(v_item->'percent') = 'number' then (v_item->>'percent')::numeric
+        when jsonb_typeof(v_item->'percent') = 'string' and btrim(v_item->>'percent') ~ '^[0-9]{1,3}(\.[0-9]+)?$'
+          then btrim(v_item->>'percent')::numeric
+      end;
+      if v_pct is not null and v_pct >= 0 and v_pct <= 100 then
+        perform public.raise_programme_activity_from_report(v_act_id, v_rep.project_id, v_pct, v_rep.week_starting, v_rep.week_ending);
+      end if;
+    end if;
+
+    select s.stage_key into v_stage from public.progress_stages s where s.name = btrim(coalesce(v_item->>'milestone', ''));
+    continue when v_stage is null;
+    v_pct := case
+      when jsonb_typeof(v_item->'percent') = 'number' then (v_item->>'percent')::numeric
+      when jsonb_typeof(v_item->'percent') = 'string' and btrim(v_item->>'percent') ~ '^[0-9]{1,3}(\.[0-9]+)?$'
+        then btrim(v_item->>'percent')::numeric
+    end;
+    continue when v_pct is null or v_pct <= 0 or v_pct > 100;
+
+    insert into public.progress_tag_skips (project_id, weekly_report_id, tag, token, reason, source)
+    select v_rep.project_id, p_report_id, coalesce(v_item->>'plot', ''), d.token, d.problem, p_source
+      from public.resolve_plot_tags_detail(v_rep.project_id, v_item->>'plot') d
+     where d.problem is not null
+    on conflict do nothing;
+
+    with u as (
+      update public.internal_milestones m
+         set percent = v_pct
+       where m.project_id = v_rep.project_id
+         and m.stage_key = v_stage
+         and m.retired_at is null
+         and m.applicable
+         and m.percent < v_pct
+         and m.plot_id in (select public.resolve_plot_tags(v_rep.project_id, v_item->>'plot'))
+      returning m.plot_id
+    )
+    select coalesce(array_agg(u.plot_id), '{}') into v_hit from u;
+    v_plots := v_plots || v_hit;
+    v_total := v_total + coalesce(array_length(v_hit, 1), 0);
+
+    with ub as (
+      update public.block_milestones m
+         set percent = v_pct
+       where m.project_id = v_rep.project_id
+         and m.stage_key = v_stage
+         and m.retired_at is null
+         and m.applicable
+         and m.percent < v_pct
+         and m.block_id in (select public.resolve_block_tags(v_rep.project_id, v_item->>'plot'))
+         and (nullif(current_setting('app.progress_block_floor_zero_ids', true), '') is null
+              or m.block_id::text <> all(string_to_array(current_setting('app.progress_block_floor_zero_ids', true), ',')))
+      returning m.block_id
+    )
+    select coalesce(array_agg(ub.block_id), '{}') into v_hit from ub;
+    v_blocks := v_blocks || v_hit;
+    v_total := v_total + coalesce(array_length(v_hit, 1), 0);
+  end loop;
+
+  -- The go-live backfill recalculates everything once at the end itself.
+  if p_source = 'report' then
+    for v_pid in select distinct x from unnest(v_plots) x loop
+      perform public.recalc_plot_progress(v_pid);
+    end loop;
+    for v_pid in select distinct x from unnest(v_blocks) x loop
+      perform public.recalc_block_progress(v_pid);
+    end loop;
+    if v_total > 0 then
+      perform public.recalc_project_progress(v_rep.project_id);
+    end if;
+  end if;
+
+  perform set_config('app.progress_internal', v_prev_int, true);
+  perform set_config('app.progress_bulk', v_prev_bulk, true);
+  perform set_config('app.progress_source', v_prev_src, true);
+  perform set_config('app.progress_report_id', v_prev_rep, true);
+  return v_total;
+end;
+$$;
+revoke all on function public.apply_weekly_report_progress(uuid, text) from public, anon, authenticated;
