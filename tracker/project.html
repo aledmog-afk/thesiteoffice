@@ -43,6 +43,13 @@
     <div id="progressDisplay"></div>
     <p class="hint" style="margin-top:0.5rem;">Actual Progress is a weighted average of every plot's own progress (set on its Plot Handovers page), each apartment block's own progress weighted by how many flats it has (a block's shared structure underpins every flat in it), plus External / Engineering Works below.</p>
     <p class="hint" id="programmeCompleteDisplay" style="margin-top:0.3rem; display:none;"></p>
+    <div id="progressSourceWrap" style="display:none; margin-top:0.6rem; align-items:center; gap:0.5rem;" class="flex-row">
+      <label for="progressSourceSelect" class="hint" style="margin:0;">Headline progress comes from</label>
+      <select id="progressSourceSelect">
+        <option value="plots">Plots (default)</option>
+        <option value="programme">Programme</option>
+      </select>
+    </div>
     <div id="generatePlotsWrap" style="display:none; margin-top:0.8rem;">
       <button type="button" class="btn btn-outline btn-sm" id="generatePlotsBtn"></button>
     </div>
@@ -887,7 +894,30 @@
     ragBadge.className = `badge badge-${project.rag_status} rag-badge`;
     ragBadge.innerHTML = `<span class="rag-dot rag-${project.rag_status}"></span>${RAG_LABEL[project.rag_status]}`;
     document.getElementById("progressDisplay").innerHTML = renderProgressBlock(project.baseline_progress_pct, project.actual_progress_pct, project.rag_status);
+
+    // v95: switching the headline progress source — editor-only (see
+    // projects_v69_progress_guard()'s own re-check server-side; this
+    // visibility toggle is a convenience, never the real boundary).
+    const isEditor = myRole === "owner" || myRole === "collaborator";
+    document.getElementById("progressSourceWrap").style.display = isEditor ? "flex" : "none";
+    document.getElementById("progressSourceSelect").value = project.progress_source || "plots";
   }
+
+  document.getElementById("progressSourceSelect").addEventListener("change", async (e) => {
+    const newValue = e.target.value;
+    const previousValue = project.progress_source || "plots";
+    clearError(pageErrorBox);
+    try {
+      const { data, error } = await supabase.from("projects").update({ progress_source: newValue }).eq("id", projectId).select().single();
+      if (error) throw error;
+      project = data;
+      renderHeaderAndFacts();
+      loadProgrammeComplete();
+    } catch (err) {
+      e.target.value = previousValue;
+      showError(pageErrorBox, err);
+    }
+  });
 
   // ─── Control Summary (Priority 6) ──────────────────────────────
   async function loadControlSummary() {

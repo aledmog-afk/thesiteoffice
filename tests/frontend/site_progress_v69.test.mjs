@@ -270,6 +270,77 @@ test("Site Details: an active programme with nothing countable (e.g. everything 
   assert.equal(document.getElementById("programmeCompleteDisplay").style.display, "none");
 });
 
+// ─── Progress source control (v95) ─────────────────────────────────
+// Editor-only, enforced server-side by projects_v69_progress_guard()
+// (a trigger re-checking is_project_editor() itself) — this control's
+// visibility here is a convenience, never the real boundary (proven
+// directly against real RLS in tests/database/v95_programme_driven_progress.test.mjs).
+test("Site Details: the progress-source control is shown to an editor, reflecting the project's current setting", async () => {
+  const { document } = await runSiteDetails({ ...PROJECT_BASE, progress_source: "programme" });
+  assert.equal(document.getElementById("progressSourceWrap").style.display, "flex");
+  assert.equal(document.getElementById("progressSourceSelect").value, "programme");
+});
+
+test("Site Details: the progress-source control defaults to 'plots' when the project has no progress_source set (an older row)", async () => {
+  const { document } = await runSiteDetails(PROJECT_BASE);
+  assert.equal(document.getElementById("progressSourceSelect").value, "plots");
+});
+
+test("Site Details: the progress-source control is hidden for a non-editor (snagging-only) role", async () => {
+  const { document } = await runSiteDetails(PROJECT_BASE, { rpc: { get_my_role: { data: "snagging", error: null } } });
+  assert.equal(document.getElementById("progressSourceWrap").style.display, "none");
+});
+
+test("Site Details: changing the progress-source select updates the project via supabase and re-renders", async () => {
+  const sb = mockSupabase({
+    singles: { projects: { ...PROJECT_BASE, progress_source: "plots" } },
+    rpc: { get_my_role: { data: "owner", error: null }, get_project_members: { data: [], error: null } },
+  });
+  const { document } = await runPage(page("project.html"), extractScript(page("project.html")), projectContext(sb));
+  await wait(40);
+
+  const select = document.getElementById("progressSourceSelect");
+  select.value = "programme";
+  fireEvent(select, "change");
+  await wait(20);
+
+  const updateCall = sb.calls.find((c) => c.op === "update" && c.table === "projects" && c.payload?.progress_source === "programme");
+  assert.ok(updateCall, "changing the select must call supabase.from(\"projects\").update({ progress_source: ... })");
+});
+
+test("Site Details: a failed progress-source update shows the error and reverts the select to its previous value", async () => {
+  const sb = {
+    calls: [],
+    auth: { getUser: async () => ({ data: { user: { id: "u-owner" } } }) },
+    rpc: async (name) => ({ data: name === "get_my_role" ? "owner" : null, error: null }),
+    from(table) {
+      const api = {
+        select() { return api; },
+        eq() { return api; },
+        order() { return api; },
+        single: async () => (table === "projects" ? { data: { ...PROJECT_BASE, progress_source: "plots" }, error: null } : { data: null, error: null }),
+        update(payload) {
+          sb.calls.push({ op: "update", table, payload });
+          return { eq: () => ({ select: () => ({ single: async () => ({ data: null, error: { message: "Only a project editor can change the progress source." } }) }) }) };
+        },
+        then(resolve) { resolve({ data: [], error: null }); },
+      };
+      return api;
+    },
+  };
+  const { document } = await runPage(page("project.html"), extractScript(page("project.html")), projectContext(sb));
+  await wait(40);
+
+  const select = document.getElementById("progressSourceSelect");
+  assert.equal(select.value, "plots");
+  select.value = "programme";
+  fireEvent(select, "change");
+  await wait(20);
+
+  assert.equal(select.value, "plots", "a failed update must revert the select to its previous value");
+  assert.match(document.getElementById("pageErrorBox").textContent, /Only a project editor/);
+});
+
 test("Site Details: packages show their share and %, with report tasks read-only beside the matching package and the rest under unassigned; notes history renders", async () => {
   const packages = [
     { id: "k1", name: "Sewers", share: 40, percent: 100, report_stages: ["Drainage (Below Ground)"], sort_order: 1 },

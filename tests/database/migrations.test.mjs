@@ -704,10 +704,10 @@ test("Programme Control: tables, indexes, triggers, RLS policies and the one-act
     assert.equal(tables.rows[0].n, 2);
 
     const progTriggers = await client.query("select count(*)::int as n from pg_trigger where tgrelid = 'public.programmes'::regclass and tgname like 'trg_%'");
-    assert.equal(progTriggers.rows[0].n, 2, "exactly 2 triggers on programmes (before-write + audit), never duplicated");
+    assert.equal(progTriggers.rows[0].n, 3, "[v95: + 1 progress-recalc after-trigger] before-write + audit + the v95 recalc-on-activation/archive trigger, never duplicated");
 
     const actTriggers = await client.query("select count(*)::int as n from pg_trigger where tgrelid = 'public.programme_activities'::regclass and tgname like 'trg_%'");
-    assert.equal(actTriggers.rows[0].n, 2, "exactly 2 triggers on programme_activities (before-write + audit), never duplicated");
+    assert.equal(actTriggers.rows[0].n, 3, "[v95: + 1 progress-recalc after-trigger] before-write + audit + the v95 recalc-on-activity-change trigger, never duplicated");
 
     const progPolicies = await client.query("select count(*)::int as n from pg_policies where tablename = 'programmes'");
     assert.equal(progPolicies.rows[0].n, 6, "[v62: + 3 capability policies] programmes has select/insert/update only, no delete policy");
@@ -1017,6 +1017,50 @@ test("v91: platform_admins, is_platform_admin(), and the interest_signups SELECT
 
     const grant = await client.query(`select has_table_privilege('authenticated', 'public.interest_signups', 'select') as can_select`);
     assert.equal(grant.rows[0].can_select, true);
+
+    await client.end();
+  } finally {
+    await dropTestDatabase(db);
+  }
+});
+
+// v95: Programme-driven progress — the behaviour itself (issue raises
+// percent, never lowers; progress_source editor-only; recalc fallback)
+// is proven directly in tests/database/v95_programme_driven_progress.test.mjs.
+// The only thing checked at this schema-shape level is idempotency.
+test("v95: progress_source column, its guard/recalc triggers, and the new SECURITY DEFINER functions are idempotent across repeated re-application", async () => {
+  const db = "tracker_test_v95_idempotent";
+  await createTestDatabase(db);
+  try {
+    const client = adminClient(db);
+    await client.connect();
+    await runSqlFile(client, MOCK_SETUP);
+    for (let i = 0; i < 3; i++) {
+      await runSqlFile(client, CURRENT_SCHEMA);
+    }
+
+    const col = await client.query("select count(*)::int as n from information_schema.columns where table_schema = 'public' and table_name = 'projects' and column_name = 'progress_source'");
+    assert.equal(col.rows[0].n, 1, "projects.progress_source must exist exactly once");
+
+    const checkConstraints = await client.query("select count(*)::int as n from pg_constraint where conname = 'projects_progress_source_check'");
+    assert.equal(checkConstraints.rows[0].n, 1, "the progress_source CHECK constraint must not be duplicated across re-applications");
+
+    for (const fn of ["compute_programme_complete_pct", "raise_programme_activity_from_report", "projects_v95_progress_source_after", "programme_activities_v95_progress_after", "programmes_v95_progress_after"]) {
+      const r = await client.query("select count(*)::int as n from information_schema.routines where routine_schema = 'public' and routine_name = $1", [fn]);
+      assert.equal(r.rows[0].n, 1, `${fn} must exist exactly once after repeated re-application`);
+    }
+
+    for (const trg of [["trg_projects_v95_progress_source_after", "projects"], ["trg_programme_activities_v95_progress_after", "programme_activities"], ["trg_programmes_v95_progress_after", "programmes"]]) {
+      const r = await client.query("select count(*)::int as n from pg_trigger t join pg_class c on c.oid = t.tgrelid where t.tgname = $1 and c.relname = $2 and not t.tgisinternal", trg);
+      assert.equal(r.rows[0].n, 1, `${trg[0]} on ${trg[1]} must exist exactly once, not once per re-application`);
+    }
+
+    const grants = await client.query(`
+      select routine_name, grantee from information_schema.role_routine_grants
+      where routine_schema = 'public' and grantee in ('anon', 'authenticated')
+        and routine_name in ('compute_programme_complete_pct', 'raise_programme_activity_from_report', 'recalc_project_progress', 'apply_weekly_report_progress', 'projects_v95_progress_source_after', 'programme_activities_v95_progress_after', 'programmes_v95_progress_after')
+    `);
+    assert.equal(grants.rowCount, 0, "none of the new/extended SECURITY DEFINER functions should be directly callable by anon or authenticated");
 
     await client.end();
   } finally {
