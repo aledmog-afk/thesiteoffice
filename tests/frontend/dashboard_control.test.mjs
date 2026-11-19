@@ -408,3 +408,116 @@ test("dashboard.html: with no drill-down fields on the control summary (a pre-ex
   assert.ok(programmeTileBox);
   assert.equal(programmeTileBox.querySelector(".totals-value").textContent, "0");
 });
+
+// ─── "Completed sites" (v96) ──────────────────────────────────────
+// A complete-status project drops out of programme items/exceptions
+// entirely (getPortfolioControlSummary() already zeroes its own
+// programme counts and excludes it from activeProgrammeActivities —
+// these fixtures reflect exactly that real shape) but keeps every
+// snag/action signal — it's still "Attention" here purely from an
+// overdue action, and that action still appears in both the Overdue
+// tile drill-down and the Project Control List's own row.
+const COMPLETED_PROJECT = { id: "p3", name: "Birch Lane", status: "complete" };
+const COMPLETED_SITE_OVERDUE_ACTION = { id: "a9", project_id: "p3", title: "Final snag re-check", status: "open", priority: "medium", due_date: "2026-06-03", projects: { name: "Birch Lane" }, categories: { overdue: true, dueToday: false, dueSoon: false, blocked: false, highCritical: false } };
+const COMPLETED_SITE_OPEN_ACTION = { id: "a9", project_id: "p3", title: "Final snag re-check", status: "open", priority: "medium", due_date: "2026-06-03", projects: { name: "Birch Lane" } };
+
+function makeCompletedSiteSummary() {
+  return {
+    calls: 0,
+    async get() {
+      this.calls++;
+      return {
+        rows: [
+          { project: DRILLDOWN_PROJECT_ATTENTION, counts: { openActions: 4, overdue: 2, overdueCritical: 1, dueToday: 0, dueSoon: 0, blocked: 1, highCritical: 1 }, status: { level: "attention", label: "Attention", reason: "Attention — 2 overdue actions (1 critical), 1 blocked." } },
+          // A complete site's own counts already have every programme
+          // field at 0 — this is what getPortfolioControlSummary()
+          // itself now produces for it (countProgrammeSignals([])),
+          // never a hand-rolled all-zero shape here.
+          { project: COMPLETED_PROJECT, counts: { openActions: 1, overdue: 1, overdueCritical: 0, dueToday: 0, dueSoon: 0, blocked: 0, highCritical: 0, overdueProgrammeActivities: 0, overdueProgrammeMilestones: 0, materialForecastLateProgrammeActivities: 0, forecastLateProgrammeMilestones: 0 }, status: { level: "attention", label: "Attention", reason: "Attention — 1 overdue action." } },
+        ],
+        totals: { openActions: 5, overdue: 3, dueToday: 0, blocked: 1, highCritical: 1, overdueProgrammeActivities: 1, overdueProgrammeMilestones: 0, materialForecastLateProgrammeActivities: 1, forecastLateProgrammeMilestones: 0 },
+        projectsRequiringAttention: 2,
+        openActionsList: [...OPEN_ACTIONS_LIST, COMPLETED_SITE_OPEN_ACTION],
+        // The completed site contributes NOTHING here, even though it
+        // has its own programme — exactly the exclusion
+        // getPortfolioControlSummary() now applies.
+        activeProgrammeActivities: [OVERDUE_TASK, MATERIAL_LATE_TASK],
+      };
+    },
+  };
+}
+const COMPLETED_SITE_ATTENTION_ACTIONS = [OVERDUE_ACTION_1, OVERDUE_ACTION_2, BLOCKED_ACTION_DECOY, COMPLETED_SITE_OVERDUE_ACTION];
+
+test("dashboard.html: the Project Control List splits a complete-status project into its own collapsed 'Completed sites' table, collapsed by default", async () => {
+  const { document } = await run({ summary: makeCompletedSiteSummary(), attentionActions: COMPLETED_SITE_ATTENTION_ACTIONS });
+  await wait(30);
+
+  assert.match(document.getElementById("controlRows").innerHTML, /Elm Grove/);
+  assert.ok(!document.getElementById("controlRows").innerHTML.includes("Birch Lane"), "a complete-status project must not appear in the live Project Control List");
+
+  const section = document.getElementById("completedControlSection");
+  assert.equal(section.style.display, "block");
+  assert.equal(section.open, false, "collapsed by default");
+  assert.equal(document.getElementById("completedControlCount").textContent, "1");
+  assert.match(document.getElementById("completedControlRows").innerHTML, /Birch Lane/);
+  assert.match(document.getElementById("completedControlRows").innerHTML, /Attention — 1 overdue action\./, "the completed site's own status badge reflects only its action signal, never a programme one");
+});
+
+test("dashboard.html: the Attention/Watch/On Track filter above the Project Control List never touches the completed-sites table underneath it", async () => {
+  const { document } = await run({ summary: makeCompletedSiteSummary(), attentionActions: COMPLETED_SITE_ATTENTION_ACTIONS });
+  await wait(30);
+
+  fireEvent(document.querySelector('#projectFilterGroup button[data-filter="on_track"]'), "click");
+  assert.ok(!document.getElementById("controlRows").innerHTML.includes("Elm Grove"), "the Attention-level live project is filtered out by On Track");
+  assert.match(document.getElementById("completedControlRows").innerHTML, /Birch Lane/, "the completed-status project stays listed regardless of the live filter");
+});
+
+test("dashboard.html: Overdue Programme stays driven only by live sites — a completed site's own programme contributes nothing to the tile or its drill-down list", async () => {
+  const { document } = await run({ summary: makeCompletedSiteSummary(), attentionActions: COMPLETED_SITE_ATTENTION_ACTIONS });
+  await wait(30);
+
+  const tileValue = Number(tileButton(document, "Overdue Programme").querySelector(".totals-value").textContent);
+  assert.equal(tileValue, 1, "only Elm Grove's own overdue activity, nothing from the completed site");
+  fireEvent(tileButton(document, "Overdue Programme"), "click");
+  const rows = document.querySelectorAll("#tileDrilldownRows tr");
+  assert.equal(rows.length, tileValue, "drill-down list length still equals the tile's own number");
+  assert.ok(!document.getElementById("tileDrilldownRows").textContent.includes("Birch Lane"));
+});
+
+test("dashboard.html: the Overdue action tile still includes a completed site's own overdue action, and the drill-down list length still equals the tile count", async () => {
+  const { document } = await run({ summary: makeCompletedSiteSummary(), attentionActions: COMPLETED_SITE_ATTENTION_ACTIONS });
+  await wait(30);
+
+  const tileValue = Number(tileButton(document, "Overdue").querySelector(".totals-value").textContent);
+  assert.equal(tileValue, 3, "Elm Grove's 2 overdue actions plus the completed site's 1 — snagging/actions are never excluded for a complete site");
+  fireEvent(tileButton(document, "Overdue"), "click");
+  const rows = document.querySelectorAll("#tileDrilldownRows tr");
+  assert.equal(rows.length, tileValue);
+  assert.match(document.getElementById("tileDrilldownRows").textContent, /Final snag re-check/);
+  assert.match(document.getElementById("tileDrilldownRows").textContent, /Birch Lane/);
+});
+
+test("dashboard.html: the Open Actions tile also includes a completed site's own open action, with list length still matching the tile count", async () => {
+  const { document } = await run({ summary: makeCompletedSiteSummary(), attentionActions: COMPLETED_SITE_ATTENTION_ACTIONS });
+  await wait(30);
+
+  const tileValue = Number(tileButton(document, "Open Actions").querySelector(".totals-value").textContent);
+  assert.equal(tileValue, 5);
+  fireEvent(tileButton(document, "Open Actions"), "click");
+  const rows = document.querySelectorAll("#tileDrilldownRows tr");
+  assert.equal(rows.length, tileValue);
+  assert.match(document.getElementById("tileDrilldownRows").textContent, /Final snag re-check/);
+});
+
+test("dashboard.html: Projects Requiring Attention includes a completed site made attention-level purely by an action, and its reason text says so (no programme wording)", async () => {
+  const { document } = await run({ summary: makeCompletedSiteSummary(), attentionActions: COMPLETED_SITE_ATTENTION_ACTIONS });
+  await wait(30);
+
+  fireEvent(tileButton(document, "Projects Requiring Attention"), "click");
+  const rows = document.querySelectorAll("#tileDrilldownRows tr");
+  assert.equal(rows.length, 2);
+  const text = document.getElementById("tileDrilldownRows").textContent;
+  assert.match(text, /Birch Lane/);
+  assert.match(text, /Attention — 1 overdue action\./);
+  assert.ok(!text.includes("programme"), "a completed site's own attention reason must never cite a programme exception");
+});

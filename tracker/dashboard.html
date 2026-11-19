@@ -168,6 +168,19 @@
           <tbody id="controlRows"></tbody>
         </table>
       </div>
+      <!-- v96: "Completed sites" — collapsed by default, same reasoning
+           as the completed project tiles below (snagging/actions still
+           count; programme items/exceptions don't — see app.js'
+           getPortfolioControlSummary()). -->
+      <details id="completedControlSection" style="display:none; margin-top:1rem;">
+        <summary style="cursor:pointer; font-weight:600;">Completed sites (<span id="completedControlCount">0</span>)</summary>
+        <div class="table-wrap" style="margin-top:0.6rem;">
+          <table>
+            <thead><tr><th>Project</th><th>Status</th><th>Open</th><th>Overdue</th><th>Blocked</th><th>Due Soon</th></tr></thead>
+            <tbody id="completedControlRows"></tbody>
+          </table>
+        </div>
+      </details>
     </div>
   </div>
 
@@ -195,6 +208,17 @@
     <p>No projects yet. Add your first one to start logging weekly reports and snags — or, if you're joining another company's project, open the company invite link they sent you.</p>
     <button class="btn btn-amber" id="emptyNewBtn">+ New Project</button>
   </div>
+
+  <!-- v96: "Completed sites" — collapsed by default. A complete site
+       stays fully usable (snagging, documents, reports — its tile
+       still links straight to project.html); it just drops its
+       progress/programme figures, which are no longer meaningfully
+       tracked once the build itself is done. Setting a site back to
+       Active on project.html returns it to the live grid above. -->
+  <details id="completedSitesSection" style="display:none; margin-top:1.5rem;">
+    <summary style="cursor:pointer; font-weight:600;">Completed sites (<span id="completedSitesCount">0</span>)</summary>
+    <div id="completedGrid" class="grid" style="margin-top:1rem;"></div>
+  </details>
 </div>
 
 <script type="module">
@@ -478,21 +502,34 @@
     renderAttentionActions();
   });
 
+  function controlRowHtml(r) {
+    const c = r.counts;
+    return `
+      <tr>
+        <td><a href="project.html?id=${r.project.id}">${escapeHtml(r.project.name)}</a></td>
+        <td><span class="badge ${CONTROL_LEVEL_BADGE[r.status.level]}" title="${escapeHtml(r.status.reason)}">${escapeHtml(r.status.label)}</span></td>
+        <td>${c ? c.openActions : "—"}</td>
+        <td>${c ? c.overdue : "—"}</td>
+        <td>${c ? c.blocked : "—"}</td>
+        <td>${c ? c.dueSoon : "—"}</td>
+      </tr>
+    `;
+  }
+  // v96: "Completed sites" split off into their own collapsed table —
+  // the Attention/Watch/On Track filter above only ever applies to the
+  // live rows; a completed site's own row still shows whatever
+  // snag/action-driven status it has (programme signals excluded —
+  // see getPortfolioControlSummary()), just never mixed into the live
+  // list or that filter.
   function renderControlRows() {
-    const rows = projectFilter === "all" ? controlSummary.rows : controlSummary.rows.filter((r) => r.status.level === projectFilter);
-    document.getElementById("controlRows").innerHTML = rows.map((r) => {
-      const c = r.counts;
-      return `
-        <tr>
-          <td><a href="project.html?id=${r.project.id}">${escapeHtml(r.project.name)}</a></td>
-          <td><span class="badge ${CONTROL_LEVEL_BADGE[r.status.level]}" title="${escapeHtml(r.status.reason)}">${escapeHtml(r.status.label)}</span></td>
-          <td>${c ? c.openActions : "—"}</td>
-          <td>${c ? c.overdue : "—"}</td>
-          <td>${c ? c.blocked : "—"}</td>
-          <td>${c ? c.dueSoon : "—"}</td>
-        </tr>
-      `;
-    }).join("");
+    const liveRows = controlSummary.rows.filter((r) => r.project.status !== "complete");
+    const completedRows = controlSummary.rows.filter((r) => r.project.status === "complete");
+    const filtered = projectFilter === "all" ? liveRows : liveRows.filter((r) => r.status.level === projectFilter);
+    document.getElementById("controlRows").innerHTML = filtered.map(controlRowHtml).join("");
+
+    document.getElementById("completedControlCount").textContent = completedRows.length;
+    document.getElementById("completedControlSection").style.display = completedRows.length ? "block" : "none";
+    document.getElementById("completedControlRows").innerHTML = completedRows.map(controlRowHtml).join("");
   }
   document.querySelectorAll("#projectFilterGroup button").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -593,22 +630,35 @@
       return flags.length ? `<div class="tile-flags" style="display:flex; flex-wrap:wrap; gap:0.3rem; margin:0.4rem 0;">${flags.join("")}</div>` : "";
     }
 
-    grid.innerHTML = projects.map((p) => `
+    // v96: "Completed sites" — dropped out of the progress/programme
+    // figures (renderProgressBlock, "Programme complete") below, since
+    // neither is meaningfully tracked once the build itself is done;
+    // open snags and last report (snagging is why a complete site is
+    // still open at all) stay exactly as for a live site.
+    function tileHtml(p, { live }) {
+      return `
       <a class="tile" href="project.html?id=${p.id}">
         <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:0.6rem;">
           <div class="tile-name">${escapeHtml(p.name)}</div>
           <span class="badge badge-${p.rag_status} rag-badge"><span class="rag-dot rag-${p.rag_status}"></span>${RAG_LABEL[p.rag_status]}</span>
         </div>
         <div class="tile-meta">${escapeHtml(p.main_contractor_name || "No contractor set")}${p.status !== "active" ? ` · <span class="badge badge-grey">${escapeHtml(p.status)}</span>` : ""}</div>
-        ${renderProgressBlock(p.baseline_progress_pct, p.actual_progress_pct, p.rag_status)}
-        ${programmeCompleteHtml(p)}
-        ${externalWorksFlagsHtml(p)}
+        ${live ? renderProgressBlock(p.baseline_progress_pct, p.actual_progress_pct, p.rag_status) : ""}
+        ${live ? programmeCompleteHtml(p) : ""}
+        ${live ? externalWorksFlagsHtml(p) : ""}
         <div class="tile-stats">
           <div><strong>${openSnagCount[p.id] || 0}</strong>open snags</div>
           <div><strong>${lastReport[p.id] ? formatDate(lastReport[p.id]) : "—"}</strong>last report</div>
         </div>
       </a>
-    `).join("");
+    `;
+    }
+    const liveProjects = projects.filter((p) => p.status !== "complete");
+    const completedProjects = projects.filter((p) => p.status === "complete");
+    grid.innerHTML = liveProjects.map((p) => tileHtml(p, { live: true })).join("");
+    document.getElementById("completedSitesCount").textContent = completedProjects.length;
+    document.getElementById("completedSitesSection").style.display = completedProjects.length ? "block" : "none";
+    document.getElementById("completedGrid").innerHTML = completedProjects.map((p) => tileHtml(p, { live: false })).join("");
   }
 
   // v61: snags on jobs with companies that haven't been given to one

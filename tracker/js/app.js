@@ -1898,7 +1898,15 @@ export async function getPortfolioControlSummary() {
     counts.highSeverityHs = countHighSeverityHsIssues(hsByProject.get(project.id) || []);
     Object.assign(counts, countFindingSignals(findingsByProject.get(project.id) || [], actionsById, todayStr));
     Object.assign(counts, countSnagSignals(snagsByProject.get(project.id) || [], todayStr));
-    Object.assign(counts, countProgrammeSignals(progActivitiesByProject.get(project.id) || [], todayStr));
+    // v96: "Completed sites" — a complete-status site drops out of
+    // programme items/exceptions entirely (it's no longer being tracked
+    // against a programme), but keeps every snag/action signal above
+    // exactly as a live site — snagging is why a complete site is still
+    // open at all. Passing countProgrammeSignals() an empty array (the
+    // same function every active site's own signals go through) is
+    // exactly its own "no countable activities" shape — never a second,
+    // bespoke all-zero object that could drift from it.
+    Object.assign(counts, countProgrammeSignals(project.status === "complete" ? [] : progActivitiesByProject.get(project.id) || [], todayStr));
     return { project, counts, status: computeControlStatus(counts) };
   });
 
@@ -1932,7 +1940,12 @@ export async function getPortfolioControlSummary() {
   // selects already made above).
   const nonRestrictedProjectIds = new Set(rows.filter((r) => r.counts).map((r) => r.project.id));
   const openActionsList = (actions || []).filter((a) => nonRestrictedProjectIds.has(a.project_id) && !["completed", "cancelled"].includes(a.status));
-  const activeProgrammeActivities = (progActivities || []).filter((a) => nonRestrictedProjectIds.has(a.project_id) && a.programmes?.status === "active");
+  // v96: excludes complete-status projects too, matching the same
+  // exclusion the counts above just applied — keeps this list's length
+  // equal to the Overdue Programme/Programme Forecast Late tiles' own
+  // counts, which a complete site no longer contributes to at all.
+  const programmeCountedProjectIds = new Set(rows.filter((r) => r.counts && r.project.status !== "complete").map((r) => r.project.id));
+  const activeProgrammeActivities = (progActivities || []).filter((a) => programmeCountedProjectIds.has(a.project_id) && a.programmes?.status === "active");
 
   return { rows, totals, projectsRequiringAttention: rows.filter((r) => r.status.level === "attention").length, openActionsList, activeProgrammeActivities };
 }

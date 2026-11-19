@@ -9,7 +9,7 @@ import { extractScript, runPage, fireEvent, wait } from "../lib/jsdom-harness.mj
 
 const HTML = new URL("../../tracker/dashboard.html", import.meta.url).pathname;
 
-function makeSupabase({ ensureOrgId = "org-1", projects = [], programmes = [], programmeActivities = [] } = {}) {
+function makeSupabase({ ensureOrgId = "org-1", projects = [], programmes = [], programmeActivities = [], snags = [], reports = [] } = {}) {
   const calls = [];
   return {
     calls,
@@ -35,6 +35,8 @@ function makeSupabase({ ensureOrgId = "org-1", projects = [], programmes = [], p
           if (table === "projects") resolve({ data: projects, error: null });
           else if (table === "programmes") resolve({ data: programmes, error: null });
           else if (table === "programme_activities") resolve({ data: programmeActivities, error: null });
+          else if (table === "snag_items") resolve({ data: snags, error: null });
+          else if (table === "weekly_reports") resolve({ data: reports, error: null });
           else resolve({ data: [], error: null });
         },
       };
@@ -55,7 +57,12 @@ async function run(supabase) {
     showError: (el, err) => { el.textContent = (err && err.message) || String(err); el.style.display = "block"; },
     clearError: (el) => { el.textContent = ""; el.style.display = "none"; },
     RAG_LABEL: { red: "Red", amber: "Amber", green: "Green" },
-    renderProgressBlock: () => "",
+    renderProgressBlock: (b, a) => `<div class="progress-block" data-actual="${a}"></div>`,
+    // The real isSnagOutstanding() (app.js) — every pre-existing test
+    // here passes no snags at all, so this was never previously
+    // exercised; the v96 "Completed sites" tests below are the first
+    // to pass real snag rows through loadSites()'s own open-snag count.
+    isSnagOutstanding: (s) => !["closed", "rejected"].includes(s.status),
     ensureOrganisation: async () => {
       const { data, error } = await supabase.rpc("ensure_organisation");
       if (error) throw error;
@@ -107,6 +114,59 @@ test("dashboard.html: a site with no active programme shows no 'Programme comple
   const { document } = await run(makeSupabase({ projects: [project] }));
   await wait(20);
   assert.ok(!document.getElementById("grid").innerHTML.includes("Programme complete"));
+});
+
+// ─── "Completed sites" section (v96) ─────────────────────────────
+// A complete-status site drops out of the live grid into its own
+// collapsed section below — it stays fully clickable/usable (its tile
+// still links to project.html), it just loses the progress/programme
+// figures that are no longer meaningfully tracked once the build is
+// done (open snags / last report stay, per the brief: snagging is why
+// a complete site is still open at all).
+test("dashboard.html: a live (active/on hold) site stays in the main grid; a complete site moves into the collapsed 'Completed sites' section, collapsed by default", async () => {
+  const live = { id: "p1", name: "Elm Grove", main_contractor_name: "Acme Ltd", rag_status: "green", status: "active", baseline_progress_pct: 10, actual_progress_pct: 12 };
+  const onHold = { id: "p2", name: "Oak Close", main_contractor_name: "Acme Ltd", rag_status: "amber", status: "on hold", baseline_progress_pct: 20, actual_progress_pct: 15 };
+  const done = { id: "p3", name: "Birch Lane", main_contractor_name: "Acme Ltd", rag_status: "green", status: "complete", baseline_progress_pct: 100, actual_progress_pct: 100 };
+  const { document } = await run(makeSupabase({ projects: [live, onHold, done] }));
+  await wait(20);
+
+  const grid = document.getElementById("grid").innerHTML;
+  assert.match(grid, /Elm Grove/);
+  assert.match(grid, /Oak Close/, "an on-hold site stays in the live grid exactly as now");
+  assert.ok(!grid.includes("Birch Lane"), "a complete site must not appear in the live grid");
+
+  const section = document.getElementById("completedSitesSection");
+  assert.equal(section.style.display, "block", "shown once there's at least one completed site");
+  assert.equal(section.open, false, "collapsed by default — not auto-expanded");
+  assert.equal(document.getElementById("completedSitesCount").textContent, "1");
+  assert.match(document.getElementById("completedGrid").innerHTML, /Birch Lane/);
+  assert.match(document.getElementById("completedGrid").innerHTML, /href="project.html\?id=p3"/, "a completed site's tile still links straight to its project page");
+});
+
+test("dashboard.html: with no completed sites at all, the 'Completed sites' section stays hidden", async () => {
+  const live = { id: "p1", name: "Elm Grove", main_contractor_name: "Acme Ltd", rag_status: "green", status: "active", baseline_progress_pct: 10, actual_progress_pct: 12 };
+  const { document } = await run(makeSupabase({ projects: [live] }));
+  await wait(20);
+  assert.equal(document.getElementById("completedSitesSection").style.display, "none");
+  assert.equal(document.getElementById("completedSitesCount").textContent, "0");
+});
+
+test("dashboard.html: a completed site's tile shows neither the Actual Progress bar nor a 'Programme complete' figure — open snags and last report are unaffected", async () => {
+  const done = { id: "p3", name: "Birch Lane", main_contractor_name: "Acme Ltd", rag_status: "green", status: "complete", baseline_progress_pct: 100, actual_progress_pct: 100 };
+  const programmes = [{ id: "prog1", project_id: "p3", status: "active" }];
+  const programmeActivities = [{ programme_id: "prog1", status: "complete", percent_complete: 100, is_milestone: false, planned_start: "2026-01-01", planned_finish: "2026-01-11" }];
+  const { document } = await run(makeSupabase({
+    projects: [done], programmes, programmeActivities,
+    snags: [{ project_id: "p3", status: "open" }, { project_id: "p3", status: "open" }],
+    reports: [{ project_id: "p3", week_ending: "2026-10-01" }],
+  }));
+  await wait(20);
+
+  const html = document.getElementById("completedGrid").innerHTML;
+  assert.ok(!html.includes("progress-block"), "no Actual Progress bar for a completed site's tile");
+  assert.ok(!html.includes("Programme complete"), "no 'Programme complete' figure for a completed site's tile, even with an active programme behind it");
+  assert.match(html, />2<\/strong>\s*open snags/, "open snag count is unaffected by completion status");
+  assert.match(html, />2026-10-01<\/strong>\s*last report/, "last report date is unaffected by completion status");
 });
 
 test("dashboard.html: creating a project resolves the caller's organisation and includes org_id in the insert", async () => {
