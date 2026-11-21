@@ -143,7 +143,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, mountTableEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions, comparePlotNumbers, normalisePlotToken, syncGateStatusFromMilestones, EXTERNAL_WORKS_TAG, PHOTO_COMPLIANCE_STATUS, RESOURCE_ADEQUACY, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_LEVELS, RISK_IMPACT_BADGE, RISK_OWNER_SUGGESTIONS, STATUTORY_MILESTONE_TYPES, STATUTORY_OUTCOMES, STATUTORY_OUTCOME_BADGE, getWeeklyReportPosition, isWeeklyReportLocked, reviseWeeklyReport, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, CONTROL_LEVEL_BADGE, FINDING_SEVERITY_LABEL, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel, getRfiLinksForWeeklyReport, attachReportCommercialNotes, getUnattachedDiaryEntries, getWeeklyReportDiaryEntries, attachDiaryEntryToReport, updateAttachedDiaryEntry, removeAttachedDiaryEntry, getActiveProgramme, listProgrammeActivities } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, mountTableEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions, comparePlotNumbers, normalisePlotToken, syncGateStatusFromMilestones, EXTERNAL_WORKS_TAG, PHOTO_COMPLIANCE_STATUS, RESOURCE_ADEQUACY, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_LEVELS, RISK_IMPACT_BADGE, RISK_OWNER_SUGGESTIONS, STATUTORY_MILESTONE_TYPES, STATUTORY_OUTCOMES, STATUTORY_OUTCOME_BADGE, getWeeklyReportPosition, isWeeklyReportEarlyWarningsCalculated, isWeeklyReportLocked, reviseWeeklyReport, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, CONTROL_LEVEL_BADGE, FINDING_SEVERITY_LABEL, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel, getRfiLinksForWeeklyReport, attachReportCommercialNotes, getUnattachedDiaryEntries, getWeeklyReportDiaryEntries, attachDiaryEntryToReport, updateAttachedDiaryEntry, removeAttachedDiaryEntry, getActiveProgramme, listProgrammeActivities } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -192,6 +192,27 @@
     `;
   }
 
+  // v97: one line per unmatched planned item / behind-two-weeks /
+  // labour-drop / weather-lost-time warning — see computeEarlyWarnings()
+  // in app.js for the exact rules. `warnings` is undefined for a report
+  // saved before this existed (isWeeklyReportEarlyWarningsCalculated()
+  // is false) — shown as "not calculated", never a false "none" or a
+  // misleading 0.
+  function earlyWarningsHtml(position) {
+    const calculated = isWeeklyReportEarlyWarningsCalculated(position);
+    const warnings = calculated ? position.earlyWarnings : [];
+    return `
+      <div class="early-warnings-box" style="border:1px solid var(--rule); border-radius:6px; padding:0.8rem 1rem; margin-bottom:1rem;${warnings.length ? " border-left:4px solid var(--red);" : ""}">
+        <strong>EARLY WARNINGS</strong>
+        ${!calculated
+          ? `<p class="hint" style="margin:0.3rem 0 0;">Not calculated for this report — hit Refresh Position to calculate them.</p>`
+          : warnings.length
+            ? `<ul class="body-list" style="margin:0.4rem 0 0;">${warnings.map((w) => `<li>${escapeHtml(w.message)}</li>`).join("")}</ul>`
+            : `<p class="hint" style="margin:0.3rem 0 0;">No early warnings this week.</p>`}
+      </div>
+    `;
+  }
+
   function renderPositionBody(position) {
     if (!position) { document.getElementById("positionBody").innerHTML = `<p class="hint">Set both week dates above, then hit Refresh Position.</p>`; return; }
     const { exceptions, activity, actionsSummary, snagsSummary, inspectionsSummary, hsSummary, programmeSummary } = position;
@@ -207,6 +228,7 @@
     ];
 
     document.getElementById("positionBody").innerHTML = `
+      ${earlyWarningsHtml(position)}
       ${programmeSignalHtml(programmeSummary, position.period)}
       <div style="margin-bottom:1rem;">
         <span class="badge ${CONTROL_LEVEL_BADGE[exceptions.status.level] || "badge-grey"}">${exceptions.status.label}</span>
@@ -253,7 +275,17 @@
     document.getElementById("positionCard").style.display = "block";
     document.getElementById("positionBody").textContent = "Generating…";
     try {
-      currentPosition = await getWeeklyReportPosition(projectId, period);
+      // v97: early warnings need THIS report's own in-progress fields —
+      // whatever the live editors currently hold, since a brand-new,
+      // not-yet-saved report has no row of its own to read them back
+      // from yet.
+      const currentReportFields = {
+        progress_items: progressEditor.getItems(),
+        programme_status: document.getElementById("programmeStatus").value,
+        labour_records: labourEditor.getRows(),
+        weather_days: weatherTracker.getDays(),
+      };
+      currentPosition = await getWeeklyReportPosition(projectId, period, currentReportFields);
       renderPositionBody(currentPosition);
     } catch (err) {
       showError(positionErrorBox, err);

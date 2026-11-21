@@ -75,7 +75,7 @@ function formSupabaseMock({ existingReport = null } = {}) {
   };
 }
 
-async function runForm({ reportId = null, existingReport = null, getWeeklyReportPosition, reviseWeeklyReport } = {}) {
+async function runForm({ reportId = null, existingReport = null, getWeeklyReportPosition, reviseWeeklyReport, extra = {} } = {}) {
   const supabase = formSupabaseMock({ existingReport });
   return runPage(FORM_HTML, extractScript(FORM_HTML), {
     __url: `https://example.com/weekly-report-form.html?project=p1${reportId ? `&id=${reportId}` : ""}`,
@@ -109,6 +109,7 @@ async function runForm({ reportId = null, existingReport = null, getWeeklyReport
     reviseWeeklyReport: reviseWeeklyReport || (async (id) => ({ ...existingReport, status: "draft" })),
     WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, CONTROL_LEVEL_BADGE,
     FINDING_SEVERITY_LABEL: { critical: "Critical" },
+    ...extra,
   });
 }
 
@@ -133,6 +134,58 @@ test("weekly-report-form.html: Refresh Position calls getWeeklyReportPosition wi
   await wait(30);
   assert.equal(calledWith.projectId, "p1");
   assert.equal(calledWith.period.weekStarting, document.getElementById("weekStarting").value);
+});
+
+// ─── Early warnings (v97) ───────────────────────────────────────
+test("weekly-report-form.html: generating a position passes the CURRENT form state (progress items, programme status, labour, weather) as the 3rd argument", async () => {
+  let receivedCurrentReport = null;
+  const { document } = await runForm({
+    getWeeklyReportPosition: async (projectId, period, currentReport) => { receivedCurrentReport = currentReport; return samplePosition(); },
+    extra: {
+      mountItemListEditor: (container, items) => ({ getItems: () => (items && items.length ? items : [{ id: "x1", text: "Groundworks", plot: "Plot 1", percent: 40 }]) }),
+      mountTableEditor: (container, rows) => ({ getRows: () => (rows && rows.length ? rows : [{ trade: "Groundworkers", headcount: 8 }]) }),
+    },
+  });
+  await wait(30);
+  document.getElementById("programmeStatus").value = "behind";
+  fireEvent(document.getElementById("refreshPositionBtn"), "click");
+  await wait(30);
+
+  assert.deepEqual(receivedCurrentReport.progress_items, [{ id: "x1", text: "Groundworks", plot: "Plot 1", percent: 40 }]);
+  assert.equal(receivedCurrentReport.programme_status, "behind");
+  assert.deepEqual(receivedCurrentReport.labour_records, [{ trade: "Groundworkers", headcount: 8 }]);
+  assert.ok(Array.isArray(receivedCurrentReport.weather_days), "weather_days comes straight from the real mountWeatherTracker(), not a mock");
+});
+
+test("weekly-report-form.html: the Early Warnings section lists each warning returned by getWeeklyReportPosition", async () => {
+  const { document } = await runForm({
+    getWeeklyReportPosition: async () => ({ ...samplePosition(), earlyWarnings: [{ type: "behind_two_weeks", message: "Behind programme for the second week running." }, { type: "weather_lost_time", message: "Weather lost time this week: 2 days affected." }] }),
+  });
+  await wait(30);
+  const box = document.querySelector(".early-warnings-box");
+  assert.ok(box, "an Early Warnings box must render");
+  assert.match(box.textContent, /Behind programme for the second week running\./);
+  assert.match(box.textContent, /Weather lost time this week: 2 days affected\./);
+});
+
+test("weekly-report-form.html: the Early Warnings section says 'No early warnings this week' when the array is genuinely empty", async () => {
+  const { document } = await runForm({ getWeeklyReportPosition: async () => ({ ...samplePosition(), earlyWarnings: [] }) });
+  await wait(30);
+  assert.match(document.querySelector(".early-warnings-box").textContent, /No early warnings this week\./);
+});
+
+test("weekly-report-form.html: an existing report saved before v97 (no earlyWarnings key at all) shows 'not calculated', never a false 'none'", async () => {
+  const existingReport = {
+    id: "r1", project_id: "p1", week_starting: "2026-09-07", week_ending: "2026-09-11",
+    status: "draft", prepared_by: "Jane", programme_status: "on-track",
+    weather_days: [], commercial_items: [], labour_records: [], risk_items: [], statutory_milestones: [], photos: [],
+    system_position: samplePosition(), // no earlyWarnings key — exactly a pre-v97 saved position
+  };
+  const { document } = await runForm({ reportId: "r1", existingReport });
+  await wait(30);
+  const text = document.querySelector(".early-warnings-box").textContent;
+  assert.match(text, /Not calculated for this report/);
+  assert.ok(!text.includes("No early warnings this week"), "must never show the calculated-zero message for an uncalculated position");
 });
 
 test("weekly-report-form.html: an approved (locked) existing report disables the form and offers Revise", async () => {
@@ -246,6 +299,35 @@ test("weekly-report-view.html: the status badge and doc both reflect the real re
   await wait(30);
   assert.equal(document.getElementById("statusBadge").textContent, "Issued");
   assert.ok(document.getElementById("doc").innerHTML.includes("Issued"), "the printable document itself must also show the real status");
+});
+
+// ─── Early warnings (v97) — frozen snapshot, read-only ───────────
+test("weekly-report-view.html: renders the SAVED earlyWarnings snapshot verbatim — this is the same page used for print/PDF, no separate template", async () => {
+  const issued = {
+    id: "r1", week_starting: "2026-09-07", week_ending: "2026-09-11", status: "issued", programme_status: "on-track", projects: SAMPLE_PROJECT,
+    system_position: { ...samplePosition(), earlyWarnings: [{ type: "labour_drop", message: "Labour on site is down to 10 from 20 last week (50% drop)." }] },
+  };
+  const { document } = await runView(issued);
+  await wait(30);
+  const doc = document.getElementById("doc").innerHTML;
+  assert.match(doc, /Early Warnings/);
+  assert.match(doc, /Labour on site is down to 10 from 20 last week \(50% drop\)\./);
+});
+
+test("weekly-report-view.html: a genuinely empty earlyWarnings snapshot shows 'No early warnings this week', never silence", async () => {
+  const issued = { id: "r1", week_starting: "2026-09-07", week_ending: "2026-09-11", status: "issued", programme_status: "on-track", projects: SAMPLE_PROJECT, system_position: { ...samplePosition(), earlyWarnings: [] } };
+  const { document } = await runView(issued);
+  await wait(30);
+  assert.match(document.getElementById("doc").innerHTML, /No early warnings this week\./);
+});
+
+test("weekly-report-view.html: a report saved before v97 (no earlyWarnings key) shows 'not calculated', never a false 'none' or a 0", async () => {
+  const issued = { id: "r1", week_starting: "2026-09-07", week_ending: "2026-09-11", status: "issued", programme_status: "on-track", projects: SAMPLE_PROJECT, system_position: samplePosition() };
+  const { document } = await runView(issued);
+  await wait(30);
+  const doc = document.getElementById("doc").innerHTML;
+  assert.match(doc, /Not calculated for this report\./);
+  assert.ok(!doc.includes("No early warnings this week"));
 });
 
 // A progress item added via "Add an item…" can carry BOTH a milestone

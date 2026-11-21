@@ -4373,6 +4373,95 @@ export async function getWeeklyReportActivity(projectId, period) {
   return computeReportActivity({ actions: actions || [], snags: snags || [], findings: findings || [], inspections: inspections || [] }, period);
 }
 
+// ─── Early warnings (v97) ─────────────────────────────────────────
+// Three independent signals, each comparing THIS report against the
+// project's own PREVIOUS report — its latest weekly_reports row with
+// an earlier week_starting, whatever that row's own status (draft
+// through issued all count; an early warning is about catching a
+// problem as it happens, not about the historical record the way
+// activity/exceptions elsewhere on this page are). No previous report
+// at all (the site's first-ever report) means no warnings from any of
+// the three rules, never an error — there's nothing yet to compare
+// against, and that's a normal, fully-computed "zero warnings" state,
+// not a missing one (see isWeeklyReportEarlyWarningsCalculated() below
+// for the actual "missing" case: a report saved before this existed).
+//
+// 1. Planned but no progress — each item in the previous report's own
+//    next_week_items with no matching item in THIS report's
+//    progress_items. Matched per pair: by programme_activity_id when
+//    BOTH items carry one, otherwise by normalised text (trimmed,
+//    case-insensitive) plus the same plot tag (same normalisation) —
+//    never globally by id OR text, since a planned item with an id
+//    must still be allowed to match a plain-text progress item that
+//    was typed instead of picked. One warning per unmatched item, not
+//    one bundled warning, so the form can list each by name.
+// 2. Behind two weeks running — this report's own programme_status is
+//    'behind' AND so was the previous report's.
+// 3. Labour and weather — two independent checks, each its own
+//    warning when it fires (an "and/or" in the brief, not one merged
+//    message, since a reader wants to know WHICH problem it is):
+//    total labour headcount (sum of labour_records[].headcount) down
+//    25% or more on the previous report's own total (only when that
+//    previous total is > 0 — a previous 0 heading into some headcount
+//    is progress, never a warning), and/or any weather_days this week
+//    with lost_hours > 0 (weather_days' own "lost day" field — see
+//    mountWeatherTracker() in weekly-report-form.html).
+function normaliseWarningText(s) {
+  return String(s || "").trim().toLowerCase();
+}
+function earlyWarningItemsMatch(planned, progress) {
+  if (planned.programme_activity_id && progress.programme_activity_id) {
+    return planned.programme_activity_id === progress.programme_activity_id;
+  }
+  return normaliseWarningText(planned.text) === normaliseWarningText(progress.text)
+    && normaliseWarningText(planned.plot) === normaliseWarningText(progress.plot);
+}
+function totalLabourHeadcount(records) {
+  return (Array.isArray(records) ? records : []).reduce((sum, r) => sum + (Number(r.headcount) || 0), 0);
+}
+export function computeEarlyWarnings(previousReport, currentReport) {
+  const warnings = [];
+  if (!previousReport) return warnings;
+
+  const plannedItems = Array.isArray(previousReport.next_week_items) ? previousReport.next_week_items : [];
+  const progressItems = Array.isArray(currentReport.progress_items) ? currentReport.progress_items : [];
+  for (const planned of plannedItems) {
+    const matched = progressItems.some((p) => earlyWarningItemsMatch(planned, p));
+    if (!matched) {
+      const plotSuffix = planned.plot ? ` (${planned.plot})` : "";
+      warnings.push({ type: "planned_no_progress", message: `Planned but no progress: "${planned.text}"${plotSuffix} was in last week's plan but has no matching item in this report.` });
+    }
+  }
+
+  if (currentReport.programme_status === "behind" && previousReport.programme_status === "behind") {
+    warnings.push({ type: "behind_two_weeks", message: "Behind programme for the second week running." });
+  }
+
+  const thisHeadcount = totalLabourHeadcount(currentReport.labour_records);
+  const prevHeadcount = totalLabourHeadcount(previousReport.labour_records);
+  if (prevHeadcount > 0 && thisHeadcount <= prevHeadcount * 0.75) {
+    const dropPct = Math.round((1 - thisHeadcount / prevHeadcount) * 100);
+    warnings.push({ type: "labour_drop", message: `Labour on site is down to ${thisHeadcount} from ${prevHeadcount} last week (${dropPct}% drop).` });
+  }
+
+  const lostDays = (Array.isArray(currentReport.weather_days) ? currentReport.weather_days : []).filter((d) => Number(d.lost_hours) > 0);
+  if (lostDays.length) {
+    warnings.push({ type: "weather_lost_time", message: `Weather lost time this week: ${lostDays.length} day${lostDays.length === 1 ? "" : "s"} affected.` });
+  }
+
+  return warnings;
+}
+
+// True once a position actually has an earlyWarnings array — false for
+// a report saved before v97, whose saved system_position has no such
+// key at all. The form/view pages use this (never `warnings.length`
+// directly) to tell "genuinely zero warnings" apart from "never
+// calculated," so an old report shows neither a false "No early
+// warnings this week" nor a misleading 0.
+export function isWeeklyReportEarlyWarningsCalculated(position) {
+  return Array.isArray(position?.earlyWarnings);
+}
+
 // ─── The orchestrator ────────────────────────────────────────────
 // The ONE function that actually hits the network for the position as
 // a whole — six broad, project-scoped selects (actions, snag_items,
@@ -4387,7 +4476,18 @@ export async function getWeeklyReportActivity(projectId, period) {
 // yet saved anywhere; the caller (weekly-report-form.html) decides
 // when to actually persist it into system_position, and only while the
 // report is still draft/reviewed (the v33 trigger enforces this).
-export async function getWeeklyReportPosition(projectId, period) {
+//
+// `currentReport` (v97) carries the fields early warnings need from
+// THIS report's own in-progress form state — progress_items,
+// programme_status, labour_records, weather_days — since a brand-new,
+// not-yet-saved report has no row of its own in the database yet to
+// read them back from; the caller (weekly-report-form.html) passes
+// whatever its own editors currently hold. Defaults to {} so an older
+// or future caller that never passes it still gets a position back
+// (with earlyWarnings computed against an "empty" current report,
+// i.e. every one of the previous report's planned items would show as
+// unmatched) rather than throwing.
+export async function getWeeklyReportPosition(projectId, period, currentReport = {}) {
   const [
     { data: actions, error: actErr },
     { data: snags, error: snagErr },
@@ -4395,6 +4495,7 @@ export async function getWeeklyReportPosition(projectId, period) {
     { data: inspections, error: inspErr },
     { data: hsAudits, error: hsAuditErr },
     { data: hsItems, error: hsItemErr },
+    { data: prevReports, error: prevErr },
     activeProgramme,
   ] = await Promise.all([
     supabase.from("actions").select("id, title, status, priority, assigned_to, due_date, created_at, completed_at").eq("project_id", projectId),
@@ -4403,6 +4504,15 @@ export async function getWeeklyReportPosition(projectId, period) {
     supabase.from("inspections").select("id, title, status, inspection_date").eq("project_id", projectId),
     supabase.from("hs_audits").select("month").eq("project_id", projectId),
     supabase.from("hs_audit_items").select("status, severity").eq("project_id", projectId),
+    // v97: the project's own PREVIOUS report — the latest row with an
+    // earlier week_starting than this one, whatever its status (an
+    // early warning cares about catching a problem as it happens, not
+    // the historical record). period.weekStarting is this report's
+    // own value, so `lt` here naturally excludes this report's own
+    // row when editing an existing one — never a special case needed.
+    period?.weekStarting
+      ? supabase.from("weekly_reports").select("next_week_items, programme_status, labour_records, weather_days").eq("project_id", projectId).lt("week_starting", period.weekStarting).order("week_starting", { ascending: false }).limit(1)
+      : Promise.resolve({ data: [], error: null }),
     getActiveProgramme(projectId),
   ]);
   if (actErr) throw actErr;
@@ -4411,6 +4521,7 @@ export async function getWeeklyReportPosition(projectId, period) {
   if (inspErr) throw inspErr;
   if (hsAuditErr) throw hsAuditErr;
   if (hsItemErr) throw hsItemErr;
+  if (prevErr) throw prevErr;
 
   const data = { actions: actions || [], snags: snags || [], findings: findings || [], inspections: inspections || [], hsAudits: hsAudits || [], hsItems: hsItems || [] };
   // A second, DEPENDENT fetch (needs the active programme's id first) —
@@ -4428,6 +4539,7 @@ export async function getWeeklyReportPosition(projectId, period) {
     inspectionsSummary: summariseInspectionsForReport(data.findings, data.inspections, period),
     hsSummary: summariseHsForReport(data.hsAudits, data.hsItems, period),
     programmeSummary: computeWeeklyProgrammeSignal(activeProgramme, programmeActivities, period.weekEnding),
+    earlyWarnings: computeEarlyWarnings(prevReports?.[0] || null, currentReport),
   };
 }
 

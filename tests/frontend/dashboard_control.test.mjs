@@ -9,6 +9,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import { extractScript, runPage, fireEvent, wait } from "../lib/jsdom-harness.mjs";
+import { progressHelpers } from "../lib/progress_helpers.mjs";
 
 const HTML = new URL("../../tracker/dashboard.html", import.meta.url).pathname;
 
@@ -97,10 +98,11 @@ const ATTENTION_ACTIONS = [
   { id: "a2", project_id: "p1", title: "Resolve access dispute", status: "blocked", priority: "medium", assigned_to: null, due_date: null, projects: { name: "Elm Grove" }, categories: { overdue: false, dueToday: false, dueSoon: false, blocked: true, highCritical: false } },
 ];
 
-async function run({ summary, attentionActions = ATTENTION_ACTIONS, attentionThrows = false, extra = {} } = {}) {
+async function run({ summary, attentionActions = ATTENTION_ACTIONS, attentionThrows = false, extra = {}, supabase = emptySupabase() } = {}) {
   return runPage(HTML, extractScript(HTML), {
+    ...progressHelpers,
     __url: "https://example.com/dashboard.html",
-    supabase: emptySupabase(),
+    supabase,
     requireAuth: async () => ({ id: "u1" }),
     renderHeader: () => {},
     escapeHtml: (s) => String(s ?? ""),
@@ -109,6 +111,10 @@ async function run({ summary, attentionActions = ATTENTION_ACTIONS, attentionThr
     clearError: (el) => { el.textContent = ""; el.style.display = "none"; },
     RAG_LABEL: { red: "Red", amber: "Amber", green: "Green" },
     renderProgressBlock: () => "",
+    // The real isSnagOutstanding() (app.js) — the v97 Early Warnings
+    // tests below are the first in this file to pass loadSites() real
+    // project rows at all, exercising its own open-snag count.
+    isSnagOutstanding: (s) => !["closed", "rejected"].includes(s.status),
     ensureOrganisation: async () => "org-1",
     getPortfolioControlSummary: () => summary.get(),
     getAttentionActions: async () => {
@@ -520,4 +526,87 @@ test("dashboard.html: Projects Requiring Attention includes a completed site mad
   assert.match(text, /Birch Lane/);
   assert.match(text, /Attention — 1 overdue action\./);
   assert.ok(!text.includes("programme"), "a completed site's own attention reason must never cite a programme exception");
+});
+
+// ─── "Early Warnings" tile (v97) ──────────────────────────────────
+// Sourced from loadSites()'s own existing weekly_reports fetch (never
+// a new query) — each LIVE project's own LATEST report (by
+// week_ending), excluding complete-status (v96) projects entirely and
+// any report whose system_position has no earlyWarnings key at all
+// ("not calculated" must never render, or count, as 0).
+function tableSupabase({ projects = [], snags = [], reports = [], programmes = [] } = {}) {
+  const tables = { projects, snag_items: snags, weekly_reports: reports, programmes };
+  return {
+    auth: { getUser: async () => ({ data: { user: { id: "u1" } } }) },
+    rpc: async () => ({ data: null, error: null }),
+    from(table) {
+      const rows = tables[table] || [];
+      const api = {
+        select() { return api; }, eq() { return api; }, order() { return api; }, in() { return api; },
+        single: async () => ({ data: rows[0] || null, error: null }),
+        then(resolve) { resolve({ data: rows, error: null }); },
+      };
+      return api;
+    },
+  };
+}
+
+test("dashboard.html: the Early Warnings tile sums each live site's own latest report, excludes a complete-status site's own report entirely, and the drill-down list length equals the tile count", async () => {
+  const projects = [
+    { id: "p1", name: "Elm Grove", status: "active" },
+    { id: "p2", name: "Finished Site", status: "complete" },
+  ];
+  const reports = [
+    { id: "r1", project_id: "p1", week_starting: "2026-06-01", week_ending: "2026-06-05", system_position: { exceptions: {}, earlyWarnings: [{ type: "behind_two_weeks", message: "Behind programme for the second week running." }, { type: "weather_lost_time", message: "Weather lost time this week: 1 day affected." }] } },
+    // An EARLIER report for p1 — must be ignored in favour of r1 (the later week_ending).
+    { id: "r0", project_id: "p1", week_starting: "2026-05-25", week_ending: "2026-05-29", system_position: { exceptions: {}, earlyWarnings: [{ type: "labour_drop", message: "Should never appear — superseded by a later report." }] } },
+    // p2 is complete — its own warnings must contribute nothing at all.
+    { id: "r2", project_id: "p2", week_starting: "2026-06-01", week_ending: "2026-06-05", system_position: { exceptions: {}, earlyWarnings: [{ type: "labour_drop", message: "Should never appear — the site is complete." }] } },
+  ];
+  const { document } = await run({ summary: makeSummary(), attentionActions: [], supabase: tableSupabase({ projects, reports }) });
+  await wait(30);
+
+  const btn = tileButton(document, "Early Warnings");
+  assert.ok(btn, "Early Warnings (2) must be a clickable tile");
+  assert.equal(btn.querySelector(".totals-value").textContent, "2");
+  fireEvent(btn, "click");
+  const rows = document.querySelectorAll("#tileDrilldownRows tr");
+  assert.equal(rows.length, 2, "drill-down list length must equal the tile's own number");
+  const text = document.getElementById("tileDrilldownRows").textContent;
+  assert.match(text, /Behind programme for the second week running\./);
+  assert.match(text, /Weather lost time this week: 1 day affected\./);
+  assert.ok(!text.includes("superseded by a later report"), "the earlier report for the same project must never contribute");
+  assert.ok(!text.includes("the site is complete"), "a complete-status site's own warnings must never appear");
+  assert.match(document.querySelector('#tileDrilldownRows a[href="weekly-report-view.html?id=r1"]').outerHTML, /Elm Grove/);
+});
+
+test("dashboard.html: a live site whose latest report has no earlyWarnings key at all ('not calculated') contributes nothing — never counted as 0, and never a blank drill-down row", async () => {
+  const projects = [
+    { id: "p1", name: "Elm Grove", status: "active" }, // calculated, 1 warning
+    { id: "p3", name: "Oak Close", status: "active" }, // pre-v97 report — no earlyWarnings key
+  ];
+  const reports = [
+    { id: "r1", project_id: "p1", week_starting: "2026-06-01", week_ending: "2026-06-05", system_position: { exceptions: {}, earlyWarnings: [{ type: "behind_two_weeks", message: "Behind programme for the second week running." }] } },
+    { id: "r3", project_id: "p3", week_starting: "2026-06-01", week_ending: "2026-06-05", system_position: { exceptions: {} } }, // no earlyWarnings key
+  ];
+  const { document } = await run({ summary: makeSummary(), attentionActions: [], supabase: tableSupabase({ projects, reports }) });
+  await wait(30);
+
+  const btn = tileButton(document, "Early Warnings");
+  assert.equal(btn.querySelector(".totals-value").textContent, "1", "only the calculated site's own warning counts — the uncalculated one contributes nothing, not a 0 that still sums in");
+  fireEvent(btn, "click");
+  const rows = document.querySelectorAll("#tileDrilldownRows tr");
+  assert.equal(rows.length, 1);
+  assert.ok(!document.getElementById("tileDrilldownRows").textContent.includes("Oak Close"), "the uncalculated site must not appear in the drill-down at all, not even as an empty row");
+});
+
+test("dashboard.html: no live sites with any calculated warnings renders the Early Warnings tile as a plain, non-clickable 0", async () => {
+  const projects = [{ id: "p1", name: "Elm Grove", status: "active" }];
+  const reports = [{ id: "r1", project_id: "p1", week_starting: "2026-06-01", week_ending: "2026-06-05", system_position: { exceptions: {} } }];
+  const { document } = await run({ summary: makeSummary(), attentionActions: [], supabase: tableSupabase({ projects, reports }) });
+  await wait(30);
+  const box = tileBox(document, "Early Warnings");
+  assert.ok(box);
+  assert.equal(box.tagName, "DIV");
+  assert.equal(box.querySelector(".totals-value").textContent, "0");
 });

@@ -64,6 +64,9 @@ export async function runPage(htmlPath, scriptSrc, context = {}) {
     computeProgrammeComplete: DEFAULT_COMPUTE_PROGRAMME_COMPLETE,
     // v94: dashboard.html's own tile drill-down needs this directly.
     categoriseProgrammeActivity: DEFAULT_CATEGORISE_PROGRAMME_ACTIVITY,
+    // v97: weekly-report-form.html/weekly-report-view.html need this
+    // directly whenever they render any system position.
+    isWeeklyReportEarlyWarningsCalculated: DEFAULT_IS_EARLY_WARNINGS_CALCULATED,
     ...context,
   };
   const ctx = vm.createContext(fullContext);
@@ -148,3 +151,19 @@ function loadCategoriseProgrammeActivity() {
   `)();
 }
 const DEFAULT_CATEGORISE_PROGRAMME_ACTIVITY = loadCategoriseProgrammeActivity();
+
+// The real isWeeklyReportEarlyWarningsCalculated() (v97) — weekly-report-
+// form.html/weekly-report-view.html both call it unconditionally while
+// rendering ANY system position, so every pre-existing test of either
+// page needs this default (trivially small, but still extracted, never
+// reimplemented, same rule as every other default here).
+function loadIsWeeklyReportEarlyWarningsCalculated() {
+  const src = fs.readFileSync(new URL("../../tracker/js/app.js", import.meta.url), "utf8");
+  const mainFn = src.match(/export function isWeeklyReportEarlyWarningsCalculated\([\s\S]*?\n\}/);
+  if (!mainFn) return () => false;
+  return new Function(`
+    ${mainFn[0].replace(/^export /, "")}
+    return isWeeklyReportEarlyWarningsCalculated;
+  `)();
+}
+const DEFAULT_IS_EARLY_WARNINGS_CALCULATED = loadIsWeeklyReportEarlyWarningsCalculated();
