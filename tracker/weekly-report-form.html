@@ -143,7 +143,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, mountTableEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions, comparePlotNumbers, normalisePlotToken, syncGateStatusFromMilestones, EXTERNAL_WORKS_TAG, PHOTO_COMPLIANCE_STATUS, RESOURCE_ADEQUACY, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_LEVELS, RISK_IMPACT_BADGE, RISK_OWNER_SUGGESTIONS, STATUTORY_MILESTONE_TYPES, STATUTORY_OUTCOMES, STATUTORY_OUTCOME_BADGE, getWeeklyReportPosition, isWeeklyReportEarlyWarningsCalculated, isWeeklyReportLocked, reviseWeeklyReport, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, CONTROL_LEVEL_BADGE, FINDING_SEVERITY_LABEL, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel, getRfiLinksForWeeklyReport, attachReportCommercialNotes, getUnattachedDiaryEntries, getWeeklyReportDiaryEntries, attachDiaryEntryToReport, updateAttachedDiaryEntry, removeAttachedDiaryEntry, getActiveProgramme, listProgrammeActivities } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, mountTableEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions, comparePlotNumbers, normalisePlotToken, syncGateStatusFromMilestones, EXTERNAL_WORKS_TAG, PHOTO_COMPLIANCE_STATUS, RESOURCE_ADEQUACY, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_LEVELS, RISK_IMPACT_BADGE, RISK_OWNER_SUGGESTIONS, STATUTORY_MILESTONE_TYPES, STATUTORY_OUTCOMES, STATUTORY_OUTCOME_BADGE, getWeeklyReportPosition, isWeeklyReportEarlyWarningsCalculated, buildEarlyWarningNotes, isWeeklyReportLocked, reviseWeeklyReport, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, CONTROL_LEVEL_BADGE, FINDING_SEVERITY_LABEL, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel, getRfiLinksForWeeklyReport, attachReportCommercialNotes, getUnattachedDiaryEntries, getWeeklyReportDiaryEntries, attachDiaryEntryToReport, updateAttachedDiaryEntry, removeAttachedDiaryEntry, getActiveProgramme, listProgrammeActivities } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -152,8 +152,27 @@
 
   let existingReport = null; // the full row, once loaded — null for a brand-new report
   let currentPosition = null; // the last-generated (or last-saved) system position
+  // v98: the report's own saved early_warning_notes (empty for a
+  // brand-new report, or one saved before this existed) and whatever
+  // the editor currently has typed into each textarea — kept separate
+  // so a Refresh Position re-render (which rebuilds the whole early-
+  // warnings box, including these textareas, from scratch) never loses
+  // in-progress typing: captureEarlyWarningEdits() below reads the live
+  // DOM into this map immediately before any such re-render.
+  let savedEarlyWarningNotes = {};
+  let pendingEarlyWarningNotes = {};
 
   const positionErrorBox = document.getElementById("positionErrorBox");
+
+  function captureEarlyWarningEdits() {
+    document.querySelectorAll(".ew-reason-textarea").forEach((el) => {
+      pendingEarlyWarningNotes[el.dataset.key] = el.value;
+    });
+  }
+  document.getElementById("positionBody").addEventListener("input", (e) => {
+    if (!e.target.classList.contains("ew-reason-textarea")) return;
+    pendingEarlyWarningNotes[e.target.dataset.key] = e.target.value;
+  });
 
   function currentPeriod() {
     return { weekStarting: document.getElementById("weekStarting").value, weekEnding: document.getElementById("weekEnding").value };
@@ -198,22 +217,41 @@
   // saved before this existed (isWeeklyReportEarlyWarningsCalculated()
   // is false) — shown as "not calculated", never a false "none" or a
   // misleading 0.
+  // v98: each warning gets its own reason textarea (editors only —
+  // same page-level editor gate as the rest of this form, enforced
+  // server-side by weekly_reports' own RLS; nothing new needed here),
+  // keyed by that warning's own stable `key` (see earlyWarningKey() in
+  // app.js) so a reason survives a recalculation that temporarily
+  // drops its warning. Prefilled from pendingEarlyWarningNotes (live,
+  // uncommitted edits — takes priority so a Refresh Position re-render
+  // never discards what's already been typed) falling back to
+  // savedEarlyWarningNotes (what's actually persisted on the report).
+  function earlyWarningReasonValue(key) {
+    return pendingEarlyWarningNotes[key] !== undefined ? pendingEarlyWarningNotes[key] : (savedEarlyWarningNotes[key]?.text || "");
+  }
   function earlyWarningsHtml(position) {
     const calculated = isWeeklyReportEarlyWarningsCalculated(position);
     const warnings = calculated ? position.earlyWarnings : [];
+    const locked = !!(existingReport && isWeeklyReportLocked(existingReport));
     return `
       <div class="early-warnings-box" style="border:1px solid var(--rule); border-radius:6px; padding:0.8rem 1rem; margin-bottom:1rem;${warnings.length ? " border-left:4px solid var(--red);" : ""}">
         <strong>EARLY WARNINGS</strong>
         ${!calculated
           ? `<p class="hint" style="margin:0.3rem 0 0;">Not calculated for this report — hit Refresh Position to calculate them.</p>`
           : warnings.length
-            ? `<ul class="body-list" style="margin:0.4rem 0 0;">${warnings.map((w) => `<li>${escapeHtml(w.message)}</li>`).join("")}</ul>`
+            ? `<ul class="body-list" style="margin:0.4rem 0 0;">${warnings.map((w) => `
+                <li>
+                  ${escapeHtml(w.message)}
+                  <textarea class="ew-reason-textarea" data-key="${escapeHtml(w.key)}" rows="2" ${locked ? "disabled" : ""} placeholder="What caused this, and what's being done about it (optional)" style="display:block; width:100%; margin-top:0.3rem; box-sizing:border-box;">${escapeHtml(earlyWarningReasonValue(w.key))}</textarea>
+                </li>
+              `).join("")}</ul>`
             : `<p class="hint" style="margin:0.3rem 0 0;">No early warnings this week.</p>`}
       </div>
     `;
   }
 
   function renderPositionBody(position) {
+    captureEarlyWarningEdits();
     if (!position) { document.getElementById("positionBody").innerHTML = `<p class="hint">Set both week dates above, then hit Refresh Position.</p>`; return; }
     const { exceptions, activity, actionsSummary, snagsSummary, inspectionsSummary, hsSummary, programmeSummary } = position;
 
@@ -360,6 +398,13 @@
     const locked = existingReport && isWeeklyReportLocked(existingReport);
     document.getElementById("formFieldset").disabled = !!locked;
     document.getElementById("refreshPositionBtn").disabled = !!locked;
+    // The early-warning reason textareas live inside #positionBody, a
+    // sibling of #formFieldset, not one of its descendants — fieldset's
+    // native disabled-cascade doesn't reach them, so toggle them
+    // directly (matches earlyWarningsHtml()'s own `locked` check at
+    // render time; this covers the Revise click, which flips lock
+    // state without going through a fresh renderPositionBody() call).
+    document.querySelectorAll(".ew-reason-textarea").forEach((el) => { el.disabled = !!locked; });
     document.getElementById("lockedBanner").style.display = locked ? "block" : "none";
     if (locked) document.getElementById("lockedStatusText").textContent = WEEKLY_REPORT_STATUS_LABEL[existingReport.status];
     if (existingReport) {
@@ -1019,6 +1064,7 @@
     // a company user never sees (or can add) them.
     if (!(await attachReportCommercialNotes("weekly", [r]))) document.getElementById("commercialField").style.display = "none";
     existingReport = r;
+    savedEarlyWarningNotes = r.early_warning_notes || {};
     applyLockState();
     document.getElementById("weekStarting").value = r.week_starting;
     document.getElementById("weekEnding").value = r.week_ending;
@@ -1090,6 +1136,7 @@
   document.getElementById("reportForm").addEventListener("submit", async (e) => {
     e.preventDefault();
     clearError(errorBox);
+    captureEarlyWarningEdits();
     const { data: { user } } = await supabase.auth.getUser();
     const payload = {
       project_id: projectId,
@@ -1114,6 +1161,17 @@
       photos,
       system_position: currentPosition || {},
       position_generated_at: currentPosition?.generatedAt || null,
+      // v98: never wholesale-replaced from the live warnings list alone —
+      // buildEarlyWarningNotes() carries over a note for any key NOT in
+      // the current warnings (its warning disappeared on recalculation)
+      // untouched, so it's never lost, and only writes/clears keys that
+      // ARE currently shown, from whatever's actually in each textarea.
+      early_warning_notes: buildEarlyWarningNotes(
+        savedEarlyWarningNotes,
+        (currentPosition?.earlyWarnings || []).map((w) => w.key),
+        pendingEarlyWarningNotes,
+        user.id
+      ),
     };
     document.getElementById("saveBtn").disabled = true;
     try {

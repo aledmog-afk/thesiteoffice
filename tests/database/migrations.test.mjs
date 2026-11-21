@@ -1068,6 +1068,44 @@ test("v95: progress_source column, its guard/recalc triggers, and the new SECURI
   }
 });
 
+// v98: Early warning reasons — the lock/RLS behaviour itself is proven
+// directly in tests/database/v98_early_warning_notes.test.mjs. The only
+// thing checked at this schema-shape level is idempotency.
+test("v98: weekly_reports.early_warning_notes is idempotent across repeated re-application", async () => {
+  const db = "tracker_test_v98_idempotent";
+  await createTestDatabase(db);
+  try {
+    const client = adminClient(db);
+    await client.connect();
+    await runSqlFile(client, MOCK_SETUP);
+    for (let i = 0; i < 3; i++) {
+      await runSqlFile(client, CURRENT_SCHEMA);
+    }
+
+    const col = await client.query(`
+      select data_type, column_default, is_nullable from information_schema.columns
+      where table_schema = 'public' and table_name = 'weekly_reports' and column_name = 'early_warning_notes'
+    `);
+    assert.equal(col.rowCount, 1, "early_warning_notes must exist exactly once after repeated re-application");
+    assert.equal(col.rows[0].data_type, "jsonb");
+    assert.equal(col.rows[0].is_nullable, "NO");
+    assert.match(col.rows[0].column_default, /'\{\}'::jsonb/);
+
+    // RLS/trigger counts on weekly_reports are deliberately UNCHANGED by
+    // v98 — a plain column needs no policy or trigger of its own; both
+    // already cover any new column via the existing whole-row checks.
+    const triggers = await client.query("select count(*)::int as n from pg_trigger where tgrelid = 'public.weekly_reports'::regclass and tgname like 'trg_%'");
+    assert.equal(triggers.rows[0].n, 4, "v98 adds zero triggers to weekly_reports — same 4 as before (pre-existing audit + before-write + v62 commercial-notes divert + v69 stage raise)");
+
+    const policies = await client.query("select count(*)::int as n from pg_policies where tablename = 'weekly_reports'");
+    assert.equal(policies.rows[0].n, 7, "v98 adds zero RLS policies to weekly_reports — same 7 as before");
+
+    await client.end();
+  } finally {
+    await dropTestDatabase(db);
+  }
+});
+
 test("v91: a fresh install has zero platform_admins — nobody is a platform admin by default", async () => {
   const db = "tracker_test_v91_no_backfill";
   await createTestDatabase(db);

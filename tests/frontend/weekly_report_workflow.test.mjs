@@ -50,7 +50,7 @@ function samplePosition() {
 
 // ─── weekly-report-form.html ────────────────────────────────────────
 
-function formSupabaseMock({ existingReport = null } = {}) {
+function formSupabaseMock({ existingReport = null, onUpdate = () => {} } = {}) {
   return {
     auth: { getUser: async () => ({ data: { user: { id: "u1" } } }) },
     from(table) {
@@ -67,7 +67,10 @@ function formSupabaseMock({ existingReport = null } = {}) {
         insert(payload) {
           return { select: () => ({ single: async () => ({ data: { id: "new-report-id", ...payload }, error: null }) }) };
         },
-        update() { return { eq: async () => ({ error: null }) }; },
+        update(payload) {
+          if (table === "weekly_reports") onUpdate(payload);
+          return { eq: async () => ({ error: null }) };
+        },
         then(resolve) { resolve({ data: [], error: null }); },
       };
       return api;
@@ -75,8 +78,13 @@ function formSupabaseMock({ existingReport = null } = {}) {
   };
 }
 
-async function runForm({ reportId = null, existingReport = null, getWeeklyReportPosition, reviseWeeklyReport, extra = {} } = {}) {
-  const supabase = formSupabaseMock({ existingReport });
+// v98: `onUpdate` is called with every weekly_reports update() payload
+// (the report save, then the separate commercial_items/photos follow-
+// up updates the real save handler also issues) — a test that cares
+// about early_warning_notes specifically reads it off the FIRST call
+// (the main report save), not a later one.
+async function runForm({ reportId = null, existingReport = null, getWeeklyReportPosition, reviseWeeklyReport, onUpdate = () => {}, extra = {} } = {}) {
+  const supabase = formSupabaseMock({ existingReport, onUpdate });
   return runPage(FORM_HTML, extractScript(FORM_HTML), {
     __url: `https://example.com/weekly-report-form.html?project=p1${reportId ? `&id=${reportId}` : ""}`,
     supabase,
@@ -222,6 +230,110 @@ test("weekly-report-form.html: Revise unlocks the form again", async () => {
   await wait(30);
   assert.equal(document.getElementById("formFieldset").disabled, false, "Revise must unlock the form");
   assert.equal(document.getElementById("lockedBanner").style.display, "none");
+});
+
+// ─── Early warning reasons (v98) ────────────────────────────────────
+
+test("weekly-report-form.html: an existing report's saved early_warning_notes pre-fills the matching warning's textarea", async () => {
+  const existingReport = {
+    id: "r1", project_id: "p1", week_starting: "2026-09-07", week_ending: "2026-09-11",
+    status: "draft", prepared_by: "Jane", programme_status: "on-track",
+    weather_days: [], commercial_items: [], labour_records: [], risk_items: [], statutory_milestones: [], photos: [],
+    system_position: { ...samplePosition(), earlyWarnings: [{ type: "labour_drop", key: "labour_drop", message: "Labour on site is down to 10 from 20 last week (50% drop)." }] },
+    early_warning_notes: { labour_drop: { text: "Two groundworkers off sick", updated_at: "2026-09-10T00:00:00Z", updated_by: "u2" } },
+  };
+  const { document } = await runForm({ reportId: "r1", existingReport });
+  await wait(30);
+  const textarea = document.querySelector('.ew-reason-textarea[data-key="labour_drop"]');
+  assert.ok(textarea, "the matching warning's reason textarea must render");
+  assert.equal(textarea.value, "Two groundworkers off sick");
+});
+
+test("weekly-report-form.html: a reason textarea is disabled when the report is locked (approved/issued)", async () => {
+  const existingReport = {
+    id: "r1", project_id: "p1", week_starting: "2026-09-07", week_ending: "2026-09-11",
+    status: "approved", prepared_by: "Jane", programme_status: "on-track",
+    weather_days: [], commercial_items: [], labour_records: [], risk_items: [], statutory_milestones: [], photos: [],
+    system_position: { ...samplePosition(), earlyWarnings: [{ type: "weather_lost_time", key: "weather_lost_time", message: "Weather lost time this week: 2 days affected." }] },
+    early_warning_notes: {},
+  };
+  const { document } = await runForm({ reportId: "r1", existingReport });
+  await wait(30);
+  const textarea = document.querySelector('.ew-reason-textarea[data-key="weather_lost_time"]');
+  assert.ok(textarea, "the warning's reason textarea must still render, read-only");
+  assert.equal(textarea.disabled, true, "editing a reason on a locked report must be disabled, same as every other field");
+});
+
+test("weekly-report-form.html: Revise re-enables an already-rendered reason textarea without needing a fresh position render", async () => {
+  const existingReport = {
+    id: "r1", project_id: "p1", week_starting: "2026-09-07", week_ending: "2026-09-11",
+    status: "issued", prepared_by: "Jane", programme_status: "on-track",
+    weather_days: [], commercial_items: [], labour_records: [], risk_items: [], statutory_milestones: [], photos: [],
+    system_position: { ...samplePosition(), earlyWarnings: [{ type: "labour_drop", key: "labour_drop", message: "Labour down." }] },
+    early_warning_notes: {},
+  };
+  const { document } = await runForm({ reportId: "r1", existingReport, reviseWeeklyReport: async () => ({ ...existingReport, status: "draft" }) });
+  await wait(30);
+  assert.equal(document.querySelector('.ew-reason-textarea[data-key="labour_drop"]').disabled, true);
+  fireEvent(document.getElementById("reviseBtn"), "click");
+  await wait(30);
+  assert.equal(document.querySelector('.ew-reason-textarea[data-key="labour_drop"]').disabled, false, "Revise must unlock the reason textarea too, the same as the rest of the form");
+});
+
+test("weekly-report-form.html: typing a reason and saving writes it into early_warning_notes, keyed and stamped with the signed-in user", async () => {
+  const existingReport = {
+    id: "r1", project_id: "p1", week_starting: "2026-09-07", week_ending: "2026-09-11",
+    status: "draft", prepared_by: "Jane", programme_status: "on-track",
+    weather_days: [], commercial_items: [], labour_records: [], risk_items: [], statutory_milestones: [], photos: [],
+    system_position: samplePosition(),
+    early_warning_notes: {},
+  };
+  let savedPayload = null;
+  const { document } = await runForm({
+    reportId: "r1", existingReport,
+    getWeeklyReportPosition: async () => ({ ...samplePosition(), earlyWarnings: [{ type: "behind_two_weeks", key: "behind_two_weeks", message: "Behind programme for the second week running." }] }),
+    onUpdate: (payload) => { if (!savedPayload) savedPayload = payload; },
+  });
+  await wait(30);
+  fireEvent(document.getElementById("refreshPositionBtn"), "click");
+  await wait(30);
+  const textarea = document.querySelector('.ew-reason-textarea[data-key="behind_two_weeks"]');
+  assert.ok(textarea);
+  textarea.value = "Crane breakdown held up the frame";
+  fireEvent(textarea, "input");
+  fireEvent(document.getElementById("reportForm"), "submit");
+  await wait(30);
+
+  assert.ok(savedPayload, "the report save must have gone through update()");
+  const note = savedPayload.early_warning_notes.behind_two_weeks;
+  assert.equal(note.text, "Crane breakdown held up the frame");
+  assert.equal(note.updated_by, "u1", "stamped with the signed-in user's own id");
+  assert.ok(typeof note.updated_at === "string" && note.updated_at.length > 0, "stamped with a real timestamp");
+});
+
+test("weekly-report-form.html: saving never drops a note for a warning that's no longer in the current list — it's carried over untouched", async () => {
+  const existingReport = {
+    id: "r1", project_id: "p1", week_starting: "2026-09-07", week_ending: "2026-09-11",
+    status: "draft", prepared_by: "Jane", programme_status: "on-track",
+    weather_days: [], commercial_items: [], labour_records: [], risk_items: [], statutory_milestones: [], photos: [],
+    // Saved with a labour_drop warning + its reason, but THIS recalculation
+    // (below) returns no warnings at all — labour_drop has disappeared.
+    system_position: { ...samplePosition(), earlyWarnings: [{ type: "labour_drop", key: "labour_drop", message: "Labour down." }] },
+    early_warning_notes: { labour_drop: { text: "Resolved by Monday", updated_at: "2026-09-08T00:00:00Z", updated_by: "u2" } },
+  };
+  let savedPayload = null;
+  const { document } = await runForm({
+    reportId: "r1", existingReport,
+    getWeeklyReportPosition: async () => ({ ...samplePosition(), earlyWarnings: [] }),
+    onUpdate: (payload) => { if (!savedPayload) savedPayload = payload; },
+  });
+  await wait(30);
+  fireEvent(document.getElementById("refreshPositionBtn"), "click");
+  await wait(30);
+  fireEvent(document.getElementById("reportForm"), "submit");
+  await wait(30);
+
+  assert.deepEqual(savedPayload.early_warning_notes.labour_drop, { text: "Resolved by Monday", updated_at: "2026-09-08T00:00:00Z", updated_by: "u2" }, "a vanished warning's reason must survive the save unchanged");
 });
 
 // ─── weekly-report-view.html ────────────────────────────────────────
@@ -370,4 +482,45 @@ test("weekly-report-view.html (v62): commercial notes are left out of the page (
   r = await runView(structuredClone(report), { attachReportCommercialNotes: async (kind, list) => { list.forEach((x) => { x.commercial_items = []; }); return false; } });
   await wait(30);
   assert.doesNotMatch(r.document.body.textContent, /VO SECRET/);
+});
+
+// ─── Early warning reasons (v98) ────────────────────────────────────
+
+test("weekly-report-view.html: shows the saved reason under its matching warning", async () => {
+  const issued = {
+    id: "r1", week_starting: "2026-09-07", week_ending: "2026-09-11", status: "issued", programme_status: "on-track", projects: SAMPLE_PROJECT,
+    system_position: { ...samplePosition(), earlyWarnings: [{ type: "labour_drop", key: "labour_drop", message: "Labour on site is down to 10 from 20 last week (50% drop)." }] },
+    early_warning_notes: { labour_drop: { text: "Two groundworkers off sick, agency cover booked for Monday", updated_at: "2026-09-10T00:00:00Z", updated_by: "u2" } },
+  };
+  const { document } = await runView(issued);
+  await wait(30);
+  const doc = document.getElementById("doc").innerHTML;
+  assert.match(doc, /Labour on site is down to 10 from 20 last week/);
+  assert.match(doc, /Two groundworkers off sick, agency cover booked for Monday/);
+});
+
+test("weekly-report-view.html: a warning with no stored reason shows nothing extra under it — never an empty line or placeholder", async () => {
+  const issued = {
+    id: "r1", week_starting: "2026-09-07", week_ending: "2026-09-11", status: "issued", programme_status: "on-track", projects: SAMPLE_PROJECT,
+    system_position: { ...samplePosition(), earlyWarnings: [{ type: "weather_lost_time", key: "weather_lost_time", message: "Weather lost time this week: 1 day affected." }] },
+    early_warning_notes: {},
+  };
+  const { document } = await runView(issued);
+  await wait(30);
+  const doc = document.getElementById("doc").innerHTML;
+  assert.match(doc, /Weather lost time this week: 1 day affected\./);
+  // the warning's own <li> must not carry a trailing empty reason paragraph
+  assert.doesNotMatch(doc, /<p class="hint" style="margin:0\.2rem 0 0;"><\/p>/);
+});
+
+test("weekly-report-view.html: a reason kept for a warning no longer in the current list stays hidden, never shown loose", async () => {
+  const issued = {
+    id: "r1", week_starting: "2026-09-07", week_ending: "2026-09-11", status: "issued", programme_status: "on-track", projects: SAMPLE_PROJECT,
+    system_position: { ...samplePosition(), earlyWarnings: [] }, // labour_drop has since disappeared
+    early_warning_notes: { labour_drop: { text: "Should stay hidden — its warning is gone", updated_at: "2026-09-08T00:00:00Z", updated_by: "u2" } },
+  };
+  const { document } = await runView(issued);
+  await wait(30);
+  const doc = document.getElementById("doc").innerHTML;
+  assert.doesNotMatch(doc, /Should stay hidden/, "a note for a warning that's no longer listed must never render on its own");
 });

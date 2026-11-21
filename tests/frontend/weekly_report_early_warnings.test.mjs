@@ -26,11 +26,13 @@ const SCOPE = `
   ${extractPrivateFn("normaliseWarningText")}
   ${extractPrivateFn("earlyWarningItemsMatch")}
   ${extractPrivateFn("totalLabourHeadcount")}
+  ${extractPrivateFn("earlyWarningKey")}
   ${extractFn("computeEarlyWarnings")}
   ${extractFn("isWeeklyReportEarlyWarningsCalculated")}
-  return { computeEarlyWarnings, isWeeklyReportEarlyWarningsCalculated };
+  ${extractFn("buildEarlyWarningNotes")}
+  return { computeEarlyWarnings, isWeeklyReportEarlyWarningsCalculated, buildEarlyWarningNotes };
 `;
-const { computeEarlyWarnings, isWeeklyReportEarlyWarningsCalculated } = new Function(SCOPE)();
+const { computeEarlyWarnings, isWeeklyReportEarlyWarningsCalculated, buildEarlyWarningNotes } = new Function(SCOPE)();
 
 function warningTypes(warnings) {
   return warnings.map((w) => w.type);
@@ -186,6 +188,77 @@ test("computeEarlyWarnings: all applicable warnings fire together, independently
   };
   const warnings = computeEarlyWarnings(previous, current);
   assert.deepEqual(warningTypes(warnings).sort(), ["behind_two_weeks", "labour_drop", "planned_no_progress", "weather_lost_time"]);
+});
+
+// ─── v98: warning.key ──────────────────────────────────────────────
+test("computeEarlyWarnings: the three singleton warnings use their own `type` as a fixed, stable key", () => {
+  const warnings = computeEarlyWarnings(
+    { programme_status: "behind", labour_records: labourRecords(20) },
+    { programme_status: "behind", labour_records: labourRecords(5), weather_days: [{ lost_hours: 3 }] }
+  );
+  const byType = Object.fromEntries(warnings.map((w) => [w.type, w.key]));
+  assert.equal(byType.behind_two_weeks, "behind_two_weeks");
+  assert.equal(byType.labour_drop, "labour_drop");
+  assert.equal(byType.weather_lost_time, "weather_lost_time");
+});
+
+test("computeEarlyWarnings: a planned_no_progress warning keys off the planned item's own programme_activity_id when it has one", () => {
+  const previous = { next_week_items: [{ id: "n1", text: "Roof Covering", plot: "Plot 4", programme_activity_id: "act-1" }] };
+  const warnings = computeEarlyWarnings(previous, { progress_items: [] });
+  assert.equal(warnings[0].key, "planned_no_progress:pa:act-1");
+});
+
+test("computeEarlyWarnings: a planned_no_progress warning with no programme_activity_id keys off normalised text+plot instead", () => {
+  const previous = { next_week_items: [{ id: "n1", text: "  Roof Covering  ", plot: " Plot 4 " }] };
+  const warnings = computeEarlyWarnings(previous, { progress_items: [] });
+  assert.equal(warnings[0].key, "planned_no_progress:tx:roof covering|plot 4");
+});
+
+test("computeEarlyWarnings: a planned_no_progress key stays stable across recalculation even as the planned item's own text/plot is edited later — only its programme_activity_id matters when present", () => {
+  const warnings1 = computeEarlyWarnings(
+    { next_week_items: [{ id: "n1", text: "Roof Covering", plot: "Plot 4", programme_activity_id: "act-1" }] },
+    { progress_items: [] }
+  );
+  const warnings2 = computeEarlyWarnings(
+    { next_week_items: [{ id: "n1", text: "Roof Covering — revised wording", plot: "Plot 5", programme_activity_id: "act-1" }] },
+    { progress_items: [] }
+  );
+  assert.equal(warnings1[0].key, warnings2[0].key);
+});
+
+test("computeEarlyWarnings: two different unmatched planned items (no ids) get two distinct keys", () => {
+  const previous = { next_week_items: [{ id: "n1", text: "Groundworks", plot: "" }, { id: "n2", text: "Roofing", plot: "Plot 2" }] };
+  const warnings = computeEarlyWarnings(previous, { progress_items: [] });
+  assert.notEqual(warnings[0].key, warnings[1].key);
+});
+
+// ─── v98: buildEarlyWarningNotes() ─────────────────────────────────
+test("buildEarlyWarningNotes: a non-blank textarea value for a CURRENT warning key is written, with updated_at/updated_by stamped", () => {
+  const result = buildEarlyWarningNotes({}, ["labour_drop"], { labour_drop: "Subcontractor short-staffed this week" }, "user-1", "2026-03-04T10:00:00Z");
+  assert.deepEqual(result, { labour_drop: { text: "Subcontractor short-staffed this week", updated_at: "2026-03-04T10:00:00Z", updated_by: "user-1" } });
+});
+
+test("buildEarlyWarningNotes: a blank/whitespace-only textarea for a current key clears that key's stored reason", () => {
+  const existing = { labour_drop: { text: "Old reason", updated_at: "2026-02-01T00:00:00Z", updated_by: "user-1" } };
+  const result = buildEarlyWarningNotes(existing, ["labour_drop"], { labour_drop: "   " }, "user-1");
+  assert.deepEqual(result, {}, "an explicitly blanked textarea must clear the note, not keep the old value");
+});
+
+test("buildEarlyWarningNotes: a note for a key NOT in the current warning list (its warning disappeared) is carried over untouched", () => {
+  const existing = { weather_lost_time: { text: "Three days of rain", updated_at: "2026-02-01T00:00:00Z", updated_by: "user-1" } };
+  const result = buildEarlyWarningNotes(existing, ["labour_drop"], { labour_drop: "" }, "user-1");
+  assert.deepEqual(result, { weather_lost_time: existing.weather_lost_time }, "a vanished warning's note must never be dropped just because it's no longer in the current list");
+});
+
+test("buildEarlyWarningNotes: a key that reappears after being carried over untouched is then updatable again like any other current key", () => {
+  const existing = { weather_lost_time: { text: "Old note from before it disappeared", updated_at: "2026-02-01T00:00:00Z", updated_by: "user-1" } };
+  const result = buildEarlyWarningNotes(existing, ["weather_lost_time"], { weather_lost_time: "It's back, same cause as before" }, "user-2", "2026-03-10T00:00:00Z");
+  assert.deepEqual(result, { weather_lost_time: { text: "It's back, same cause as before", updated_at: "2026-03-10T00:00:00Z", updated_by: "user-2" } });
+});
+
+test("buildEarlyWarningNotes: missing/undefined inputs never throw — defaults to an empty object", () => {
+  assert.deepEqual(buildEarlyWarningNotes(null, [], {}, null), {});
+  assert.deepEqual(buildEarlyWarningNotes(undefined, ["labour_drop"], undefined, "u1"), {});
 });
 
 // ─── isWeeklyReportEarlyWarningsCalculated() ──────────────────────
