@@ -31,7 +31,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, getOrgLogoUrl, formatGBP, showError, clearError, PHOTO_COMPLIANCE_BADGE, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_BADGE, STATUTORY_OUTCOME_BADGE, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, validWeeklyReportStatusTransitions, reviewWeeklyReport, approveWeeklyReport, issueWeeklyReport, reviseWeeklyReport, CONTROL_LEVEL_BADGE, getRfiLinksForWeeklyReport, normalisePlotToken, attachReportCommercialNotes, getWeeklyReportDiaryEntries } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, getOrgLogoUrl, formatGBP, showError, clearError, PHOTO_COMPLIANCE_BADGE, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_BADGE, STATUTORY_OUTCOME_BADGE, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, validWeeklyReportStatusTransitions, reviewWeeklyReport, approveWeeklyReport, issueWeeklyReport, reviseWeeklyReport, CONTROL_LEVEL_BADGE, getRfiLinksForWeeklyReport, normalisePlotToken, attachReportCommercialNotes, getWeeklyReportDiaryEntries, isWeeklyReportEarlyWarningsCalculated } from "./js/app.js";
 
   await requireAuth();
   const reportId = getParam("id");
@@ -246,6 +246,25 @@
     }).join("")}</ul></div>`;
   }
 
+  // v97: frozen, read-only — same "whatever was last saved" rule
+  // positionSection() below follows, for the same reason. A report
+  // saved before this existed has no earlyWarnings key at all
+  // (isWeeklyReportEarlyWarningsCalculated() is false) — shown as "not
+  // calculated", never a false "none" or a misleading 0.
+  function earlyWarningsSection(position) {
+    if (!position || !position.exceptions) return "";
+    const calculated = isWeeklyReportEarlyWarningsCalculated(position);
+    const warnings = calculated ? position.earlyWarnings : [];
+    return `<div class="doc-section">
+      <h3>Early Warnings</h3>
+      ${!calculated
+        ? `<p class="hint">Not calculated for this report.</p>`
+        : warnings.length
+          ? `<ul class="body-list">${warnings.map((w) => `<li>${escapeHtml(w.message)}</li>`).join("")}</ul>`
+          : `<p class="hint">No early warnings this week.</p>`}
+    </div>`;
+  }
+
   // Renders whatever was last SAVED into system_position — never a live
   // re-fetch. This page is the record of what the report said; once a
   // report is approved/issued this is frozen by the v33 trigger anyway,
@@ -437,6 +456,7 @@
         <div><dt>Contract Period</dt><dd>${project.start_date ? formatDate(project.start_date) : "—"} – ${project.contract_completion_date ? formatDate(project.contract_completion_date) : "—"}</dd></div>
       </dl>
 
+      ${earlyWarningsSection(r.system_position)}
       ${positionSection(r.system_position)}
       ${programmeSignalSection(r.system_position)}
       ${weatherSection(r.weather_days)}

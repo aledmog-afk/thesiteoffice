@@ -223,7 +223,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, ensureOrganisation, getPortfolioControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, createAction, isPlatformAdmin, isSnagOutstanding, externalWorksStale, externalWorksShareSet, EXTERNAL_WORKS_STALE_DAYS, computeProgrammeComplete, categoriseProgrammeActivity } from "./js/app.js";
+  import { requireAuth, renderHeader, escapeHtml, formatDate, showError, clearError, RAG_LABEL, renderProgressBlock, ensureOrganisation, getPortfolioControlSummary, getAttentionActions, getMemberEmailMap, CONTROL_LEVEL_BADGE, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL, ACTION_PRIORITY_BADGE, ACTION_STATUS_LABEL, ACTION_STATUS_BADGE, ACTION_DUE_LABEL, ACTION_DUE_BADGE, createAction, isPlatformAdmin, isSnagOutstanding, externalWorksStale, externalWorksShareSet, EXTERNAL_WORKS_STALE_DAYS, computeProgrammeComplete, categoriseProgrammeActivity, isWeeklyReportEarlyWarningsCalculated } from "./js/app.js";
 
   const me = await requireAuth();
   renderHeader([{ label: "Dashboard" }]);
@@ -248,6 +248,13 @@
   let projectFilter = "all";
   let attentionFilter = "all";
   let allProjects = []; // every project visible to the caller — populated by loadSites(), reused for the quick-create Action's project picker
+  // v97: project_id -> { reportId, projectName, warnings } for that
+  // live site's own LATEST weekly report, only when its system_position
+  // actually has earlyWarnings calculated — populated by loadSites()
+  // (reuses its existing weekly_reports fetch, no new query) and read
+  // by the "Early Warnings" totals-bar tile below, same as
+  // attentionActions/controlSummary feed every other tile.
+  let earlyWarningsByProject = {};
 
   function toggleForm(show) {
     newProjectCard.style.display = show ? "block" : "none";
@@ -417,12 +424,32 @@
     </tr>
   `;
 
+  // v97: one row per early warning (a project with 2 warnings gets 2
+  // rows) — the exact flat shape every other drill-down list here
+  // already uses, so this tile's own count always equals its list
+  // length too. Links to that specific report, not just the project.
+  const earlyWarningDrilldownHead = () => `<tr><th>Project</th><th>Warning</th></tr>`;
+  const earlyWarningDrilldownRow = (w) => `
+    <tr>
+      <td><a href="weekly-report-view.html?id=${w.reportId}">${escapeHtml(w.projectName)}</a></td>
+      <td>${escapeHtml(w.message)}</td>
+    </tr>
+  `;
+  function earlyWarningDrilldownItems() {
+    const items = [];
+    Object.values(earlyWarningsByProject).forEach((entry) => {
+      entry.warnings.forEach((w) => items.push({ reportId: entry.reportId, projectName: entry.projectName, message: w.message }));
+    });
+    return items;
+  }
+
   function tileDefinitions() {
     const t = controlSummary.totals;
     const programmeActivities = controlSummary.activeProgrammeActivities || [];
     const openActionsList = controlSummary.openActionsList || [];
     const overdueProgramme = (t.overdueProgrammeActivities || 0) + (t.overdueProgrammeMilestones || 0);
     const forecastLateProgramme = (t.materialForecastLateProgrammeActivities || 0) + (t.forecastLateProgrammeMilestones || 0);
+    const earlyWarningCount = Object.values(earlyWarningsByProject).reduce((sum, entry) => sum + entry.warnings.length, 0);
     return [
       { key: "attention", label: "Projects Requiring Attention", value: controlSummary.projectsRequiringAttention, color: controlSummary.projectsRequiringAttention > 0 ? "var(--red)" : "var(--ink)", head: attentionProjectDrilldownHead, row: attentionProjectDrilldownRow, items: () => controlSummary.rows.filter((r) => r.status.level === "attention") },
       { key: "openActions", label: "Open Actions", value: t.openActions, color: "var(--ink)", head: actionDrilldownHead, row: actionDrilldownRow, items: () => openActionsList },
@@ -432,6 +459,7 @@
       { key: "highCritical", label: "High / Critical Priority", value: t.highCritical, color: t.highCritical > 0 ? "var(--amber)" : "var(--ink)", head: actionDrilldownHead, row: actionDrilldownRow, items: () => attentionActions.filter((a) => a.categories.highCritical) },
       { key: "overdueProgramme", label: "Overdue Programme", value: overdueProgramme, color: overdueProgramme > 0 ? "var(--red)" : "var(--ink)", head: programmeDrilldownHead, row: programmeDrilldownRow, items: () => programmeActivities.filter(isOverdueProgrammeActivity) },
       { key: "forecastLateProgramme", label: "Programme Forecast Late", value: forecastLateProgramme, color: forecastLateProgramme > 0 ? "var(--amber)" : "var(--ink)", head: programmeDrilldownHead, row: programmeDrilldownRow, items: () => programmeActivities.filter(isForecastLateProgrammeActivity) },
+      { key: "earlyWarnings", label: "Early Warnings", value: earlyWarningCount, color: earlyWarningCount > 0 ? "var(--amber)" : "var(--ink)", head: earlyWarningDrilldownHead, row: earlyWarningDrilldownRow, items: earlyWarningDrilldownItems },
     ];
   }
 
@@ -581,7 +609,11 @@
 
     const [{ data: snags }, { data: reports }, { data: activeProgrammes }] = await Promise.all([
       supabase.from("snag_items").select("project_id, status"),
-      supabase.from("weekly_reports").select("project_id, week_ending"),
+      // v97: id/week_starting/system_position just ride along on this
+      // same existing select (no new query) — needed to find each
+      // project's own LATEST report in full, not just its date, for
+      // the "Early Warnings" tile below.
+      supabase.from("weekly_reports").select("id, project_id, week_starting, week_ending, system_position"),
       supabase.from("programmes").select("id, project_id").eq("status", "active"),
     ]);
 
@@ -621,6 +653,32 @@
         lastReport[r.project_id] = r.week_ending;
       }
     });
+
+    // "Early Warnings" (v97) — each LIVE project's own latest report
+    // (by week_ending, the same "later wins" comparison lastReport
+    // above already uses), kept in full rather than just its date, so
+    // its own system_position.earlyWarnings can be read straight off
+    // it. Completed sites (v96) are excluded entirely — a finished
+    // build isn't somewhere "early warnings" means anything, the same
+    // reasoning that already drops them out of the programme/progress
+    // figures. A report whose position was never calculated for this
+    // (isWeeklyReportEarlyWarningsCalculated() false — saved before
+    // v97) is skipped too: "not calculated" must never render as a
+    // false, reassuring 0.
+    const completeProjectIds = new Set(projects.filter((p) => p.status === "complete").map((p) => p.id));
+    const projectNameById = new Map(projects.map((p) => [p.id, p.name]));
+    const latestReportByProject = {};
+    (reports || []).forEach((r) => {
+      if (completeProjectIds.has(r.project_id)) return;
+      const existing = latestReportByProject[r.project_id];
+      if (!existing || r.week_ending > existing.week_ending) latestReportByProject[r.project_id] = r;
+    });
+    earlyWarningsByProject = {};
+    Object.values(latestReportByProject).forEach((r) => {
+      if (!isWeeklyReportEarlyWarningsCalculated(r.system_position)) return;
+      earlyWarningsByProject[r.project_id] = { reportId: r.id, projectName: projectNameById.get(r.project_id) || "—", warnings: r.system_position.earlyWarnings };
+    });
+    if (controlSummary) renderTotals(); // loadControlSummary() may still be in flight — it re-renders itself once ready too, whichever finishes last
 
     // v69: external works reminders (never set automatically).
     function externalWorksFlagsHtml(p) {
