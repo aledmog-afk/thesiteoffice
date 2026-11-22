@@ -4419,6 +4419,22 @@ function earlyWarningItemsMatch(planned, progress) {
 function totalLabourHeadcount(records) {
   return (Array.isArray(records) ? records : []).reduce((sum, r) => sum + (Number(r.headcount) || 0), 0);
 }
+// v98: the stable key a warning's early_warning_notes entry is stored
+// under — derived once, here, from the same identifying data each
+// warning is already matched by, so the UI/storage layer never has to
+// re-derive it independently (and can't drift from this). The three
+// "singleton" warning types each have exactly one possible occurrence
+// per report, so their own `type` string IS already a stable, unique
+// key. "planned_no_progress" can fire once per unmatched planned item,
+// so it needs a key per SOURCE item: its programme_activity_id when
+// the item has one (an id survives the planned item's text/plot being
+// edited later), else its normalised text+plot — the exact same
+// identity earlyWarningItemsMatch() above uses to match items.
+function earlyWarningKey(type, planned) {
+  if (type !== "planned_no_progress") return type;
+  if (planned.programme_activity_id) return `planned_no_progress:pa:${planned.programme_activity_id}`;
+  return `planned_no_progress:tx:${normaliseWarningText(planned.text)}|${normaliseWarningText(planned.plot)}`;
+}
 export function computeEarlyWarnings(previousReport, currentReport) {
   const warnings = [];
   if (!previousReport) return warnings;
@@ -4429,27 +4445,51 @@ export function computeEarlyWarnings(previousReport, currentReport) {
     const matched = progressItems.some((p) => earlyWarningItemsMatch(planned, p));
     if (!matched) {
       const plotSuffix = planned.plot ? ` (${planned.plot})` : "";
-      warnings.push({ type: "planned_no_progress", message: `Planned but no progress: "${planned.text}"${plotSuffix} was in last week's plan but has no matching item in this report.` });
+      warnings.push({ type: "planned_no_progress", key: earlyWarningKey("planned_no_progress", planned), message: `Planned but no progress: "${planned.text}"${plotSuffix} was in last week's plan but has no matching item in this report.` });
     }
   }
 
   if (currentReport.programme_status === "behind" && previousReport.programme_status === "behind") {
-    warnings.push({ type: "behind_two_weeks", message: "Behind programme for the second week running." });
+    warnings.push({ type: "behind_two_weeks", key: earlyWarningKey("behind_two_weeks"), message: "Behind programme for the second week running." });
   }
 
   const thisHeadcount = totalLabourHeadcount(currentReport.labour_records);
   const prevHeadcount = totalLabourHeadcount(previousReport.labour_records);
   if (prevHeadcount > 0 && thisHeadcount <= prevHeadcount * 0.75) {
     const dropPct = Math.round((1 - thisHeadcount / prevHeadcount) * 100);
-    warnings.push({ type: "labour_drop", message: `Labour on site is down to ${thisHeadcount} from ${prevHeadcount} last week (${dropPct}% drop).` });
+    warnings.push({ type: "labour_drop", key: earlyWarningKey("labour_drop"), message: `Labour on site is down to ${thisHeadcount} from ${prevHeadcount} last week (${dropPct}% drop).` });
   }
 
   const lostDays = (Array.isArray(currentReport.weather_days) ? currentReport.weather_days : []).filter((d) => Number(d.lost_hours) > 0);
   if (lostDays.length) {
-    warnings.push({ type: "weather_lost_time", message: `Weather lost time this week: ${lostDays.length} day${lostDays.length === 1 ? "" : "s"} affected.` });
+    warnings.push({ type: "weather_lost_time", key: earlyWarningKey("weather_lost_time"), message: `Weather lost time this week: ${lostDays.length} day${lostDays.length === 1 ? "" : "s"} affected.` });
   }
 
   return warnings;
+}
+
+// v98: folds a report's edited early-warning reason text back into its
+// early_warning_notes object on save. `existingNotes` is the report's
+// current early_warning_notes (possibly {}); `currentWarningKeys` is
+// every warning.key the just-recalculated system_position actually
+// carries right now; `textByKey` is whatever the editor currently has
+// typed per key. A note for a key NOT in currentWarningKeys (its
+// warning has disappeared on recalculation) is carried over untouched
+// — never deleted — so it reappears unchanged if the same warning
+// recurs later; a key that IS current is replaced from textByKey,
+// written only when non-blank (a blanked textarea clears that key's
+// stored reason, same as any other form field).
+export function buildEarlyWarningNotes(existingNotes, currentWarningKeys, textByKey, userId, nowIso = new Date().toISOString()) {
+  const currentKeySet = new Set(currentWarningKeys);
+  const result = {};
+  for (const [key, note] of Object.entries(existingNotes || {})) {
+    if (!currentKeySet.has(key)) result[key] = note;
+  }
+  for (const key of currentWarningKeys) {
+    const text = String((textByKey || {})[key] || "").trim();
+    if (text) result[key] = { text, updated_at: nowIso, updated_by: userId || null };
+  }
+  return result;
 }
 
 // True once a position actually has an earlyWarnings array — false for

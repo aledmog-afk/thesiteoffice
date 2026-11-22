@@ -67,6 +67,8 @@ export async function runPage(htmlPath, scriptSrc, context = {}) {
     // v97: weekly-report-form.html/weekly-report-view.html need this
     // directly whenever they render any system position.
     isWeeklyReportEarlyWarningsCalculated: DEFAULT_IS_EARLY_WARNINGS_CALCULATED,
+    // v98: weekly-report-form.html needs this directly on every save.
+    buildEarlyWarningNotes: DEFAULT_BUILD_EARLY_WARNING_NOTES,
     ...context,
   };
   const ctx = vm.createContext(fullContext);
@@ -167,3 +169,18 @@ function loadIsWeeklyReportEarlyWarningsCalculated() {
   `)();
 }
 const DEFAULT_IS_EARLY_WARNINGS_CALCULATED = loadIsWeeklyReportEarlyWarningsCalculated();
+
+// The real buildEarlyWarningNotes() (v98) — weekly-report-form.html
+// calls it unconditionally on every save, so every pre-existing test
+// of that page needs this default too, same reasoning as every other
+// default here.
+function loadBuildEarlyWarningNotes() {
+  const src = fs.readFileSync(new URL("../../tracker/js/app.js", import.meta.url), "utf8");
+  const mainFn = src.match(/export function buildEarlyWarningNotes\([\s\S]*?\n\}/);
+  if (!mainFn) return () => ({});
+  return new Function(`
+    ${mainFn[0].replace(/^export /, "")}
+    return buildEarlyWarningNotes;
+  `)();
+}
+const DEFAULT_BUILD_EARLY_WARNING_NOTES = loadBuildEarlyWarningNotes();

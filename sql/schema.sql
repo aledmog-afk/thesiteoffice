@@ -18557,3 +18557,28 @@ begin
 end;
 $$;
 revoke all on function public.apply_weekly_report_progress(uuid, text) from public, anon, authenticated;
+
+-- ─── v98 ADDITIONS: Early warning reasons ────────────────────────────
+--
+-- A single plain jsonb column on weekly_reports holding, per early
+-- warning (v97's system_position.earlyWarnings — never stored here,
+-- since that whole object is rebuilt from scratch by
+-- getWeeklyReportPosition() on every save), an editor-entered note on
+-- what caused it and what's being done about it. Keyed by each
+-- warning's own stable `key` (see earlyWarningKey() in app.js) so a
+-- note survives recalculation even when its warning temporarily
+-- disappears, and reattaches if the same warning recurs later.
+--
+-- No per-column grant or RLS change needed: weekly_reports already
+-- grants `authenticated` the whole row (see the diary pull-in note
+-- above, "no per-column grants exist on it anywhere in this schema")
+-- and is gated only by the existing row-level "editors ...
+-- weekly_reports" and v62 party-capability policies — a new column is
+-- automatically covered by both, same as every other weekly_reports
+-- column. Likewise weekly_reports_before_write()'s whole-row content-
+-- lock (see its own comment above) diffs to_jsonb(new) against
+-- to_jsonb(old) over every column except status/updated_at, so an
+-- issued/approved report's early_warning_notes is automatically locked
+-- with zero trigger change — verified directly in
+-- tests/database/v98_early_warning_notes.test.mjs.
+alter table public.weekly_reports add column if not exists early_warning_notes jsonb not null default '{}'::jsonb;

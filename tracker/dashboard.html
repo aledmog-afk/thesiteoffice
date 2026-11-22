@@ -432,13 +432,16 @@
   const earlyWarningDrilldownRow = (w) => `
     <tr>
       <td><a href="weekly-report-view.html?id=${w.reportId}">${escapeHtml(w.projectName)}</a></td>
-      <td>${escapeHtml(w.message)}</td>
+      <td>${escapeHtml(w.message)}${w.reason ? `<div class="hint" style="margin-top:0.2rem;">${escapeHtml(w.reason)}</div>` : ""}</td>
     </tr>
   `;
   function earlyWarningDrilldownItems() {
     const items = [];
     Object.values(earlyWarningsByProject).forEach((entry) => {
-      entry.warnings.forEach((w) => items.push({ reportId: entry.reportId, projectName: entry.projectName, message: w.message }));
+      // v98: the stored reason, if any, rides along for display — read
+      // straight from this entry's own early_warning_notes, keyed by
+      // the warning's own stable `key`, never re-derived.
+      entry.warnings.forEach((w) => items.push({ reportId: entry.reportId, projectName: entry.projectName, message: w.message, reason: entry.notes[w.key]?.text || "" }));
     });
     return items;
   }
@@ -613,7 +616,9 @@
       // same existing select (no new query) — needed to find each
       // project's own LATEST report in full, not just its date, for
       // the "Early Warnings" tile below.
-      supabase.from("weekly_reports").select("id, project_id, week_starting, week_ending, system_position"),
+      // v98: early_warning_notes rides along too, for the Early
+      // Warnings drill-down's own reason line below.
+      supabase.from("weekly_reports").select("id, project_id, week_starting, week_ending, system_position, early_warning_notes"),
       supabase.from("programmes").select("id, project_id").eq("status", "active"),
     ]);
 
@@ -676,7 +681,7 @@
     earlyWarningsByProject = {};
     Object.values(latestReportByProject).forEach((r) => {
       if (!isWeeklyReportEarlyWarningsCalculated(r.system_position)) return;
-      earlyWarningsByProject[r.project_id] = { reportId: r.id, projectName: projectNameById.get(r.project_id) || "—", warnings: r.system_position.earlyWarnings };
+      earlyWarningsByProject[r.project_id] = { reportId: r.id, projectName: projectNameById.get(r.project_id) || "—", warnings: r.system_position.earlyWarnings, notes: r.early_warning_notes || {} };
     });
     if (controlSummary) renderTotals(); // loadControlSummary() may still be in flight — it re-renders itself once ready too, whichever finishes last
 

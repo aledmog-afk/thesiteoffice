@@ -610,3 +610,38 @@ test("dashboard.html: no live sites with any calculated warnings renders the Ear
   assert.equal(box.tagName, "DIV");
   assert.equal(box.querySelector(".totals-value").textContent, "0");
 });
+
+// ─── Early warning reasons (v98) ────────────────────────────────────
+// early_warning_notes rides along on the same bulk weekly_reports
+// select loadSites() already issues (no new query) — shown as an
+// optional second line under its matching warning, keyed by the
+// warning's own stable `key`.
+
+test("dashboard.html: the Early Warnings drill-down shows a warning's stored reason as a line underneath it", async () => {
+  const projects = [{ id: "p1", name: "Elm Grove", status: "active" }];
+  const reports = [{
+    id: "r1", project_id: "p1", week_starting: "2026-06-01", week_ending: "2026-06-05",
+    system_position: { exceptions: {}, earlyWarnings: [{ type: "labour_drop", key: "labour_drop", message: "Labour on site is down to 10 from 20 last week (50% drop)." }] },
+    early_warning_notes: { labour_drop: { text: "Two groundworkers off sick", updated_at: "2026-06-04T00:00:00Z", updated_by: "u2" } },
+  }];
+  const { document } = await run({ summary: makeSummary(), attentionActions: [], supabase: tableSupabase({ projects, reports }) });
+  await wait(30);
+  fireEvent(tileButton(document, "Early Warnings"), "click");
+  const text = document.getElementById("tileDrilldownRows").textContent;
+  assert.match(text, /Labour on site is down to 10 from 20 last week/);
+  assert.match(text, /Two groundworkers off sick/);
+});
+
+test("dashboard.html: a warning with no stored reason shows no extra line — never a blank one", async () => {
+  const projects = [{ id: "p1", name: "Elm Grove", status: "active" }];
+  const reports = [{
+    id: "r1", project_id: "p1", week_starting: "2026-06-01", week_ending: "2026-06-05",
+    system_position: { exceptions: {}, earlyWarnings: [{ type: "weather_lost_time", key: "weather_lost_time", message: "Weather lost time this week: 1 day affected." }] },
+    early_warning_notes: {},
+  }];
+  const { document } = await run({ summary: makeSummary(), attentionActions: [], supabase: tableSupabase({ projects, reports }) });
+  await wait(30);
+  fireEvent(tileButton(document, "Early Warnings"), "click");
+  const rowsHtml = document.getElementById("tileDrilldownRows").innerHTML;
+  assert.doesNotMatch(rowsHtml, /class="hint"[^>]*><\/div>/, "no empty reason line must ever render");
+});
