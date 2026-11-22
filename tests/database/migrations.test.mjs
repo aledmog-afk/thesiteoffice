@@ -1106,6 +1106,66 @@ test("v98: weekly_reports.early_warning_notes is idempotent across repeated re-a
   }
 });
 
+// v99: Exclude programme rows from progress — the auto-tick rule, its
+// manual-override-always-wins guarantee, RLS, and SQL/JS parity are
+// all proven directly in tests/database/v99_exclude_programme_rows_from_progress.test.mjs.
+// The only thing checked at this schema-shape level is idempotency.
+test("v99: programme_activities.exclude_from_progress[_source], apply_programme_auto_exclude(), and the extended trigger/function are idempotent across repeated re-application", async () => {
+  const db = "tracker_test_v99_idempotent";
+  await createTestDatabase(db);
+  try {
+    const client = adminClient(db);
+    await client.connect();
+    await runSqlFile(client, MOCK_SETUP);
+    for (let i = 0; i < 3; i++) {
+      await runSqlFile(client, CURRENT_SCHEMA);
+    }
+
+    const columns = await client.query(`
+      select column_name, data_type, is_nullable from information_schema.columns
+      where table_schema = 'public' and table_name = 'programme_activities'
+        and column_name in ('exclude_from_progress', 'exclude_from_progress_source')
+      order by column_name
+    `);
+    assert.equal(columns.rowCount, 2, "both new columns must exist exactly once after repeated re-application");
+    assert.equal(columns.rows[0].column_name, "exclude_from_progress");
+    assert.equal(columns.rows[0].data_type, "boolean");
+    assert.equal(columns.rows[0].is_nullable, "NO");
+    assert.equal(columns.rows[1].column_name, "exclude_from_progress_source");
+    assert.equal(columns.rows[1].data_type, "text");
+    assert.equal(columns.rows[1].is_nullable, "YES");
+
+    const checkConstraint = await client.query(`
+      select count(*)::int as n from pg_constraint
+      where conrelid = 'public.programme_activities'::regclass and conname = 'programme_activities_exclude_source_check'
+    `);
+    assert.equal(checkConstraint.rows[0].n, 1, "the exclude_from_progress_source CHECK constraint must not be duplicated across re-applications");
+
+    const fn = await client.query("select count(*)::int as n from information_schema.routines where routine_schema = 'public' and routine_name = 'apply_programme_auto_exclude'");
+    assert.equal(fn.rows[0].n, 1, "apply_programme_auto_exclude must exist exactly once after repeated re-application");
+
+    // v99 adds ZERO new triggers/policies to programme_activities — it
+    // only extends the existing trg_programme_activities_v95_progress_after
+    // function body (same name, same attachment) and adds a plain,
+    // never-granted helper function — so the Programme Control
+    // foundation's own trigger/policy counts (asserted elsewhere in
+    // this file) stay exactly as they already were.
+    const actTriggers = await client.query("select count(*)::int as n from pg_trigger where tgrelid = 'public.programme_activities'::regclass and tgname like 'trg_%'");
+    assert.equal(actTriggers.rows[0].n, 3, "v99 adds zero triggers to programme_activities — same 3 as before");
+
+    const grants = await client.query(`
+      select routine_name, grantee from information_schema.role_routine_grants
+      where routine_schema = 'public' and grantee in ('anon', 'authenticated')
+        and routine_name in ('apply_programme_auto_exclude', 'compute_programme_complete_pct', 'programme_activities_v95_progress_after')
+    `);
+    assert.equal(grants.rowCount, 0, "none of the new/extended SECURITY DEFINER functions should be directly callable by anon or authenticated");
+
+    await client.end();
+  } finally {
+    await dropTestDatabase(db);
+  }
+});
+
 test("v91: a fresh install has zero platform_admins — nobody is a platform admin by default", async () => {
   const db = "tracker_test_v91_no_backfill";
   await createTestDatabase(db);

@@ -1100,9 +1100,11 @@
       const programmeActivities = await listProgrammeActivities(programme.id);
       const pct = computeProgrammeComplete(programmeActivities);
       if (pct === null) return;
-      const completeCount = programmeActivities.filter((a) => a.status === "complete").length;
-      const totalCount = programmeActivities.length;
-      document.getElementById("programmeCompleteDisplay").textContent = `Programme complete: ${pct.toFixed(0)}% (${completeCount} of ${totalCount} activities)`;
+      // v99: counted against what the figure is actually weighted
+      // over (not cancelled, not excluded), not the full activity count.
+      const counted = programmeActivities.filter((a) => a.status !== "cancelled" && !a.exclude_from_progress);
+      const completeCount = counted.filter((a) => a.status === "complete").length;
+      document.getElementById("programmeCompleteDisplay").textContent = `Programme complete: ${pct.toFixed(0)}% (${completeCount} of ${counted.length} counted activities)`;
       document.getElementById("programmeCompleteDisplay").style.display = "block";
     } catch {
       // Supplementary figure only — leave it hidden on any failure

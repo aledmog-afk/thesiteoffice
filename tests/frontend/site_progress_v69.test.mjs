@@ -252,7 +252,7 @@ test("Site Details: with an active programme, 'Programme complete' renders the w
   await wait(40);
   const el = document.getElementById("programmeCompleteDisplay");
   assert.equal(el.style.display, "block");
-  assert.match(el.textContent, /Programme complete: 75% \(1 of 2 activities\)/);
+  assert.match(el.textContent, /Programme complete: 75% \(1 of 2 counted activities\)/);
   assert.match(document.getElementById("progressDisplay").innerHTML, /38\.4/, "the stored Actual Progress figure stays exactly as before");
 });
 
