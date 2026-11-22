@@ -106,7 +106,7 @@ test("dashboard.html: a site with an active programme shows 'Programme complete'
   ];
   const { document } = await run(makeSupabase({ projects: [project], programmes, programmeActivities }));
   await wait(20);
-  assert.match(document.getElementById("grid").innerHTML, /Programme complete: 75% \(1 of 2 activities\)/);
+  assert.match(document.getElementById("grid").innerHTML, /Programme complete: 75% \(1 of 2 counted activities\)/);
 });
 
 test("dashboard.html: a site with no active programme shows no 'Programme complete' figure on its tile", async () => {

@@ -631,21 +631,33 @@
     const activitiesByProject = {};
     const activeProgrammeIds = Object.keys(programmeProjectId);
     if (activeProgrammeIds.length) {
+      // v99: exclude_from_progress rides along too — computeProgrammeComplete()
+      // needs it to exclude header/summary rows the same way it excludes
+      // a cancelled one.
       const { data: progActivities } = await supabase
         .from("programme_activities")
-        .select("programme_id, is_milestone, status, planned_start, planned_finish, forecast_start, forecast_finish, percent_complete")
+        .select("programme_id, is_milestone, status, planned_start, planned_finish, forecast_start, forecast_finish, percent_complete, exclude_from_progress")
         .in("programme_id", activeProgrammeIds);
       (progActivities || []).forEach((a) => {
         const pid = programmeProjectId[a.programme_id];
         (activitiesByProject[pid] || (activitiesByProject[pid] = [])).push(a);
       });
     }
+    // v99: "counted" = actually weighted into the figure above (not
+    // cancelled, not excluded) — the denominator a reader needs to
+    // make sense of a programme with header rows ticked out, shown as
+    // "X of Y counted activities" rather than silently against the
+    // project's full, unfiltered activity count.
+    function countedProgrammeActivities(projectActivities) {
+      return projectActivities.filter((a) => a.status !== "cancelled" && !a.exclude_from_progress);
+    }
     function programmeCompleteHtml(p) {
       const projectActivities = activitiesByProject[p.id] || [];
       const pct = computeProgrammeComplete(projectActivities);
       if (pct === null) return "";
-      const completeCount = projectActivities.filter((a) => a.status === "complete").length;
-      return `<div class="hint" style="margin-top:0.3rem;">Programme complete: ${pct.toFixed(0)}% (${completeCount} of ${projectActivities.length} activities)</div>`;
+      const counted = countedProgrammeActivities(projectActivities);
+      const completeCount = counted.filter((a) => a.status === "complete").length;
+      return `<div class="hint" style="margin-top:0.3rem;">Programme complete: ${pct.toFixed(0)}% (${completeCount} of ${counted.length} counted activities)</div>`;
     }
 
     const openSnagCount = {};

@@ -18582,3 +18582,215 @@ revoke all on function public.apply_weekly_report_progress(uuid, text) from publ
 -- with zero trigger change — verified directly in
 -- tests/database/v98_early_warning_notes.test.mjs.
 alter table public.weekly_reports add column if not exists early_warning_notes jsonb not null default '{}'::jsonb;
+
+-- ─── v99 ADDITIONS: Exclude programme rows from progress ────────────
+--
+-- Problem: compute_programme_complete_pct()'s duration-weighted figure
+-- (and computeProgrammeComplete() in app.js, the identical client-side
+-- calculation) is dragged down by header/summary/resource rows that
+-- span most or all of the job (a programme's own title row, "Client
+-- Handover Process", "Prelims", named site staff like "Site Manager" —
+-- each spanning a year or more at 0%) — real scope with real duration
+-- to a Gantt tool, but not countable "construction progress" here. The
+-- XLSX import keeps no header/summary flag from the source file, so
+-- this can't be told apart on import; it has to be inferred from shape
+-- and then left to a human to check.
+--
+-- (A) Two new columns. exclude_from_progress is the actual on/off
+-- switch read by both calculations below; exclude_from_progress_source
+-- distinguishes the auto rule's own guess ('auto') from an editor's
+-- deliberate choice ('manual') — a manual tick/untick must never be
+-- overwritten by a later auto-exclude pass (see apply_programme_auto_
+-- exclude() below), which is exactly what this column exists to let
+-- that function tell apart. Null (never set either way) is the normal
+-- state for a row the auto rule has never touched and no editor has
+-- either.
+alter table public.programme_activities add column if not exists exclude_from_progress boolean not null default false;
+alter table public.programme_activities add column if not exists exclude_from_progress_source text;
+alter table public.programme_activities drop constraint if exists programme_activities_exclude_source_check;
+alter table public.programme_activities add constraint programme_activities_exclude_source_check
+  check (exclude_from_progress_source is null or exclude_from_progress_source in ('auto', 'manual'));
+
+-- (B) apply_programme_auto_exclude(): the auto rule itself, callable
+-- idempotently and re-run automatically (see the trigger below) rather
+-- than stamped once and forgotten — a non-milestone activity whose own
+-- planned span (planned_finish - planned_start) is >= 90% of the
+-- WHOLE programme's own planned span (min planned_start to max
+-- planned_finish, across every one of its activities, deliberately
+-- INCLUDING already-excluded rows — excluding them here would shrink
+-- the very span the rule measures against, defeating the point) gets
+-- ticked, source 'auto'. Any row currently 'auto' that no longer
+-- qualifies (an edit elsewhere shifted the overall span) is untucked
+-- the same way — but a 'manual' row is never touched by either half,
+-- in either direction, regardless of what it does or doesn't qualify
+-- for. Never granted to any client role — called only from the
+-- trigger below and once (per existing programme) by this migration's
+-- own backfill.
+create or replace function public.apply_programme_auto_exclude(p_programme_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_span numeric;
+begin
+  select max(planned_finish) - min(planned_start) into v_span
+    from public.programme_activities
+    where programme_id = p_programme_id
+      and planned_start is not null and planned_finish is not null;
+
+  if v_span is null or v_span <= 0 then
+    -- Nothing to reliably weight against (fewer than two dated rows,
+    -- or they all fall on the same day) — never auto-tick OR
+    -- auto-untick off the back of an unreliable span; leave every
+    -- 'auto' row exactly as it already is.
+    return;
+  end if;
+
+  update public.programme_activities
+     set exclude_from_progress = true, exclude_from_progress_source = 'auto'
+   where programme_id = p_programme_id
+     and coalesce(exclude_from_progress_source, '') <> 'manual'
+     and is_milestone = false
+     and planned_start is not null and planned_finish is not null
+     and (planned_finish - planned_start) >= 0.9 * v_span
+     and (exclude_from_progress is distinct from true or exclude_from_progress_source is distinct from 'auto');
+
+  update public.programme_activities
+     set exclude_from_progress = false, exclude_from_progress_source = null
+   where programme_id = p_programme_id
+     and exclude_from_progress_source = 'auto'
+     and not (
+       is_milestone = false
+       and planned_start is not null and planned_finish is not null
+       and (planned_finish - planned_start) >= 0.9 * v_span
+     );
+end;
+$$;
+revoke all on function public.apply_programme_auto_exclude(uuid) from public, anon, authenticated;
+
+-- (C) compute_programme_complete_pct(): extended with ONE extra
+-- exclusion in the `countable` CTE's WHERE clause — a ticked row
+-- (either source) is now excluded exactly like a cancelled one,
+-- neither weighted nor counted in the denominator. Every other line
+-- is byte-identical to the v95 original.
+create or replace function public.compute_programme_complete_pct(p_project_id uuid)
+returns numeric
+language sql stable security invoker set search_path = public as $$
+  with active_programme as (
+    select id from public.programmes where project_id = p_project_id and status = 'active' limit 1
+  ),
+  countable as (
+    select
+      a.status,
+      a.percent_complete,
+      case
+        when a.is_milestone then 1
+        when a.planned_start is not null and a.planned_finish is not null then greatest(1, a.planned_finish - a.planned_start)
+        when a.forecast_start is not null and a.forecast_finish is not null then greatest(1, a.forecast_finish - a.forecast_start)
+        else 1
+      end as weight
+    from public.programme_activities a
+    where a.programme_id in (select id from active_programme)
+      and a.status <> 'cancelled'
+      and not a.exclude_from_progress
+  )
+  select case when coalesce(sum(weight), 0) > 0
+    then round(sum(weight * (case when status = 'complete' then 100 else coalesce(percent_complete, 0) end)) / sum(weight), 1)
+    else null
+  end
+  from countable;
+$$;
+revoke all on function public.compute_programme_complete_pct(uuid) from public, anon, authenticated;
+
+-- (D) programme_activities_v95_progress_after(): extended to also run
+-- the auto-exclude rule (always — regardless of this project's own
+-- progress_source, since a site may switch to 'programme' later and
+-- its ticks should already be right by then) on INSERT, or on an
+-- UPDATE that changed one of the three fields the rule itself reads
+-- (planned_start/planned_finish/is_milestone) — the same "only on a
+-- field that actually matters" discipline the existing recalc branch
+-- below it already applies. exclude_from_progress changing is added
+-- to THAT existing branch's own watch list, so toggling a tick
+-- recalculates the stored progress figure immediately, the same as
+-- every other field that feeds it. Calling apply_programme_auto_
+-- exclude() from a row-level AFTER trigger during a large bulk import
+-- (hundreds of single-row inserts in one transaction) redundantly
+-- re-scans the whole programme on every one of those rows — by
+-- design: a bulk import's EARLIER rows have theirs computed against a
+-- still-partial span, but the LAST row's own call sees the complete,
+-- final set and corrects everything (both the fresh ticks and any
+-- earlier guess that no longer qualifies) in that one final pass —
+-- cheap enough for the 5,000-row cap import_programme_activities()
+-- already enforces, and never a new code path for import specifically
+-- to call (it is the same plain INSERT/UPDATE statements under the
+-- same trigger, bulk or not).
+create or replace function public.programme_activities_v95_progress_after()
+returns trigger
+language plpgsql security definer set search_path = public as $$
+declare
+  v_pid uuid;
+  v_source text;
+begin
+  v_pid := coalesce(new.project_id, old.project_id);
+
+  if tg_op = 'INSERT' then
+    perform public.apply_programme_auto_exclude(new.programme_id);
+  elsif tg_op = 'UPDATE' and (
+       new.planned_start is distinct from old.planned_start
+    or new.planned_finish is distinct from old.planned_finish
+    or new.is_milestone is distinct from old.is_milestone
+  ) then
+    perform public.apply_programme_auto_exclude(new.programme_id);
+  end if;
+
+  select progress_source into v_source from public.projects where id = v_pid;
+  if v_source is distinct from 'programme' then
+    return null;
+  end if;
+  if tg_op = 'DELETE' or tg_op = 'INSERT' then
+    perform public.recalc_project_progress(v_pid);
+  elsif new.percent_complete is distinct from old.percent_complete
+     or new.status is distinct from old.status
+     or new.is_milestone is distinct from old.is_milestone
+     or new.planned_start is distinct from old.planned_start
+     or new.planned_finish is distinct from old.planned_finish
+     or new.forecast_start is distinct from old.forecast_start
+     or new.forecast_finish is distinct from old.forecast_finish
+     or new.exclude_from_progress is distinct from old.exclude_from_progress then
+    perform public.recalc_project_progress(v_pid);
+  end if;
+  return null;
+end;
+$$;
+revoke all on function public.programme_activities_v95_progress_after() from public, anon, authenticated;
+-- Trigger itself is unchanged (same name, same attachment) — no
+-- drop/create needed:
+--   trg_programme_activities_v95_progress_after after insert or update or delete on public.programme_activities
+
+-- (E) One-off backfill for rows that already existed before this
+-- migration — everything after this point (the trigger above) handles
+-- new/edited rows going forward; this single statement is the only
+-- place existing data is ever touched, and only once; re-running it is
+-- harmless (its own WHERE clause already only matches rows not yet in
+-- the state it would put them in). Deliberately only the "tick"
+-- half of the rule, never the "untick" half — a brand-new/zeroed
+-- column has nothing stale to untick yet, and this statement runs
+-- exactly once per fresh apply of this migration block.
+with span as (
+  select programme_id, max(planned_finish) - min(planned_start) as total_span
+  from public.programme_activities
+  where planned_start is not null and planned_finish is not null
+  group by programme_id
+  having max(planned_finish) - min(planned_start) > 0
+)
+update public.programme_activities a
+   set exclude_from_progress = true, exclude_from_progress_source = 'auto'
+  from span s
+ where a.programme_id = s.programme_id
+   and coalesce(a.exclude_from_progress_source, '') <> 'manual'
+   and a.is_milestone = false
+   and a.planned_start is not null and a.planned_finish is not null
+   and (a.planned_finish - a.planned_start) >= 0.9 * s.total_span
+   and (a.exclude_from_progress is distinct from true or a.exclude_from_progress_source is distinct from 'auto');

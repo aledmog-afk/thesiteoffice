@@ -104,3 +104,30 @@ test("computeProgrammeComplete: returns null when every activity is cancelled (n
   const pct = computeProgrammeComplete([act({ status: "cancelled" }), act({ id: "c2", status: "cancelled" })]);
   assert.equal(pct, null);
 });
+
+// ─── v99: exclude_from_progress ────────────────────────────────────
+test("computeProgrammeComplete: an activity with exclude_from_progress set is excluded entirely — neither weighted nor counted — the same as a cancelled one", () => {
+  const done = act({ status: "complete", percent_complete: 100, planned_start: "2026-01-01", planned_finish: "2026-01-11" });
+  const headerRow = act({ id: "header", status: "not_started", percent_complete: 0, planned_start: "2025-01-01", planned_finish: "2027-01-01", exclude_from_progress: true }); // huge weight if it counted
+  const pct = computeProgrammeComplete([done, headerRow]);
+  assert.equal(pct, 100);
+});
+
+test("computeProgrammeComplete: exclude_from_progress excludes regardless of its source ('auto' or 'manual')", () => {
+  const done = act({ status: "complete", percent_complete: 100, planned_start: "2026-01-01", planned_finish: "2026-01-11" });
+  const autoExcluded = act({ id: "auto", percent_complete: 0, planned_start: "2025-01-01", planned_finish: "2027-01-01", exclude_from_progress: true, exclude_from_progress_source: "auto" });
+  const manualExcluded = act({ id: "manual", percent_complete: 0, planned_start: "2025-01-01", planned_finish: "2027-01-01", exclude_from_progress: true, exclude_from_progress_source: "manual" });
+  assert.equal(computeProgrammeComplete([done, autoExcluded]), 100);
+  assert.equal(computeProgrammeComplete([done, manualExcluded]), 100);
+});
+
+test("computeProgrammeComplete: returns null when every activity is excluded (nothing countable, even though the array isn't empty)", () => {
+  const pct = computeProgrammeComplete([act({ exclude_from_progress: true }), act({ id: "e2", exclude_from_progress: true })]);
+  assert.equal(pct, null);
+});
+
+test("computeProgrammeComplete: exclude_from_progress false (or absent, matching every pre-existing activity row) never excludes — unaffected by this flag existing at all", () => {
+  const a = act({ percent_complete: 60, planned_start: "2026-01-01", planned_finish: "2026-01-11", exclude_from_progress: false });
+  const b = act({ id: "b", percent_complete: 40, planned_start: "2026-01-01", planned_finish: "2026-01-11" }); // no such field at all
+  assert.equal(computeProgrammeComplete([a, b]), 50);
+});

@@ -91,7 +91,11 @@ function activity(overrides = {}) {
   };
 }
 
-function baseSupabaseMock() {
+// `myRole` defaults to "owner" (an editor) — matching this page's own
+// long-standing assumption (see the file-header comment) that only
+// editors are ever given a link to it; a test that specifically wants
+// the v99 "disabled for non-editors" path passes its own role.
+function baseSupabaseMock({ myRole = "owner" } = {}) {
   return {
     from(table) {
       const api = {
@@ -103,7 +107,7 @@ function baseSupabaseMock() {
       };
       return api;
     },
-    rpc() { return Promise.resolve({ data: [], error: null }); },
+    rpc: (name) => Promise.resolve(name === "get_my_role" ? { data: myRole, error: null } : { data: [], error: null }),
   };
 }
 
@@ -115,8 +119,9 @@ async function runProgrammePage({
   createActionFromProgrammeActivity,
   confirm = () => true,
   todayISO = () => "2026-06-15",
+  myRole = "owner",
 } = {}) {
-  const supabase = baseSupabaseMock();
+  const supabase = baseSupabaseMock({ myRole });
   return runPage(PROGRAMME_HTML, extractScript(PROGRAMME_HTML), {
     __url: "https://example.com/programme.html?project=p1",
     supabase,
@@ -615,17 +620,21 @@ test("programme.html: a successful Complete re-renders the row — the Complete 
 // these only prove the PAGE renders what that real function returns,
 // the same division of responsibility the rest of this file already
 // keeps between categoriseProgrammeActivity() and its own rendering.
-test("programme.html: the 'Programme complete' summary shows the duration-weighted percent and the raw complete/total counts", async () => {
+test("programme.html: the 'Programme complete' summary shows the duration-weighted percent and the complete/counted totals", async () => {
   const { document } = await runProgrammePage({
     activities: [activity({ id: "a1", title: "Groundworks", status: "in_progress", percent_complete: 40, planned_start: "2026-01-01", planned_finish: "2026-01-15" })],
   });
   await wait(30);
   const summary = document.getElementById("programmeCompleteSummary");
   assert.equal(summary.style.display, "block");
-  assert.match(summary.textContent, /Programme complete: 40% \(0 of 1 activities\)/);
+  assert.match(summary.textContent, /Programme complete: 40% \(0 of 1 counted activities\)/);
 });
 
-test("programme.html: the summary excludes cancelled activities from the weighted percent but still counts them in the total shown", async () => {
+// v99: the displayed total is now "counted activities" — not cancelled,
+// not excluded — so it agrees with what the weighted percent is
+// actually computed over, rather than the page's raw, unfiltered
+// activity count.
+test("programme.html: the summary excludes cancelled activities from BOTH the weighted percent and the counted total shown", async () => {
   const { document } = await runProgrammePage({
     activities: [
       activity({ id: "a1", title: "Done", status: "complete", percent_complete: 100, planned_start: "2026-01-01", planned_finish: "2026-01-15" }),
@@ -638,12 +647,148 @@ test("programme.html: the summary excludes cancelled activities from the weighte
   // Both countable activities (a1, a3) have equal weight (same 14-day
   // planned duration), so the weighted figure is a plain average of
   // 100% and 50% — 75% — with the cancelled activity contributing to
-  // neither side of that fraction.
-  assert.match(summary.textContent, /Programme complete: 75% \(1 of 3 activities\)/);
+  // neither side of that fraction, nor to the "of N counted" total.
+  assert.match(summary.textContent, /Programme complete: 75% \(1 of 2 counted activities\)/);
+});
+
+test("programme.html: an activity ticked exclude_from_progress is left out of the weighted percent AND the counted total, the same as a cancelled one", async () => {
+  const { document } = await runProgrammePage({
+    activities: [
+      activity({ id: "a1", title: "Real work", status: "complete", percent_complete: 100, planned_start: "2026-01-01", planned_finish: "2026-01-15" }),
+      activity({ id: "a2", title: "Programme Title Row", status: "not_started", percent_complete: 0, planned_start: "2025-01-01", planned_finish: "2027-01-01", exclude_from_progress: true, exclude_from_progress_source: "auto" }),
+    ],
+  });
+  await wait(30);
+  const summary = document.getElementById("programmeCompleteSummary");
+  assert.match(summary.textContent, /Programme complete: 100% \(1 of 1 counted activities\)/, "the excluded header row's huge span must drag down neither the percent nor the counted denominator");
 });
 
 test("programme.html: with no programme at all, the summary stays hidden", async () => {
   const { document } = await runProgrammePage({ programmes: [] });
   await wait(30);
   assert.equal(document.getElementById("programmeCompleteSummary").style.display, "none");
+});
+
+// ─── "Counts?" tick + auto-ticked notice (v99) ─────────────────────
+
+function countsCheckboxFor(document, title) {
+  const row = Array.from(document.querySelectorAll("#activityRows tr")).find((r) => r.textContent.includes(title));
+  return row && row.querySelector('input[type="checkbox"]');
+}
+
+test("programme.html: the Counts? checkbox is checked when exclude_from_progress is false, unchecked when true", async () => {
+  const { document } = await runProgrammePage({
+    activities: [
+      activity({ id: "a1", title: "Counted", exclude_from_progress: false }),
+      activity({ id: "a2", title: "Excluded", exclude_from_progress: true, exclude_from_progress_source: "manual" }),
+    ],
+  });
+  await wait(30);
+  assert.equal(countsCheckboxFor(document, "Counted").checked, true);
+  assert.equal(countsCheckboxFor(document, "Excluded").checked, false);
+});
+
+// Like completeActivity() above, the checkbox/button's own onchange/
+// onclick is an inline attribute string — never executed under this
+// harness's runScripts:"outside-only" jsdom mode (see completeButtonFor()'s
+// own precedent) — so these call the page's exposed window.toggleExcludeFromProgress()
+// directly, the same real function that attribute would call, rather
+// than dispatching a DOM event nothing here would pick up.
+test("programme.html: unticking Counts? calls updateProgrammeActivity with exclude_from_progress true and source 'manual'", async () => {
+  let called = null;
+  const { window } = await runProgrammePage({
+    activities: [activity({ id: "a1", title: "Groundworks", exclude_from_progress: false })],
+    updateProgrammeActivity: async (id, fields) => { called = { id, fields }; return {}; },
+  });
+  await wait(30);
+  window.toggleExcludeFromProgress("a1", true);
+  await wait(30);
+  assert.equal(called.id, "a1");
+  assert.equal(called.fields.exclude_from_progress, true);
+  assert.equal(called.fields.exclude_from_progress_source, "manual");
+});
+
+test("programme.html: re-ticking Counts? on a previously auto-excluded row calls updateProgrammeActivity with exclude_from_progress false and source 'manual' — an editor's own choice, never left as 'auto'", async () => {
+  let called = null;
+  const { window } = await runProgrammePage({
+    activities: [activity({ id: "a1", title: "Prelims", exclude_from_progress: true, exclude_from_progress_source: "auto" })],
+    updateProgrammeActivity: async (id, fields) => { called = { id, fields }; return {}; },
+  });
+  await wait(30);
+  window.toggleExcludeFromProgress("a1", false);
+  await wait(30);
+  assert.equal(called.id, "a1");
+  assert.equal(called.fields.exclude_from_progress, false);
+  assert.equal(called.fields.exclude_from_progress_source, "manual");
+});
+
+test("programme.html: the Counts? checkbox is disabled for a non-editor (snagging role)", async () => {
+  const { document } = await runProgrammePage({
+    activities: [activity({ id: "a1", title: "Groundworks" })],
+    myRole: "snagging",
+  });
+  await wait(30);
+  assert.equal(countsCheckboxFor(document, "Groundworks").disabled, true);
+});
+
+test("programme.html: the Counts? checkbox is enabled for an editor (owner or collaborator)", async () => {
+  const owner = await runProgrammePage({ activities: [activity({ id: "a1", title: "Groundworks" })], myRole: "owner" });
+  await wait(30);
+  assert.equal(countsCheckboxFor(owner.document, "Groundworks").disabled, false);
+
+  const collaborator = await runProgrammePage({ activities: [activity({ id: "a1", title: "Groundworks" })], myRole: "collaborator" });
+  await wait(30);
+  assert.equal(countsCheckboxFor(collaborator.document, "Groundworks").disabled, false);
+});
+
+test("programme.html: an auto-excluded row appears in the auto-ticked notice, a manually-excluded row does not", async () => {
+  const { document } = await runProgrammePage({
+    activities: [
+      activity({ id: "a1", title: "Programme Title Row", exclude_from_progress: true, exclude_from_progress_source: "auto" }),
+      activity({ id: "a2", title: "Deliberately Excluded By Editor", exclude_from_progress: true, exclude_from_progress_source: "manual" }),
+      activity({ id: "a3", title: "Normal Task", exclude_from_progress: false }),
+    ],
+  });
+  await wait(30);
+  const card = document.getElementById("autoExcludedCard");
+  assert.equal(card.style.display, "block");
+  const text = document.getElementById("autoExcludedList").textContent;
+  assert.match(text, /Programme Title Row/);
+  assert.ok(!text.includes("Deliberately Excluded By Editor"), "a manually-excluded row must never appear in the AUTO-ticked notice");
+  assert.ok(!text.includes("Normal Task"), "a counted row must never appear in the notice");
+});
+
+test("programme.html: the auto-ticked notice stays hidden when nothing is currently auto-excluded", async () => {
+  const { document } = await runProgrammePage({
+    activities: [activity({ id: "a1", title: "Normal Task", exclude_from_progress: false })],
+  });
+  await wait(30);
+  assert.equal(document.getElementById("autoExcludedCard").style.display, "none");
+});
+
+test("programme.html: the auto-ticked notice offers an Untick action that is the same window.toggleExcludeFromProgress(id, false) its onclick attribute calls", async () => {
+  let called = null;
+  const { document, window } = await runProgrammePage({
+    activities: [activity({ id: "a1", title: "Prelims", exclude_from_progress: true, exclude_from_progress_source: "auto" })],
+    updateProgrammeActivity: async (id, fields) => { called = { id, fields }; return {}; },
+  });
+  await wait(30);
+  const btn = Array.from(document.getElementById("autoExcludedList").querySelectorAll("button")).find((b) => b.textContent.includes("Untick"));
+  assert.ok(btn, "the notice must offer an Untick action");
+  assert.match(btn.getAttribute("onclick"), /toggleExcludeFromProgress\('a1', false\)/);
+  window.toggleExcludeFromProgress("a1", false);
+  await wait(30);
+  assert.equal(called.id, "a1");
+  assert.equal(called.fields.exclude_from_progress, false);
+  assert.equal(called.fields.exclude_from_progress_source, "manual");
+});
+
+test("programme.html: the Untick button in the auto-ticked notice is disabled for a non-editor too", async () => {
+  const { document } = await runProgrammePage({
+    activities: [activity({ id: "a1", title: "Prelims", exclude_from_progress: true, exclude_from_progress_source: "auto" })],
+    myRole: "snagging",
+  });
+  await wait(30);
+  const btn = Array.from(document.getElementById("autoExcludedList").querySelectorAll("button")).find((b) => b.textContent.includes("Untick"));
+  assert.equal(btn.disabled, true);
 });

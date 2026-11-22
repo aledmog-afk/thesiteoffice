@@ -44,6 +44,12 @@
     <p class="hint" id="programmeCompleteSummary" style="margin-top:0.6rem; display:none;"></p>
   </div>
 
+  <div class="card" id="autoExcludedCard" style="display:none; margin-bottom:1.5rem; border-left:4px solid var(--amber, #b5860b);">
+    <strong>Rows left out of Programme complete automatically</strong>
+    <p class="hint" style="margin:0.3rem 0 0.6rem;">Each spans at least 90% of this programme's own overall planned window — almost certainly a header, summary or resource row (e.g. the programme's own title, "Prelims", a named site role), not real construction scope. Check each one and untick it if it's actually a genuinely long work item.</p>
+    <ul class="body-list" id="autoExcludedList" style="margin:0;"></ul>
+  </div>
+
   <div class="card" id="activityFormCard" style="display:none; margin-bottom:1.5rem;">
     <div id="formErrorBox" class="error-box"></div>
     <form id="activityForm">
@@ -118,7 +124,7 @@
       <table>
         <thead>
           <tr>
-            <th>Activity</th><th>Type</th><th>Plot</th><th>Owner</th><th>Planned Finish</th><th>Forecast Finish</th><th>Actual Finish</th><th>Variance</th><th>Status</th><th></th>
+            <th>Activity</th><th>Type</th><th>Plot</th><th>Owner</th><th>Planned Finish</th><th>Forecast Finish</th><th>Actual Finish</th><th>Variance</th><th>Status</th><th>Counts?</th><th></th>
           </tr>
         </thead>
         <tbody id="activityRows"></tbody>
@@ -153,6 +159,13 @@
   let statusFilter = "";
   let varianceFilter = "";
   let sortBy = "forecast_finish";
+  // v99: gates the "Counts?" tick's own editability — a convenience
+  // toggle only, same reasoning project.html's own progress_source
+  // control already established (see its v95 comment): the real
+  // boundary is programme_activities' existing editor/party-capability
+  // RLS, re-checked server-side on every write regardless of what this
+  // disables client-side.
+  let isEditor = false;
 
   document.getElementById("activityStatus").innerHTML = ACTIVITY_STATUSES.map((s) => `<option value="${s}">${ACTIVITY_STATUS_LABEL[s]}</option>`).join("");
   document.getElementById("statusFilter").innerHTML += ACTIVITY_STATUSES.map((s) => `<option value="${s}">${ACTIVITY_STATUS_LABEL[s]}</option>`).join("");
@@ -405,13 +418,58 @@
       summaryEl.style.display = "none";
       return;
     }
-    const completeCount = activities.filter((a) => a.status === "complete").length;
-    summaryEl.textContent = `Programme complete: ${pct.toFixed(0)}% (${completeCount} of ${activities.length} activities)`;
+    // v99: "counted" = what the figure above is actually weighted
+    // over (not cancelled, not excluded) — showing it against the
+    // counted total, not the full activity count, so a reader can see
+    // at a glance that header/summary rows were left out.
+    const counted = activities.filter((a) => a.status !== "cancelled" && !a.exclude_from_progress);
+    const completeCount = counted.filter((a) => a.status === "complete").length;
+    summaryEl.textContent = `Programme complete: ${pct.toFixed(0)}% (${completeCount} of ${counted.length} counted activities)`;
     summaryEl.style.display = "block";
+  }
+
+  // v99: a plain, un-debounced per-row toggle — same shape as every
+  // other single-field update already on this page (completeActivity()
+  // above). Always stamps source 'manual': an editor's own tick/untick
+  // always wins and must never be overwritten by a later auto pass
+  // (see apply_programme_auto_exclude() in sql/schema.sql) — true here
+  // as much when UNticking a previously 'auto' row as when ticking a
+  // fresh one.
+  async function toggleExcludeFromProgress(id, checked) {
+    clearError(pageErrorBox);
+    try {
+      await updateProgrammeActivity(id, { exclude_from_progress: checked, exclude_from_progress_source: "manual" });
+      await loadActivities();
+    } catch (err) {
+      showError(pageErrorBox, err);
+      await loadActivities(); // re-render to reflect the actual, unchanged server state
+    }
+  }
+  window.toggleExcludeFromProgress = toggleExcludeFromProgress;
+
+  // v99: every currently auto-ticked row, surfaced as its own notice
+  // (never silent) so an editor can catch a false positive — a
+  // genuinely long single work item that happens to span most of the
+  // programme — and untick it. From the FULL, unfiltered `activities`
+  // list, same as the summary above, so the status/variance filters
+  // never hide a row that needs checking.
+  function renderAutoExcludedNotice() {
+    const card = document.getElementById("autoExcludedCard");
+    const autoTicked = activities.filter((a) => a.exclude_from_progress && a.exclude_from_progress_source === "auto");
+    if (!autoTicked.length) { card.style.display = "none"; return; }
+    card.style.display = "block";
+    document.getElementById("autoExcludedList").innerHTML = autoTicked.map((a) => `
+      <li>
+        <a href="#activity-${a.id}">${escapeHtml(a.title)}</a>
+        ${a.planned_start && a.planned_finish ? `<span class="hint">(${formatDate(a.planned_start)} – ${formatDate(a.planned_finish)})</span>` : ""}
+        <button type="button" class="btn btn-outline btn-sm" ${isEditor ? "" : "disabled"} onclick="toggleExcludeFromProgress('${a.id}', false)">Untick — count it</button>
+      </li>
+    `).join("");
   }
 
   function renderActivities() {
     renderProgrammeCompleteSummary();
+    renderAutoExcludedNotice();
     const list = sortedFilteredActivities();
     const rows = document.getElementById("activityRows");
     if (!list.length) {
@@ -444,6 +502,9 @@
         <td>${a.actual_finish ? formatDate(a.actual_finish) : "—"}</td>
         <td>${varianceCellHtml(cats)}</td>
         <td><span class="badge ${ACTIVITY_STATUS_BADGE[a.status] || "badge-grey"}">${ACTIVITY_STATUS_LABEL[a.status] || escapeHtml(a.status)}</span></td>
+        <td title="${a.exclude_from_progress ? "Left out of Programme complete" + (a.exclude_from_progress_source === "auto" ? " (auto)" : "") : "Counted towards Programme complete"}">
+          <input type="checkbox" ${a.exclude_from_progress ? "" : "checked"} ${isEditor ? "" : "disabled"} onchange="toggleExcludeFromProgress('${a.id}', !this.checked)">
+        </td>
         <td>
           <button class="btn btn-outline btn-sm" onclick="editActivity('${a.id}')">Edit</button>
           <button class="btn btn-outline btn-sm" onclick="deleteActivity('${a.id}', '${escapeHtml(a.title).replace(/'/g, "\\'")}')">Delete</button>
@@ -565,6 +626,11 @@
 
     clearError(pageErrorBox);
     try {
+      // v99: "Counts?" tick's own editability — see isEditor's own
+      // comment above. Looked up the same way project.html's
+      // progress_source control already does.
+      const { data: role } = await supabase.rpc("get_my_role", { p_project_id: projectId });
+      isEditor = role === "owner" || role === "collaborator";
       programmes = await listProgrammes(projectId);
       currentProgramme = programmes.find((p) => p.status === "active") || programmes[0] || null;
       renderProgrammeCard();

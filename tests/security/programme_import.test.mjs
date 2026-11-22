@@ -171,6 +171,17 @@ test("Database: a row identical to the existing activity is 'unchanged' — no w
   const ownerA = await userClient(DB, OWNER_A);
   try {
     const p = await createProg(ownerA);
+    // v99: created FIRST, so the overall programme span already spans
+    // most of the job BEFORE Groundworks exists — Groundworks' own
+    // 14-day span is nowhere near 90% of it from the moment it's
+    // created, so neither its own creation nor this sibling's never
+    // triggers a follow-up auto-exclude UPDATE (and matching audit
+    // row) on Groundworks. Creating it the other way around (as the
+    // programme's only activity, however briefly) would trivially
+    // auto-tick it at 100% ratio, then auto-UNtick it the moment this
+    // sibling's own insert widens the span — two real writes, and two
+    // real audit rows, this test isn't about at all.
+    await createAct(ownerA, p.id, { external_id: "A-2", title: "Long setter", planned_start: "2026-01-01", planned_finish: "2027-12-31" });
     const a = await createAct(ownerA, p.id, { external_id: "A-1", title: "Groundworks", planned_start: "2026-01-01", planned_finish: "2026-01-15" });
 
     const result = await importRows(ownerA, p.id, [

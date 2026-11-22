@@ -5056,7 +5056,16 @@ export async function listProgrammeActivities(programmeId, { status } = {}) {
 // when planned dates are missing, else a flat weight of 1. Milestones
 // are always weight 1 — a point-in-time event has no duration to
 // weight by. Cancelled activities are excluded entirely, not weighted
-// at 0: abandoned scope shouldn't dilute the denominator either.
+// at 0: abandoned scope shouldn't dilute the denominator either, and
+// so (v99) is any activity with exclude_from_progress set — a
+// header/summary/resource row (the programme's own title, "Prelims",
+// a named site role) that spans most or all of the job and would
+// otherwise swamp the real construction activities' own weight. See
+// apply_programme_auto_exclude()/compute_programme_complete_pct() in
+// sql/schema.sql for the identical server-side rule this mirrors —
+// kept in lockstep deliberately (tests/frontend/programme_complete_figure.test.mjs
+// asserts the two agree), since this is the same figure shown here
+// and recalculated there for progress_source='programme'.
 // Returns null, not 0, when there's nothing countable (including no
 // activities at all), so a caller with no active programme can pass
 // [] and get the same "render nothing" signal.
@@ -5071,7 +5080,7 @@ function programmeActivityDurationWeight(activity) {
 }
 
 export function computeProgrammeComplete(activities) {
-  const countable = (activities || []).filter((a) => a.status !== "cancelled");
+  const countable = (activities || []).filter((a) => a.status !== "cancelled" && !a.exclude_from_progress);
   if (!countable.length) return null;
   let totalWeight = 0;
   let doneWeight = 0;
