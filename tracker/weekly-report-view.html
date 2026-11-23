@@ -459,7 +459,6 @@
         <div><dt>Status</dt><dd>${WEEKLY_REPORT_STATUS_LABEL[r.status] || r.status}</dd></div>
         <div><dt>Programme Status</dt><dd>${programmeLabel[r.programme_status]}</dd></div>
         <div><dt>Prepared By</dt><dd>${escapeHtml(r.prepared_by) || "—"}</dd></div>
-        <div><dt>Clerk of Works</dt><dd>${escapeHtml(project.clerk_of_works_name) || "—"}</dd></div>
         <div><dt>Site Manager</dt><dd>${escapeHtml(project.site_manager_name) || "—"}</dd></div>
         <div><dt>Employer's Agent</dt><dd>${escapeHtml(project.employers_agent_name) || "—"}</dd></div>
         <div><dt>Contract Period</dt><dd>${project.start_date ? formatDate(project.start_date) : "—"} – ${project.contract_completion_date ? formatDate(project.contract_completion_date) : "—"}</dd></div>
