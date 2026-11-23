@@ -203,10 +203,7 @@
         <div class="field"><label for="startDate">Contract start date</label><input type="date" id="startDate"></div>
         <div class="field"><label for="completionDate">Contract completion date</label><input type="date" id="completionDate"></div>
       </div>
-      <div class="form-grid">
-        <div class="field"><label for="employersAgentName">Employer's Agent</label><input type="text" id="employersAgentName"></div>
-        <div class="field"><label for="clerkOfWorksName">Clerk of Works</label><input type="text" id="clerkOfWorksName"></div>
-      </div>
+      <div class="field"><label for="employersAgentName">Employer's Agent</label><input type="text" id="employersAgentName"></div>
       <div class="field"><label for="siteManagerName">Site Manager</label><input type="text" id="siteManagerName"></div>
       <div class="form-grid">
         <div class="field">
@@ -591,7 +588,6 @@
       <div><dt>Contract Start Date</dt><dd>${project.start_date ? formatDate(project.start_date) : "—"}</dd></div>
       <div><dt>Contract Completion Date</dt><dd>${project.contract_completion_date ? formatDate(project.contract_completion_date) : "—"}</dd></div>
       <div><dt>Employer's Agent</dt><dd>${escapeHtml(project.employers_agent_name) || "—"}</dd></div>
-      <div><dt>Clerk of Works</dt><dd>${escapeHtml(project.clerk_of_works_name) || "—"}</dd></div>
       <div><dt>Site Manager</dt><dd>${escapeHtml(project.site_manager_name) || "—"}</dd></div>
       <div><dt>Total Plots (target)</dt><dd>${project.total_plots || "—"}</dd></div>
       <div><dt>External / Engineering Works</dt><dd>${Number(project.external_works_pct) || 0}%${externalWorksShareSet(project) ? ` <span class="hint">(${Number(project.external_works_share)}% of the job)</span>` : ` <span class="badge badge-amber">Share not set</span>`}</dd></div>
@@ -608,7 +604,6 @@
     document.getElementById("startDate").value = project.start_date || "";
     document.getElementById("completionDate").value = project.contract_completion_date || "";
     document.getElementById("employersAgentName").value = project.employers_agent_name || "";
-    document.getElementById("clerkOfWorksName").value = project.clerk_of_works_name || "";
     document.getElementById("siteManagerName").value = project.site_manager_name || "";
     document.getElementById("ragStatusInput").value = project.rag_status;
     document.getElementById("baselinePct").value = project.baseline_progress_pct;
@@ -642,7 +637,6 @@
       start_date: document.getElementById("startDate").value || null,
       contract_completion_date: document.getElementById("completionDate").value || null,
       employers_agent_name: document.getElementById("employersAgentName").value.trim() || null,
-      clerk_of_works_name: document.getElementById("clerkOfWorksName").value.trim() || null,
       site_manager_name: document.getElementById("siteManagerName").value.trim() || null,
       rag_status: document.getElementById("ragStatusInput").value,
       baseline_progress_pct: Number(document.getElementById("baselinePct").value) || 0,
