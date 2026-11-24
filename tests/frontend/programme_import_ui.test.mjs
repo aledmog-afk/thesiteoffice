@@ -321,6 +321,81 @@ test("programme-import.html: a Documents-retention failure does not undo or hide
   assert.match(document.getElementById("retainCopyStatus").textContent, /storage quota exceeded/);
 });
 
+// ─── v100: Download changes (PDF) on the result screen ─────────────
+
+test("programme-import.html: a successful import with a run_id shows the Download changes (PDF) button", async () => {
+  const { context } = baseContext({ importProgrammeActivities: async () => ({ run_id: "run-99", created: 1, updated: 0, unchanged: 0, rejected: [], created_ids: ["n1"], updated_ids: [] }) });
+  const { document, window } = await runPage(HTML_PATH, scriptSrc, context);
+  await advanceToPreview(document, window);
+  fireEvent(document.getElementById("confirmImportBtn"), "click");
+  await until(() => document.getElementById("resultCard").style.display === "block");
+  assert.equal(document.getElementById("downloadChangesPdfBtn").style.display, "inline-flex");
+});
+
+test("programme-import.html: the rare case of a successful import with NO run_id hides the Download changes (PDF) button entirely", async () => {
+  const { context } = baseContext({ importProgrammeActivities: async () => ({ created: 1, updated: 0, unchanged: 0, rejected: [], created_ids: ["n1"], updated_ids: [] }) });
+  const { document, window } = await runPage(HTML_PATH, scriptSrc, context);
+  await advanceToPreview(document, window);
+  fireEvent(document.getElementById("confirmImportBtn"), "click");
+  await until(() => document.getElementById("resultCard").style.display === "block");
+  assert.equal(document.getElementById("downloadChangesPdfBtn").style.display, "none");
+});
+
+test("programme-import.html: clicking Download changes (PDF) calls generateProgrammeChangesPdfBlob with THIS import's own run_id and saves the file", async () => {
+  let generatedForRunId = null;
+  const { context } = baseContext({
+    importProgrammeActivities: async () => ({ run_id: "run-abc", created: 1, updated: 0, unchanged: 0, rejected: [], created_ids: ["n1"], updated_ids: [] }),
+    generateProgrammeChangesPdfBlob: async (runId) => { generatedForRunId = runId; return { blob: "fake-blob", filename: "Programme changes.pdf" }; },
+    saveFileToDevice: async () => ({ status: "saved" }),
+    deviceSaveStatusLabel: (status) => `Saved (${status})`,
+  });
+  const { document, window } = await runPage(HTML_PATH, scriptSrc, context);
+  await advanceToPreview(document, window);
+  fireEvent(document.getElementById("confirmImportBtn"), "click");
+  await until(() => document.getElementById("resultCard").style.display === "block");
+
+  fireEvent(document.getElementById("downloadChangesPdfBtn"), "click");
+  await wait(30);
+  assert.equal(generatedForRunId, "run-abc");
+  assert.match(document.getElementById("pdfStatusText").textContent, /Saved \(saved\)/);
+  assert.equal(document.getElementById("downloadChangesPdfBtn").disabled, false, "the button must re-enable once the download finishes");
+});
+
+test("programme-import.html: a failed PDF generation shows the page error and clears the status text, without crashing the result screen", async () => {
+  const { context } = baseContext({
+    importProgrammeActivities: async () => ({ run_id: "run-abc", created: 1, updated: 0, unchanged: 0, rejected: [], created_ids: ["n1"], updated_ids: [] }),
+    generateProgrammeChangesPdfBlob: async () => { throw new Error("network error"); },
+  });
+  const { document, window } = await runPage(HTML_PATH, scriptSrc, context);
+  await advanceToPreview(document, window);
+  fireEvent(document.getElementById("confirmImportBtn"), "click");
+  await until(() => document.getElementById("resultCard").style.display === "block");
+
+  fireEvent(document.getElementById("downloadChangesPdfBtn"), "click");
+  await wait(30);
+  assert.match(document.getElementById("pageErrorBox").textContent, /network error/);
+  assert.equal(document.getElementById("pdfStatusText").textContent, "");
+});
+
+test("programme-import.html: 'Import Another File' also clears the PDF status text", async () => {
+  const { context } = baseContext({
+    importProgrammeActivities: async () => ({ run_id: "run-abc", created: 1, updated: 0, unchanged: 0, rejected: [], created_ids: ["n1"], updated_ids: [] }),
+    generateProgrammeChangesPdfBlob: async () => ({ blob: "fake-blob", filename: "x.pdf" }),
+    saveFileToDevice: async () => ({ status: "saved" }),
+    deviceSaveStatusLabel: () => "Saved",
+  });
+  const { document, window } = await runPage(HTML_PATH, scriptSrc, context);
+  await advanceToPreview(document, window);
+  fireEvent(document.getElementById("confirmImportBtn"), "click");
+  await until(() => document.getElementById("resultCard").style.display === "block");
+  fireEvent(document.getElementById("downloadChangesPdfBtn"), "click");
+  await wait(30);
+  assert.notEqual(document.getElementById("pdfStatusText").textContent, "");
+
+  fireEvent(document.getElementById("importAnotherBtn"), "click");
+  assert.equal(document.getElementById("pdfStatusText").textContent, "");
+});
+
 test("programme-import.html: 'Import Another File' resets the wizard back to step 1 with a clean state", async () => {
   const { context } = baseContext();
   const { document, window } = await runPage(HTML_PATH, scriptSrc, context);

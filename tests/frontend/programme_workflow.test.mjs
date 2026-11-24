@@ -95,7 +95,7 @@ function activity(overrides = {}) {
 // long-standing assumption (see the file-header comment) that only
 // editors are ever given a link to it; a test that specifically wants
 // the v99 "disabled for non-editors" path passes its own role.
-function baseSupabaseMock({ myRole = "owner" } = {}) {
+function baseSupabaseMock({ myRole = "owner", members = [] } = {}) {
   return {
     from(table) {
       const api = {
@@ -107,7 +107,11 @@ function baseSupabaseMock({ myRole = "owner" } = {}) {
       };
       return api;
     },
-    rpc: (name) => Promise.resolve(name === "get_my_role" ? { data: myRole, error: null } : { data: [], error: null }),
+    rpc: (name) => Promise.resolve(
+      name === "get_my_role" ? { data: myRole, error: null }
+      : name === "get_project_members" ? { data: members, error: null }
+      : { data: [], error: null }
+    ),
   };
 }
 
@@ -120,8 +124,10 @@ async function runProgrammePage({
   confirm = () => true,
   todayISO = () => "2026-06-15",
   myRole = "owner",
+  members = [],
+  extra = {},
 } = {}) {
-  const supabase = baseSupabaseMock({ myRole });
+  const supabase = baseSupabaseMock({ myRole, members });
   return runPage(PROGRAMME_HTML, extractScript(PROGRAMME_HTML), {
     __url: "https://example.com/programme.html?project=p1",
     supabase,
@@ -143,6 +149,7 @@ async function runProgrammePage({
     updateProgrammeActivity: updateProgrammeActivity || (async () => ({})),
     deleteProgrammeActivity: deleteProgrammeActivity || (async () => {}),
     confirm,
+    ...extra,
   });
 }
 
@@ -791,4 +798,118 @@ test("programme.html: the Untick button in the auto-ticked notice is disabled fo
   await wait(30);
   const btn = Array.from(document.getElementById("autoExcludedList").querySelectorAll("button")).find((b) => b.textContent.includes("Untick"));
   assert.equal(btn.disabled, true);
+});
+
+// ─── Revisions list (v100) ─────────────────────────────────────────
+
+function revisionRun(overrides = {}) {
+  return {
+    id: "run-1", imported_by: "u1", imported_at: "2026-09-10T10:00:00Z",
+    created_count: 1, updated_count: 2, unchanged_count: 3, not_in_import_count: 0,
+    ...overrides,
+  };
+}
+
+test("programme.html: with no programme at all, the Revisions card stays hidden", async () => {
+  const { document } = await runProgrammePage({ programmes: [], activities: [] });
+  await wait(30);
+  assert.equal(document.getElementById("revisionsCard").style.display, "none");
+});
+
+test("programme.html: with an active programme, the Revisions card shows and lists every import run newest-first exactly as returned", async () => {
+  const { document } = await runProgrammePage({
+    members: [{ user_id: "u1", email: "site.manager@example.com" }],
+    extra: {
+      listProgrammeImportRuns: async () => [revisionRun({ id: "run-2", imported_at: "2026-09-10T10:00:00Z" }), revisionRun({ id: "run-1", imported_at: "2026-09-03T10:00:00Z" })],
+      formatDateTime: (s) => s,
+    },
+  });
+  await wait(30);
+  assert.equal(document.getElementById("revisionsCard").style.display, "block");
+  const rows = document.querySelectorAll("#revisionRows tr");
+  assert.equal(rows.length, 2);
+  assert.match(rows[0].textContent, /site\.manager@example\.com/);
+  assert.ok(rows[0].querySelector("button[data-run-id='run-2']"), "each row's Download button must carry that row's own run id");
+});
+
+test("programme.html: an empty import history shows 'No imports yet.' rather than an empty table", async () => {
+  const { document } = await runProgrammePage({
+    extra: { listProgrammeImportRuns: async () => [], formatDateTime: (s) => s },
+  });
+  await wait(30);
+  assert.match(document.getElementById("revisionRows").textContent, /No imports yet\./);
+});
+
+test("programme.html: a run with no imported_by (nothing recorded) shows an em dash, never a crash", async () => {
+  const { document } = await runProgrammePage({
+    extra: { listProgrammeImportRuns: async () => [revisionRun({ imported_by: null })], formatDateTime: (s) => s },
+  });
+  await wait(30);
+  assert.match(document.getElementById("revisionRows").textContent, /—/);
+});
+
+test("programme.html: the Revisions body starts collapsed and toggling Show/Hide flips both its visibility and the button's own label", async () => {
+  const { document } = await runProgrammePage({
+    extra: { listProgrammeImportRuns: async () => [revisionRun()], formatDateTime: (s) => s },
+  });
+  await wait(30);
+  assert.equal(document.getElementById("revisionsBody").style.display, "none");
+  assert.equal(document.getElementById("toggleRevisionsBtn").textContent, "Show");
+  fireEvent(document.getElementById("toggleRevisionsBtn"), "click");
+  assert.equal(document.getElementById("revisionsBody").style.display, "block");
+  assert.equal(document.getElementById("toggleRevisionsBtn").textContent, "Hide");
+  fireEvent(document.getElementById("toggleRevisionsBtn"), "click");
+  assert.equal(document.getElementById("revisionsBody").style.display, "none");
+  assert.equal(document.getElementById("toggleRevisionsBtn").textContent, "Show");
+});
+
+test("programme.html: clicking a row's Download changes (PDF) button calls generateProgrammeChangesPdfBlob with THAT row's run id and saves the file", async () => {
+  let generatedForRunId = null;
+  const { document } = await runProgrammePage({
+    extra: {
+      listProgrammeImportRuns: async () => [revisionRun({ id: "run-xyz" })],
+      formatDateTime: (s) => s,
+      generateProgrammeChangesPdfBlob: async (runId) => { generatedForRunId = runId; return { blob: "fake-blob", filename: "Programme changes.pdf" }; },
+      saveFileToDevice: async () => ({ status: "saved" }),
+      deviceSaveStatusLabel: (status) => `Saved (${status})`,
+    },
+  });
+  await wait(30);
+  const btn = document.querySelector("button[data-run-id='run-xyz']");
+  fireEvent(btn, "click");
+  await wait(30);
+  assert.equal(generatedForRunId, "run-xyz");
+  assert.match(document.getElementById("revisionsPdfStatusText").textContent, /Saved \(saved\)/);
+  assert.equal(btn.disabled, false, "the button must re-enable once the download finishes");
+});
+
+test("programme.html: a failed PDF generation on a revision row shows the page error and clears the status text", async () => {
+  const { document } = await runProgrammePage({
+    extra: {
+      listProgrammeImportRuns: async () => [revisionRun()],
+      formatDateTime: (s) => s,
+      generateProgrammeChangesPdfBlob: async () => { throw new Error("network error"); },
+    },
+  });
+  await wait(30);
+  fireEvent(document.querySelector("button[data-run-id='run-1']"), "click");
+  await wait(30);
+  assert.match(document.getElementById("pageErrorBox").textContent, /network error/);
+  assert.equal(document.getElementById("revisionsPdfStatusText").textContent, "");
+});
+
+test("programme.html: switching to a brand-new programme (via newProgrammeBtn) reloads the Revisions list for that programme", async () => {
+  const listCalls = [];
+  const { document } = await runProgrammePage({
+    createProgramme: async () => ({ id: "prog-new", project_id: "p1", name: "New", status: "draft" }),
+    extra: {
+      listProgrammeImportRuns: async (programmeId) => { listCalls.push(programmeId); return []; },
+      formatDateTime: (s) => s,
+    },
+  });
+  await wait(30);
+  fireEvent(document.getElementById("newProgrammeBtn"), "click");
+  await wait(30);
+  assert.ok(listCalls.includes("prog1"), "the initial active programme's own revisions must be loaded on page load");
+  assert.ok(listCalls.includes("prog-new"), "switching to the brand-new programme must reload the Revisions list for ITS id, not the old one");
 });

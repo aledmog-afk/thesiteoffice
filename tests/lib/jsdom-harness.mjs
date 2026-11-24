@@ -69,6 +69,9 @@ export async function runPage(htmlPath, scriptSrc, context = {}) {
     isWeeklyReportEarlyWarningsCalculated: DEFAULT_IS_EARLY_WARNINGS_CALCULATED,
     // v98: weekly-report-form.html needs this directly on every save.
     buildEarlyWarningNotes: DEFAULT_BUILD_EARLY_WARNING_NOTES,
+    // v100: weekly-report-form.html/weekly-report-view.html need this
+    // directly whenever they render any system position.
+    isWeeklyReportProgrammeRevisionsCalculated: DEFAULT_IS_PROGRAMME_REVISIONS_CALCULATED,
     ...context,
   };
   const ctx = vm.createContext(fullContext);
@@ -184,3 +187,19 @@ function loadBuildEarlyWarningNotes() {
   `)();
 }
 const DEFAULT_BUILD_EARLY_WARNING_NOTES = loadBuildEarlyWarningNotes();
+
+// The real isWeeklyReportProgrammeRevisionsCalculated() (v100) —
+// weekly-report-form.html/weekly-report-view.html both call it
+// unconditionally while rendering ANY system position, exactly like
+// isWeeklyReportEarlyWarningsCalculated() above, so every pre-existing
+// test of either page needs this default too.
+function loadIsWeeklyReportProgrammeRevisionsCalculated() {
+  const src = fs.readFileSync(new URL("../../tracker/js/app.js", import.meta.url), "utf8");
+  const mainFn = src.match(/export function isWeeklyReportProgrammeRevisionsCalculated\([\s\S]*?\n\}/);
+  if (!mainFn) return () => false;
+  return new Function(`
+    ${mainFn[0].replace(/^export /, "")}
+    return isWeeklyReportProgrammeRevisionsCalculated;
+  `)();
+}
+const DEFAULT_IS_PROGRAMME_REVISIONS_CALCULATED = loadIsWeeklyReportProgrammeRevisionsCalculated();

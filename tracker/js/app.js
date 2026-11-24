@@ -4564,10 +4564,14 @@ export async function getWeeklyReportPosition(projectId, period, currentReport =
   if (prevErr) throw prevErr;
 
   const data = { actions: actions || [], snags: snags || [], findings: findings || [], inspections: inspections || [], hsAudits: hsAudits || [], hsItems: hsItems || [] };
-  // A second, DEPENDENT fetch (needs the active programme's id first) —
-  // only issued when a project actually has one, so a project with no
-  // programme yet costs nothing extra beyond the lookup above.
-  const programmeActivities = activeProgramme ? await listProgrammeActivities(activeProgramme.id) : [];
+  // A second, DEPENDENT round (needs the active programme's id first)
+  // — only issued when a project actually has one, so a project with
+  // no programme yet costs nothing extra beyond the lookup above.
+  // v100: importRuns rides alongside the activities fetch for the
+  // same reason — one extra query, never one per report.
+  const [programmeActivities, importRuns] = activeProgramme
+    ? await Promise.all([listProgrammeActivities(activeProgramme.id), listProgrammeImportRuns(activeProgramme.id)])
+    : [[], []];
 
   return {
     period,
@@ -4580,6 +4584,7 @@ export async function getWeeklyReportPosition(projectId, period, currentReport =
     hsSummary: summariseHsForReport(data.hsAudits, data.hsItems, period),
     programmeSummary: computeWeeklyProgrammeSignal(activeProgramme, programmeActivities, period.weekEnding),
     earlyWarnings: computeEarlyWarnings(prevReports?.[0] || null, currentReport),
+    programmeRevisions: computeProgrammeRevisionsThisWeek(importRuns, period),
   };
 }
 
@@ -5199,20 +5204,35 @@ function formatCalendarDateUTC(y, m, d) {
 // a row the user has to fix by hand.
 //
 // Timezone correctness (the one thing this function has to get
-// exactly right): Excel date serials — and therefore the Date objects
-// SheetJS builds from them — have no timezone concept at all; SheetJS
-// encodes the intended calendar date using UTC fields regardless of
-// where the code runs. Reading such a Date back with LOCAL getters
-// (as this app's own toLocalISODate() deliberately does for
-// wall-clock Dates elsewhere) would silently shift the date by a day
-// for anyone running in a timezone behind UTC — so a Date that came
-// from a spreadsheet cell is ALWAYS read back via UTC fields here,
-// deliberately not toLocalISODate().
+// exactly right, and the one it got backwards until v100 — see the
+// `instanceof Date` branch's own note below): Excel date SERIALS — a
+// plain number of days since the 1899-12-30 epoch — have no timezone
+// concept at all, and are read via UTC fields a few lines down for
+// exactly that reason: EXCEL_EPOCH_MS is itself a UTC instant, so
+// adding whole days to it and reading the result back with
+// getUTCFullYear/Month/Date is the only self-consistent way to turn
+// "day N since the epoch" into a calendar date. A JS Date object is a
+// different matter entirely once SheetJS has already built one from
+// that serial (cellDates:true) — see below.
 export function parseImportDate(value) {
   if (value === null || value === undefined || value === "") return { ok: true, value: null };
   if (value instanceof Date) {
     if (isNaN(value.getTime())) return { ok: false };
-    const formatted = formatCalendarDateUTC(value.getUTCFullYear(), value.getUTCMonth() + 1, value.getUTCDate());
+    // SheetJS's cellDates:true option hands back a Date built via
+    // `new Date(y, m-1, d, H, M, S)` — a LOCAL-time constructor call,
+    // not a UTC one — so its LOCAL calendar fields (getFullYear/
+    // getMonth/getDate) are the exact date the user sees in the
+    // sheet. Reading it back with the UTC getters instead (as this
+    // function did before v100) re-interprets that local wall-clock
+    // instant through whatever UTC offset happens to be in effect at
+    // that moment — in BST (Europe/London, UTC+1, April–October)
+    // every such Date lands one hour before local midnight in UTC
+    // terms, so its UTC calendar date reads one day early. This is
+    // the exact bug behind the live Red Dragon programme's April–
+    // October rows all importing a day early; see the PR description
+    // for why those existing rows are left as-is rather than
+    // corrected here.
+    const formatted = formatCalendarDateUTC(value.getFullYear(), value.getMonth() + 1, value.getDate());
     return formatted ? { ok: true, value: formatted } : { ok: false };
   }
   if (typeof value === "number" && isFinite(value)) {
@@ -5629,6 +5649,242 @@ export async function importProgrammeActivities(programmeId, rows) {
   const { data, error } = await supabase.rpc("import_programme_activities", { p_programme_id: programmeId, p_rows: rows });
   if (error) throw error;
   return data;
+}
+
+// ─── Programme revision record (v100) ──────────────────────────────
+// Read-only wrappers over programme_import_runs — the row itself is
+// ALWAYS written by import_programme_activities() above, in the same
+// transaction as the import (sql/schema.sql's own v100 ADDITIONS
+// comment explains why); nothing here ever writes to this table.
+export async function listProgrammeImportRuns(programmeId) {
+  const { data, error } = await supabase.from("programme_import_runs").select("*").eq("programme_id", programmeId).order("imported_at", { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function getProgrammeImportRun(runId) {
+  const { data, error } = await supabase.from("programme_import_runs").select("*").eq("id", runId).single();
+  if (error) throw error;
+  return data;
+}
+
+// "Programme revisions this week" (weekly report, v100) — same shape
+// of rule as computeEarlyWarnings() (v97): a pure function over
+// already-fetched data, called both live (weekly-report-form.html,
+// recomputed on every Refresh Position while still draft) and frozen
+// into system_position once issued. `period.weekStarting` is always
+// a Monday by this app's own convention (see mondayOf() and every
+// weekly report's own default week), so the "Mon-Sun" window this
+// counts against is [weekStarting, weekStarting+6] inclusive — NOT
+// the report's own week_ending, which many reports leave at Friday;
+// a revision imported over a weekend still belongs to that week.
+// `importRuns` is matched against this window by the LONDON calendar
+// date `imported_at` falls on (londonCalendarDate() below) — never a
+// plain UTC slice of the timestamp, for the exact same BST-boundary
+// reason parseImportDate()'s own v100 fix exists one section up.
+function addCalendarDays(dateStr, days) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+}
+export function londonCalendarDate(ts) {
+  if (!ts) return null;
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(d);
+  const map = {};
+  parts.forEach((p) => { map[p.type] = p.value; });
+  return `${map.year}-${map.month}-${map.day}`;
+}
+// "Top moves" — the biggest finish-date slips, created rows excluded
+// (a brand-new row has no "move" to report; it's already counted in
+// createdCount) — sorted by the SIZE of the move (a 10-day pull-FORWARD
+// is just as worth surfacing as a 10-day slip), biggest first, same
+// ordering the change PDF itself uses for its own "dates moved"
+// section (buildProgrammeChangesPdfDocument() below) so the two never
+// disagree about what counts as "the top move".
+const PROGRAMME_REVISIONS_TOP_MOVES = 5;
+export function computeProgrammeRevisionsThisWeek(importRuns, period) {
+  if (!period?.weekStarting) {
+    return { runIds: [], createdCount: 0, updatedCount: 0, unchangedCount: 0, notInImportCount: 0, topMoves: [] };
+  }
+  const weekEnd = addCalendarDays(period.weekStarting, 6);
+  const runsThisWeek = (importRuns || []).filter((r) => {
+    const d = londonCalendarDate(r.imported_at);
+    return d && d >= period.weekStarting && d <= weekEnd;
+  });
+  let createdCount = 0, updatedCount = 0, unchangedCount = 0, notInImportCount = 0;
+  const allEntries = [];
+  for (const run of runsThisWeek) {
+    createdCount += run.created_count || 0;
+    updatedCount += run.updated_count || 0;
+    unchangedCount += run.unchanged_count || 0;
+    notInImportCount += run.not_in_import_count || 0;
+    const entries = (run.changes && Array.isArray(run.changes.entries)) ? run.changes.entries : [];
+    for (const e of entries) allEntries.push({ ...e, runId: run.id });
+  }
+  const moved = allEntries.filter((e) => !e.created && (Number(e.start_slip_days) || Number(e.finish_slip_days)));
+  moved.sort((a, b) => Math.abs(Number(b.finish_slip_days) || 0) - Math.abs(Number(a.finish_slip_days) || 0));
+  return {
+    runIds: runsThisWeek.map((r) => r.id),
+    createdCount, updatedCount, unchangedCount, notInImportCount,
+    topMoves: moved.slice(0, PROGRAMME_REVISIONS_TOP_MOVES),
+  };
+}
+
+// True once a position actually has a programmeRevisions.runIds array
+// — false for a report saved before v100, whose stored system_position
+// has no such key at all. Same "genuinely zero" vs "never calculated"
+// distinction isWeeklyReportEarlyWarningsCalculated() already
+// establishes for early warnings — a report with no revisions that
+// week must never be confused with an older report this feature
+// simply didn't exist for yet.
+export function isWeeklyReportProgrammeRevisionsCalculated(position) {
+  return Array.isArray(position?.programmeRevisions?.runIds);
+}
+
+// ─── Programme change PDF (v100) ───────────────────────────────────
+// "programme-changes-<Programme Name>-<imported_at date>.pdf" —
+// mirrors toolboxTalkPdfFilename()'s own shape (a human-identifying
+// label plus a date, sanitized for a filesystem).
+export function programmeChangesPdfFilename(run, programmeName) {
+  const dateStr = run.imported_at ? londonCalendarDate(run.imported_at) : "import";
+  const label = programmeName ? `${programmeName} – ${dateStr}` : dateStr;
+  return `${sanitizeExportFilename(`Programme changes - ${label}`)}.pdf`;
+}
+
+const PCR_PDF_PAGE = { width: 595.28, height: 841.89 }; // A4 in points
+const PCR_PDF_MARGIN = 42;
+const PCR_PDF_CONTENT_WIDTH = PCR_PDF_PAGE.width - PCR_PDF_MARGIN * 2;
+const PCR_PDF_FOOTER_RESERVE = 30;
+
+// The pure PDF builder — given a jsPDF constructor and already-
+// resolved plain data, it returns a built document with no I/O of its
+// own, so it can be exercised directly against the real `jspdf`
+// package in tests, the same division generateProgrammeChangesPdfBlob()
+// below (the only function here that touches Supabase or the CDN
+// import) keeps for every other PDF builder in this file. `run` is
+// exactly the programme_import_runs row shape (changes.entries/
+// changes.not_in_import as sql/schema.sql's own v100 comment
+// documents them); `importedByLabel` is a plain string (an email, or
+// null) — this function does no identity lookups of its own.
+export function buildProgrammeChangesPdfDocument({ jsPDFCtor, run, projectName, programmeName, importedByLabel }) {
+  const doc = new jsPDFCtor({ unit: "pt", format: "a4" });
+  let y = PCR_PDF_MARGIN;
+
+  function newPage() {
+    doc.addPage();
+    y = PCR_PDF_MARGIN;
+  }
+  function ensureSpace(needed) {
+    if (y + needed > PCR_PDF_PAGE.height - PCR_PDF_MARGIN - PCR_PDF_FOOTER_RESERVE) newPage();
+  }
+  function heading(text, size = 11.5) {
+    ensureSpace(size + 12);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(size);
+    doc.setTextColor(20, 20, 20);
+    doc.text(String(text), PCR_PDF_MARGIN, y);
+    y += size + 8;
+  }
+  function line(text, size = 10) {
+    ensureSpace(size + 4);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(size);
+    doc.setTextColor(40, 40, 40);
+    const lines = doc.splitTextToSize(String(text), PCR_PDF_CONTENT_WIDTH);
+    for (const l of lines) {
+      ensureSpace(size + 4);
+      doc.text(l, PCR_PDF_MARGIN, y);
+      y += size + 4;
+    }
+  }
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.5);
+  doc.setTextColor(130, 130, 130);
+  doc.text("THE SITE OFFICE — PROGRAMME CHANGES", PCR_PDF_MARGIN, y);
+  y += 20;
+
+  heading("Programme Changes", 16);
+  line(`Project: ${projectName || "—"}`);
+  line(`Programme: ${programmeName || "—"}`);
+  line(`Imported by: ${importedByLabel || "—"}`);
+  line(`Imported at: ${run.imported_at ? formatDateTime(run.imported_at) : "—"}`);
+  y += 6;
+
+  heading("Summary", 12.5);
+  line(`Created: ${run.created_count || 0}   Updated: ${run.updated_count || 0}   Unchanged: ${run.unchanged_count || 0}   Not in import: ${run.not_in_import_count || 0}`);
+  y += 6;
+
+  const entries = (run.changes && Array.isArray(run.changes.entries)) ? run.changes.entries : [];
+  const notInImport = (run.changes && Array.isArray(run.changes.not_in_import)) ? run.changes.not_in_import : [];
+
+  const moved = entries
+    .filter((e) => !e.created && (Number(e.start_slip_days) || Number(e.finish_slip_days)))
+    .sort((a, b) => Math.abs(Number(b.finish_slip_days) || 0) - Math.abs(Number(a.finish_slip_days) || 0));
+  heading(`Dates moved (${moved.length})`, 12.5);
+  if (moved.length) {
+    for (const e of moved) {
+      const finishSlip = Number(e.finish_slip_days) || 0;
+      const startSlip = Number(e.start_slip_days) || 0;
+      let detail = `Planned finish: ${e.old_planned_finish || "—"} to ${e.new_planned_finish || "—"} (${finishSlip > 0 ? "+" : ""}${finishSlip}d)`;
+      if (startSlip) detail += `; planned start: ${e.old_planned_start || "—"} to ${e.new_planned_start || "—"} (${startSlip > 0 ? "+" : ""}${startSlip}d)`;
+      line(`${e.title || "(untitled)"} — ${detail}`);
+    }
+  } else {
+    line("No dates moved in this import.");
+  }
+  y += 6;
+
+  const created = entries.filter((e) => e.created);
+  heading(`Newly added (${created.length})`, 12.5);
+  if (created.length) {
+    for (const e of created) {
+      const dates = e.new_planned_start || e.new_planned_finish ? ` (${e.new_planned_start || "—"} to ${e.new_planned_finish || "—"})` : "";
+      line(`${e.title || "(untitled)"}${dates}`);
+    }
+  } else {
+    line("No new activities in this import.");
+  }
+  y += 6;
+
+  heading(`Not in this import (${notInImport.length})`, 12.5);
+  if (notInImport.length) {
+    for (const a of notInImport) {
+      line(`${a.title || "(untitled)"}${a.external_id ? ` (${a.external_id})` : ""}`);
+    }
+  } else {
+    line("Every existing activity was present in this import.");
+  }
+
+  return doc;
+}
+
+// Fetches the run, its project and programme names, and the
+// importer's own email (best-effort — getMemberEmailMap() only
+// resolves current project members; a user who has since left the
+// project shows as "—", never a broken lookup), then hands off to the
+// pure builder above. Same CDN-import approach this app already uses
+// for the Commercial/Toolbox Talk/Inspection PDFs.
+export async function generateProgrammeChangesPdfBlob(runId) {
+  const run = await getProgrammeImportRun(runId);
+  const [{ data: project, error: projErr }, { data: programme, error: progErr }] = await Promise.all([
+    supabase.from("projects").select("name").eq("id", run.project_id).single(),
+    supabase.from("programmes").select("name").eq("id", run.programme_id).single(),
+  ]);
+  if (projErr) throw projErr;
+  if (progErr) throw progErr;
+  const emailMap = run.imported_by ? await getMemberEmailMap([run.project_id]) : {};
+
+  const { jsPDF } = await import("https://esm.sh/jspdf@2.5.2");
+  const doc = buildProgrammeChangesPdfDocument({
+    jsPDFCtor: jsPDF,
+    run,
+    projectName: project?.name || null,
+    programmeName: programme?.name || null,
+    importedByLabel: run.imported_by ? (emailMap[run.imported_by] || null) : null,
+  });
+  return { blob: doc.output("blob"), filename: programmeChangesPdfFilename(run, programme?.name) };
 }
 
 // ─── Module Permissions (project-level) ────────────────────────────

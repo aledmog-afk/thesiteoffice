@@ -143,7 +143,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, mountTableEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions, comparePlotNumbers, normalisePlotToken, syncGateStatusFromMilestones, EXTERNAL_WORKS_TAG, PHOTO_COMPLIANCE_STATUS, RESOURCE_ADEQUACY, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_LEVELS, RISK_IMPACT_BADGE, RISK_OWNER_SUGGESTIONS, STATUTORY_MILESTONE_TYPES, STATUTORY_OUTCOMES, STATUTORY_OUTCOME_BADGE, getWeeklyReportPosition, isWeeklyReportEarlyWarningsCalculated, buildEarlyWarningNotes, isWeeklyReportLocked, reviseWeeklyReport, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, CONTROL_LEVEL_BADGE, FINDING_SEVERITY_LABEL, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel, getRfiLinksForWeeklyReport, attachReportCommercialNotes, getUnattachedDiaryEntries, getWeeklyReportDiaryEntries, attachDiaryEntryToReport, updateAttachedDiaryEntry, removeAttachedDiaryEntry, getActiveProgramme, listProgrammeActivities } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, mountTableEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions, comparePlotNumbers, normalisePlotToken, syncGateStatusFromMilestones, EXTERNAL_WORKS_TAG, PHOTO_COMPLIANCE_STATUS, RESOURCE_ADEQUACY, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_LEVELS, RISK_IMPACT_BADGE, RISK_OWNER_SUGGESTIONS, STATUTORY_MILESTONE_TYPES, STATUTORY_OUTCOMES, STATUTORY_OUTCOME_BADGE, getWeeklyReportPosition, isWeeklyReportEarlyWarningsCalculated, buildEarlyWarningNotes, isWeeklyReportProgrammeRevisionsCalculated, generateProgrammeChangesPdfBlob, isWeeklyReportLocked, reviseWeeklyReport, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, CONTROL_LEVEL_BADGE, FINDING_SEVERITY_LABEL, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel, getRfiLinksForWeeklyReport, attachReportCommercialNotes, getUnattachedDiaryEntries, getWeeklyReportDiaryEntries, attachDiaryEntryToReport, updateAttachedDiaryEntry, removeAttachedDiaryEntry, getActiveProgramme, listProgrammeActivities } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -172,6 +172,27 @@
   document.getElementById("positionBody").addEventListener("input", (e) => {
     if (!e.target.classList.contains("ew-reason-textarea")) return;
     pendingEarlyWarningNotes[e.target.dataset.key] = e.target.value;
+  });
+  // v100: Download changes (PDF) buttons inside the Programme
+  // Revisions box — event delegation, same reasoning as the input
+  // listener above: the box (and every button in it) is rebuilt
+  // wholesale on every renderPositionBody() call.
+  document.getElementById("positionBody").addEventListener("click", async (e) => {
+    const btn = e.target.closest(".pr-download-pdf-btn");
+    if (!btn) return;
+    const statusEl = document.getElementById("prPdfStatusText");
+    btn.disabled = true;
+    if (statusEl) statusEl.textContent = "Generating PDF…";
+    try {
+      const { blob, filename } = await generateProgrammeChangesPdfBlob(btn.dataset.runId);
+      const result = await saveFileToDevice(blob, filename);
+      if (statusEl) statusEl.textContent = deviceSaveStatusLabel(result.status);
+    } catch (err) {
+      if (statusEl) statusEl.textContent = "";
+      showError(positionErrorBox, err);
+    } finally {
+      btn.disabled = false;
+    }
   });
 
   function currentPeriod() {
@@ -250,6 +271,40 @@
     `;
   }
 
+  // v100: "Programme revisions this week" — same live/frozen split as
+  // Early Warnings above: calculated fresh from the active programme's
+  // own import runs on every Refresh Position while still draft, and
+  // frozen into system_position (via currentPosition, exactly like
+  // earlyWarnings) once the report is issued. One "Download changes
+  // (PDF)" button per import run that week — usually one, but a week
+  // with more than one re-import gets one button each, never a single
+  // button pretending to cover more than one run's own PDF.
+  function programmeRevisionsHtml(position) {
+    const calculated = isWeeklyReportProgrammeRevisionsCalculated(position);
+    const rev = calculated ? position.programmeRevisions : null;
+    const hasAny = !!(rev && rev.runIds.length);
+    return `
+      <div class="programme-revisions-box" style="border:1px solid var(--rule); border-radius:6px; padding:0.8rem 1rem; margin-bottom:1rem;">
+        <strong>PROGRAMME REVISIONS THIS WEEK</strong>
+        ${!calculated
+          ? `<p class="hint" style="margin:0.3rem 0 0;">Not calculated for this report — hit Refresh Position to calculate them.</p>`
+          : !hasAny
+            ? `<p class="hint" style="margin:0.3rem 0 0;">No programme revisions this week.</p>`
+            : `
+              <p style="margin:0.3rem 0 0;">Created: ${rev.createdCount} · Updated: ${rev.updatedCount} · Unchanged: ${rev.unchangedCount} · Not in import: ${rev.notInImportCount}</p>
+              ${rev.topMoves.length ? `<ul class="body-list" style="margin:0.4rem 0 0;">${rev.topMoves.map((m) => {
+                const finishSlip = Number(m.finish_slip_days) || 0;
+                return `<li>${escapeHtml(m.title || "(untitled)")} — planned finish ${m.old_planned_finish || "—"} &rarr; ${m.new_planned_finish || "—"} (${finishSlip > 0 ? "+" : ""}${finishSlip}d)</li>`;
+              }).join("")}</ul>` : ""}
+              <div class="btn-row" style="margin-top:0.5rem; flex-wrap:wrap;">
+                ${rev.runIds.map((id) => `<button type="button" class="btn btn-outline btn-sm pr-download-pdf-btn" data-run-id="${id}">Download changes (PDF)</button>`).join("")}
+              </div>
+              <p class="hint" id="prPdfStatusText" style="margin-top:0.4rem;"></p>
+            `}
+      </div>
+    `;
+  }
+
   function renderPositionBody(position) {
     captureEarlyWarningEdits();
     if (!position) { document.getElementById("positionBody").innerHTML = `<p class="hint">Set both week dates above, then hit Refresh Position.</p>`; return; }
@@ -267,6 +322,7 @@
 
     document.getElementById("positionBody").innerHTML = `
       ${earlyWarningsHtml(position)}
+      ${programmeRevisionsHtml(position)}
       ${programmeSignalHtml(programmeSummary, position.period)}
       <div style="margin-bottom:1rem;">
         <span class="badge ${CONTROL_LEVEL_BADGE[exceptions.status.level] || "badge-grey"}">${exceptions.status.label}</span>

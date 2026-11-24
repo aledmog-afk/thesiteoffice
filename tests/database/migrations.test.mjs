@@ -1166,6 +1166,99 @@ test("v99: programme_activities.exclude_from_progress[_source], apply_programme_
   }
 });
 
+// v100: Programme revision record — the transactional-write guarantee,
+// the "project members can read, nobody can write" RLS shape, and
+// payload correctness are all proven directly in
+// tests/database/v100_programme_import_runs.test.mjs. The only thing
+// checked at this schema-shape level is idempotency.
+test("v100: programme_import_runs table, its RLS, and the extended import_programme_activities() are idempotent across repeated re-application", async () => {
+  const db = "tracker_test_v100_idempotent";
+  await createTestDatabase(db);
+  try {
+    const client = adminClient(db);
+    await client.connect();
+    await runSqlFile(client, MOCK_SETUP);
+    for (let i = 0; i < 3; i++) {
+      await runSqlFile(client, CURRENT_SCHEMA);
+    }
+
+    const table = await client.query(`
+      select table_name from information_schema.tables
+      where table_schema = 'public' and table_name = 'programme_import_runs'
+    `);
+    assert.equal(table.rowCount, 1, "programme_import_runs must exist exactly once after repeated re-application");
+
+    const columns = await client.query(`
+      select column_name, data_type, is_nullable from information_schema.columns
+      where table_schema = 'public' and table_name = 'programme_import_runs'
+      order by column_name
+    `);
+    const byName = Object.fromEntries(columns.rows.map((r) => [r.column_name, r]));
+    assert.equal(columns.rowCount, 11, "no column must be duplicated across re-applications");
+    assert.equal(byName.changes.data_type, "jsonb");
+    assert.equal(byName.changes.is_nullable, "NO");
+    assert.equal(byName.imported_at.data_type, "timestamp with time zone");
+
+    const rls = await client.query(`
+      select relrowsecurity from pg_class c join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname = 'public' and c.relname = 'programme_import_runs'
+    `);
+    assert.equal(rls.rows[0].relrowsecurity, true, "RLS must be enabled");
+
+    const policies = await client.query(`
+      select policyname, cmd, qual from pg_policies where tablename = 'programme_import_runs'
+    `);
+    assert.equal(policies.rowCount, 1, "exactly one policy must exist, never duplicated — a SELECT policy and nothing else");
+    assert.equal(policies.rows[0].cmd, "SELECT", "the only policy must be for SELECT — no insert/update/delete policy exists, matching the audit_log pattern, so authenticated gets no write path at all");
+    assert.equal(policies.rows[0].policyname, "editors read programme_import_runs");
+    // Must match programme_activities' own read boundary (editor OR a
+    // party holding programme_read/programme_write) — NOT plain project
+    // membership, which would let a snagging-only member read every
+    // task name/date change through this table. Checked against the
+    // policy's own stored expression, not just its name, so a future
+    // edit that renames the policy but reverts the predicate still fails.
+    assert.match(policies.rows[0].qual, /is_project_editor/, "must gate on project-editor status");
+    assert.match(policies.rows[0].qual, /party_cap_projects\('programme_read'/, "must also admit a party with programme_read");
+    assert.match(policies.rows[0].qual, /party_cap_projects\('programme_write'/, "must also admit a party with programme_write");
+    assert.doesNotMatch(policies.rows[0].qual, /is_project_member/, "must NOT fall back to plain project membership");
+
+    const indexes = await client.query(`
+      select indexname from pg_indexes where tablename = 'programme_import_runs'
+    `);
+    assert.ok(indexes.rowCount >= 3, "the primary key plus the two lookup indexes must all exist exactly once");
+
+    const fn = await client.query(`
+      select routine_name from information_schema.routines
+      where routine_schema = 'public' and routine_name = 'import_programme_activities'
+    `);
+    assert.equal(fn.rowCount, 1, "import_programme_activities must still exist exactly once (create or replace, not a duplicate)");
+
+    // v100 adds ZERO new triggers/policies to programme_activities or
+    // programmes — it only extends import_programme_activities()'s own
+    // body and adds a brand-new table, so those tables' own
+    // trigger/policy counts (asserted elsewhere in this file) must stay
+    // exactly as they already were.
+    const actTriggers = await client.query("select count(*)::int as n from pg_trigger where tgrelid = 'public.programme_activities'::regclass and tgname like 'trg_%'");
+    assert.equal(actTriggers.rows[0].n, 3, "v100 adds zero triggers to programme_activities — same 3 as before v99/v100");
+
+    const actPolicies = await client.query("select count(*)::int as n from pg_policies where tablename = 'programme_activities'");
+    const progPolicies = await client.query("select count(*)::int as n from pg_policies where tablename = 'programmes'");
+    assert.ok(actPolicies.rows[0].n > 0 && progPolicies.rows[0].n > 0, "sanity check: these tables keep their own pre-existing policies untouched");
+
+    const grants = await client.query(`
+      select routine_name, grantee from information_schema.role_routine_grants
+      where routine_schema = 'public' and grantee in ('anon', 'authenticated')
+        and routine_name = 'import_programme_activities'
+    `);
+    assert.ok(grants.rows.some((g) => g.grantee === "authenticated"), "authenticated must be able to call the RPC itself");
+    assert.equal(grants.rows.filter((g) => g.grantee === "authenticated").length, 1, "the repeated grant statement in the v100 block must never duplicate the grant");
+
+    await client.end();
+  } finally {
+    await dropTestDatabase(db);
+  }
+});
+
 test("v91: a fresh install has zero platform_admins — nobody is a platform admin by default", async () => {
   const db = "tracker_test_v91_no_backfill";
   await createTestDatabase(db);

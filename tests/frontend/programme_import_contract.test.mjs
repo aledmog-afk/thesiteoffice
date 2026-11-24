@@ -79,6 +79,44 @@ test("parseImportDate: accepts a real JS Date object", () => {
   assert.equal(result.value, "2026-03-15");
 });
 
+// v100 bug fix: SheetJS's cellDates:true gives parseImportDate() a Date
+// object constructed from LOCAL y/m/d (so its *local* getters always
+// reflect the calendar date the user actually sees in the spreadsheet),
+// but the pre-fix code read it via getUTC*() instead — which only
+// differs from the local getters while the process's own local
+// timezone is NOT UTC+0, i.e. during British Summer Time. Reproduced
+// here by actually switching process.env.TZ at runtime (confirmed safe:
+// Node's test runner gives each test FILE its own process, and Node
+// re-reads TZ on every subsequent Date/Intl call — no process restart
+// needed) and constructing a Date the same way SheetJS does: a plain
+// local-time constructor, exactly what a `new Date(y, m-1, d)` cell
+// value looks like once SheetJS has parsed it.
+test("parseImportDate: a summer (BST) Date cell gives the calendar date shown in the sheet, not one day earlier", () => {
+  const originalTz = process.env.TZ;
+  process.env.TZ = "Europe/London";
+  try {
+    const sheetJsStyleCell = new Date(2026, 3, 6); // 6 April 2026, local-time constructor — BST (UTC+1)
+    const result = parseImportDate(sheetJsStyleCell);
+    assert.equal(result.ok, true);
+    assert.equal(result.value, "2026-04-06", "must read 6 April, not 5 April — the pre-fix UTC-getter code shifted BST dates one day early");
+  } finally {
+    process.env.TZ = originalTz;
+  }
+});
+
+test("parseImportDate: a winter (GMT) Date cell is unaffected either way, since the UTC offset is zero", () => {
+  const originalTz = process.env.TZ;
+  process.env.TZ = "Europe/London";
+  try {
+    const sheetJsStyleCell = new Date(2026, 0, 6); // 6 January 2026 — GMT (UTC+0), no discrepancy possible
+    const result = parseImportDate(sheetJsStyleCell);
+    assert.equal(result.ok, true);
+    assert.equal(result.value, "2026-01-06");
+  } finally {
+    process.env.TZ = originalTz;
+  }
+});
+
 // "15/03/2026" is no longer in this list — Phase 3 (brief §10)
 // explicitly requires UK-style DD/MM/YYYY support, added in
 // sql/schema.sql v36's companion app.js change; see the dedicated

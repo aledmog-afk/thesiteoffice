@@ -134,6 +134,23 @@
       <p>No activities yet for this programme.</p>
     </div>
   </div>
+
+  <div class="card" id="revisionsCard" style="display:none;">
+    <div class="row-between" style="flex-wrap:wrap; gap:0.8rem;">
+      <strong>Revisions</strong>
+      <button class="btn btn-outline btn-sm" id="toggleRevisionsBtn">Show</button>
+    </div>
+    <p class="hint" style="margin:0.3rem 0 0;">Every programme import, newest first — what changed, who imported it and when.</p>
+    <div id="revisionsBody" style="display:none; margin-top:0.8rem;">
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Imported</th><th>By</th><th>Created</th><th>Updated</th><th>Unchanged</th><th>Not in import</th><th></th></tr></thead>
+          <tbody id="revisionRows"></tbody>
+        </table>
+      </div>
+      <p class="hint" id="revisionsPdfStatusText" style="margin-top:0.4rem;"></p>
+    </div>
+  </div>
 </div>
 
 <div class="modal-backdrop" id="createActionModal" style="display:none;">
@@ -142,7 +159,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, todayISO, showError, clearError, PROGRAMME_STATUS_LABEL, PROGRAMME_STATUS_BADGE, ACTIVITY_STATUSES, ACTIVITY_STATUS_LABEL, ACTIVITY_STATUS_BADGE, listProgrammes, createProgramme, activateProgramme, archiveProgramme, listProgrammeActivities, createProgrammeActivity, updateProgrammeActivity, deleteProgrammeActivity, categoriseProgrammeActivity, PROGRAMME_VARIANCE_LABEL, PROGRAMME_VARIANCE_BADGE, createActionFromProgrammeActivity, buildProgrammeActionContext, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL, computeProgrammeComplete } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, formatDateTime, todayISO, showError, clearError, PROGRAMME_STATUS_LABEL, PROGRAMME_STATUS_BADGE, ACTIVITY_STATUSES, ACTIVITY_STATUS_LABEL, ACTIVITY_STATUS_BADGE, listProgrammes, createProgramme, activateProgramme, archiveProgramme, listProgrammeActivities, createProgrammeActivity, updateProgrammeActivity, deleteProgrammeActivity, categoriseProgrammeActivity, PROGRAMME_VARIANCE_LABEL, PROGRAMME_VARIANCE_BADGE, createActionFromProgrammeActivity, buildProgrammeActionContext, ACTION_PRIORITIES, ACTION_PRIORITY_LABEL, computeProgrammeComplete, listProgrammeImportRuns, generateProgrammeChangesPdfBlob, saveFileToDevice, deviceSaveStatusLabel } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -198,7 +215,7 @@
   document.getElementById("programmeSelect").addEventListener("change", async (e) => {
     currentProgramme = programmes.find((p) => p.id === e.target.value) || null;
     renderProgrammeCard();
-    await loadActivities();
+    await Promise.all([loadActivities(), loadRevisions()]);
   });
 
   document.getElementById("createProgrammeBtn").addEventListener("click", async () => {
@@ -208,7 +225,7 @@
       programmes.unshift(p);
       currentProgramme = p;
       renderProgrammeCard();
-      await loadActivities();
+      await Promise.all([loadActivities(), loadRevisions()]);
     } catch (err) {
       showError(pageErrorBox, err);
     }
@@ -246,7 +263,7 @@
       programmes.unshift(p);
       currentProgramme = p;
       renderProgrammeCard();
-      await loadActivities();
+      await Promise.all([loadActivities(), loadRevisions()]);
     } catch (err) {
       showError(pageErrorBox, err);
     }
@@ -602,6 +619,79 @@
     }
   }
 
+  // ─── Revisions (v100) ───────────────────────────────────────────
+  // Every programme_import_runs row for this programme — written ONLY
+  // by import_programme_activities() itself (see sql/schema.sql's own
+  // v100 ADDITIONS comment); this page only ever reads them. `members`
+  // (loaded by loadPlotsAndMembers(), called before this in init() —
+  // see below) already covers "every current project member's email",
+  // the exact same lookup the activity table's own Owner column
+  // already reuses, so no separate email fetch is needed here.
+  let revisionRuns = [];
+  async function loadRevisions() {
+    const card = document.getElementById("revisionsCard");
+    if (!currentProgramme) { card.style.display = "none"; revisionRuns = []; return; }
+    card.style.display = "block";
+    clearError(pageErrorBox);
+    try {
+      revisionRuns = await listProgrammeImportRuns(currentProgramme.id);
+      renderRevisions();
+    } catch (err) {
+      showError(pageErrorBox, err);
+    }
+  }
+
+  function renderRevisions() {
+    const emailByUserId = new Map(members.map((m) => [m.user_id, m.email]));
+    const rows = document.getElementById("revisionRows");
+    if (!revisionRuns.length) {
+      rows.innerHTML = `<tr><td colspan="7" class="hint">No imports yet.</td></tr>`;
+      return;
+    }
+    rows.innerHTML = revisionRuns.map((r) => `
+      <tr>
+        <td>${formatDateTime(r.imported_at)}</td>
+        <td>${r.imported_by ? escapeHtml(emailByUserId.get(r.imported_by) || "—") : "—"}</td>
+        <td>${r.created_count}</td>
+        <td>${r.updated_count}</td>
+        <td>${r.unchanged_count}</td>
+        <td>${r.not_in_import_count}</td>
+        <td><button type="button" class="btn btn-outline btn-sm" data-run-id="${r.id}">Download changes (PDF)</button></td>
+      </tr>
+    `).join("");
+  }
+
+  document.getElementById("toggleRevisionsBtn").addEventListener("click", () => {
+    const body = document.getElementById("revisionsBody");
+    const shown = body.style.display !== "none";
+    body.style.display = shown ? "none" : "block";
+    document.getElementById("toggleRevisionsBtn").textContent = shown ? "Show" : "Hide";
+  });
+
+  // Generated entirely client-side from this run's own already-written
+  // record — no separate access check to keep in sync with the page's
+  // own, the same reasoning every other "Download PDF" button in this
+  // app already follows. Event delegation since rows are re-rendered
+  // wholesale on every loadRevisions() call.
+  document.getElementById("revisionRows").addEventListener("click", async (e) => {
+    const btn = e.target.closest("button[data-run-id]");
+    if (!btn) return;
+    const statusEl = document.getElementById("revisionsPdfStatusText");
+    clearError(pageErrorBox);
+    btn.disabled = true;
+    statusEl.textContent = "Generating PDF…";
+    try {
+      const { blob, filename } = await generateProgrammeChangesPdfBlob(btn.dataset.runId);
+      const result = await saveFileToDevice(blob, filename);
+      statusEl.textContent = deviceSaveStatusLabel(result.status);
+    } catch (err) {
+      statusEl.textContent = "";
+      showError(pageErrorBox, err);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
   async function loadPlotsAndMembers() {
     const [{ data: plotRows }, { data: memberRows }] = await Promise.all([
       supabase.from("plots").select("id, plot_number").eq("project_id", projectId).order("plot_number"),
@@ -635,6 +725,10 @@
       currentProgramme = programmes.find((p) => p.status === "active") || programmes[0] || null;
       renderProgrammeCard();
       await Promise.all([loadActivities(), loadPlotsAndMembers()]);
+      // After loadPlotsAndMembers() resolves, not alongside it — the
+      // revisions table's own "By" column looks each run's imported_by
+      // up in `members`, so it needs that already populated.
+      await loadRevisions();
     } catch (err) {
       showError(pageErrorBox, err);
     }
