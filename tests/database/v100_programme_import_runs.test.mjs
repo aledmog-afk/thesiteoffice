@@ -9,20 +9,27 @@
 // unauthorized caller here) rolls back the WHOLE transaction, leaving
 // no run row AND no activity changes either, proving the run insert
 // genuinely shares the import's own transaction rather than being a
-// separate, skippable step; a non-project-member can't read the table;
-// an authenticated member (even the project owner) can't INSERT,
-// UPDATE or DELETE a row directly, matching the audit_log pattern; and
-// the changes payload itself is correct — slip days (signed, both
-// directions), a title change, a milestone flag change, newly created
-// rows, and rows absent from the import.
+// separate, skippable step; an authenticated member (even the project
+// owner) can't INSERT, UPDATE or DELETE a row directly, matching the
+// audit_log pattern; and the changes payload itself is correct — slip
+// days (signed, both directions), a title change, a milestone flag
+// change, newly created rows, and rows absent from the import.
+//
+// RLS READ boundary (fixed after review): the SELECT policy mirrors
+// programme_activities' own read predicate exactly — is_project_editor
+// OR a party holding the programme_read/programme_write capability —
+// NOT plain project membership. A plain project_members row (e.g. a
+// snagging-only member) can already see neither programme_activities
+// nor programme_import_runs; a company with only programme_read
+// capability (no ordinary project_members row at all) can read both.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createTestDatabase, dropTestDatabase, setupSchema, adminClient, userClient } from "../lib/db.mjs";
 
 const DB = "tracker_test_v100_programme_import_runs";
 const U = (n) => `a1000000-0000-0000-0000-0000000000${String(n).padStart(2, "0")}`;
-const OWNER = U(1), SNAGGER = U(2), OUTSIDER = U(3);
-const EMAIL = { [OWNER]: "owner100@x.test", [SNAGGER]: "snagger100@x.test", [OUTSIDER]: "outsider100@x.test" };
+const OWNER = U(1), SNAGGER = U(2), OUTSIDER = U(3), CLIENT = U(4);
+const EMAIL = { [OWNER]: "owner100@x.test", [SNAGGER]: "snagger100@x.test", [OUTSIDER]: "outsider100@x.test", [CLIENT]: "client100@x.test" };
 
 const fx = {};
 
@@ -35,6 +42,20 @@ async function sql(q, p = []) {
   try { return await a.query(q, p); } finally { await a.end(); }
 }
 const one = (c, q, p) => c.query(q, p).then((r) => r.rows[0]);
+
+// Enrols CLIENT as a 'client' party on the given project — same
+// create_party_invite()/accept_party_invite() flow tests/security/
+// v69_progress_rls.test.mjs's own join() helper uses. 'client' grants
+// exactly programme_read (never programme_write) per
+// party_role_capabilities — the narrowest real case for "a company
+// with programme read access can read the run".
+async function joinAsClientParty(projectId) {
+  const inv = await as(OWNER, (c) => one(c, "select * from public.create_party_invite($1,$2,$3,null,null)", [projectId, EMAIL[CLIENT], "client"]));
+  await as(CLIENT, async (c) => {
+    const org = await one(c, "select public.create_organisation('Fake Client Co v100', 'developer_client') as id");
+    await c.query("select public.accept_party_invite($1,$2)", [inv.token, org.id]);
+  });
+}
 
 let projectCounter = 0;
 // Each test gets its OWN fresh project — same reasoning as the v99
@@ -138,14 +159,33 @@ test("v100: a rollback on a non-existent programme also leaves no run row anywhe
   assert.equal(runs, 0);
 });
 
-// ─── RLS: read vs write ─────────────────────────────────────────────
+// ─── RLS: read matches programme_activities' own read boundary ─────
 
-test("v100: a project member can read the run rows for their own project", async () => {
+test("v100: an editor (the project owner) can read the run rows for their own project", async () => {
   const prog = await createProgramme();
   await as(OWNER, (c) => c.query("select public.import_programme_activities($1, $2::jsonb)", [prog.id, importRows([{ title: "A row" }])]));
 
   const rows = await as(OWNER, (c) => c.query("select * from public.programme_import_runs where programme_id = $1", [prog.id]));
   assert.equal(rows.rows.length, 1, "the project owner must be able to read the run they themselves triggered");
+});
+
+test("v100: a company with only programme_read capability (no ordinary project_members row at all) can read the run", async () => {
+  const prog = await createProgramme();
+  await as(OWNER, (c) => c.query("select public.import_programme_activities($1, $2::jsonb)", [prog.id, importRows([{ title: "A row" }])]));
+  await joinAsClientParty(prog.project_id);
+
+  const rows = await as(CLIENT, (c) => c.query("select * from public.programme_import_runs where programme_id = $1", [prog.id]));
+  assert.equal(rows.rows.length, 1, "a party holding programme_read must see the run, exactly like it already sees programme_activities");
+});
+
+test("v100: a plain project member with no programme access (snagging role, no party capability) gets ZERO rows — never an error", async () => {
+  const prog = await createProgramme();
+  await as(OWNER, (c) => c.query("select public.import_programme_activities($1, $2::jsonb)", [prog.id, importRows([{ title: "A row" }])]));
+  await sql("insert into public.organisation_members (org_id, user_id, role) values ($1,$2,'member') on conflict do nothing", [fx.orgId, SNAGGER]);
+  await sql("insert into public.project_members (project_id, user_id, role) values ($1,$2,'snagging') on conflict do nothing", [prog.project_id, SNAGGER]);
+
+  const rows = await as(SNAGGER, (c) => c.query("select * from public.programme_import_runs where programme_id = $1", [prog.id]));
+  assert.equal(rows.rows.length, 0, "a plain project_members row is not enough — this must match programme_activities' own boundary, not project membership");
 });
 
 test("v100: a user with no membership on the project at all cannot read its run rows", async () => {

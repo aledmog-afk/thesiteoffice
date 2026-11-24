@@ -1206,10 +1206,21 @@ test("v100: programme_import_runs table, its RLS, and the extended import_progra
     assert.equal(rls.rows[0].relrowsecurity, true, "RLS must be enabled");
 
     const policies = await client.query(`
-      select policyname, cmd from pg_policies where tablename = 'programme_import_runs'
+      select policyname, cmd, qual from pg_policies where tablename = 'programme_import_runs'
     `);
     assert.equal(policies.rowCount, 1, "exactly one policy must exist, never duplicated — a SELECT policy and nothing else");
     assert.equal(policies.rows[0].cmd, "SELECT", "the only policy must be for SELECT — no insert/update/delete policy exists, matching the audit_log pattern, so authenticated gets no write path at all");
+    assert.equal(policies.rows[0].policyname, "editors read programme_import_runs");
+    // Must match programme_activities' own read boundary (editor OR a
+    // party holding programme_read/programme_write) — NOT plain project
+    // membership, which would let a snagging-only member read every
+    // task name/date change through this table. Checked against the
+    // policy's own stored expression, not just its name, so a future
+    // edit that renames the policy but reverts the predicate still fails.
+    assert.match(policies.rows[0].qual, /is_project_editor/, "must gate on project-editor status");
+    assert.match(policies.rows[0].qual, /party_cap_projects\('programme_read'/, "must also admit a party with programme_read");
+    assert.match(policies.rows[0].qual, /party_cap_projects\('programme_write'/, "must also admit a party with programme_write");
+    assert.doesNotMatch(policies.rows[0].qual, /is_project_member/, "must NOT fall back to plain project membership");
 
     const indexes = await client.query(`
       select indexname from pg_indexes where tablename = 'programme_import_runs'

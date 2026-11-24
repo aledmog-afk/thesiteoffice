@@ -25,19 +25,29 @@
 -- Stuart's requirement: the row is written by import_programme_
 -- activities() itself, in the SAME transaction as the import it
 -- records, so it can never be skipped by the page or edited
--- afterwards. RLS follows the audit_log precedent above exactly (see
--- its own comment, ~line 2683): enabled, one SELECT policy keyed off
--- project membership, and deliberately NO insert/update/delete
--- policy at all. Postgres denies those outright to every role except
--- the table owner / a security-definer function that bypasses RLS —
--- the only way a row can ever be written is from inside
--- import_programme_activities() below. No extra revoke/grant needed
--- beyond that: this project's own ALTER DEFAULT PRIVILEGES entry
--- already grants authenticated blanket table-level DML on every new
--- public table (mirrored for tests by tests/lib/mock_setup.sql's own
--- `grant select, insert, update, delete on all tables in schema
+-- afterwards. The write side follows the audit_log precedent above
+-- exactly (see its own comment, ~line 2683): enabled, deliberately NO
+-- insert/update/delete policy at all. Postgres denies those outright
+-- to every role except the table owner / a security-definer function
+-- that bypasses RLS — the only way a row can ever be written is from
+-- inside import_programme_activities() below. No extra revoke/grant
+-- needed beyond that: this project's own ALTER DEFAULT PRIVILEGES
+-- entry already grants authenticated blanket table-level DML on every
+-- new public table (mirrored for tests by tests/lib/mock_setup.sql's
+-- own `grant select, insert, update, delete on all tables in schema
 -- public to authenticated`), the same way audit_log itself relies on
 -- RLS alone, never a table-level revoke, to block writes.
+--
+-- The READ side must match programme_activities' own read boundary
+-- exactly, not plain project membership — a plain project_members row
+-- (e.g. a snagging-only member) cannot see programme_activities
+-- itself, so it must not be able to read every task name and date
+-- change through this table either. This is the same combined
+-- predicate (editor OR a party holding programme_read/programme_write)
+-- already used, verbatim, for the other append-only history tables in
+-- this exact position in the schema — progress_stage_events and
+-- progress_tag_skips, a few hundred lines up — rather than a new
+-- helper.
 create table if not exists public.programme_import_runs (
   id uuid primary key default gen_random_uuid(),
   org_id uuid not null references public.organisations(id),
@@ -76,15 +86,13 @@ create index if not exists programme_import_runs_org_idx on public.programme_imp
 
 alter table public.programme_import_runs enable row level security;
 drop policy if exists "members read programme_import_runs" on public.programme_import_runs;
-create policy "members read programme_import_runs" on public.programme_import_runs for select to authenticated using (public.is_project_member(project_id));
+drop policy if exists "editors read programme_import_runs" on public.programme_import_runs;
+create policy "editors read programme_import_runs" on public.programme_import_runs for select to authenticated
+  using (public.is_project_editor(project_id)
+         or project_id in (select public.party_cap_projects('programme_read'))
+         or project_id in (select public.party_cap_projects('programme_write')));
 -- Deliberately no insert/update/delete policy — see this table's own
--- header comment above. (Scoped to plain project membership, not the
--- v62 party-capability system programme_activities itself also
--- extends to — out of scope for this task's own explicit instruction,
--- "project members can read"; a party granted programme_write/_read
--- capability without an ordinary project_members row would not yet
--- see this table. Flagged in this PR's own description, not silently
--- left unmentioned.)
+-- header comment above.
 
 -- Redeclares import_programme_activities() with the recording added —
 -- every other line (matching, validation, row-level rejection vs.
