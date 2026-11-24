@@ -5827,8 +5827,8 @@ export function buildProgrammeChangesPdfDocument({ jsPDFCtor, run, projectName, 
     for (const e of moved) {
       const finishSlip = Number(e.finish_slip_days) || 0;
       const startSlip = Number(e.start_slip_days) || 0;
-      let detail = `Planned finish: ${e.old_planned_finish || "—"} → ${e.new_planned_finish || "—"} (${finishSlip > 0 ? "+" : ""}${finishSlip}d)`;
-      if (startSlip) detail += `; planned start: ${e.old_planned_start || "—"} → ${e.new_planned_start || "—"} (${startSlip > 0 ? "+" : ""}${startSlip}d)`;
+      let detail = `Planned finish: ${e.old_planned_finish || "—"} to ${e.new_planned_finish || "—"} (${finishSlip > 0 ? "+" : ""}${finishSlip}d)`;
+      if (startSlip) detail += `; planned start: ${e.old_planned_start || "—"} to ${e.new_planned_start || "—"} (${startSlip > 0 ? "+" : ""}${startSlip}d)`;
       line(`${e.title || "(untitled)"} — ${detail}`);
     }
   } else {
@@ -5840,7 +5840,7 @@ export function buildProgrammeChangesPdfDocument({ jsPDFCtor, run, projectName, 
   heading(`Newly added (${created.length})`, 12.5);
   if (created.length) {
     for (const e of created) {
-      const dates = e.new_planned_start || e.new_planned_finish ? ` (${e.new_planned_start || "—"} → ${e.new_planned_finish || "—"})` : "";
+      const dates = e.new_planned_start || e.new_planned_finish ? ` (${e.new_planned_start || "—"} to ${e.new_planned_finish || "—"})` : "";
       line(`${e.title || "(untitled)"}${dates}`);
     }
   } else {

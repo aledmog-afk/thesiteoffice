@@ -143,6 +143,15 @@ test("PDF: 'dates moved' section lists moved rows sorted by biggest finish slip 
   assert.ok(text.includes("2026-02-01") && text.includes("2026-02-15"), "old and new planned finish dates must both appear for Roof Covering");
   assert.ok(text.includes("+14d"), "a positive slip must be shown with an explicit + sign");
   assert.ok(text.includes("-4d"), "a negative slip (pulled forward) must be shown with its sign");
+  // jsPDF's built-in Helvetica only supports WinAnsi-encoded characters
+  // — "→" (U+2192) isn't one of them and renders as a garbled glyph
+  // (confirmed against a real render: "2026-07-01 !' 2026-07-08"), so
+  // the old/new date separator must be the plain word "to", never an
+  // arrow character.
+  const roofLine = text.split("\n").find((l) => l.includes("Roof Covering"));
+  assert.ok(roofLine, "the Roof Covering line must exist");
+  assert.match(roofLine, / to /, "old date and new date must be joined by the word 'to'");
+  assert.doesNotMatch(roofLine, /→/, "never a right-arrow character — Helvetica can't render it");
 });
 
 test("PDF: 'newly added' section lists created rows, excluded from 'dates moved'", async () => {
@@ -152,6 +161,22 @@ test("PDF: 'newly added' section lists created rows, excluded from 'dates moved'
   assert.ok(text.includes("Newly added (1)"));
   assert.ok(text.includes("Frame Erect"));
   assert.ok(text.includes("2026-03-01") && text.includes("2026-03-20"));
+  const frameLine = text.split("\n").find((l) => l.includes("Frame Erect"));
+  assert.match(frameLine, / to /, "the created row's own start/finish dates must also be joined by 'to', not an arrow");
+  assert.doesNotMatch(frameLine, /→/);
+});
+
+test("PDF: no non-WinAnsi character ever reaches the page — jsPDF's built-in Helvetica can only draw WinAnsi-encoded glyphs, and a garbled character (confirmed empirically: a real render of '→' comes back from pdftotext as \"2026-07-01 !’ 2026-07-08\") would otherwise go unnoticed since the PDF 'succeeds' either way", async () => {
+  const run = makeRun();
+  const doc = buildProgrammeChangesPdfDocument({ jsPDFCtor: jsPDF, run, projectName: "Red Dragon", programmeName: "Programme A", importedByLabel: "u@x.test" });
+  const { text } = await renderAndExtractText(doc);
+  assert.doesNotMatch(text, /→/, "no right-arrow anywhere in the document");
+  // The one non-ASCII character this builder's own literal strings use
+  // is the em dash (—, U+2014) — WinAnsi position 0x97, already relied
+  // on by several other jsPDF builders in this codebase (e.g.
+  // buildPlotHandoverPdfDocument's own "—" fallback), and confirmed
+  // here to render as a literal em dash, not a garbled glyph.
+  assert.ok(text.includes("—"), "the em dash fallback (Project/Programme/Imported by) must render as itself");
 });
 
 test("PDF: 'not in this import' section lists existing activities absent from the import", async () => {
