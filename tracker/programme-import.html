@@ -158,15 +158,17 @@
 
       <div class="btn-row">
         <a class="btn btn-amber" id="viewProgrammeLink" href="#">View Programme</a>
+        <button class="btn btn-outline" id="downloadChangesPdfBtn">Download changes (PDF)</button>
         <button class="btn btn-outline" id="importAnotherBtn">Import Another File</button>
       </div>
+      <p class="hint" id="pdfStatusText" style="margin-top:0.4rem;"></p>
     </div>
   </div>
 </div>
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, PROGRAMME_STATUS_LABEL, listProgrammes, listProgrammeActivities, validateImportFile, readWorkbookFile, splitSheetHeaderAndRows, suggestColumnMapping, mapRowsToImportRows, buildImportReconciliation, importProgrammeActivities, createDocument } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, PROGRAMME_STATUS_LABEL, listProgrammes, listProgrammeActivities, validateImportFile, readWorkbookFile, splitSheetHeaderAndRows, suggestColumnMapping, mapRowsToImportRows, buildImportReconciliation, importProgrammeActivities, createDocument, generateProgrammeChangesPdfBlob, saveFileToDevice, deviceSaveStatusLabel } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -493,12 +495,39 @@
     }
 
     document.getElementById("viewProgrammeLink").href = `programme.html?project=${projectId}`;
+    document.getElementById("downloadChangesPdfBtn").style.display = res.run_id ? "inline-flex" : "none";
+    document.getElementById("pdfStatusText").textContent = "";
   }
+
+  // v100: generated entirely client-side from this run's own
+  // already-written record (programme_import_runs) — no separate
+  // access check to keep in sync with the page's own, same reasoning
+  // every other "Download PDF" button in this app already follows.
+  // Hidden entirely (see renderResult() above) on the rare case the
+  // import itself succeeded but somehow returned no run_id.
+  document.getElementById("downloadChangesPdfBtn").addEventListener("click", async () => {
+    const btn = document.getElementById("downloadChangesPdfBtn");
+    const statusEl = document.getElementById("pdfStatusText");
+    clearError(pageErrorBox);
+    btn.disabled = true;
+    statusEl.textContent = "Generating PDF…";
+    try {
+      const { blob, filename } = await generateProgrammeChangesPdfBlob(state.importResult.run_id);
+      const result = await saveFileToDevice(blob, filename);
+      statusEl.textContent = deviceSaveStatusLabel(result.status);
+    } catch (err) {
+      statusEl.textContent = "";
+      showError(pageErrorBox, err);
+    } finally {
+      btn.disabled = false;
+    }
+  });
 
   document.getElementById("importAnotherBtn").addEventListener("click", () => {
     state = { file: null, workbook: null, sheetName: null, headers: [], rows: [], mapping: {}, importRows: [], existingActivities: [], recon: null, importResult: null };
     document.getElementById("workbookFile").value = "";
     document.getElementById("retainCopyCheckbox").checked = true;
+    document.getElementById("pdfStatusText").textContent = "";
     clearError(pageErrorBox);
     goToStep(0);
   });

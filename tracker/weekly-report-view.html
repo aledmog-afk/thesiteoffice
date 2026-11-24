@@ -31,13 +31,34 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, getOrgLogoUrl, formatGBP, showError, clearError, PHOTO_COMPLIANCE_BADGE, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_BADGE, STATUTORY_OUTCOME_BADGE, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, validWeeklyReportStatusTransitions, reviewWeeklyReport, approveWeeklyReport, issueWeeklyReport, reviseWeeklyReport, CONTROL_LEVEL_BADGE, getRfiLinksForWeeklyReport, normalisePlotToken, attachReportCommercialNotes, getWeeklyReportDiaryEntries, isWeeklyReportEarlyWarningsCalculated } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, getOrgLogoUrl, formatGBP, showError, clearError, PHOTO_COMPLIANCE_BADGE, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_BADGE, STATUTORY_OUTCOME_BADGE, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, validWeeklyReportStatusTransitions, reviewWeeklyReport, approveWeeklyReport, issueWeeklyReport, reviseWeeklyReport, CONTROL_LEVEL_BADGE, getRfiLinksForWeeklyReport, normalisePlotToken, attachReportCommercialNotes, getWeeklyReportDiaryEntries, isWeeklyReportEarlyWarningsCalculated, isWeeklyReportProgrammeRevisionsCalculated, generateProgrammeChangesPdfBlob, saveFileToDevice, deviceSaveStatusLabel } from "./js/app.js";
 
   await requireAuth();
   const reportId = getParam("id");
   if (!reportId) window.location.href = "dashboard.html";
 
   document.getElementById("printBtn").addEventListener("click", () => window.print());
+
+  // v100: Download changes (PDF) buttons inside the Programme
+  // Revisions section — event delegation, since #doc's whole innerHTML
+  // is rebuilt wholesale on every render.
+  document.getElementById("doc").addEventListener("click", async (e) => {
+    const btn = e.target.closest(".pr-download-pdf-btn");
+    if (!btn) return;
+    const statusEl = document.getElementById("prPdfStatusText");
+    btn.disabled = true;
+    if (statusEl) statusEl.textContent = "Generating PDF…";
+    try {
+      const { blob, filename } = await generateProgrammeChangesPdfBlob(btn.dataset.runId);
+      const result = await saveFileToDevice(blob, filename);
+      if (statusEl) statusEl.textContent = deviceSaveStatusLabel(result.status);
+    } catch (err) {
+      if (statusEl) statusEl.textContent = "";
+      showError(document.getElementById("lifecycleErrorBox"), err);
+    } finally {
+      btn.disabled = false;
+    }
+  });
 
   // Browsers use document.title as the suggested filename when saving
   // this page as a PDF, so this doubles as the download's file name —
@@ -274,6 +295,37 @@
     </div>`;
   }
 
+  // v100: frozen, read-only — same "whatever was last saved" rule as
+  // Early Warnings above. A report saved before this existed has no
+  // programmeRevisions.runIds array at all — shown as "not
+  // calculated", never a false "none". The Download buttons are
+  // outside the printed area (no-print) — the figures above them
+  // print as part of the report; a download action never does.
+  function programmeRevisionsSection(position) {
+    if (!position || !position.exceptions) return "";
+    const calculated = isWeeklyReportProgrammeRevisionsCalculated(position);
+    const rev = calculated ? position.programmeRevisions : null;
+    const hasAny = !!(rev && rev.runIds.length);
+    return `<div class="doc-section">
+      <h3>Programme Revisions This Week</h3>
+      ${!calculated
+        ? `<p class="hint">Not calculated for this report.</p>`
+        : !hasAny
+          ? `<p class="hint">No programme revisions this week.</p>`
+          : `
+            <p>Created: ${rev.createdCount} · Updated: ${rev.updatedCount} · Unchanged: ${rev.unchangedCount} · Not in import: ${rev.notInImportCount}</p>
+            ${rev.topMoves.length ? `<ul class="body-list">${rev.topMoves.map((m) => {
+              const finishSlip = Number(m.finish_slip_days) || 0;
+              return `<li>${escapeHtml(m.title || "(untitled)")} — planned finish ${m.old_planned_finish || "—"} &rarr; ${m.new_planned_finish || "—"} (${finishSlip > 0 ? "+" : ""}${finishSlip}d)</li>`;
+            }).join("")}</ul>` : ""}
+            <div class="btn-row no-print" style="flex-wrap:wrap;">
+              ${rev.runIds.map((id) => `<button type="button" class="btn btn-outline btn-sm pr-download-pdf-btn" data-run-id="${id}">Download changes (PDF)</button>`).join("")}
+            </div>
+            <p class="hint no-print" id="prPdfStatusText"></p>
+          `}
+    </div>`;
+  }
+
   // Renders whatever was last SAVED into system_position — never a live
   // re-fetch. This page is the record of what the report said; once a
   // report is approved/issued this is frozen by the v33 trigger anyway,
@@ -465,6 +517,7 @@
       </dl>
 
       ${earlyWarningsSection(r.system_position, r.early_warning_notes)}
+      ${programmeRevisionsSection(r.system_position)}
       ${positionSection(r.system_position)}
       ${programmeSignalSection(r.system_position)}
       ${weatherSection(r.weather_days)}

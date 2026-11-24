@@ -196,6 +196,85 @@ test("weekly-report-form.html: an existing report saved before v97 (no earlyWarn
   assert.ok(!text.includes("No early warnings this week"), "must never show the calculated-zero message for an uncalculated position");
 });
 
+// ─── Programme revisions this week (v100) — live while draft ──────
+function sampleRevisions(overrides = {}) {
+  return {
+    runIds: ["run-1"], createdCount: 1, updatedCount: 2, unchangedCount: 3, notInImportCount: 1,
+    topMoves: [{ activity_id: "a1", title: "Roof Covering", old_planned_finish: "2026-02-01", new_planned_finish: "2026-02-15", finish_slip_days: 14 }],
+    ...overrides,
+  };
+}
+
+test("weekly-report-form.html: the Programme Revisions section shows the counts and top moves returned by getWeeklyReportPosition", async () => {
+  const { document } = await runForm({
+    getWeeklyReportPosition: async () => ({ ...samplePosition(), programmeRevisions: sampleRevisions() }),
+  });
+  await wait(30);
+  const box = document.querySelector(".programme-revisions-box");
+  assert.ok(box, "a Programme Revisions box must render");
+  assert.match(box.textContent, /Created: 1/);
+  assert.match(box.textContent, /Updated: 2/);
+  assert.match(box.textContent, /Unchanged: 3/);
+  assert.match(box.textContent, /Not in import: 1/);
+  assert.match(box.textContent, /Roof Covering/);
+  assert.match(box.textContent, /\+14d/);
+});
+
+test("weekly-report-form.html: the Programme Revisions section says 'No programme revisions this week' when genuinely empty", async () => {
+  const { document } = await runForm({
+    getWeeklyReportPosition: async () => ({ ...samplePosition(), programmeRevisions: sampleRevisions({ runIds: [], createdCount: 0, updatedCount: 0, unchangedCount: 0, notInImportCount: 0, topMoves: [] }) }),
+  });
+  await wait(30);
+  assert.match(document.querySelector(".programme-revisions-box").textContent, /No programme revisions this week\./);
+});
+
+test("weekly-report-form.html: an existing report saved before v100 (no programmeRevisions key at all) shows 'not calculated', never a false 'none'", async () => {
+  const existingReport = {
+    id: "r1", project_id: "p1", week_starting: "2026-09-07", week_ending: "2026-09-11",
+    status: "draft", prepared_by: "Jane", programme_status: "on-track",
+    weather_days: [], commercial_items: [], labour_records: [], risk_items: [], statutory_milestones: [], photos: [],
+    system_position: samplePosition(), // no programmeRevisions key — exactly a pre-v100 saved position
+  };
+  const { document } = await runForm({ reportId: "r1", existingReport });
+  await wait(30);
+  const text = document.querySelector(".programme-revisions-box").textContent;
+  assert.match(text, /Not calculated for this report/);
+  assert.ok(!text.includes("No programme revisions this week"), "must never show the calculated-zero message for an uncalculated position");
+});
+
+test("weekly-report-form.html: Download changes (PDF) inside the Programme Revisions box calls generateProgrammeChangesPdfBlob with that run's id and saves the file", async () => {
+  let generatedForRunId = null;
+  let savedBlob = null;
+  const { document } = await runForm({
+    getWeeklyReportPosition: async () => ({ ...samplePosition(), programmeRevisions: sampleRevisions({ runIds: ["run-abc"] }) }),
+    extra: {
+      generateProgrammeChangesPdfBlob: async (runId) => { generatedForRunId = runId; return { blob: "fake-blob", filename: "Programme changes.pdf" }; },
+      saveFileToDevice: async (blob) => { savedBlob = blob; return { status: "saved" }; },
+      deviceSaveStatusLabel: (status) => `Saved (${status})`,
+    },
+  });
+  await wait(30);
+  const btn = document.querySelector(".pr-download-pdf-btn");
+  assert.ok(btn, "a Download changes (PDF) button must render for the run returned");
+  assert.equal(btn.dataset.runId, "run-abc");
+  fireEvent(btn, "click");
+  await wait(30);
+  assert.equal(generatedForRunId, "run-abc");
+  assert.equal(savedBlob, "fake-blob");
+  assert.match(document.getElementById("prPdfStatusText").textContent, /Saved \(saved\)/);
+  assert.equal(btn.disabled, false, "the button must re-enable once the download finishes");
+});
+
+test("weekly-report-form.html: a week with more than one re-import gets one Download button per run, never a single button covering more than one PDF", async () => {
+  const { document } = await runForm({
+    getWeeklyReportPosition: async () => ({ ...samplePosition(), programmeRevisions: sampleRevisions({ runIds: ["run-1", "run-2"] }) }),
+  });
+  await wait(30);
+  const buttons = document.querySelectorAll(".pr-download-pdf-btn");
+  assert.equal(buttons.length, 2);
+  assert.deepEqual([...buttons].map((b) => b.dataset.runId), ["run-1", "run-2"]);
+});
+
 test("weekly-report-form.html: an approved (locked) existing report disables the form and offers Revise", async () => {
   const existingReport = {
     id: "r1", project_id: "p1", week_starting: "2026-09-07", week_ending: "2026-09-11",
@@ -440,6 +519,77 @@ test("weekly-report-view.html: a report saved before v97 (no earlyWarnings key) 
   const doc = document.getElementById("doc").innerHTML;
   assert.match(doc, /Not calculated for this report\./);
   assert.ok(!doc.includes("No early warnings this week"));
+});
+
+// ─── Programme revisions this week (v100) — frozen snapshot, read-only ──
+test("weekly-report-view.html: renders the SAVED programmeRevisions snapshot verbatim, including the Download button for its run id", async () => {
+  const issued = {
+    id: "r1", week_starting: "2026-09-07", week_ending: "2026-09-11", status: "issued", programme_status: "on-track", projects: SAMPLE_PROJECT,
+    system_position: { ...samplePosition(), programmeRevisions: sampleRevisions({ runIds: ["run-xyz"] }) },
+  };
+  const { document } = await runView(issued);
+  await wait(30);
+  const doc = document.getElementById("doc").innerHTML;
+  assert.match(doc, /Programme Revisions This Week/);
+  assert.match(doc, /Created: 1/);
+  assert.match(doc, /Roof Covering/);
+  const btn = document.querySelector(".pr-download-pdf-btn");
+  assert.ok(btn);
+  assert.equal(btn.dataset.runId, "run-xyz");
+});
+
+test("weekly-report-view.html: a genuinely empty programmeRevisions snapshot shows 'No programme revisions this week', never silence", async () => {
+  const issued = {
+    id: "r1", week_starting: "2026-09-07", week_ending: "2026-09-11", status: "issued", programme_status: "on-track", projects: SAMPLE_PROJECT,
+    system_position: { ...samplePosition(), programmeRevisions: sampleRevisions({ runIds: [], createdCount: 0, updatedCount: 0, unchangedCount: 0, notInImportCount: 0, topMoves: [] }) },
+  };
+  const { document } = await runView(issued);
+  await wait(30);
+  assert.match(document.getElementById("doc").innerHTML, /No programme revisions this week\./);
+});
+
+test("weekly-report-view.html: a report saved before v100 (no programmeRevisions key) shows 'not calculated', never a false 'none' or a 0", async () => {
+  const issued = { id: "r1", week_starting: "2026-09-07", week_ending: "2026-09-11", status: "issued", programme_status: "on-track", projects: SAMPLE_PROJECT, system_position: samplePosition() };
+  const { document } = await runView(issued);
+  await wait(30);
+  const doc = document.getElementById("doc").innerHTML;
+  assert.match(doc, /Programme Revisions This Week/);
+  assert.match(doc, /Not calculated for this report\./);
+  assert.ok(!doc.includes("No programme revisions this week"));
+});
+
+test("weekly-report-view.html: an ISSUED report's programmeRevisions never changes even though a NEWER import run exists now — the snapshot is frozen, not recalculated on view", async () => {
+  // getWeeklyReportPosition is never called by weekly-report-view.html
+  // at all (no "extra" override needed here) — the whole point of this
+  // test is that the view page has no live-recalculation path for an
+  // already-issued report; it only ever reads system_position back.
+  const frozenRevisions = sampleRevisions({ runIds: ["old-run"], createdCount: 1 });
+  const issued = {
+    id: "r1", week_starting: "2026-09-07", week_ending: "2026-09-11", status: "issued", programme_status: "on-track", projects: SAMPLE_PROJECT,
+    system_position: { ...samplePosition(), programmeRevisions: frozenRevisions },
+  };
+  const { document } = await runView(issued);
+  await wait(30);
+  const btn = document.querySelector(".pr-download-pdf-btn");
+  assert.equal(btn.dataset.runId, "old-run", "only the frozen run id from the time of issue must ever appear, never a run that happened afterwards");
+});
+
+test("weekly-report-view.html: Download changes (PDF) inside the Programme Revisions section calls generateProgrammeChangesPdfBlob and saves the file", async () => {
+  let generatedForRunId = null;
+  const issued = {
+    id: "r1", week_starting: "2026-09-07", week_ending: "2026-09-11", status: "issued", programme_status: "on-track", projects: SAMPLE_PROJECT,
+    system_position: { ...samplePosition(), programmeRevisions: sampleRevisions({ runIds: ["run-view-1"] }) },
+  };
+  const { document } = await runView(issued, {
+    generateProgrammeChangesPdfBlob: async (runId) => { generatedForRunId = runId; return { blob: "fake-blob", filename: "Programme changes.pdf" }; },
+    saveFileToDevice: async () => ({ status: "saved" }),
+    deviceSaveStatusLabel: (status) => `Saved (${status})`,
+  });
+  await wait(30);
+  fireEvent(document.querySelector(".pr-download-pdf-btn"), "click");
+  await wait(30);
+  assert.equal(generatedForRunId, "run-view-1");
+  assert.match(document.getElementById("prPdfStatusText").textContent, /Saved \(saved\)/);
 });
 
 // A progress item added via "Add an item…" can carry BOTH a milestone

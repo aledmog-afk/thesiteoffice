@@ -381,12 +381,21 @@ test("buildImportReconciliation: a mixed batch of new/updated/unchanged/invalid 
 // calendar date no matter what timezone the code happens to run in.
 
 const originalTZ = process.env.TZ;
-test("parseImportDate: a Date built the way SheetJS encodes a real Excel cell reads back the same calendar date at extreme UTC+ and UTC- offsets", () => {
+// v100: SheetJS's cellDates:true does NOT give a UTC-anchored Date —
+// it constructs one from LOCAL y/m/d (confirmed empirically against
+// the real `xlsx` package), so the import and the read always happen
+// under the SAME system timezone in practice. The correct invariant
+// is therefore: construct the cell the way SheetJS would if the
+// import ran under timezone T, then read it back under that SAME T —
+// not "construct once under UTC, then read under many different T's",
+// which was this test's original (pre-v100) premise and is exactly the
+// wrong mental model that caused the BST bug in the first place.
+test("parseImportDate: a Date built the way SheetJS encodes a real Excel cell reads back the same calendar date no matter what timezone the import runs under", () => {
   try {
-    const utcNoon = new Date(Date.UTC(2026, 2, 15)); // 2026-03-15 00:00 UTC
     for (const tz of ["Pacific/Kiritimati", "Etc/GMT+12", "UTC", "Europe/London"]) {
       process.env.TZ = tz;
-      const result = parseImportDate(utcNoon);
+      const sheetJsStyleCell = new Date(2026, 2, 15); // local-time constructor, as SheetJS itself uses
+      const result = parseImportDate(sheetJsStyleCell);
       assert.equal(result.value, "2026-03-15", `TZ=${tz} should read 2026-03-15, got ${result.value}`);
     }
   } finally {
