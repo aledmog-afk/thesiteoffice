@@ -5085,7 +5085,12 @@ function programmeActivityDurationWeight(activity) {
 }
 
 export function computeProgrammeComplete(activities) {
-  const countable = (activities || []).filter((a) => a.status !== "cancelled" && !a.exclude_from_progress);
+  // v101: is_summary rides along too — a genuine rollup/summary bar
+  // (flagged by the import, never by the v99 auto/manual tick) must
+  // never count, the same way a cancelled or already-excluded row
+  // doesn't. See compute_programme_complete_pct() in sql/schema.sql
+  // for the identical server-side rule.
+  const countable = (activities || []).filter((a) => a.status !== "cancelled" && !a.exclude_from_progress && !a.is_summary);
   if (!countable.length) return null;
   let totalWeight = 0;
   let doneWeight = 0;
@@ -5170,7 +5175,7 @@ export function buildProgrammeActionContext(activity, cats) {
 // tied to any one spreadsheet's literal header text — column mapping
 // (letting a user say "my 'Task Name' column means title") is UI work
 // for the actual importer, not this phase.
-export const PROGRAMME_IMPORT_COLUMNS = ["external_id", "title", "plot_number", "is_milestone", "planned_start", "planned_finish"];
+export const PROGRAMME_IMPORT_COLUMNS = ["external_id", "title", "plot_number", "is_milestone", "planned_start", "planned_finish", "summary", "percent_complete"];
 
 // Accepts a small set of unambiguous shapes a spreadsheet cell might
 // actually contain: an ISO date string, an Excel serial date number
@@ -5295,6 +5300,24 @@ export function validateImportRow(row) {
     }
   }
 
+  // v101: Summary — OPTIONAL. `summaryProvided` tracks whether this
+  // row's payload carries the `summary` key AT ALL (not merely
+  // whether its value is truthy) — see mapRowsToImportRows() below,
+  // which omits the key entirely (rather than sending it as null)
+  // when the user never mapped a Summary column for this import.
+  // That distinction is what lets a later import WITHOUT the column
+  // leave an existing summary flag alone (brief: "Re-importing
+  // without the column must not clear an existing summary flag"),
+  // while a MAPPED column's genuinely blank cell for one row still
+  // means "not a summary" for that row, same as every other optional
+  // column. Accepts Y/yes/true/1 (string or already-typed); anything
+  // else is simply "not a summary", the same lenient, no-error
+  // precedent is_milestone already sets just above — not every
+  // unrecognised value in an optional boolean-ish column is worth
+  // blocking an import over.
+  const summaryProvided = row.summary !== undefined;
+  const isSummary = summaryProvided && ["y", "yes", "true", "1"].includes(String(row.summary).trim().toLowerCase());
+
   const externalId = typeof row.external_id === "string" ? row.external_id.trim() : (row.external_id ? String(row.external_id).trim() : "");
 
   if (errors.length) return { valid: false, errors };
@@ -5309,6 +5332,8 @@ export function validateImportRow(row) {
       plannedStart: plannedStart.value,
       plannedFinish: plannedFinish.value,
       percentComplete,
+      summaryProvided,
+      isSummary,
     },
   };
 }
@@ -5498,8 +5523,13 @@ const COLUMN_MAPPING_HINTS = {
   planned_start: ["planned start", "start date", "start"],
   planned_finish: ["planned finish", "finish date", "completion date", "end date", "finish", "completion", "end"],
   is_milestone: ["milestone"],
+  // v101: both optional, matched after every field above so a header
+  // this specific (e.g. an exact "Summary" or "% Complete" column) is
+  // never miscategorised into a looser-matching field first.
+  summary: ["summary", "is summary", "rollup", "summary bar", "summary row"],
+  percent_complete: ["% complete", "percent complete", "pct complete", "% done", "percent done", "complete %", "progress", "progress %"],
 };
-const COLUMN_MAPPING_FIELD_ORDER = ["external_id", "title", "plot_number", "planned_start", "planned_finish", "is_milestone"];
+const COLUMN_MAPPING_FIELD_ORDER = ["external_id", "title", "plot_number", "planned_start", "planned_finish", "is_milestone", "summary", "percent_complete"];
 
 export function suggestColumnMapping(headers) {
   const mapping = {};
@@ -5538,6 +5568,19 @@ export function mapRowsToImportRows(rows, mapping) {
     is_milestone: mapping.is_milestone != null ? row[mapping.is_milestone] : null,
     planned_start: mapping.planned_start != null ? row[mapping.planned_start] : null,
     planned_finish: mapping.planned_finish != null ? row[mapping.planned_finish] : null,
+    // v101: `summary` is deliberately left OUT of this object entirely
+    // (not set to null) when unmapped — `undefined` is the one value
+    // JSON.stringify() drops from an object altogether, which is
+    // exactly the "this import never asked about Summary at all"
+    // signal validateImportRow()'s own summaryProvided (and, further
+    // downstream, import_programme_activities()'s `v_row ? 'summary'`
+    // check) relies on to leave an existing flag alone. percent_
+    // complete needs no such distinction — a blank cell and an
+    // unmapped column both correctly mean "no change" under this
+    // column's own raise-only rule, so it's always present, null when
+    // either.
+    ...(mapping.summary != null ? { summary: row[mapping.summary] } : {}),
+    percent_complete: mapping.percent_complete != null ? row[mapping.percent_complete] : null,
   }));
 }
 
@@ -5606,6 +5649,15 @@ export function buildImportReconciliation(rows, existingActivities, plotIdByNumb
       existing = candidates[0] || null;
     }
 
+    // v101: percent_complete is always present (raise-only — a blank
+    // cell and an unmapped column both mean "no change", so null is
+    // the correct, always-safe value either way). is_summary is only
+    // set here when THIS import actually asked about Summary for this
+    // row (summaryProvided) — left `undefined` otherwise, which
+    // JSON.stringify() drops from the eventual RPC payload entirely,
+    // leaving an existing flag exactly as it was (see validateImportRow()'s
+    // own comment on summaryProvided for why key-presence, not mere
+    // truthiness, is what must survive all the way to the server).
     const fields = {
       title: r.activity.title,
       planned_start: r.activity.plannedStart,
@@ -5613,6 +5665,8 @@ export function buildImportReconciliation(rows, existingActivities, plotIdByNumb
       is_milestone: r.activity.isMilestone,
       external_id: r.activity.externalId,
       plot_id: plotId,
+      percent_complete: r.activity.percentComplete ?? null,
+      is_summary: r.activity.summaryProvided ? r.activity.isSummary : undefined,
     };
 
     if (!existing) {
@@ -5621,11 +5675,27 @@ export function buildImportReconciliation(rows, existingActivities, plotIdByNumb
     }
 
     matchedActivityIds.add(existing.id);
-    const changed = PROGRAMME_IMPORT_OWNED_FIELDS.some((key) => (existing[key] ?? null) !== (fields[key] ?? null));
+    // is_summary is deliberately NOT one of PROGRAMME_IMPORT_OWNED_FIELDS
+    // checked below — that loop's blanket `?? null` comparison would
+    // read an omitted (undefined) fields.is_summary as null and wrongly
+    // call that "changed" against an existing `true`, the exact
+    // clear-on-re-import bug requirement 2 warns against; checked only
+    // when summaryProvided is true instead. A row otherwise IDENTICAL
+    // in every import-owned field is still correctly flagged as a
+    // pending update when the import would RAISE its % complete (Red
+    // Dragon's own real scenario: same title, same dates, only the %
+    // needs to catch up) — this only affects the preview's own New/
+    // Update/Unchanged label, never whether the row reaches the server
+    // (see programme-import.html's confirm handler, which now sends
+    // every valid row, not just toCreate/toUpdate, for exactly this
+    // reason).
+    const summaryChanged = r.activity.summaryProvided && Boolean(existing.is_summary) !== r.activity.isSummary;
+    const wouldRaise = r.activity.percentComplete !== undefined && Number(r.activity.percentComplete) > (Number(existing.percent_complete) || 0);
+    const changed = PROGRAMME_IMPORT_OWNED_FIELDS.some((key) => (existing[key] ?? null) !== (fields[key] ?? null)) || summaryChanged || wouldRaise;
     if (changed) {
       toUpdate.push({ index: r.index, activityId: existing.id, existing, fields, plotUnmatched });
     } else {
-      unchanged.push({ index: r.index, activityId: existing.id });
+      unchanged.push({ index: r.index, activityId: existing.id, fields });
     }
   }
 

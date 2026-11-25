@@ -194,6 +194,29 @@ test("validateImportRow: is_milestone recognises common truthy spreadsheet shape
   assert.equal(validateImportRow({ title: "M" }).activity.isMilestone, false);
 });
 
+// v101: Summary — accepts Y/yes/true/1; summaryProvided tracks whether
+// the `summary` KEY exists on the row at all (not merely whether it's
+// truthy), since that's the one signal this whole feature's "never
+// clear an existing flag when the column isn't mapped" promise relies
+// on all the way down to the server (see mapRowsToImportRows()' own
+// comment on why it omits the key entirely, and import_programme_
+// activities()'s own `v_row ? 'summary'` check in sql/schema.sql).
+test("validateImportRow: Summary — accepts Y/yes/true/1 (string or already-typed), anything else (including blank) is simply 'not a summary', the same lenient no-error precedent is_milestone already sets", () => {
+  for (const v of ["Y", "y", "yes", "YES", "true", "TRUE", 1]) {
+    assert.equal(validateImportRow({ title: "X", summary: v }).activity.isSummary, true, `summary=${JSON.stringify(v)} must be true`);
+  }
+  for (const v of ["N", "no", "false", 0, "maybe"]) {
+    assert.equal(validateImportRow({ title: "X", summary: v }).activity.isSummary, false, `summary=${JSON.stringify(v)} must be false, never a validation error`);
+  }
+});
+
+test("validateImportRow: summaryProvided is true whenever the row carries a `summary` key at all — even an explicitly blank one — and false only when the key is genuinely absent", () => {
+  assert.equal(validateImportRow({ title: "X", summary: "Y" }).activity.summaryProvided, true);
+  assert.equal(validateImportRow({ title: "X", summary: "" }).activity.summaryProvided, true, "a mapped column's blank cell still counts as provided — it's a real 'no', not an omission");
+  assert.equal(validateImportRow({ title: "X", summary: null }).activity.summaryProvided, true);
+  assert.equal(validateImportRow({ title: "X" }).activity.summaryProvided, false, "no `summary` key at all — the column was never mapped for this import");
+});
+
 // ─── matchImportRowToActivity (the stable-identity strategy) ────────
 
 test("matchImportRowToActivity: matches by external_id when present, ignoring title differences", () => {

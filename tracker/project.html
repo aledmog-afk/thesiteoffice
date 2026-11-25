@@ -902,8 +902,19 @@
     const previousValue = project.progress_source || "plots";
     clearError(pageErrorBox);
     try {
-      const { data, error } = await supabase.from("projects").update({ progress_source: newValue }).eq("id", projectId).select().single();
+      const { error } = await supabase.from("projects").update({ progress_source: newValue }).eq("id", projectId);
       if (error) throw error;
+      // v101: the UPDATE's own RETURNING row reflects this statement's
+      // own write only — actual_progress_pct is recalculated by a
+      // SEPARATE later statement, trg_projects_v95_progress_source_after
+      // (an AFTER trigger), which a RETURNING clause never sees. Using
+      // that stale row showed the PREVIOUS source's figure right after
+      // switching (e.g. programme -> plots -> programme on Red Dragon
+      // showed 24% here while the database already held 6.0%). A
+      // separate, plain re-fetch after the write always sees the
+      // trigger's own result.
+      const { data, error: fetchError } = await supabase.from("projects").select("*").eq("id", projectId).single();
+      if (fetchError) throw fetchError;
       project = data;
       renderHeaderAndFacts();
       loadProgrammeComplete();
@@ -1094,9 +1105,10 @@
       const programmeActivities = await listProgrammeActivities(programme.id);
       const pct = computeProgrammeComplete(programmeActivities);
       if (pct === null) return;
-      // v99: counted against what the figure is actually weighted
-      // over (not cancelled, not excluded), not the full activity count.
-      const counted = programmeActivities.filter((a) => a.status !== "cancelled" && !a.exclude_from_progress);
+      // v99/v101: counted against what the figure is actually weighted
+      // over (not cancelled, not excluded, not a summary/rollup row),
+      // not the full activity count.
+      const counted = programmeActivities.filter((a) => a.status !== "cancelled" && !a.exclude_from_progress && !a.is_summary);
       const completeCount = counted.filter((a) => a.status === "complete").length;
       document.getElementById("programmeCompleteDisplay").textContent = `Programme complete: ${pct.toFixed(0)}% (${completeCount} of ${counted.length} counted activities)`;
       document.getElementById("programmeCompleteDisplay").style.display = "block";

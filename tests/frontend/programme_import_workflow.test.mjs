@@ -295,6 +295,53 @@ test("buildImportReconciliation: a matching row with NO changed import-owned fie
   assert.equal(recon.toUpdate.length, 0);
 });
 
+// ─── v101: Summary and % complete ──────────────────────────────────
+
+test("buildImportReconciliation: a row whose import-owned fields are identical but whose % complete would RAISE the stored value is classified as toUpdate, not unchanged — so it still reaches the RPC", () => {
+  const existing = [{ id: "e1", external_id: "A-1", title: "Groundworks", plot_id: null, planned_start: "2026-01-01", planned_finish: "2026-01-15", is_milestone: false, percent_complete: 20 }];
+  const recon = buildImportReconciliation([{ ...row({ external_id: "A-1", title: "Groundworks", planned_start: "2026-01-01", planned_finish: "2026-01-15" }), percent_complete: 81 }], existing);
+  assert.equal(recon.toUpdate.length, 1, "a potential % raise must promote this row out of 'unchanged'");
+  assert.equal(recon.unchanged.length, 0);
+  assert.equal(recon.toUpdate[0].fields.percent_complete, 81);
+});
+
+test("buildImportReconciliation: a row whose % complete is LOWER than what's stored stays 'unchanged' when every other field also matches — a lower value is never treated as a pending change", () => {
+  const existing = [{ id: "e1", external_id: "A-1", title: "Groundworks", plot_id: null, planned_start: null, planned_finish: null, is_milestone: false, percent_complete: 76 }];
+  const recon = buildImportReconciliation([{ ...row({ external_id: "A-1", title: "Groundworks" }), percent_complete: 40 }], existing);
+  assert.equal(recon.unchanged.length, 1);
+  assert.equal(recon.toUpdate.length, 0);
+  assert.equal(recon.unchanged[0].fields.percent_complete, 40, "the fields object still carries the raw sheet value — the RPC itself decides raise-only, not this preview");
+});
+
+test("buildImportReconciliation: Summary=Y on an otherwise-identical row promotes it to toUpdate; Summary omitted from the row entirely never does", () => {
+  const existing = [{ id: "e1", external_id: "A-1", title: "Ground Works 2nd Stage", plot_id: null, planned_start: null, planned_finish: null, is_milestone: false, is_summary: false }];
+  const withSummary = buildImportReconciliation([{ ...row({ external_id: "A-1", title: "Ground Works 2nd Stage" }), summary: "Y" }], existing);
+  assert.equal(withSummary.toUpdate.length, 1);
+  assert.equal(withSummary.toUpdate[0].fields.is_summary, true);
+
+  const withoutSummaryColumn = buildImportReconciliation([row({ external_id: "A-1", title: "Ground Works 2nd Stage" })], existing);
+  assert.equal(withoutSummaryColumn.unchanged.length, 1, "no 'summary' key at all on the row must never be read as a change");
+  assert.equal(withoutSummaryColumn.toUpdate.length, 0);
+});
+
+test("buildImportReconciliation: a MAPPED Summary column that is blank for this one row IS a real change when the existing row is already flagged true", () => {
+  const existing = [{ id: "e1", external_id: "A-1", title: "X", plot_id: null, planned_start: null, planned_finish: null, is_milestone: false, is_summary: true }];
+  const recon = buildImportReconciliation([{ ...row({ external_id: "A-1", title: "X" }), summary: "" }], existing);
+  assert.equal(recon.toUpdate.length, 1, "a mapped column's genuinely blank cell is a real 'no', not an omission");
+  assert.equal(recon.toUpdate[0].fields.is_summary, false);
+});
+
+test("buildImportReconciliation: a brand-new row's fields always carry percent_complete (null when not given) and is_summary only when the column was actually mapped", () => {
+  const plain = buildImportReconciliation([row({ external_id: "A-9", title: "No optional columns at all" })], []);
+  assert.equal(plain.toCreate[0].fields.percent_complete, null);
+  assert.equal("is_summary" in plain.toCreate[0].fields, true, "the key itself may exist on the object (assigned undefined)...");
+  assert.equal(plain.toCreate[0].fields.is_summary, undefined, "...but its VALUE must be undefined, which JSON.stringify() drops from the eventual RPC payload entirely");
+
+  const withBoth = buildImportReconciliation([{ ...row({ external_id: "A-10", title: "Both optional columns given" }), summary: "Y", percent_complete: 30 }], []);
+  assert.equal(withBoth.toCreate[0].fields.percent_complete, 30);
+  assert.equal(withBoth.toCreate[0].fields.is_summary, true);
+});
+
 test("buildImportReconciliation: an existing activity absent from this import is reported as 'missing' — never as something to delete", () => {
   const existing = [
     { id: "e1", external_id: "A-1", title: "In this import", plot_id: null, planned_start: null, planned_finish: null, is_milestone: false },
@@ -349,12 +396,23 @@ test("buildImportReconciliation: an invalid row (e.g. missing title) is reported
   assert.ok(recon.invalid[0].errors.length > 0);
 });
 
-test("buildImportReconciliation: only PROGRAMME_IMPORT_OWNED_FIELDS ever appear in an update's field set", () => {
+// v101: percent_complete and is_summary are now also legitimate keys
+// in an update's field set — percent_complete under its own raise-
+// only rule (never a plain overwrite: import_programme_activities()
+// only ever raises it, never lowers), and is_summary only when the
+// import actually carries a Summary column for this row (it's
+// `undefined`, dropped by JSON.stringify() before the payload ever
+// reaches the server, when it doesn't — see buildImportReconciliation()'s
+// own comment). Every OTHER key must still be exactly
+// PROGRAMME_IMPORT_OWNED_FIELDS — this is the real thing this test
+// guards: no status/forecast/actual/assigned_to field ever sneaks in.
+test("buildImportReconciliation: only PROGRAMME_IMPORT_OWNED_FIELDS (plus the v101 raise-only percent_complete and optional is_summary) ever appear in an update's field set", () => {
   const existing = [{ id: "e1", external_id: "A-1", title: "Old", plot_id: null, planned_start: null, planned_finish: null, is_milestone: false, status: "in_progress", percent_complete: 40 }];
   const recon = buildImportReconciliation([row({ external_id: "A-1", title: "New" })], existing);
   for (const key of Object.keys(recon.toUpdate[0].fields)) {
-    assert.ok(["title", "planned_start", "planned_finish", "is_milestone", "external_id", "plot_id"].includes(key));
+    assert.ok(["title", "planned_start", "planned_finish", "is_milestone", "external_id", "plot_id", "percent_complete", "is_summary"].includes(key), `unexpected field: ${key}`);
   }
+  assert.ok(!("status" in recon.toUpdate[0].fields) && !("forecast_start" in recon.toUpdate[0].fields) && !("actual_start" in recon.toUpdate[0].fields) && !("assigned_to" in recon.toUpdate[0].fields), "the real app-owned fields this test exists to guard must never appear");
 });
 
 test("buildImportReconciliation: a mixed batch of new/updated/unchanged/invalid all reconcile independently in one pass", () => {

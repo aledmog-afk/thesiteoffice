@@ -1194,7 +1194,10 @@ test("v100: programme_import_runs table, its RLS, and the extended import_progra
       order by column_name
     `);
     const byName = Object.fromEntries(columns.rows.map((r) => [r.column_name, r]));
-    assert.equal(columns.rowCount, 11, "no column must be duplicated across re-applications");
+    // 12, not 11 — v101 later added its own percent_raised_count to
+    // this same table (see that migration's own idempotency test);
+    // the real thing this count still guards is "never duplicated".
+    assert.equal(columns.rowCount, 12, "no column must be duplicated across re-applications");
     assert.equal(byName.changes.data_type, "jsonb");
     assert.equal(byName.changes.is_nullable, "NO");
     assert.equal(byName.imported_at.data_type, "timestamp with time zone");
@@ -1252,6 +1255,59 @@ test("v100: programme_import_runs table, its RLS, and the extended import_progra
     `);
     assert.ok(grants.rows.some((g) => g.grantee === "authenticated"), "authenticated must be able to call the RPC itself");
     assert.equal(grants.rows.filter((g) => g.grantee === "authenticated").length, 1, "the repeated grant statement in the v100 block must never duplicate the grant");
+
+    await client.end();
+  } finally {
+    await dropTestDatabase(db);
+  }
+});
+
+// v101: Summary rows and % complete — the raise-only rule, RLS/
+// authorization and summary-exclusion are all proven directly in
+// tests/database/v101_summary_rows_percent_complete.test.mjs. The
+// only thing checked at this schema-shape level is idempotency.
+test("v101: programme_activities.is_summary, programme_import_runs.percent_raised_count, and the extended compute/trigger/import functions are idempotent across repeated re-application", async () => {
+  const db = "tracker_test_v101_idempotent";
+  await createTestDatabase(db);
+  try {
+    const client = adminClient(db);
+    await client.connect();
+    await runSqlFile(client, MOCK_SETUP);
+    for (let i = 0; i < 3; i++) {
+      await runSqlFile(client, CURRENT_SCHEMA);
+    }
+
+    const col1 = await client.query(`
+      select data_type, column_default, is_nullable from information_schema.columns
+      where table_schema = 'public' and table_name = 'programme_activities' and column_name = 'is_summary'
+    `);
+    assert.equal(col1.rowCount, 1, "is_summary must exist exactly once after repeated re-application");
+    assert.equal(col1.rows[0].data_type, "boolean");
+    assert.equal(col1.rows[0].is_nullable, "NO");
+    assert.match(col1.rows[0].column_default, /false/);
+
+    const col2 = await client.query(`
+      select data_type, is_nullable from information_schema.columns
+      where table_schema = 'public' and table_name = 'programme_import_runs' and column_name = 'percent_raised_count'
+    `);
+    assert.equal(col2.rowCount, 1, "percent_raised_count must exist exactly once after repeated re-application");
+    assert.equal(col2.rows[0].data_type, "integer");
+    assert.equal(col2.rows[0].is_nullable, "NO");
+
+    const fn = await client.query("select count(*)::int as n from information_schema.routines where routine_schema = 'public' and routine_name = 'import_programme_activities'");
+    assert.equal(fn.rows[0].n, 1, "import_programme_activities must still exist exactly once (create or replace, not a duplicate)");
+
+    // v101 adds ZERO new triggers/policies anywhere — it only extends
+    // compute_programme_complete_pct()'s and programme_activities_v95_
+    // progress_after()'s own bodies (same names, same attachments) and
+    // import_programme_activities()'s own body, and adds two plain
+    // columns — so every pre-existing trigger/policy count elsewhere
+    // in this file must stay exactly as it already was.
+    const actTriggers = await client.query("select count(*)::int as n from pg_trigger where tgrelid = 'public.programme_activities'::regclass and tgname like 'trg_%'");
+    assert.equal(actTriggers.rows[0].n, 3, "v101 adds zero triggers to programme_activities — same 3 as before v99/v100/v101");
+
+    const runPolicies = await client.query("select count(*)::int as n from pg_policies where tablename = 'programme_import_runs'");
+    assert.equal(runPolicies.rows[0].n, 1, "v101 adds zero policies to programme_import_runs — still just the one SELECT policy");
 
     await client.end();
   } finally {

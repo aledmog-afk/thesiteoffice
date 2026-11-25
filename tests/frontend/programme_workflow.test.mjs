@@ -913,3 +913,128 @@ test("programme.html: switching to a brand-new programme (via newProgrammeBtn) r
   assert.ok(listCalls.includes("prog1"), "the initial active programme's own revisions must be loaded on page load");
   assert.ok(listCalls.includes("prog-new"), "switching to the brand-new programme must reload the Revisions list for ITS id, not the old one");
 });
+
+// ─── Summary rows (v101) ────────────────────────────────────────────
+
+test("programme.html: a row flagged is_summary shows a Summary badge, its Type column overridden to 'Summary', and the Counts? checkbox unchecked and disabled even for an editor", async () => {
+  const { document } = await runProgrammePage({
+    activities: [activity({ id: "a1", title: "Ground Works 2nd Stage", is_summary: true, is_milestone: false, exclude_from_progress: false })],
+  });
+  await wait(30);
+  const row = document.getElementById("activity-a1");
+  assert.match(row.textContent, /Summary/);
+  assert.match(row.textContent, /Ground Works 2nd Stage/);
+  const typeCell = row.querySelectorAll("td")[1];
+  assert.equal(typeCell.textContent.trim(), "Summary", "the Type column must say Summary, never Task or Milestone, for a summary row");
+  const checkbox = row.querySelector("input[type=checkbox]");
+  assert.equal(checkbox.checked, false, "a summary row must never show as 'counted'");
+  assert.equal(checkbox.disabled, true, "there is no manual toggle for is_summary — it only ever comes from the import");
+});
+
+test("programme.html: an ordinary (non-summary) row's Type column and Counts? checkbox are completely unaffected", async () => {
+  const { document } = await runProgrammePage({
+    activities: [activity({ id: "a1", title: "Groundworks", is_summary: false, is_milestone: false, exclude_from_progress: false })],
+  });
+  await wait(30);
+  const row = document.getElementById("activity-a1");
+  assert.doesNotMatch(row.textContent, /Summary/);
+  const typeCell = row.querySelectorAll("td")[1];
+  assert.equal(typeCell.textContent.trim(), "Task");
+  const checkbox = row.querySelector("input[type=checkbox]");
+  assert.equal(checkbox.checked, true, "an ordinary, non-excluded row must still show as counted");
+  assert.equal(checkbox.disabled, false, "an editor must still be able to toggle an ordinary row's own exclude_from_progress tick");
+});
+
+test("programme.html: a milestone that is ALSO flagged is_summary shows 'Summary' in the Type column, not 'Milestone' — is_summary takes precedence for display", async () => {
+  const { document } = await runProgrammePage({
+    activities: [activity({ id: "a1", title: "Batch Handover", is_summary: true, is_milestone: true })],
+  });
+  await wait(30);
+  const typeCell = document.getElementById("activity-a1").querySelectorAll("td")[1];
+  assert.equal(typeCell.textContent.trim(), "Summary");
+});
+
+test("programme.html: the Programme complete summary line and its 'counted activities' denominator both exclude a summary row, the same way they already exclude a cancelled or exclude_from_progress one", async () => {
+  const { document } = await runProgrammePage({
+    activities: [
+      activity({ id: "a1", title: "Ground Works 2nd Stage", is_summary: true, status: "not_started", percent_complete: 0, planned_start: "2026-01-01", planned_finish: "2026-12-31" }),
+      activity({ id: "a2", title: "Groundworks", is_summary: false, status: "in_progress", percent_complete: 81, planned_start: "2026-01-01", planned_finish: "2026-02-01" }),
+    ],
+  });
+  await wait(30);
+  const summary = document.getElementById("programmeCompleteSummary").textContent;
+  assert.match(summary, /\(0 of 1 counted activities\)/, "only Groundworks (1 activity) must be counted — the summary row must not inflate the denominator");
+});
+
+// ─── Activity list columns: Start added, Owner removed (v101) ─────
+// Aled was reading "Planned Finish" + "Forecast Finish" as if they
+// were a start/finish pair — a genuine "Start" column (planned_start)
+// now sits before Planned Finish, in the exact position Owner used to
+// occupy. Owner itself (assigned_to) is removed from this list only —
+// assigned_to remains fully editable in the Edit form (see the
+// dedicated test below), and `members` (the lookup that used to
+// resolve it to an email here) is untouched, since the Edit form's own
+// assignee dropdown and the Create Action modal both still need it.
+
+test("programme.html: the activity table header has a Start column (showing planned_start) and no Owner column at all", async () => {
+  const { document } = await runProgrammePage();
+  await wait(30);
+  const headers = Array.from(document.querySelectorAll("table thead th")).map((th) => th.textContent.trim());
+  assert.ok(headers.includes("Start"), `expected a Start column, got: ${headers.join(", ")}`);
+  assert.ok(!headers.includes("Owner"), `Owner must be gone, got: ${headers.join(", ")}`);
+});
+
+test("programme.html: a row's Start cell shows planned_start, formatted the same way Planned/Forecast/Actual Finish already are, and never the assignee or 'Unassigned'", async () => {
+  const { document } = await runProgrammePage({
+    activities: [activity({ id: "a1", title: "Groundworks", planned_start: "2026-01-05", planned_finish: "2026-01-15", assigned_to: null })],
+  });
+  await wait(30);
+  const row = document.getElementById("activity-a1");
+  const startCell = row.querySelectorAll("td")[3];
+  assert.equal(startCell.textContent.trim(), formatDate("2026-01-05"));
+  assert.doesNotMatch(row.textContent, /Unassigned/, "the old Owner column's own 'Unassigned' placeholder must never appear in the list now");
+});
+
+test("programme.html: an activity with no planned_start shows the same em dash placeholder every other empty date cell in this row already uses", async () => {
+  const { document } = await runProgrammePage({
+    activities: [activity({ id: "a1", title: "No start yet", planned_start: null })],
+  });
+  await wait(30);
+  const startCell = document.getElementById("activity-a1").querySelectorAll("td")[3];
+  assert.equal(startCell.textContent.trim(), "—");
+});
+
+test("programme.html: a real assigned_to is never rendered anywhere in the activity list row, even though it's still a genuine field on the activity", async () => {
+  const { document } = await runProgrammePage({
+    activities: [activity({ id: "a1", title: "Groundworks", assigned_to: "u-assignee-1" })],
+    members: [{ user_id: "u-assignee-1", email: "site.manager@example.com" }],
+  });
+  await wait(30);
+  assert.doesNotMatch(document.getElementById("activity-a1").textContent, /site\.manager@example\.com/, "an assignee's email must never leak into the list row now that the Owner column is gone");
+});
+
+test("programme.html: assigned_to stays fully editable in the Edit form — the dropdown is populated from members, pre-filled from the activity's own assigned_to, and submits correctly", async () => {
+  let updateCall = null;
+  const { document, window } = await runProgrammePage({
+    activities: [activity({ id: "a1", title: "Groundworks", assigned_to: "u-assignee-1" })],
+    members: [{ user_id: "u-assignee-1", email: "site.manager@example.com" }, { user_id: "u-assignee-2", email: "foreman@example.com" }],
+    updateProgrammeActivity: async (id, fields) => { updateCall = { id, fields }; return {}; },
+  });
+  await wait(30);
+  // editActivity() is wired as a window global invoked by the row's
+  // own inline onclick — called directly here, matching this suite's
+  // established convention for inline-onclick buttons (they never
+  // fire under this harness's outside-only script execution mode).
+  window.editActivity("a1");
+  await wait(20);
+  const select = document.getElementById("activityAssignedTo");
+  assert.ok(Array.from(select.options).some((o) => o.value === "u-assignee-1" && o.textContent === "site.manager@example.com"));
+  assert.ok(Array.from(select.options).some((o) => o.value === "u-assignee-2" && o.textContent === "foreman@example.com"));
+  assert.equal(select.value, "u-assignee-1", "the form must pre-fill the activity's own current assignee");
+
+  select.value = "u-assignee-2";
+  fireEvent(document.getElementById("activityForm"), "submit");
+  await wait(20);
+  assert.equal(updateCall.id, "a1");
+  assert.equal(updateCall.fields.assigned_to, "u-assignee-2", "reassigning via the Edit form must still work exactly as before");
+});
