@@ -110,8 +110,17 @@ test("v101: a row imported with Summary=Y is flagged is_summary and excluded fro
     { external_id: "GW", title: "Groundworks", percent_complete: 81, planned_start: "2026-01-01", planned_finish: "2026-02-01" },
   ])]));
 
-  const rows = (await sql("select title, is_summary, percent_complete from public.programme_activities where programme_id = $1 order by title", [prog.id])).rows;
-  assert.deepEqual(rows.map((r) => [r.title, r.is_summary]), [["Ground Works 2nd Stage", true], ["Groundworks", false]]);
+  // Ordered by external_id, not title: "Ground Works 2nd Stage" vs
+  // "Groundworks" sort in OPPOSITE directions under a byte/C-locale
+  // collation (where the space loses to "w") versus a glibc en_US-style
+  // collation (where punctuation/whitespace is ignored for the primary
+  // comparison, so the shorter string that's a prefix of the other wins) —
+  // exactly the local-sandbox-vs-CI-container mismatch that broke this
+  // test. external_id ("GW" vs "GW2") has no such ambiguity: one is a
+  // strict prefix of the other, which sorts identically — shorter first —
+  // under every collation.
+  const rows = (await sql("select title, is_summary, percent_complete from public.programme_activities where programme_id = $1 order by external_id", [prog.id])).rows;
+  assert.deepEqual(rows.map((r) => [r.title, r.is_summary]), [["Groundworks", false], ["Ground Works 2nd Stage", true]]);
 
   const pct = Number((await sql("select public.compute_programme_complete_pct($1) as pct", [prog.project_id])).rows[0].pct);
   assert.equal(pct, 81, "the summary bar's own huge 365-day span must contribute NOTHING — the figure must be exactly Groundworks' own 81%");
@@ -206,6 +215,87 @@ test("v101: a raise to 100 sets status complete and stamps actual_finish, the sa
   assert.ok(row.actual_finish);
 });
 
+// ─── % complete: the import's OWN date rule, never current_date ────
+//
+// Post-review fix: the import used to pass current_date for BOTH
+// raise_programme_activity_from_report()'s week_start/week_end
+// parameters. On Red Dragon that meant every already-finished real
+// task (e.g. a Demolition activity from last April) got TODAY'S date
+// stamped onto actual_start/actual_finish the moment its % was raised
+// to 100 — permanently wrong, since the function only ever fills a
+// BLANK actual_start/actual_finish, so there's no later correction.
+// Fixed with the same rule the Complete button on programme.html
+// already uses (computeCompletionFields()): actual_start from
+// planned_start if it's already passed, else today; actual_finish (at
+// the transition into complete) from forecast_finish — falling back
+// to planned_finish — if THAT has passed, else today. Both only ever
+// fill a blank field, never overwrite a real one.
+
+test("v101: raising a PAST-dated task to 100% stamps its own planned/forecast dates, never today's date", async () => {
+  const prog = await createProgramme();
+  const act = await createActivity(prog.id, {
+    title: "Demolition", external_id: "demo-1", percent_complete: 0, status: "not_started",
+    planned_start: "2026-04-01", planned_finish: "2026-04-10",
+  });
+
+  await as(OWNER, (c) => c.query("select public.import_programme_activities($1, $2::jsonb)", [prog.id, importRows([
+    { external_id: "demo-1", title: "Demolition", planned_start: "2026-04-01", planned_finish: "2026-04-10", percent_complete: 100 },
+  ])]));
+
+  const row = (await sql("select actual_start::text as s, actual_finish::text as f, status from public.programme_activities where id = $1", [act.id])).rows[0];
+  assert.equal(row.status, "complete");
+  assert.equal(row.s, "2026-04-01", "actual_start must be the activity's own (long-past) planned_start, not today");
+  assert.equal(row.f, "2026-04-10", "actual_finish must be the activity's own (long-past) planned_finish, not today");
+});
+
+test("v101: raising a FUTURE-dated task to 100% stamps today (never a future date)", async () => {
+  const prog = await createProgramme();
+  const act = await createActivity(prog.id, {
+    title: "Future Task", external_id: "future-1", percent_complete: 0, status: "not_started",
+    planned_start: "2027-01-01", planned_finish: "2027-02-01",
+  });
+
+  await as(OWNER, (c) => c.query("select public.import_programme_activities($1, $2::jsonb)", [prog.id, importRows([
+    { external_id: "future-1", title: "Future Task", planned_start: "2027-01-01", planned_finish: "2027-02-01", percent_complete: 100 },
+  ])]));
+
+  const row = (await sql("select actual_start::text as s, actual_finish::text as f from public.programme_activities where id = $1", [act.id])).rows[0];
+  const today = new Date().toISOString().slice(0, 10);
+  assert.equal(row.s, today, "a planned_start that hasn't happened yet must never become actual_start — today instead");
+  assert.equal(row.f, today, "a planned_finish that hasn't happened yet must never become actual_finish — today instead");
+});
+
+test("v101: a forecast_finish, when present and past, is preferred over planned_finish for actual_finish", async () => {
+  const prog = await createProgramme();
+  const act = await createActivity(prog.id, { title: "Forecast Driven", external_id: "fc-1", percent_complete: 50, status: "in_progress" });
+  await sql("update public.programme_activities set planned_start = '2026-03-01', planned_finish = '2026-03-10', forecast_finish = '2026-03-15' where id = $1", [act.id]);
+
+  await as(OWNER, (c) => c.query("select public.import_programme_activities($1, $2::jsonb)", [prog.id, importRows([
+    { external_id: "fc-1", title: "Forecast Driven", planned_start: "2026-03-01", planned_finish: "2026-03-10", percent_complete: 100 },
+  ])]));
+
+  const row = (await sql("select actual_finish::text as f from public.programme_activities where id = $1", [act.id])).rows[0];
+  assert.equal(row.f, "2026-03-15", "forecast_finish, not planned_finish, is the better evidence of when the work actually finished");
+});
+
+test("v101: existing actual_start/actual_finish are never overwritten by the import's own date rule", async () => {
+  const prog = await createProgramme();
+  const act = await createActivity(prog.id, {
+    title: "Existing Actuals", external_id: "existing-1", percent_complete: 80, status: "in_progress",
+    planned_start: "2026-01-01", planned_finish: "2026-01-10",
+  });
+  await sql("update public.programme_activities set actual_start = '2026-01-02' where id = $1", [act.id]);
+
+  await as(OWNER, (c) => c.query("select public.import_programme_activities($1, $2::jsonb)", [prog.id, importRows([
+    { external_id: "existing-1", title: "Existing Actuals", planned_start: "2026-01-01", planned_finish: "2026-01-10", percent_complete: 100 },
+  ])]));
+
+  const row = (await sql("select actual_start::text as s, actual_finish::text as f, status from public.programme_activities where id = $1", [act.id])).rows[0];
+  assert.equal(row.status, "complete");
+  assert.equal(row.s, "2026-01-02", "the real, already-recorded actual_start must survive untouched");
+  assert.equal(row.f, "2026-01-10", "actual_finish was blank, so it's newly filled from planned_finish (no forecast_finish here)");
+});
+
 test("v101: a brand-new row created via import with a % complete starts at that figure, not 0 then separately raised", async () => {
   const prog = await createProgramme();
   await as(OWNER, (c) => c.query("select public.import_programme_activities($1, $2::jsonb)", [prog.id, importRows([
@@ -255,6 +345,30 @@ test("v101: programme_import_runs.percent_raised_count counts exactly the rows a
   const run = (await sql("select percent_raised_count, unchanged_count from public.programme_import_runs where programme_id = $1", [prog.id])).rows[0];
   assert.equal(run.percent_raised_count, 2);
   assert.equal(run.unchanged_count, 2);
+});
+
+// percent_complete is NOT NULL (default 0) at the table level, so a
+// "blank old" value is really always 0, not SQL null — these two
+// tests pin that boundary down explicitly on both sides of the
+// comparison (the raise count's own `coalesce(v_before_pct, 0)` makes
+// the comparison itself null-safe too, as a defensive measure, even
+// though the column's own constraint rules a real null out today).
+test("v101: a brand-new row given percent_complete=0 explicitly is never counted as raised (0 is not greater than its own blank/0 starting value)", async () => {
+  const prog = await createProgramme();
+  const result = await as(OWNER, (c) => one(c, "select public.import_programme_activities($1, $2::jsonb) as r", [prog.id, importRows([
+    { external_id: "zero-new", title: "Zero New", percent_complete: 0 },
+  ])]));
+  assert.equal(result.r.created, 1);
+  assert.equal(result.r.raised, 0, "0 imported against a brand-new row's own 0 starting value is equal, never a raise");
+});
+
+test("v101: an existing row already at 0% is correctly counted as raised the moment a higher % comes in", async () => {
+  const prog = await createProgramme();
+  await createActivity(prog.id, { title: "Zero Existing", external_id: "zero-existing", percent_complete: 0, status: "not_started" });
+  const result = await as(OWNER, (c) => one(c, "select public.import_programme_activities($1, $2::jsonb) as r", [prog.id, importRows([
+    { external_id: "zero-existing", title: "Zero Existing", percent_complete: 15 },
+  ])]));
+  assert.equal(result.r.raised, 1, "0 -> 15 on an existing row must count as a raise, not be mistaken for a blank/no-op comparison");
 });
 
 // ─── Old-format files import exactly as before ──────────────────────

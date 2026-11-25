@@ -19262,11 +19262,15 @@ alter table public.programme_import_runs add column if not exists percent_raised
 --     complete, status escalation, actual_start/actual_finish — is
 --     delegated entirely to raise_programme_activity_from_report()
 --     (the exact function a weekly report's own raise already calls),
---     passing current_date for both its week_start/week_end
---     parameters since an import has no "report week" of its own;
---     this is the one and only place those rules live, so an import's
---     raise and a weekly report's raise can never drift apart. Called
---     for a row regardless of whether its import-owned fields changed
+--     passing it the import's OWN p_week_start/p_week_end — planned_
+--     start (if passed) / forecast_finish-falling-back-to-planned_
+--     finish (if passed), else today for either — never current_date
+--     for both: an import has no "report week" of its own, and stamping
+--     today's date onto a long-finished real task's actual_start/
+--     actual_finish would otherwise be wrong and permanent (see the
+--     UPDATE branch's own comment below for the full story; this is
+--     the same rule the Complete button on programme.html already uses).
+--     Called for a row regardless of whether its import-owned fields changed
 --     — a % raise is tracked and counted entirely independently of
 --     the created/updated/unchanged split (see percent_raised_count's
 --     own comment above).
@@ -19314,6 +19318,9 @@ declare
   v_after_pct numeric;
   v_raised_this_row boolean;
   v_fields_changed boolean;
+  v_resolved_finish date;
+  v_import_week_start date;
+  v_import_week_end date;
 begin
   select project_id, org_id into v_project_id, v_org_id from public.programmes where id = p_programme_id;
   if v_project_id is null then
@@ -19430,9 +19437,16 @@ begin
       v_after_pct := 0;
       v_raised_this_row := false;
       if v_pct is not null then
-        perform public.raise_programme_activity_from_report(v_existing_id, v_project_id, v_pct, current_date, current_date);
+        -- v101 (post-review): the import's OWN dates, never current_date
+        -- — see this row's twin computation in the UPDATE branch below
+        -- for the full rationale (it's identical here; a brand-new row
+        -- never already has a forecast_finish of its own).
+        v_import_week_start := case when v_planned_start is not null and v_planned_start <= current_date then v_planned_start else current_date end;
+        v_resolved_finish := v_planned_finish;
+        v_import_week_end := case when v_resolved_finish is not null and v_resolved_finish <= current_date then v_resolved_finish else current_date end;
+        perform public.raise_programme_activity_from_report(v_existing_id, v_project_id, v_pct, v_import_week_start, v_import_week_end);
         select percent_complete into v_after_pct from public.programme_activities where id = v_existing_id;
-        v_raised_this_row := v_after_pct > v_before_pct;
+        v_raised_this_row := v_after_pct > coalesce(v_before_pct, 0);
         if v_raised_this_row then v_raised := v_raised + 1; end if;
       end if;
 
@@ -19451,7 +19465,7 @@ begin
         'new_percent_complete', (case when v_pct is not null then v_after_pct else null end)
       ));
     else
-      select plot_id, title, external_id, is_milestone, planned_start, planned_finish, percent_complete, is_summary
+      select plot_id, title, external_id, is_milestone, planned_start, planned_finish, percent_complete, is_summary, forecast_finish
         into v_old
         from public.programme_activities where id = v_existing_id;
 
@@ -19482,13 +19496,39 @@ begin
       -- % raise applies regardless of v_fields_changed above — a row
       -- can be identical in every import-owned field and still need
       -- its own % raised (Red Dragon's own real scenario).
+      --
+      -- v101 (post-review fix): the import's OWN dates, never
+      -- current_date for both — the earlier version passed current_date
+      -- as BOTH p_week_start and p_week_end, which meant every already-
+      -- finished real task (e.g. a Demolition activity from last April,
+      -- raised to 100% by today's import) got actual_start/actual_finish
+      -- stamped with TODAY's date, silently overwriting what should have
+      -- been its real, long-past dates — skewing Actual Finish, Variance
+      -- and the Behind-schedule warning for every such row, permanently
+      -- (raise_programme_activity_from_report() only fills a blank
+      -- actual_start/actual_finish, so a wrong stamp here is never
+      -- corrected by a later import). Fixed with the SAME rule the
+      -- Complete button on programme.html already uses for exactly this
+      -- reason (computeCompletionFields() there): actual_start (only
+      -- filled while blank) is the activity's own planned_start if that
+      -- date has already passed, else today (never a future date, never
+      -- guessed past where there's no evidence for it); actual_finish at
+      -- the transition into 'complete' (only filled while blank) is the
+      -- best known finish date — forecast_finish, falling back to
+      -- planned_finish when there's no forecast — if THAT has passed,
+      -- else today. A brand-new row (the CREATE branch's own twin of
+      -- this block, above) never already has a forecast_finish, so its
+      -- resolved finish is simply planned_finish.
       v_before_pct := v_old.percent_complete;
       v_after_pct := v_old.percent_complete;
       v_raised_this_row := false;
       if v_pct is not null then
-        perform public.raise_programme_activity_from_report(v_existing_id, v_project_id, v_pct, current_date, current_date);
+        v_import_week_start := case when v_planned_start is not null and v_planned_start <= current_date then v_planned_start else current_date end;
+        v_resolved_finish := coalesce(v_old.forecast_finish, v_planned_finish);
+        v_import_week_end := case when v_resolved_finish is not null and v_resolved_finish <= current_date then v_resolved_finish else current_date end;
+        perform public.raise_programme_activity_from_report(v_existing_id, v_project_id, v_pct, v_import_week_start, v_import_week_end);
         select percent_complete into v_after_pct from public.programme_activities where id = v_existing_id;
-        v_raised_this_row := v_after_pct > v_before_pct;
+        v_raised_this_row := v_after_pct > coalesce(v_before_pct, 0);
         if v_raised_this_row then v_raised := v_raised + 1; end if;
       end if;
 
