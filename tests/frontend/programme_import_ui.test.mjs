@@ -232,16 +232,86 @@ test("programme-import.html: activities missing from this import are shown as 'n
   assert.doesNotMatch(document.body.innerHTML, /delete.*Old Activity/i);
 });
 
-test("programme-import.html: confirming import calls the RPC wrapper with only the create/update rows, never the unchanged ones", async () => {
+// ─── v101: Summary flags and % raises shown in the preview ─────────
+
+test("programme-import.html: a row flagged is_summary in the reconciliation shows a Summary badge in the preview, before anything is confirmed", async () => {
+  const { context } = baseContext({
+    buildImportReconciliation: () => ({
+      toCreate: [{ index: 0, fields: { title: "Ground Works 2nd Stage", planned_start: null, planned_finish: null, is_milestone: false, external_id: "GW2", plot_id: null, percent_complete: null, is_summary: true }, plotUnmatched: false }],
+      toUpdate: [], unchanged: [], missing: [], invalid: [],
+    }),
+  });
+  const { document, window } = await runPage(HTML_PATH, scriptSrc, context);
+  await advanceToPreview(document, window);
+  assert.match(document.getElementById("previewRows").innerHTML, /Ground Works 2nd Stage/);
+  assert.match(document.getElementById("previewRows").innerHTML, /Summary/);
+  assert.match(document.getElementById("summaryGrid").innerHTML, /Summary rows/);
+});
+
+test("programme-import.html: an update row whose import value would RAISE the stored % complete shows the raise (old -> new) in the preview's own % Complete column", async () => {
+  const { context } = baseContext({
+    listProgrammeActivities: async () => [{ id: "e1", external_id: "ext-1", title: "Groundworks", percent_complete: 20 }],
+    buildImportReconciliation: () => ({
+      toCreate: [], unchanged: [],
+      toUpdate: [{ index: 0, activityId: "e1", existing: { id: "e1", percent_complete: 20 }, fields: { title: "Groundworks", planned_start: null, planned_finish: null, is_milestone: false, external_id: "ext-1", plot_id: null, percent_complete: 81 }, plotUnmatched: false }],
+      missing: [], invalid: [],
+    }),
+  });
+  const { document, window } = await runPage(HTML_PATH, scriptSrc, context);
+  await advanceToPreview(document, window);
+  const html = document.getElementById("previewRows").innerHTML;
+  assert.match(html, /20%/);
+  assert.match(html, /81%/);
+  assert.match(document.getElementById("summaryGrid").innerHTML, /Will raise %/);
+});
+
+test("programme-import.html: an update row whose import value would NOT raise the stored % complete (lower) is shown plainly marked 'no change', never as if it had raised", async () => {
+  const { context } = baseContext({
+    listProgrammeActivities: async () => [{ id: "e1", external_id: "ext-1", title: "Groundworks", percent_complete: 76 }],
+    buildImportReconciliation: () => ({
+      toCreate: [], unchanged: [],
+      toUpdate: [{ index: 0, activityId: "e1", existing: { id: "e1", percent_complete: 76 }, fields: { title: "Groundworks (renamed)", planned_start: null, planned_finish: null, is_milestone: false, external_id: "ext-1", plot_id: null, percent_complete: 40 }, plotUnmatched: false }],
+      missing: [], invalid: [],
+    }),
+  });
+  const { document, window } = await runPage(HTML_PATH, scriptSrc, context);
+  await advanceToPreview(document, window);
+  const html = document.getElementById("previewRows").innerHTML;
+  assert.match(html, /76%/, "the figure shown must be the real STORED one, not the sheet's lower value");
+  assert.match(html, /no change/i);
+});
+
+test("programme-import.html: a row with no % complete in the sheet at all shows nothing in that column, never a misleading 0%", async () => {
+  const { context } = baseContext({
+    buildImportReconciliation: () => ({
+      toCreate: [{ index: 0, fields: { title: "No percent given", planned_start: null, planned_finish: null, is_milestone: false, external_id: "x", plot_id: null, percent_complete: null, is_summary: undefined }, plotUnmatched: false }],
+      toUpdate: [], unchanged: [], missing: [], invalid: [],
+    }),
+  });
+  const { document, window } = await runPage(HTML_PATH, scriptSrc, context);
+  await advanceToPreview(document, window);
+  const row = Array.from(document.querySelectorAll("#previewRows tr")).find((tr) => tr.textContent.includes("No percent given"));
+  assert.match(row.textContent, /—/);
+  assert.doesNotMatch(row.textContent, /0%/);
+});
+
+// v101: unchanged rows are now sent too — a row can be unchanged in
+// every import-owned field and still need its own % complete raised
+// (the server, not the client, is the only safe place to tell the
+// difference — see buildImportReconciliation()'s and the confirm
+// handler's own comments in app.js/programme-import.html). Sending an
+// unchanged row is harmless: the RPC re-confirms it's unchanged and
+// writes nothing extra for it.
+test("programme-import.html: confirming import calls the RPC wrapper with every valid row — create, update AND unchanged — so a % raise on an otherwise-unchanged row is never silently dropped", async () => {
   const importCalls = [];
   const { context } = baseContext({
     buildImportReconciliation: () => ({
-      toCreate: [{ index: 0, fields: { title: "New" }, plotUnmatched: false }],
-      toUpdate: [{ index: 1, activityId: "e1", fields: { title: "Updated" }, plotUnmatched: false }],
-      unchanged: [{ index: 2, activityId: "e2" }],
+      toCreate: [{ index: 0, fields: { title: "New", percent_complete: null, is_summary: undefined }, plotUnmatched: false }],
+      toUpdate: [{ index: 1, activityId: "e1", fields: { title: "Updated", percent_complete: null, is_summary: undefined }, plotUnmatched: false }],
+      unchanged: [{ index: 2, activityId: "e2", fields: { title: "Same", percent_complete: 55, is_summary: undefined } }],
       missing: [], invalid: [],
     }),
-    importProgrammeActivities: async (programmeId, rows) => { importCalls.push({ programmeId, rows }); return { created: 1, updated: 1, unchanged: 0, rejected: [], created_ids: ["n1"], updated_ids: ["e1"] }; },
+    importProgrammeActivities: async (programmeId, rows) => { importCalls.push({ programmeId, rows }); return { created: 1, updated: 1, unchanged: 1, raised: 0, rejected: [], created_ids: ["n1"], updated_ids: ["e1"] }; },
   });
   const { document, window } = await runPage(HTML_PATH, scriptSrc, context);
   await advanceToPreview(document, window);
@@ -249,7 +319,8 @@ test("programme-import.html: confirming import calls the RPC wrapper with only t
   await until(() => document.getElementById("resultCard").style.display === "block");
   assert.equal(importCalls.length, 1);
   assert.equal(importCalls[0].programmeId, "prog-1");
-  assert.equal(importCalls[0].rows.length, 2, "only the 1 create + 1 update, never the unchanged row");
+  assert.equal(importCalls[0].rows.length, 3, "all 3 valid rows — create, update, AND the unchanged one — must reach the RPC");
+  assert.ok(importCalls[0].rows.some((r) => r.client_row_index === 2), "the unchanged row's own client_row_index must be present");
 });
 
 test("programme-import.html: a failed confirm (RPC rejects) shows the error and stays on the preview step — nothing silently marked done", async () => {

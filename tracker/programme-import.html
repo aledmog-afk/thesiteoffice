@@ -59,6 +59,9 @@
     <div class="card" id="step1Card">
       <h3 style="margin-bottom:0.3rem;">1. Upload workbook</h3>
       <p class="page-sub" style="margin-bottom:1rem;">Importing into <strong id="targetProgrammeName"></strong> (<span id="targetProgrammeStatus"></span>). The file is read entirely in your browser — it is never sent anywhere except this The Site Office.</p>
+      <div class="btn-row" style="margin-bottom:1rem;">
+        <button class="btn btn-outline" id="downloadTemplateBtn">Download template (.xlsx)</button>
+      </div>
       <div class="field">
         <label for="workbookFile">Excel workbook (.xlsx)</label>
         <input type="file" id="workbookFile" accept=".xlsx">
@@ -97,6 +100,10 @@
       <h3 style="margin-bottom:0.3rem;">3. Map columns</h3>
       <p class="page-sub" style="margin-bottom:1rem;">Match each worksheet column to what The Site Office expects. Mappings were guessed from your headers — check and correct them.</p>
       <div id="mappingRows"></div>
+      <p class="hint" style="margin-top:0.8rem;">
+        <strong>Summary</strong> (optional) — mark a row as a summary/rollup bar (e.g. "Ground Works 2nd Stage", "Structure to Watertight") with Y, Yes, True or 1; leave blank for an ordinary task. Summary rows are never counted towards the Programme complete figure. Leaving this column unmapped leaves every existing summary flag exactly as it is.<br>
+        <strong>% Complete</strong> (optional) — a number from 0 to 100. This only ever RAISES a task's stored % complete; a lower or blank value never lowers it. Leave unmapped (or leave a row blank) to make no change.
+      </p>
       <div class="btn-row" style="margin-top:1rem;">
         <button class="btn btn-outline" id="step3BackBtn">Back</button>
         <button class="btn btn-amber" id="step3NextBtn" disabled>Next: Validate &amp; Preview</button>
@@ -120,7 +127,7 @@
       <div style="margin-bottom:1.2rem;">
         <strong>Preview</strong>
         <div class="table-wrap"><table>
-          <thead><tr><th>Row</th><th>Change</th><th>Activity</th><th>Plot</th><th>Planned Start</th><th>Planned Finish</th></tr></thead>
+          <thead><tr><th>Row</th><th>Change</th><th>Activity</th><th>Plot</th><th>Planned Start</th><th>Planned Finish</th><th>% Complete</th></tr></thead>
           <tbody id="previewRows"></tbody>
         </table></div>
         <div id="previewMoreNote" class="hint" style="display:none; margin-top:0.4rem;"></div>
@@ -219,6 +226,45 @@
   }
 
   // ─── Step 1: Upload ─────────────────────────────────────────────
+
+  // v101: the column header row (plus one worked example of each kind
+  // of row this import understands) this app itself expects — a pure,
+  // testable builder, same split as plot-handovers.html's own
+  // buildOverallRows()/buildInternalRows() (a plain array-of-arrays,
+  // no I/O), reusing the exact SheetJS write path already established
+  // there (XLSX.utils.aoa_to_sheet + XLSX.writeFile) rather than
+  // introducing a second way to write a workbook. Both new v101
+  // columns are included from the start, since there was no earlier
+  // template to carry forward — External ID/Milestone/Summary are all
+  // optional, so an older file without them still maps and imports
+  // exactly as it always has.
+  function buildProgrammeImportTemplateRows() {
+    return [
+      ["Activity ID", "Title", "Plot Number", "Milestone", "Planned Start", "Planned Finish", "Summary", "% Complete"],
+      ["GW", "Groundworks", "Plot 4", "", "2026-01-05", "2026-02-02", "", 81],
+      ["GW2", "Ground Works 2nd Stage", "", "", "2026-01-05", "2026-12-18", "Y", ""],
+      ["MS1", "Frame Complete", "", "Y", "2026-03-20", "2026-03-20", "", ""],
+    ];
+  }
+
+  document.getElementById("downloadTemplateBtn").addEventListener("click", async () => {
+    const btn = document.getElementById("downloadTemplateBtn");
+    btn.disabled = true;
+    const originalText = btn.textContent;
+    btn.textContent = "Generating…";
+    try {
+      const XLSX = await import("https://esm.sh/xlsx@0.18.5");
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(buildProgrammeImportTemplateRows()), "Programme");
+      XLSX.writeFile(wb, "Programme import template.xlsx");
+    } catch (err) {
+      showError(pageErrorBox, err);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalText;
+    }
+  });
+
   document.getElementById("step1NextBtn").addEventListener("click", async () => {
     clearError(pageErrorBox);
     const fileInput = document.getElementById("workbookFile");
@@ -285,6 +331,11 @@
     { key: "planned_finish", label: "Planned Finish", required: true },
     { key: "plot_number", label: "Plot Number", required: false },
     { key: "is_milestone", label: "Milestone", required: false },
+    // v101: both optional. Leaving either unmapped imports exactly as
+    // before this existed — Summary never clears an existing flag,
+    // and % Complete simply never raises anything.
+    { key: "summary", label: "Summary", required: false },
+    { key: "percent_complete", label: "% Complete", required: false },
   ];
 
   function populateStep3() {
@@ -360,10 +411,38 @@
     return `Row ${index + 2}`;
   }
 
+  // v101: the preview's own "% Complete" column — shown BEFORE
+  // confirming, per requirement 4 ("The import preview/diff must show
+  // ... % raises before the user confirms"). Mirrors the raise-only
+  // rule exactly: nothing shown at all when the sheet gives no value
+  // for this row; an arrow only when it would actually RAISE the
+  // stored figure; the plain current figure, explicitly marked
+  // "no change", when the sheet's value wouldn't (lower, equal, or a
+  // brand-new row's own fresh starting value needs no "raise" framing
+  // at all — it has nothing to raise FROM).
+  function pctCellHtml(importPct, existingPct) {
+    if (importPct === null || importPct === undefined) return "—";
+    if (existingPct === null || existingPct === undefined) return `&rarr; ${importPct}%`;
+    const existing = Number(existingPct) || 0;
+    if (Number(importPct) > existing) return `${existing}% &rarr; <strong>${importPct}%</strong>`;
+    return `<span class="hint">${existing}% (sheet: ${importPct}% — no change, raise-only)</span>`;
+  }
+
   function renderStep4() {
     const r = state.recon;
     const totalRows = state.importRows.length;
     const validCount = r.toCreate.length + r.toUpdate.length + r.unchanged.length;
+    // v101: previewed, not authoritative — the server re-derives this
+    // from the real stored data at confirmation time, same as every
+    // other count on this page; shown here purely so requirement 4
+    // ("the preview must show ... % raises before the user confirms")
+    // is visible before anything is written.
+    const wouldRaiseCount = [...r.toCreate, ...r.toUpdate, ...r.unchanged].filter((e) => {
+      if (e.fields.percent_complete === null || e.fields.percent_complete === undefined) return false;
+      const existing = e.activityId ? state.existingActivities.find((a) => a.id === e.activityId) : null;
+      return Number(e.fields.percent_complete) > (existing ? Number(existing.percent_complete) || 0 : 0);
+    }).length;
+    const summaryCount = [...r.toCreate, ...r.toUpdate, ...r.unchanged].filter((e) => e.fields.is_summary).length;
     const stats = [
       { n: totalRows, l: "Total rows" },
       { n: validCount, l: "Valid" },
@@ -371,6 +450,8 @@
       { n: r.toCreate.length, l: "New" },
       { n: r.toUpdate.length, l: "Existing (changed)" },
       { n: r.unchanged.length, l: "Unchanged" },
+      { n: wouldRaiseCount, l: "Will raise %" },
+      { n: summaryCount, l: "Summary rows" },
       { n: r.missing.length, l: "Not in import" },
     ];
     document.getElementById("summaryGrid").innerHTML = stats.map((s) => `<div class="summary-stat"><div class="n">${s.n}</div><div class="l">${s.l}</div></div>`).join("");
@@ -385,10 +466,18 @@
       invalidSection.style.display = "none";
     }
 
+    // v101: buildImportReconciliation() now gives every entry — create,
+    // update AND unchanged — its own `fields`, including the raw
+    // percent_complete/is_summary this import row carries (the
+    // unchanged case is guaranteed consistent with what's already
+    // stored for the import-owned fields, by definition of
+    // "unchanged" — see that function's own comment), so there's no
+    // longer any need to fall back to the raw existing-activity row
+    // here.
     const previewEntries = [
       ...r.toCreate.map((e) => ({ ...e, kind: "create" })),
       ...r.toUpdate.map((e) => ({ ...e, kind: "update" })),
-      ...r.unchanged.map((e) => ({ ...e, kind: "unchanged", fields: (state.existingActivities.find((a) => a.id === e.activityId)) || {} })),
+      ...r.unchanged.map((e) => ({ ...e, kind: "unchanged" })),
     ].sort((a, b) => a.index - b.index);
     const PREVIEW_LIMIT = 200;
     const shown = previewEntries.slice(0, PREVIEW_LIMIT);
@@ -397,14 +486,18 @@
     document.getElementById("previewRows").innerHTML = shown.map((e) => {
       const f = e.fields;
       const plotNote = e.plotUnmatched ? ` <span class="badge recon-badge-invalid" title="No matching plot found in this project">plot not matched</span>` : "";
+      const summaryBadge = f.is_summary ? ` <span class="badge badge-grey" title="Never counted towards Programme complete">Summary</span>` : "";
+      const existing = e.kind !== "create" ? state.existingActivities.find((a) => a.id === e.activityId) : null;
+      const pctCell = pctCellHtml(f.percent_complete, existing ? existing.percent_complete : null);
       return `
         <tr>
           <td>${sheetRowLabel(e.index)}</td>
           <td><span class="badge ${badgeClass[e.kind]}">${badgeLabel[e.kind]}</span></td>
-          <td>${escapeHtml(f.title || "")}${plotNote}</td>
+          <td>${escapeHtml(f.title || "")}${plotNote}${summaryBadge}</td>
           <td>${f.plot_id ? escapeHtml(plots.find((p) => p.id === f.plot_id)?.plot_number || "") : "—"}</td>
           <td>${f.planned_start ? formatDate(f.planned_start) : "—"}</td>
           <td>${f.planned_finish ? formatDate(f.planned_finish) : "—"}</td>
+          <td>${pctCell}</td>
         </tr>
       `;
     }).join("");
@@ -435,7 +528,15 @@
     btn.disabled = true;
     btn.textContent = "Importing…";
     try {
-      const payloadRows = [...state.recon.toCreate, ...state.recon.toUpdate].map((e) => ({ client_row_index: e.index, ...e.fields }));
+      // v101: unchanged rows are now sent too — a row can be
+      // completely unchanged in every import-owned field and still
+      // need its own % complete raised (Red Dragon's own real
+      // scenario: same title, same dates, only the % needs to catch
+      // up), and the server is the only place that can tell the
+      // difference safely. Harmless for a genuinely unchanged row:
+      // import_programme_activities() re-confirms it's unchanged and
+      // writes nothing extra for it.
+      const payloadRows = [...state.recon.toCreate, ...state.recon.toUpdate, ...state.recon.unchanged].map((e) => ({ client_row_index: e.index, ...e.fields }));
       state.importResult = await importProgrammeActivities(currentProgramme.id, payloadRows);
       await renderResult();
       goToStep(4);
@@ -464,6 +565,7 @@
       { n: res.created, l: "Created" },
       { n: res.updated, l: "Updated" },
       { n: res.unchanged, l: "Unchanged" },
+      { n: res.raised || 0, l: "% Raised" },
       { n: res.rejected.length, l: "Rejected" },
       { n: state.recon.missing.length, l: "Not present in import" },
     ];

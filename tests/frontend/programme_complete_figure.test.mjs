@@ -131,3 +131,30 @@ test("computeProgrammeComplete: exclude_from_progress false (or absent, matching
   const b = act({ id: "b", percent_complete: 40, planned_start: "2026-01-01", planned_finish: "2026-01-11" }); // no such field at all
   assert.equal(computeProgrammeComplete([a, b]), 50);
 });
+
+// ─── v101: is_summary ───────────────────────────────────────────────
+test("computeProgrammeComplete: an activity flagged is_summary is excluded entirely, the same as exclude_from_progress or cancelled — even though its own span would otherwise swamp everything else", () => {
+  const groundworks = act({ percent_complete: 81, planned_start: "2026-01-01", planned_finish: "2026-02-01" });
+  const summaryBar = act({ id: "summary", title: "Ground Works 2nd Stage", status: "not_started", percent_complete: 0, planned_start: "2026-01-01", planned_finish: "2026-12-31", is_summary: true }); // huge weight if it counted
+  const pct = computeProgrammeComplete([groundworks, summaryBar]);
+  assert.equal(pct, 81, "the summary bar's own huge span must contribute NOTHING — the figure must be exactly Groundworks' own 81%");
+});
+
+test("computeProgrammeComplete: is_summary and exclude_from_progress are independent — a row can be excluded by either, or both, with the same net effect", () => {
+  const done = act({ status: "complete", percent_complete: 100, planned_start: "2026-01-01", planned_finish: "2026-01-11" });
+  const summaryOnly = act({ id: "s1", percent_complete: 0, planned_start: "2025-01-01", planned_finish: "2027-01-01", is_summary: true, exclude_from_progress: false });
+  const bothFlags = act({ id: "s2", percent_complete: 0, planned_start: "2025-01-01", planned_finish: "2027-01-01", is_summary: true, exclude_from_progress: true, exclude_from_progress_source: "auto" });
+  assert.equal(computeProgrammeComplete([done, summaryOnly]), 100);
+  assert.equal(computeProgrammeComplete([done, bothFlags]), 100);
+});
+
+test("computeProgrammeComplete: returns null when every activity is a summary row (nothing countable, even though the array isn't empty)", () => {
+  const pct = computeProgrammeComplete([act({ is_summary: true }), act({ id: "e2", is_summary: true })]);
+  assert.equal(pct, null);
+});
+
+test("computeProgrammeComplete: is_summary false (or absent, matching every pre-v101 activity row) never excludes — unaffected by this flag existing at all", () => {
+  const a = act({ percent_complete: 60, planned_start: "2026-01-01", planned_finish: "2026-01-11", is_summary: false });
+  const b = act({ id: "b", percent_complete: 40, planned_start: "2026-01-01", planned_finish: "2026-01-11" }); // no such field at all
+  assert.equal(computeProgrammeComplete([a, b]), 50);
+});

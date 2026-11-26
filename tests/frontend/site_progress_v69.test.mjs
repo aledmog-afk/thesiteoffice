@@ -321,7 +321,11 @@ test("Site Details: a failed progress-source update shows the error and reverts 
         single: async () => (table === "projects" ? { data: { ...PROJECT_BASE, progress_source: "plots" }, error: null } : { data: null, error: null }),
         update(payload) {
           sb.calls.push({ op: "update", table, payload });
-          return { eq: () => ({ select: () => ({ single: async () => ({ data: null, error: { message: "Only a project editor can change the progress source." } }) }) }) };
+          // v101: the page now awaits update().eq() directly (no
+          // .select().single() chained) — a plain re-fetch happens
+          // separately, only on success — so the rejection itself must
+          // be thenable right here.
+          return { eq: () => ({ then(resolve) { resolve({ data: null, error: { message: "Only a project editor can change the progress source." } }); } }) };
         },
         then(resolve) { resolve({ data: [], error: null }); },
       };
@@ -339,6 +343,60 @@ test("Site Details: a failed progress-source update shows the error and reverts 
 
   assert.equal(select.value, "plots", "a failed update must revert the select to its previous value");
   assert.match(document.getElementById("pageErrorBox").textContent, /Only a project editor/);
+});
+
+// v101: trg_projects_v95_progress_source_after recalculates
+// actual_progress_pct in a SEPARATE statement that runs AFTER the
+// UPDATE itself, which a RETURNING clause (what update().select().single()
+// reads back) never sees — so the row the update call itself returns
+// still carries the PREVIOUS source's figure. Confirmed live: switching
+// programme -> plots -> programme on Red Dragon showed 24% on this
+// page while the database already held 6.0%. The fix is a plain,
+// separate re-fetch after a successful write; this mock deliberately
+// gives the update's own (never-consulted) RETURNING row a WRONG
+// figure and the follow-up plain select the REAL one, so the test
+// fails if the page ever goes back to trusting the update response.
+test("Site Details: after switching progress source, the displayed figure comes from a fresh re-fetch, never the update's own (pre-trigger) RETURNING row", async () => {
+  const STALE_RETURNING_ROW = { ...PROJECT_BASE, progress_source: "programme", actual_progress_pct: 24 };
+  const REAL_RECALCULATED_ROW = { ...PROJECT_BASE, progress_source: "programme", actual_progress_pct: 6.0 };
+  let selectCount = 0;
+  const sb = {
+    calls: [],
+    auth: { getUser: async () => ({ data: { user: { id: "u-owner" } } }) },
+    rpc: async (name) => ({ data: name === "get_my_role" ? "owner" : null, error: null }),
+    from(table) {
+      const api = {
+        select() { return api; },
+        eq() { return api; },
+        order() { return api; },
+        single: async () => {
+          if (table !== "projects") return { data: null, error: null };
+          selectCount += 1;
+          // The FIRST select is the page's own initial load; every
+          // select AFTER the update call is the re-fetch this fix adds.
+          return { data: selectCount === 1 ? { ...PROJECT_BASE, progress_source: "plots" } : REAL_RECALCULATED_ROW, error: null };
+        },
+        update(payload) {
+          sb.calls.push({ op: "update", table, payload });
+          // Never read by the fixed page at all — if this value ever
+          // reaches the screen, the bug has come back.
+          return { eq: () => ({ then(resolve) { resolve({ data: STALE_RETURNING_ROW, error: null }); } }) };
+        },
+        then(resolve) { resolve({ data: [], error: null }); },
+      };
+      return api;
+    },
+  };
+  const { document } = await runPage(page("project.html"), extractScript(page("project.html")), projectContext(sb));
+  await wait(40);
+
+  const select = document.getElementById("progressSourceSelect");
+  select.value = "programme";
+  fireEvent(select, "change");
+  await wait(40);
+
+  assert.match(document.getElementById("progressDisplay").innerHTML, /6(\.0)?/, "must show the re-fetched 6.0%, not the update response's stale 24%");
+  assert.doesNotMatch(document.getElementById("progressDisplay").innerHTML, /24/, "the update call's own (pre-trigger) RETURNING figure must never be rendered");
 });
 
 test("Site Details: packages show their share and %, with report tasks read-only beside the matching package and the rest under unassigned; notes history renders", async () => {

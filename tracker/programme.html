@@ -124,7 +124,7 @@
       <table>
         <thead>
           <tr>
-            <th>Activity</th><th>Type</th><th>Plot</th><th>Owner</th><th>Planned Finish</th><th>Forecast Finish</th><th>Actual Finish</th><th>Variance</th><th>Status</th><th>Counts?</th><th></th>
+            <th>Activity</th><th>Type</th><th>Plot</th><th>Start</th><th>Planned Finish</th><th>Forecast Finish</th><th>Actual Finish</th><th>Variance</th><th>Status</th><th>Counts?</th><th></th>
           </tr>
         </thead>
         <tbody id="activityRows"></tbody>
@@ -435,11 +435,12 @@
       summaryEl.style.display = "none";
       return;
     }
-    // v99: "counted" = what the figure above is actually weighted
-    // over (not cancelled, not excluded) — showing it against the
-    // counted total, not the full activity count, so a reader can see
-    // at a glance that header/summary rows were left out.
-    const counted = activities.filter((a) => a.status !== "cancelled" && !a.exclude_from_progress);
+    // v99/v101: "counted" = what the figure above is actually weighted
+    // over (not cancelled, not excluded, not a v101 summary/rollup
+    // row) — showing it against the counted total, not the full
+    // activity count, so a reader can see at a glance that header/
+    // summary rows were left out.
+    const counted = activities.filter((a) => a.status !== "cancelled" && !a.exclude_from_progress && !a.is_summary);
     const completeCount = counted.filter((a) => a.status === "complete").length;
     summaryEl.textContent = `Programme complete: ${pct.toFixed(0)}% (${completeCount} of ${counted.length} counted activities)`;
     summaryEl.style.display = "block";
@@ -495,32 +496,46 @@
       return;
     }
     document.getElementById("emptyState").style.display = "none";
-    // Owner (Priority 16) — programme_activities.assigned_to already
-    // existed before this phase but was only ever visible by opening
-    // each activity's own edit form one at a time; surfaced here so a
-    // coordinator scanning the list can see it directly, reusing the
-    // same `members` lookup the Edit form's own assignee dropdown
-    // already loads — no new query.
-    const emailByUserId = new Map(members.map((m) => [m.user_id, m.email]));
+    // v101: the Owner column (programme_activities.assigned_to,
+    // surfaced here in Priority 16) is removed from this list — Aled
+    // found it added clutter he didn't use from this view. assigned_to
+    // itself, and the `members` lookup that resolves it to an email,
+    // are both untouched — the Edit form's own assignee dropdown still
+    // uses `members` exactly as before; only this list's own column is
+    // gone. A "Start" column (planned_start) replaces it in the same
+    // position every "Planned Finish"/"Forecast Finish"/"Actual Finish"
+    // column already sits in — Aled had been reading those two finish
+    // dates as if they were a start/finish pair.
     rows.innerHTML = list.map(({ activity: a, cats }) => {
       const isException = cats.overdue || cats.forecastLate;
       const actionCell = a.action_id
         ? `<a href="actions.html?project=${projectId}">View Action</a>`
         : (isException ? `<button class="btn btn-outline btn-sm" onclick="openCreateAction('${a.id}')">Create Action</button>` : "");
-      const ownerCell = a.assigned_to ? escapeHtml(emailByUserId.get(a.assigned_to) || "—") : `<span class="hint">Unassigned</span>`;
+      // v101: a Summary/rollup row (flagged only by the import's own
+      // Summary column — never by a user, there is no toggle for it
+      // in this UI) is ALWAYS left out of Programme complete,
+      // regardless of exclude_from_progress's own value — shown with
+      // its own badge (bold title alone already marks every row, so
+      // isn't a distinguishing cue on its own) and the Type column
+      // overridden, so a reader can see at a glance why a row with an
+      // otherwise-ordinary span is sitting out of the figure.
+      const summaryBadge = a.is_summary ? ` <span class="badge badge-grey" title="Flagged Summary by the import — never counted towards Programme complete">Summary</span>` : "";
+      const countsTitle = a.is_summary
+        ? "Summary row — never counted towards Programme complete"
+        : (a.exclude_from_progress ? "Left out of Programme complete" + (a.exclude_from_progress_source === "auto" ? " (auto)" : "") : "Counted towards Programme complete");
       return `
       <tr id="activity-${a.id}">
-        <td><strong>${escapeHtml(a.title)}</strong></td>
-        <td>${a.is_milestone ? "Milestone" : "Task"}</td>
+        <td><strong>${escapeHtml(a.title)}</strong>${summaryBadge}</td>
+        <td>${a.is_summary ? "Summary" : (a.is_milestone ? "Milestone" : "Task")}</td>
         <td>${a.plots?.plot_number ? escapeHtml(a.plots.plot_number) : "—"}</td>
-        <td>${ownerCell}</td>
+        <td>${a.planned_start ? formatDate(a.planned_start) : "—"}</td>
         <td>${a.planned_finish ? formatDate(a.planned_finish) : "—"}</td>
         <td>${a.forecast_finish ? formatDate(a.forecast_finish) : "—"}</td>
         <td>${a.actual_finish ? formatDate(a.actual_finish) : "—"}</td>
         <td>${varianceCellHtml(cats)}</td>
         <td><span class="badge ${ACTIVITY_STATUS_BADGE[a.status] || "badge-grey"}">${ACTIVITY_STATUS_LABEL[a.status] || escapeHtml(a.status)}</span></td>
-        <td title="${a.exclude_from_progress ? "Left out of Programme complete" + (a.exclude_from_progress_source === "auto" ? " (auto)" : "") : "Counted towards Programme complete"}">
-          <input type="checkbox" ${a.exclude_from_progress ? "" : "checked"} ${isEditor ? "" : "disabled"} onchange="toggleExcludeFromProgress('${a.id}', !this.checked)">
+        <td title="${countsTitle}">
+          <input type="checkbox" ${(a.exclude_from_progress || a.is_summary) ? "" : "checked"} ${(isEditor && !a.is_summary) ? "" : "disabled"} onchange="toggleExcludeFromProgress('${a.id}', !this.checked)">
         </td>
         <td>
           <button class="btn btn-outline btn-sm" onclick="editActivity('${a.id}')">Edit</button>
