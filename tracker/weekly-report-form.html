@@ -57,7 +57,7 @@
       </div>
       <div class="field">
         <label>Weather Tracker <button type="button" class="btn btn-outline btn-sm" id="refreshWeatherBtn" style="margin-left:0.5rem;">↻ Refresh Weather</button></label>
-        <p class="hint" style="margin:0 0 0.4rem;">Auto-filled from Open-Meteo for days that have already finished (08:00-17:00 on site), using evidence written into that day's notes when they're blank. Refresh re-runs the lookup for any day you haven't edited yourself — a day you've set or typed a note on is never overwritten.</p>
+        <p class="hint" style="margin:0 0 0.4rem;">Auto-filled from Open-Meteo for days that have already finished (08:00-17:00 on site), using evidence written into that day's notes when they're blank. Refresh re-runs the lookup for any day you haven't edited yourself — a day you've set or typed a note on is never overwritten. To let a day auto-fill again, set it back to "—" and clear its notes, then press Refresh Weather.</p>
         <div id="weatherTracker"></div>
       </div>
       <div class="field"><label for="weather">Weather Notes (optional)</label><input type="text" id="weather" placeholder="Any general commentary not captured in the day-by-day tracker above"></div>
@@ -641,6 +641,21 @@
       return Boolean(d.condition) || Boolean((d.notes || "").trim());
     }
 
+    // v103: re-evaluates a day's own source right after a hand-edit to
+    // its condition or notes — called with the day's state AFTER the
+    // edit has already been applied. Blanking both condition ("—") and
+    // notes together hands the day back to auto-fill (source cleared,
+    // so isManualWeatherDay() reads it as a plain blank day again, the
+    // same as one that was never touched at all — this is also how a
+    // legacy day saved before v102 (content, no source) gets back
+    // in: blank it by hand once, and it's auto-eligible from then on).
+    // Leaving either one with real content still in it keeps the day
+    // manual exactly as before. Never looks at lost_hours — that field
+    // plays no part in this at all, in either direction.
+    function applyWeatherEditSource(d) {
+      d.source = (!d.condition && !(d.notes || "").trim()) ? undefined : "manual";
+    }
+
     function totalLostHours() {
       return days.reduce((sum, d) => sum + (Number(d.lost_hours) || 0), 0);
     }
@@ -672,7 +687,7 @@
       container.querySelectorAll(".wt-condition").forEach((el) => el.addEventListener("change", () => {
         const d = days[Number(el.dataset.i)];
         d.condition = el.value;
-        d.source = "manual"; // v102: any user edit to condition takes this day out of auto-fill's hands for good
+        applyWeatherEditSource(d); // v103: manual unless this edit left the day fully blank
       }));
       container.querySelectorAll(".wt-lost").forEach((el) => el.addEventListener("input", () => {
         days[Number(el.dataset.i)].lost_hours = el.value === "" ? 0 : Number(el.value);
@@ -681,7 +696,7 @@
       container.querySelectorAll(".wt-notes").forEach((el) => el.addEventListener("input", () => {
         const d = days[Number(el.dataset.i)];
         d.notes = el.value;
-        d.source = "manual"; // v102: same rule as condition above
+        applyWeatherEditSource(d); // v103: same rule as condition above
       }));
     }
 

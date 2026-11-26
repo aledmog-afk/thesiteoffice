@@ -12,6 +12,16 @@
 // never a real network request) — proving the whole pipeline (page
 // wiring + real Open-Meteo aggregation + the manual/auto eligibility
 // rule) together, not a reimplementation of any of it.
+//
+// v103 follow-up: wind is reported in m/s (wind_speed_unit=ms on the
+// Open-Meteo request), never km/h — still evidence-text only, never a
+// condition input. Also fixes a real gap in v102's own source rule: a
+// day could become manual (any hand-edit) but never go BACK to
+// auto-eligible, so blanking a day out, or a legacy pre-v102 day with
+// real content and no source tag at all, got stuck manual forever.
+// Blanking BOTH condition and notes together now clears the day's
+// source, handing it back to auto-fill/Refresh exactly like a plain
+// blank day.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -65,7 +75,7 @@ function loadLondonTodayISOReal() {
 
 // Builds a 24-hour Open-Meteo-shaped hourly series for one date.
 // `byHour` maps a 0-23 hour to a value for that one field; every hour
-// not mentioned defaults to 0 rain/snow, 10°C, 10 km/h gusts — plainly
+// not mentioned defaults to 0 rain/snow, 10°C, 10 m/s gusts — plainly
 // uneventful, so a test only has to state what's actually interesting.
 function hourlyDay(date, { rain = {}, snow = {}, temp = {}, gust = {} } = {}) {
   const time = [], precipitation = [], snowfall = [], temperature_2m = [], wind_gusts_10m = [];
@@ -85,6 +95,12 @@ function mergeHourlyDays(...days) {
 }
 function fetchMockFor(hourly) {
   return async () => ({ ok: true, json: async () => ({ hourly }) });
+}
+// v103: same as fetchMockFor(), but also records the exact URL each
+// call was made with, into `calls` — for asserting on the request
+// itself (e.g. that wind_speed_unit=ms is on it), not just its result.
+function fetchMockForCapture(hourly, calls) {
+  return async (url) => { calls.push(url); return { ok: true, json: async () => ({ hourly }) }; };
 }
 
 const SAMPLE_PROJECT = { id: "p1", name: "Test Site", org_id: "org1", main_contractor_name: "ACME", main_contractor_email: "acme@example.com", latitude: 51.649221, longitude: -3.791721 };
@@ -120,9 +136,9 @@ function weatherSupabaseMock({ existingReport = null, onUpdate = () => {} } = {}
 // swapping in a real fetchWeatherConditions (built over a per-test
 // mock fetch) and a fixed londonTodayISO stub so "today" is
 // deterministic.
-async function runWeatherForm({ existingReport = null, reportId = null, fetchHourly = null, todayISODate = "2026-11-25", onUpdate = () => {} } = {}) {
+async function runWeatherForm({ existingReport = null, reportId = null, fetchHourly = null, fetchMock = null, todayISODate = "2026-11-25", onUpdate = () => {} } = {}) {
   const supabase = weatherSupabaseMock({ existingReport, onUpdate });
-  const fetchWeatherConditions = loadFetchWeatherConditions(fetchHourly ? fetchMockFor(fetchHourly) : async () => ({ ok: true, json: async () => ({ hourly: { time: [] } }) }));
+  const fetchWeatherConditions = loadFetchWeatherConditions(fetchMock || (fetchHourly ? fetchMockFor(fetchHourly) : async () => ({ ok: true, json: async () => ({ hourly: { time: [] } }) })));
   return runPage(FORM_HTML, extractScript(FORM_HTML), {
     __url: `https://example.com/weekly-report-form.html?project=p1${reportId ? `&id=${reportId}` : ""}`,
     supabase,
@@ -167,6 +183,9 @@ function weatherRow(document, i) {
   const condition = document.querySelectorAll(".wt-condition")[i];
   const notes = document.querySelectorAll(".wt-notes")[i];
   return { condition: condition.value, notes: notes.value };
+}
+function weatherLostHours(document, i) {
+  return document.querySelectorAll(".wt-lost")[i].value;
 }
 
 // The 7-day grid for weekStarting "2026-11-16" (a Monday) is, in
@@ -245,7 +264,7 @@ test("weekly-report-form.html weather: today and future days are left blank, eve
   assert.equal(weatherRow(document, 5).notes, "", "a blank day must get no evidence text either");
 });
 
-test("weekly-report-form.html weather: the evidence text written into a blank day's notes matches the real figures exactly", async () => {
+test("weekly-report-form.html weather: the evidence text written into a blank day's notes matches the real figures exactly, with wind in m/s", async () => {
   const hourly = mergeHourlyDays(
     hourlyDay("2026-11-14", {}), hourlyDay("2026-11-15", {}),
     hourlyDay("2026-11-16", { rain: { 10: 3.5 }, gust: { 10: 48 }, temp: { 8: 1, 10: 3 } }),
@@ -253,7 +272,18 @@ test("weekly-report-form.html weather: the evidence text written into a blank da
   );
   const { document } = await runWeatherForm({ fetchHourly: hourly });
   await wait(50);
-  assert.equal(weatherRow(document, MON).notes, "3.5 mm 8am-5pm, gusts 48 km/h, min 1°C");
+  // v103: m/s, not km/h — Open-Meteo is asked for wind_speed_unit=ms
+  // (see the next test), so the raw figure IS the m/s one already;
+  // this just proves the evidence string's own units label matches.
+  assert.equal(weatherRow(document, MON).notes, "3.5 mm 8am-5pm, gusts 48 m/s, min 1°C");
+});
+
+test("weekly-report-form.html weather: the Open-Meteo request asks for wind_speed_unit=ms", async () => {
+  const calls = [];
+  const { document } = await runWeatherForm({ fetchMock: fetchMockForCapture({ time: [] }, calls) });
+  await wait(50);
+  assert.ok(calls.length >= 1, "fetchWeatherConditions must have called fetch at least once");
+  calls.forEach((url) => assert.match(url, /wind_speed_unit=ms/, `expected wind_speed_unit=ms on ${url}`));
 });
 
 // ─── Manual vs auto, and the Refresh button ──────────────────────────
@@ -325,6 +355,98 @@ test("weekly-report-form.html weather: editing a day by hand immediately protect
   fireEvent(document.getElementById("refreshWeatherBtn"), "click");
   await wait(50);
   assert.equal(weatherRow(document, MON).condition, "Heavy Rain", "the user's own choice must survive a Refresh");
+});
+
+// ─── v103: blanking a day hands it back to auto-fill ─────────────────
+
+test("weekly-report-form.html weather: blanking a manual day's condition AND notes together hands it back to auto-fill on the next Refresh", async () => {
+  const existingReport = {
+    id: "r1", project_id: "p1", status: "draft", week_starting: "2026-11-16", week_ending: "2026-11-20",
+    weather_days: [
+      { date: "2026-11-16", condition: "Dry", lost_hours: 2, notes: "Checked on site", source: "manual" },
+    ],
+  };
+  const freshHourly = mergeHourlyDays(
+    hourlyDay("2026-11-14", {}), hourlyDay("2026-11-15", {}),
+    hourlyDay("2026-11-16", { rain: { 10: 2, 11: 2 } }), // 4mm in site hours -> Heavy Rain, once eligible
+    hourlyDay("2026-11-17", {}), hourlyDay("2026-11-18", {}), hourlyDay("2026-11-19", {}), hourlyDay("2026-11-20", {}),
+  );
+  const { document } = await runWeatherForm({ existingReport, reportId: "r1", fetchHourly: freshHourly });
+  await wait(50);
+  assert.equal(weatherRow(document, MON).condition, "Dry", "sanity: manual, untouched by the initial load's own auto-fill pass");
+
+  // Blank it by hand: condition back to "—", notes cleared.
+  const select = document.querySelectorAll(".wt-condition")[MON];
+  select.value = "";
+  fireEvent(select, "change");
+  const notesInput = document.querySelectorAll(".wt-notes")[MON];
+  notesInput.value = "";
+  fireEvent(notesInput, "input");
+
+  fireEvent(document.getElementById("refreshWeatherBtn"), "click");
+  await wait(50);
+  const row = weatherRow(document, MON);
+  assert.equal(row.condition, "Heavy Rain", "blanking both fields must hand the day back to auto-fill — Refresh now fills it");
+  assert.match(row.notes, /^4\.0 mm/, "and write fresh evidence into the now-reopened day");
+  assert.equal(weatherLostHours(document, MON), "2", "lost hours are completely unaffected by any of this, in either direction");
+});
+
+test("weekly-report-form.html weather: blanking only the condition while notes still has text keeps the day manual", async () => {
+  const existingReport = {
+    id: "r1", project_id: "p1", status: "draft", week_starting: "2026-11-16", week_ending: "2026-11-20",
+    weather_days: [
+      { date: "2026-11-16", condition: "Dry", lost_hours: 0, notes: "Checked on site", source: "manual" },
+    ],
+  };
+  const freshHourly = mergeHourlyDays(
+    hourlyDay("2026-11-14", {}), hourlyDay("2026-11-15", {}),
+    hourlyDay("2026-11-16", { rain: { 10: 2, 11: 2 } }),
+    hourlyDay("2026-11-17", {}), hourlyDay("2026-11-18", {}), hourlyDay("2026-11-19", {}), hourlyDay("2026-11-20", {}),
+  );
+  const { document } = await runWeatherForm({ existingReport, reportId: "r1", fetchHourly: freshHourly });
+  await wait(50);
+
+  const select = document.querySelectorAll(".wt-condition")[MON];
+  select.value = "";
+  fireEvent(select, "change"); // notes still has "Checked on site"
+
+  fireEvent(document.getElementById("refreshWeatherBtn"), "click");
+  await wait(50);
+  const row = weatherRow(document, MON);
+  assert.equal(row.condition, "", "the condition itself stays blank — Refresh must not fill it, since notes still carries real content");
+  assert.equal(row.notes, "Checked on site", "and the notes text must survive completely untouched");
+});
+
+test("weekly-report-form.html weather: a legacy day saved before v102 (no source, real content) stays manual until blanked, then refills like any other day", async () => {
+  const existingReport = {
+    id: "r1", project_id: "p1", status: "draft", week_starting: "2026-11-16", week_ending: "2026-11-20",
+    weather_days: [
+      { date: "2026-11-16", condition: "Light Rain", lost_hours: 1, notes: "" }, // pre-v102 shape — no `source` key at all
+    ],
+  };
+  const freshHourly = mergeHourlyDays(
+    hourlyDay("2026-11-14", {}), hourlyDay("2026-11-15", {}),
+    hourlyDay("2026-11-16", { rain: { 10: 2, 11: 2 } }),
+    hourlyDay("2026-11-17", {}), hourlyDay("2026-11-18", {}), hourlyDay("2026-11-19", {}), hourlyDay("2026-11-20", {}),
+  );
+  const { document } = await runWeatherForm({ existingReport, reportId: "r1", fetchHourly: freshHourly });
+  await wait(50);
+  assert.equal(weatherRow(document, MON).condition, "Light Rain", "sanity: a legacy day with no source is treated as manual on load");
+
+  // Refresh alone must never touch a legacy day, with no hand-edit at all.
+  fireEvent(document.getElementById("refreshWeatherBtn"), "click");
+  await wait(50);
+  assert.equal(weatherRow(document, MON).condition, "Light Rain", "still manual after a Refresh with no edit of its own");
+
+  // Blank it by hand (notes was already empty, so condition alone does it).
+  const select = document.querySelectorAll(".wt-condition")[MON];
+  select.value = "";
+  fireEvent(select, "change");
+
+  fireEvent(document.getElementById("refreshWeatherBtn"), "click");
+  await wait(50);
+  assert.equal(weatherRow(document, MON).condition, "Heavy Rain", "once blanked, the legacy day is open for auto-fill exactly like any other day");
+  assert.equal(weatherLostHours(document, MON), "1", "lost hours (pre-existing on this legacy day) are never touched by any of this");
 });
 
 // ─── londonTodayISO() itself ──────────────────────────────────────────
