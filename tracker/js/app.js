@@ -3498,7 +3498,7 @@ export async function fetchWeatherConditions(latitude, longitude, startDate, end
   if (latitude == null || longitude == null) return new Map();
   try {
     const today = todayISODate || londonTodayISO();
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&start_date=${startDate}&end_date=${endDate}&hourly=precipitation,snowfall,temperature_2m,wind_gusts_10m&timezone=Europe%2FLondon`;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&start_date=${startDate}&end_date=${endDate}&hourly=precipitation,snowfall,temperature_2m,wind_gusts_10m&wind_speed_unit=ms&timezone=Europe%2FLondon`;
     const res = await fetch(url);
     if (!res.ok) return new Map();
     const json = await res.json();
@@ -3524,7 +3524,10 @@ export async function fetchWeatherConditions(latitude, longitude, startDate, end
     const result = new Map();
     byDate.forEach((day, date) => {
       const condition = conditionFromSiteHours(day);
-      const evidence = `${day.rainMm.toFixed(1)} mm ${WEATHER_SITE_HOURS_LABEL}, gusts ${Math.round(day.maxGust)} km/h, min ${Math.round(day.minTemp)}°C`;
+      // v103: gusts in m/s (wind_speed_unit=ms on the request above) —
+      // wind is evidence only, never a condition input (see
+      // conditionFromSiteHours() above, which never reads maxGust).
+      const evidence = `${day.rainMm.toFixed(1)} mm ${WEATHER_SITE_HOURS_LABEL}, gusts ${Math.round(day.maxGust)} m/s, min ${Math.round(day.minTemp)}°C`;
       result.set(date, { condition, evidence });
     });
     return result;
