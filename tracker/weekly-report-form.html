@@ -56,7 +56,8 @@
         </div>
       </div>
       <div class="field">
-        <label>Weather Tracker</label>
+        <label>Weather Tracker <button type="button" class="btn btn-outline btn-sm" id="refreshWeatherBtn" style="margin-left:0.5rem;">↻ Refresh Weather</button></label>
+        <p class="hint" style="margin:0 0 0.4rem;">Auto-filled from Open-Meteo for days that have already finished (08:00-17:00 on site), using evidence written into that day's notes when they're blank. Refresh re-runs the lookup for any day you haven't edited yourself — a day you've set or typed a note on is never overwritten.</p>
         <div id="weatherTracker"></div>
       </div>
       <div class="field"><label for="weather">Weather Notes (optional)</label><input type="text" id="weather" placeholder="Any general commentary not captured in the day-by-day tracker above"></div>
@@ -143,7 +144,7 @@
 
 <script type="module">
   import { supabase } from "./js/supabase-client.js";
-  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, mountTableEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions, comparePlotNumbers, normalisePlotToken, syncGateStatusFromMilestones, EXTERNAL_WORKS_TAG, PHOTO_COMPLIANCE_STATUS, RESOURCE_ADEQUACY, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_LEVELS, RISK_IMPACT_BADGE, RISK_OWNER_SUGGESTIONS, STATUTORY_MILESTONE_TYPES, STATUTORY_OUTCOMES, STATUTORY_OUTCOME_BADGE, getWeeklyReportPosition, isWeeklyReportEarlyWarningsCalculated, buildEarlyWarningNotes, isWeeklyReportProgrammeRevisionsCalculated, generateProgrammeChangesPdfBlob, isWeeklyReportLocked, reviseWeeklyReport, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, CONTROL_LEVEL_BADGE, FINDING_SEVERITY_LABEL, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel, getRfiLinksForWeeklyReport, attachReportCommercialNotes, getUnattachedDiaryEntries, getWeeklyReportDiaryEntries, attachDiaryEntryToReport, updateAttachedDiaryEntry, removeAttachedDiaryEntry, getActiveProgramme, listProgrammeActivities } from "./js/app.js";
+  import { requireAuth, renderHeader, getParam, escapeHtml, formatDate, showError, clearError, mondayOf, uploadImage, todayISO, mountItemListEditor, mountTableEditor, formatGBP, toLocalISODate, WEATHER_CONDITIONS, fetchWeatherConditions, londonTodayISO, comparePlotNumbers, normalisePlotToken, syncGateStatusFromMilestones, EXTERNAL_WORKS_TAG, PHOTO_COMPLIANCE_STATUS, RESOURCE_ADEQUACY, RESOURCE_ADEQUACY_BADGE, RISK_IMPACT_LEVELS, RISK_IMPACT_BADGE, RISK_OWNER_SUGGESTIONS, STATUTORY_MILESTONE_TYPES, STATUTORY_OUTCOMES, STATUTORY_OUTCOME_BADGE, getWeeklyReportPosition, isWeeklyReportEarlyWarningsCalculated, buildEarlyWarningNotes, isWeeklyReportProgrammeRevisionsCalculated, generateProgrammeChangesPdfBlob, isWeeklyReportLocked, reviseWeeklyReport, WEEKLY_REPORT_STATUS_LABEL, WEEKLY_REPORT_STATUS_BADGE, CONTROL_LEVEL_BADGE, FINDING_SEVERITY_LABEL, saveFileToDevice, deviceSavePhotoFilename, deviceSaveStatusLabel, getRfiLinksForWeeklyReport, attachReportCommercialNotes, getUnattachedDiaryEntries, getWeeklyReportDiaryEntries, attachDiaryEntryToReport, updateAttachedDiaryEntry, removeAttachedDiaryEntry, getActiveProgramme, listProgrammeActivities } from "./js/app.js";
 
   await requireAuth();
   const projectId = getParam("project");
@@ -618,8 +619,26 @@
           condition: existing?.condition || "",
           lost_hours: typeof existing?.lost_hours === "number" ? existing.lost_hours : 0,
           notes: existing?.notes || "",
+          // v102: undefined for a day never touched by auto-fill — see
+          // isManualWeatherDay() below for what that means for a day
+          // carried over from an EXISTING saved report (no source at
+          // all) versus a brand-new, still genuinely blank day.
+          source: existing?.source,
         };
       });
+    }
+
+    // v102: a day the auto-fill/Refresh must leave alone. "auto" is
+    // always fair game (that's the whole point of Refresh); anything
+    // else counts as manual the moment it actually carries content —
+    // either because the user (or a previous save, from before this
+    // feature existed) put something in condition/notes with no "auto"
+    // marker at all. A day with neither content nor a source is simply
+    // blank and open for filling either way.
+    function isManualWeatherDay(d) {
+      if (d.source === "auto") return false;
+      if (d.source === "manual") return true;
+      return Boolean(d.condition) || Boolean((d.notes || "").trim());
     }
 
     function totalLostHours() {
@@ -651,24 +670,37 @@
       `;
 
       container.querySelectorAll(".wt-condition").forEach((el) => el.addEventListener("change", () => {
-        days[Number(el.dataset.i)].condition = el.value;
+        const d = days[Number(el.dataset.i)];
+        d.condition = el.value;
+        d.source = "manual"; // v102: any user edit to condition takes this day out of auto-fill's hands for good
       }));
       container.querySelectorAll(".wt-lost").forEach((el) => el.addEventListener("input", () => {
         days[Number(el.dataset.i)].lost_hours = el.value === "" ? 0 : Number(el.value);
         container.querySelector("#wtTotal").textContent = totalLostHours();
       }));
       container.querySelectorAll(".wt-notes").forEach((el) => el.addEventListener("input", () => {
-        days[Number(el.dataset.i)].notes = el.value;
+        const d = days[Number(el.dataset.i)];
+        d.notes = el.value;
+        d.source = "manual"; // v102: same rule as condition above
       }));
     }
 
+    // v102: fills/overwrites only a day that isn't manual (see
+    // isManualWeatherDay() above) — a brand-new blank day, or one this
+    // same mechanism filled before (source "auto"), either way marking
+    // it "auto" again. Used both for the week-change auto-fill and for
+    // the Refresh button — they are the SAME operation, just triggered
+    // differently; a manual day is equally protected from both.
     function autoFillConditions(conditionsByDate) {
       let changed = false;
       days.forEach((d) => {
-        if (!d.condition && conditionsByDate.has(d.date)) {
-          d.condition = conditionsByDate.get(d.date);
-          changed = true;
-        }
+        if (isManualWeatherDay(d)) return;
+        const entry = conditionsByDate.get(d.date);
+        if (!entry) return;
+        d.condition = entry.condition;
+        d.notes = entry.evidence;
+        d.source = "auto";
+        changed = true;
       });
       if (changed) render();
     }
@@ -696,9 +728,23 @@
     if (!siteProject?.latitude || !siteProject?.longitude) return;
     const days = weatherTracker.getDays();
     if (!days.length) return;
-    const conditions = await fetchWeatherConditions(siteProject.latitude, siteProject.longitude, days[0].date, days[days.length - 1].date);
+    const conditions = await fetchWeatherConditions(siteProject.latitude, siteProject.longitude, days[0].date, days[days.length - 1].date, londonTodayISO());
     weatherTracker.autoFillConditions(conditions);
   }
+
+  // v102: Refresh Weather is the exact same lookup+fill the week-change
+  // handler above already runs — a manual click, not a different
+  // operation. Disabled meanwhile so a slow network can't double-fire
+  // it; silently does nothing if the site has no location, same as the
+  // automatic version.
+  document.getElementById("refreshWeatherBtn").addEventListener("click", async (e) => {
+    e.target.disabled = true;
+    try {
+      await tryAutoFillWeather();
+    } finally {
+      e.target.disabled = false;
+    }
+  });
 
   // ─── Commercial items mini-editor ───────────────────────────────
   // Each item is { id, title, type, cost_impact, time_impact_days, ledger_id }.
