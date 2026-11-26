@@ -3439,41 +3439,93 @@ export async function geocodePostcode(postcode) {
   }
 }
 
-// Maps an Open-Meteo WMO weather code to one of WEATHER_CONDITIONS.
-// Anything that isn't rain or snow/ice returns "" (no auto-fill) — a
-// clear or overcast day just stays blank, since it doesn't affect site
-// works.
-const WMO_RAIN_LIGHT = new Set([51, 53, 55, 61, 63, 80, 81]);
-const WMO_RAIN_HEAVY = new Set([65, 82, 95, 96, 99]);
-const WMO_SNOW_ICE = new Set([56, 57, 66, 67, 71, 73, 75, 77, 85, 86]);
+// v102: judged on SITE hours only (08:00-17:00), never the worst
+// moment across the whole 24h day — an overnight shower long finished
+// by 08:00 must never mark a working day wet. Snow or frost wins
+// outright regardless of how little rain also fell that day; otherwise
+// the rain thresholds decide; a day with neither is explicitly "Dry" —
+// a real fill, not "nothing to report" (the old WMO-daily-code version
+// could only ever fill rain/snow, never Dry, since a clear WMO code
+// mapped to "" and was skipped).
+export const WEATHER_SITE_START_HOUR = 8;
+export const WEATHER_SITE_END_HOUR = 17; // exclusive: site hours are 08:00 up to (not including) 17:00 — hourly indices 8..16 inclusive.
+const WEATHER_HEAVY_RAIN_MM = 4;
+const WEATHER_LIGHT_RAIN_MM = 0.5;
+const WEATHER_FROST_MAX_C = 0;
 
-export function conditionFromWeatherCode(code) {
-  if (WMO_SNOW_ICE.has(code)) return "Snow / Ice";
-  if (WMO_RAIN_HEAVY.has(code)) return "Heavy Rain";
-  if (WMO_RAIN_LIGHT.has(code)) return "Light Rain";
-  return "";
+function siteHourLabel(hour) {
+  if (hour === 0) return "12am";
+  if (hour === 12) return "12pm";
+  return hour < 12 ? `${hour}am` : `${hour - 12}pm`;
+}
+const WEATHER_SITE_HOURS_LABEL = `${siteHourLabel(WEATHER_SITE_START_HOUR)}-${siteHourLabel(WEATHER_SITE_END_HOUR)}`;
+
+function conditionFromSiteHours({ rainMm, snowSum, minTemp }) {
+  if (snowSum > 0 || (Number.isFinite(minTemp) && minTemp <= WEATHER_FROST_MAX_C)) return "Snow / Ice";
+  if (rainMm >= WEATHER_HEAVY_RAIN_MM) return "Heavy Rain";
+  if (rainMm >= WEATHER_LIGHT_RAIN_MM) return "Light Rain";
+  return "Dry";
 }
 
-// Fetches a daily condition summary for a lat/long + date range from
-// Open-Meteo's forecast API (free, no key — it blends recent history and
-// forecast in one call, which covers the "this week" / "last week" range
-// weekly reports actually need). Returns a Map of date -> condition
-// string, or an empty Map on any failure (network, dates out of the
-// supported window, etc.) — callers should treat that as "no auto-fill
-// available this time", never as a blocking error.
-export async function fetchWeatherConditions(latitude, longitude, startDate, endDate) {
+// Europe/London's own calendar date for "now" — deliberately NOT
+// todayISO() above, which reads the CALLER's own local timezone (right
+// for a form field a UK user is filling in; wrong here, where "has
+// this day already finished" must mean the SITE's own timezone, not
+// whatever zone a CI runner or a travelling PM's laptop happens to be
+// in).
+export function londonTodayISO(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(now);
+  const map = {};
+  parts.forEach((p) => { map[p.type] = p.value; });
+  return `${map.year}-${map.month}-${map.day}`;
+}
+
+// Fetches each already-FINISHED day's weather condition + a short
+// evidence string for a lat/long + date range from Open-Meteo's
+// forecast API (free, no key — it blends recent history and forecast
+// in one call, which covers the "this week" / "last week" range weekly
+// reports actually need). Pulls HOURLY precipitation/snowfall/
+// temperature/wind-gust series (never the single daily "worst code
+// over 24h" the old version used) and aggregates each day's own site
+// hours only. A day that hasn't finished yet (today or later, Europe/
+// London) is left out of the result entirely — its forecast can still
+// change, so it must stay blank until a later refresh re-runs this
+// once that day is actually over. Returns a Map of date -> {condition,
+// evidence}, or an empty Map on any failure (network, no data for the
+// range, etc.) — callers must treat that as "no auto-fill available
+// this time", never as a blocking error.
+export async function fetchWeatherConditions(latitude, longitude, startDate, endDate, todayISODate) {
   if (latitude == null || longitude == null) return new Map();
   try {
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&start_date=${startDate}&end_date=${endDate}&daily=weathercode&timezone=auto`;
+    const today = todayISODate || londonTodayISO();
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&start_date=${startDate}&end_date=${endDate}&hourly=precipitation,snowfall,temperature_2m,wind_gusts_10m&timezone=Europe%2FLondon`;
     const res = await fetch(url);
     if (!res.ok) return new Map();
     const json = await res.json();
-    const daily = json.daily;
-    if (!daily || !Array.isArray(daily.time)) return new Map();
+    const hourly = json.hourly;
+    if (!hourly || !Array.isArray(hourly.time)) return new Map();
+
+    const byDate = new Map();
+    hourly.time.forEach((ts, i) => {
+      const [date, time] = String(ts).split("T");
+      if (!date || date >= today) return;
+      const hour = Number(time?.slice(0, 2));
+      if (!(hour >= WEATHER_SITE_START_HOUR && hour < WEATHER_SITE_END_HOUR)) return;
+      if (!byDate.has(date)) byDate.set(date, { rainMm: 0, snowSum: 0, minTemp: Infinity, maxGust: 0 });
+      const day = byDate.get(date);
+      day.rainMm += Number(hourly.precipitation?.[i]) || 0;
+      day.snowSum += Number(hourly.snowfall?.[i]) || 0;
+      const temp = Number(hourly.temperature_2m?.[i]);
+      if (Number.isFinite(temp)) day.minTemp = Math.min(day.minTemp, temp);
+      const gust = Number(hourly.wind_gusts_10m?.[i]);
+      if (Number.isFinite(gust)) day.maxGust = Math.max(day.maxGust, gust);
+    });
+
     const result = new Map();
-    daily.time.forEach((date, i) => {
-      const condition = conditionFromWeatherCode(daily.weathercode?.[i]);
-      if (condition) result.set(date, condition);
+    byDate.forEach((day, date) => {
+      const condition = conditionFromSiteHours(day);
+      const evidence = `${day.rainMm.toFixed(1)} mm ${WEATHER_SITE_HOURS_LABEL}, gusts ${Math.round(day.maxGust)} km/h, min ${Math.round(day.minTemp)}°C`;
+      result.set(date, { condition, evidence });
     });
     return result;
   } catch {
